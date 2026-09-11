@@ -283,13 +283,56 @@ def resolve_effective_quantities(
     effective: Dict[str, int] = {}
     flags: List[Dict[str, Any]] = []
 
-    # leaves listed directly on the main GA (families with no sub-assembly drawing)
+    # WHICH CODES ARE ACTUALLY ASSEMBLY NODES. "its family has a sub-drawing" was a proxy for
+    # it, and on a SINGLE-FAMILY job the proxy catches everything: 12349-02's parts are all
+    # family "12349", so 12349-02-69-08J — a leaf, an MDF packer, listed only on the GA — was
+    # skipped as though its children lived on another sheet. Nothing ever gave it an effective
+    # quantity, so it kept the GA's 3 and Tim asked "where did 3 per unit come from for 6mm
+    # MDF(Packer)".
+    #
+    # A node is an assembly when other rows are grouped UNDER it. That is the fact, and it is
+    # sitting in `groups` already.
+    # AN ASSEMBLY NODE IS ONE OF THREE THINGS, and none of them is "its family has a
+    # sub-drawing" — that proxy caught every leaf on a single-family job, which is how the MDF
+    # packer kept the GA's 3.
+    #
+    #   it has children grouped under it          (a real parent in this tree)
+    #   its own row lives on a sub-drawing too    (the GA row is a reference to that sheet)
+    #   somebody NAMED it as the unit being quoted
+    #
+    # Anything else on the main GA is a leaf listed directly there, and gets a quantity.
+    parents = {_norm(src) for src in groups}
+    codes_on_subs = {_norm(r.get("part_number"))
+                     for src, rows_ in groups.items() if src != main_ga for r in rows_}
+    assembly_nodes = parents | codes_on_subs | ({_named} if _named else set())
+    # How many arrangements the GA is showing. Every install-context code carries the same
+    # quantity by construction — that is one of the three conditions — so there is one number.
+    _install_n = next(iter(set(install_context.values())), 1) if install_context else 1
     for r in groups.get(main_ga, []):
         code = _norm(r.get("part_number"))
-        fam = _family(code)
-        if fam in sub_families:
-            continue  # this is an assembly node; its leaves come from the sub drawing
-        # NOTE: bought-in rows on the main GA (fam == "") are per-bay items -> keep own qty.
+        if code in assembly_nodes:
+            continue  # its leaves come from its own group, or it is the unit itself
+        # EVERYTHING ON AN ARRANGEMENT IS ARRANGEMENTS' WORTH, bought-in rows included. The GA
+        # showing three of every structural code means three arrangements, and the eighteen wood
+        # screws printed beside them are eighteen for three — six each. Tim's note says the
+        # fastener quantities are wrong as well as unpriced, and this is why.
+        #
+        # Divided rather than set to 1, so a GA showing 6 of a part across 3 arrangements gives
+        # 2 and not 1. Only where it divides evenly: 5 across 3 is not a per-arrangement
+        # quantity and guessing one would be worse than leaving it alone.
+        #
+        # The older rule — "bought-in rows on the main GA are per-bay items, keep own qty" — is
+        # untouched on a bay, because a bay has no install context at all.
+        if _install_n > 1 and _qty(r) % _install_n == 0:
+            effective[code] = _qty(r) // _install_n
+            continue
+        if _install_n > 1:
+            flags.append({
+                "severity": "warning", "code": code,
+                "detail": (f"'{code}' shows {_qty(r)} on a general arrangement of {_install_n} "
+                           f"— that does not divide evenly, so it was left at {_qty(r)}. "
+                           f"Confirm the per-unit quantity."),
+            })
         effective[code] = _qty(r)
 
     # leaves from each sub-assembly drawing: own qty x parent's top-level multiplier

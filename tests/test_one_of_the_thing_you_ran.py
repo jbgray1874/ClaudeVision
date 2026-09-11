@@ -315,3 +315,67 @@ def test_the_reinterpretation_is_flagged_rather_than_silent():
     flags = resolve(rows, main_ga=GA).get("flags") or []
     said = " ".join(str(f.get("detail") or "") for f in flags)
     assert "where they go, not what is being made" in said
+
+
+# ── the shape the RECORD actually has, not the shape the fixtures had ─────────────────
+#
+# The fixtures above use filenames as source_pdf. The dual-path reader — which is what every
+# real run uses — sets source_pdf to the PARENT LABEL, so the tree groups by parent. The
+# 12349-02 workbook shows it: 12349-02-69-100 grouped under 12349-02-69-GA, 04M under -100.
+# Everything here is taken from that workbook.
+
+
+REAL = [
+    {"part_number": "12349-02-69-100", "quantity": 3, "source_pdf": "12349-02-69-GA"},
+    {"part_number": "STD PART", "quantity": 18, "source_pdf": "12349-02-69-GA"},
+    {"part_number": "12349-02-69-08J", "quantity": 3, "source_pdf": "12349-02-69-GA"},
+    {"part_number": "12349-02-69-101", "quantity": 1, "source_pdf": "12349-02-69-100"},
+    {"part_number": "12349-02-69-03M", "quantity": 1, "source_pdf": "12349-02-69-100"},
+    {"part_number": "12349-02-69-04M", "quantity": 1, "source_pdf": "12349-02-69-100"},
+    {"part_number": "12349-02-69-06A", "quantity": 1, "source_pdf": "12349-02-69-100"},
+    {"part_number": "FIXING", "quantity": 4, "source_pdf": "12349-02-69-100"},
+    {"part_number": "12349-02-69-01A", "quantity": 1, "source_pdf": "12349-02-69-101"},
+    {"part_number": "P/P", "quantity": 6, "source_pdf": "12349-02-69-101"},
+]
+
+
+def test_every_quantity_tim_gave_comes_out_right():
+    """Tim Wilkes, 4 September, on the 3 September estimate. Six figures, one cause."""
+    eff = resolve(REAL)["effective"]
+    assert eff["12349-02-69-04M"] == 1, "Lid — he asked why it was picking up 3"
+    assert eff["12349-02-69-06A"] == 1, "Front Cover — 'Only 1 per unit (AI picking up 3)'"
+    assert eff["12349-02-69-08J"] == 1, "MDF Packer — 'Where did 3 per unit come from'"
+    assert eff["P/P"] == 6, "bumpons"
+    assert eff["FIXING"] == 4, "M4 screws"
+    assert eff["STDPART"] == 6, "wood screws — 18 on a GA of three arrangements"
+
+
+def test_a_leaf_listed_only_on_the_ga_still_gets_a_quantity():
+    """THE BUG THIS FOUND IN MY OWN FIX. The main-GA loop skipped a code when its FAMILY had a
+    sub-drawing. On a single-family job that is every leaf: 12349-02-69-08J is an MDF packer
+    listed only on the GA, and it was skipped as though its children lived elsewhere. Nothing
+    gave it an effective quantity at all, so it kept the GA's 3."""
+    eff = resolve(REAL)["effective"]
+    assert "12349-02-69-08J" in eff, "it must not vanish"
+    assert eff["12349-02-69-08J"] == 1
+
+
+def test_an_assembly_node_is_still_kept_out_of_the_parts(
+):
+    """The GA's own row must not land in `effective` as if it were a part. A node is an
+    assembly when it has children grouped under it, when its own row lives on a sub-drawing
+    too, or when somebody named it as the unit."""
+    eff = resolve(REAL)["effective"]
+    assert "12349-02-69-100" not in eff, "it has children grouped under it"
+    assert "12349-02-69-101" in eff, "a sub-assembly IS a part of its parent"
+
+
+def test_a_quantity_that_does_not_divide_is_left_alone_and_flagged():
+    """5 across 3 arrangements is not a per-arrangement quantity, and guessing one would be
+    worse than leaving it."""
+    rows = list(REAL) + [{"part_number": "PLAS", "quantity": 5,
+                          "source_pdf": "12349-02-69-GA"}]
+    out = resolve(rows)
+    assert out["effective"]["PLAS"] == 5
+    said = " ".join(str(f.get("detail") or "") for f in (out.get("flags") or []))
+    assert "does not divide evenly" in said
