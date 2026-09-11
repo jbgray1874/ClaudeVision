@@ -185,22 +185,87 @@ def route_payloads(summary: Mapping[str, Any]) -> List[Mapping[str, Any]]:
     return out
 
 
+def _title_block_material_by_page(summary: Mapping[str, Any]) -> Dict[Any, str]:
+    """Page number -> the material printed in that page's title block.
+
+    WHY THE MATERIAL IS NOT ON THE PARTS-TABLE ROW. An SDI parts table lists item, part number,
+    description and quantity — there is no material column to read, so the extract asking a BOM
+    row for one could only ever come back blank. The material IS printed on the drawing; it is
+    in the title block of the detail sheet. Once a row knows which page it was read from, that
+    is reachable, and it is still the drawing's own words rather than an arbitrated answer.
+    """
+    out: Dict[Any, str] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, Mapping):
+            continue
+        number = page.get("page_number")
+        if number is None:
+            continue
+        analysis = page.get("page_analysis")
+        block = analysis.get("title_block") if isinstance(analysis, Mapping) else None
+        materials = block.get("materials") if isinstance(block, Mapping) else None
+        text = ", ".join(str(m).strip() for m in (materials or []) if str(m).strip())
+        if text:
+            out[number] = text
+    return out
+
+
+def _title_block_thickness_by_page(summary: Mapping[str, Any]) -> Dict[Any, Any]:
+    """Page number -> the gauge printed in that page's title block. Same reasoning as the
+    material: the parts table has no gauge column, and the drawing does print one."""
+    out: Dict[Any, Any] = {}
+    for page in (summary.get("pages") or []):
+        if not isinstance(page, Mapping):
+            continue
+        number = page.get("page_number")
+        if number is None:
+            continue
+        analysis = page.get("page_analysis")
+        block = analysis.get("title_block") if isinstance(analysis, Mapping) else None
+        values = block.get("thicknesses_mm") if isinstance(block, Mapping) else None
+        for value in (values or []):
+            try:
+                out[number] = float(str(value).strip())
+                break
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
 def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Every parts-list row, with the page it was read from and the reader that read it."""
     rows: List[Dict[str, Any]] = []
     seen_codes: Dict[str, int] = {}
+    by_page = _title_block_material_by_page(summary)
+    thick_by_page = _title_block_thickness_by_page(summary)
     for row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
         if not isinstance(row, Mapping):
             continue
         code = _text(row.get("part_number"))
         seen_codes[code.upper()] = seen_codes.get(code.upper(), 0) + 1
         reader = _text(row.get("source") or row.get("reader") or "")
+        page = row.get("source_page") if row.get("source_page") is not None else row.get("page")
+        # THE PARTS TABLE FIRST, THE PAGE'S TITLE BLOCK SECOND, AND THE SHEET SAYS WHICH. Both
+        # are printed on the drawing; they are not the same claim. A material on the row is that
+        # line's own; a material from the title block is the SHEET's, and on a detail sheet
+        # drawing one part those are the same thing — on a page carrying several, they are not,
+        # so the reader has to be able to see the difference rather than being handed one word.
+        material = _text(row.get("material_text"))
+        material_from = "the parts table row" if material else ""
+        if not material and page is not None and by_page.get(page):
+            material = _text(by_page[page])
+            material_from = f"title block of page {page} — the parts table has no material column"
         rows.append({
             "part_number": code,
             "description": _text(row.get("description")),
             "quantity": row.get("quantity"),
-            "material_as_printed": _text(row.get("material_text")),
-            "thickness_mm": row.get("thickness_mm"),
+            "material_as_printed": material,
+            "material_read_from": material_from,
+            # SAME PAGE, SAME REASONING. Filled only where the row itself has none, and the
+            # source column above already says the page it came from.
+            "thickness_mm": (row.get("thickness_mm")
+                             if row.get("thickness_mm") is not None
+                             else (thick_by_page.get(page) if page is not None else None)),
             # item_number IS THE NAME. The deterministic table reader builds every row as
             # {item_number, part_number, description, quantity} — extractor_patterns.py:1049 and
             # :1082 — and part_identity.normalize_bom_row keeps that spelling. Asking for "item"
@@ -210,6 +275,10 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
                              or row.get("item_no") or ""),
             "read_from_page": _text(row.get("source_page") or row.get("page") or ""),
             "read_by": reader,
+            # CORROBORATION, WHICH IS THE WHOLE POINT OF HAVING SIX READERS. A line the table
+            # parser and the vision model both saw is stronger than either alone, and until the
+            # merge started keeping this, a row read twice came out looking read once.
+            "also_read_by": ", ".join(str(r) for r in (row.get("also_read_by") or [])),
             "what_that_reader_is": READER_MEANING.get(reader.lower(),
                                                       "reader not named on this row"
                                                       if not reader else

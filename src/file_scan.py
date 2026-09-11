@@ -389,6 +389,23 @@ def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
     disagree the winner stands and the disagreement is written onto it. `source_pdf`
     names which drawing this row was taken from and must keep naming the winner's.
     """
+    # CORROBORATION IS A FACT, AND MERGING WAS DESTROYING IT. Two readings of one line are
+    # exactly what makes a row trustworthy — the table parser and the vision model agreeing is
+    # stronger evidence than either alone. Left to the generic merge, `source` and `source_page`
+    # behave like any other field: the winner's value stands and the loser's is a disagreement.
+    # So a row read twice came out looking read once, and the 7332-01 tab showed "appears on 1
+    # row" for every line in a pack where most parts are drawn on several sheets.
+    #
+    # Accumulated here BEFORE the generic merge, then written back over whatever it decides.
+    _readers, _pages = [], []
+    for _row in (winner, loser):
+        for _r in ([_row.get("source")] + list(_row.get("also_read_by") or [])):
+            if _r and _r not in _readers:
+                _readers.append(_r)
+        for _p in ([_row.get("source_page")] + list(_row.get("also_on_pages") or [])):
+            if _p is not None and _p not in _pages:
+                _pages.append(_p)
+
     try:
         from record_merge import merge_records, BOOKKEEPING_FIELDS
     except Exception:                                              # pragma: no cover
@@ -396,12 +413,23 @@ def _merge_bom_rows(winner: Dict[str, Any], loser: Dict[str, Any]) -> None:
     _notes = merge_records(
         winner, loser, winner_source="bom_tree", loser_source="bom_tree",
         decided=("part_number", "bom_parent"),
-        skip=tuple(BOOKKEEPING_FIELDS) + ("source_pdf",),
+        skip=tuple(BOOKKEEPING_FIELDS) + ("source_pdf", "source", "source_page",
+                                          "also_read_by", "also_on_pages"),
         label=f"BOM line {winner.get('part_number')} also on "
               f"{loser.get('source_pdf') or 'another drawing'}")
     if _notes and os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:
         for _n in _notes:
             print(f"   [bom-merge] {_n}", flush=True)
+
+    # The first of each stays the row's own; the rest are the corroboration. Kept in the order
+    # they were seen rather than sorted, so "read first by the table parser, then confirmed by
+    # vision" survives as an order somebody can reason about.
+    if _readers:
+        winner["source"] = _readers[0]
+        winner["also_read_by"] = _readers[1:]
+    if _pages:
+        winner["source_page"] = _pages[0]
+        winner["also_on_pages"] = _pages[1:]
 
 
 def _bom_row_merge_preferred(
@@ -1282,6 +1310,10 @@ def summarise_document(pdf_path: Path, plumber_pages: List[Dict[str, Any]], pypd
             bom_text=normalize_text(f"{page['region_text']['bom']} {page['region_text']['notes']}"),
             notes_text=page["region_text"]["notes"],
             page_role_hint=page["page_role"]["primary_role"],
+            # THE PAGE THE ROW WAS READ FROM, carried into the row itself. Known here and
+            # nowhere downstream: once rows from every page are merged into one list, which
+            # page a line came from cannot be recovered.
+            source_page=page_number,
         )
         vision_page = vision_lookup.get(page_number)
         llm_page = reconcile_with_llm(

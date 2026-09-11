@@ -1028,7 +1028,21 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
     return merged
 
 
-def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
+def extract_bom_rows(text: str, *, source: str = "bom_table",
+                     source_page: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Parts-table rows from a page's text, EACH ONE STAMPED WITH WHO READ IT AND WHERE.
+
+    WHY THE STAMP IS NOT A NICETY. Six readers can produce a BOM row — this table parser, the
+    vision model, the SolidWorks API, the whole-document LLM pass, the assembly tree and the DXF
+    filename — and until now not one row carried which. Every artefact that tried to show an
+    estimator where a line came from printed a blank, and the quality of a reader could not be
+    judged from its output because its output was anonymous.
+
+    It also unlocks the material. The parts table on an SDI drawing frequently has no material
+    column at all — the material is in the title block of the detail sheet — so the honest way
+    to fill "material" against a row is to resolve it from the page the row was read from, which
+    is impossible while the row does not know its page.
+    """
     try:
         from part_identity import normalize_bom_row, preprocess_bom_text
 
@@ -1052,6 +1066,11 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
                 "part_number": normalized_part,
                 "description": normalized_description,
                 "quantity": _safe_int(qty),
+                # WHO READ IT AND WHERE. Stamped at the point of creation, because anywhere
+                # later is a guess: by the time rows from several pages and several readers have
+                # been merged, nothing can say which of them produced a given line.
+                "source": source,
+                "source_page": source_page,
             }
         )
     if rows:
@@ -1085,6 +1104,11 @@ def extract_bom_rows(text: str) -> List[Dict[str, Any]]:
                 "part_number": normalized_part,
                 "description": normalized_description,
                 "quantity": _safe_int(qty),
+                # WHO READ IT AND WHERE. Stamped at the point of creation, because anywhere
+                # later is a guess: by the time rows from several pages and several readers have
+                # been merged, nothing can say which of them produced a given line.
+                "source": source,
+                "source_page": source_page,
             }
         )
     deduped_rows: List[Dict[str, Any]] = []
@@ -1464,6 +1488,7 @@ def build_textual_manufacturing_summary(
     notes_text: str = "",
     page_role_hint: Optional[str] = None,
     has_cut_length: bool = False,
+    source_page: Optional[int] = None,
 ) -> Dict[str, Any]:
     full_text = normalize_text(text)
     title_text = normalize_text(title_block_text) or full_text
@@ -1471,7 +1496,7 @@ def build_textual_manufacturing_summary(
     notes_source = normalize_text(notes_text) or full_text
 
     title_block = merge_title_block_fields(extract_title_block_fields(title_text), extract_title_block_fields(full_text))
-    bom_rows = extract_bom_rows(bom_source)
+    bom_rows = extract_bom_rows(bom_source, source_page=source_page)
     dimensions = classify_dimensions(full_text)
     feature_cues = extract_feature_cues(full_text)
     process_notes = extract_process_notes(notes_source)
