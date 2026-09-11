@@ -237,6 +237,106 @@ def _title_block_thickness_by_page(summary: Mapping[str, Any]) -> Dict[Any, Any]
 _CONTESTABLE = ("quantity", "description", "material_text", "thickness_mm")
 
 
+def _rank_of(source: str) -> int:
+    """The rank this project already assigns that source. Read from source_precedence, which
+    owns them, so a rank cannot be stated twice and drift."""
+    try:
+        from source_precedence import rank as _rank
+        return int(_rank(str(source or "").strip() or "unknown"))
+    except Exception:                                                    # noqa: BLE001
+        return 0
+
+
+def _tiebreak_of(source: str) -> int:
+    """WITHIN-RANK ORDER, WHICH IS NOT DECORATION. The DXF filename and the title block are
+    both rank 70, and source_precedence states which wins there: a filename "is a NAME rather
+    than a field on the sheet -- so where the two disagree outright the printed drawing is the
+    one that was issued" (dxf_filename 0, title_block 2).
+
+    Sorting on rank alone ignored that and costed a filename gauge over a printed one — the
+    exact pair the reviewer used as the example. The ordering already exists; this reads it
+    rather than restating it."""
+    try:
+        from source_precedence import tiebreak_priority
+        return int(tiebreak_priority(source))
+    except Exception:                                                    # noqa: BLE001
+        return 0
+
+
+def fact_observations(row: Mapping[str, Any],
+                      summary: Optional[Mapping[str, Any]] = None) -> Dict[str, List[Dict]]:
+    """Per FACT, every value observed: {value, source, page, rank}. Nothing dropped for losing.
+
+    THE RULE, AND IT IS THE SAME ONE money_provenance FOLLOWS. A fact keeps its observations;
+    arbitration picks one value to cost with; the extract prints the winner AND what it beat.
+    A reading is never discarded because it lost — a title-block steel on page 3 and a table
+    quantity on page 1 both stay, and a DXF 2.5mm and a title-block 1.2mm both stay, because
+    the second one is how "where did that price come from" gets answered without a seminar.
+
+    Observations come from two places and are the same shape either way: the row's own readings
+    (each reader's account of that parts-table line), and the title block of every page the row
+    was seen on. The title block is NOT a fake BOM column — the SDI parts table has no material
+    or gauge column and inventing one would be a lie. It is a separate observation of the same
+    fact, at its own rank, joined to the row by the page stamp.
+
+    Sorted best-first by the project's own rank. Ties keep the order they were observed in.
+    """
+    facts: Dict[str, List[Dict]] = {}
+
+    def _add(field: str, value: Any, source: str, page: Any) -> None:
+        if value in (None, "", [], {}):
+            return
+        entry = {"value": value, "source": source or "(unnamed reader)",
+                 "page": page, "rank": _rank_of(source)}
+        seen = facts.setdefault(field, [])
+        if not any(e["value"] == entry["value"] and e["source"] == entry["source"]
+                   and e["page"] == entry["page"] for e in seen):
+            seen.append(entry)
+
+    readings = [r for r in (row.get("readings") or []) if isinstance(r, Mapping)] or [row]
+    for reading in readings:
+        source, page = reading.get("source"), reading.get("source_page")
+        for field in _CONTESTABLE:
+            _add(field, reading.get(field), source, page)
+
+    # THE TITLE BLOCK OF EVERY PAGE THIS ROW WAS SEEN ON. Reachable only because the row now
+    # carries its page: before the stamp, the material printed on the sheet the line came from
+    # could not be joined to the line at all.
+    if summary is not None:
+        pages = [p for p in ([row.get("source_page")] + list(row.get("also_on_pages") or []))
+                 if p is not None]
+        materials = _title_block_material_by_page(summary)
+        thicknesses = _title_block_thickness_by_page(summary)
+        for page in pages:
+            _add("material_text", materials.get(page), "title_block", page)
+            _add("thickness_mm", thicknesses.get(page), "title_block", page)
+
+    for field in facts:
+        facts[field].sort(key=lambda e: (-e["rank"], -_tiebreak_of(e["source"])))
+    return facts
+
+
+def _beaten(facts: Mapping[str, List[Dict]]) -> str:
+    """What each winning value beat, in one line an estimator can act on.
+
+    Only where there is a genuine contest — two DIFFERENT values. Several sources agreeing is
+    corroboration and belongs in `also read by`, not here; printing it would fill the column on
+    every row and nobody reads a column that always speaks.
+    """
+    out: List[str] = []
+    for field, entries in sorted(facts.items()):
+        if len({str(e["value"]) for e in entries}) < 2:
+            continue
+        winner, rest = entries[0], entries[1:]
+        beaten = "; ".join(
+            f"{e['source']}"
+            + (f" p{e['page']}" if e["page"] is not None else "")
+            + f" said {e['value']!r} (rank {e['rank']})" for e in rest)
+        out.append(f"{field.replace('_', ' ')}: costing {winner['value']!r} from "
+                   f"{winner['source']} (rank {winner['rank']}) — beat {beaten}")
+    return " | ".join(out)
+
+
 def _disagreements(row: Mapping[str, Any]) -> str:
     """Where two readers read the same line differently, in their own words.
 
@@ -317,6 +417,9 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "times_read": len(row.get("readings") or []) or 1,
             # WHERE THE READERS DISAGREE, named reader by reader. Empty where they agree.
             "readers_disagree_on": _disagreements(row),
+            # THE WINNER AND WHAT IT BEAT, with the rank each was judged on. This is the
+            # column that answers "where did that price come from" without a conversation.
+            "what_the_winner_beat": _beaten(fact_observations(row, summary)),
             "what_that_reader_is": READER_MEANING.get(reader.lower(),
                                                       "reader not named on this row"
                                                       if not reader else

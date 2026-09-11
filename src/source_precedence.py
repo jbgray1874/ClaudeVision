@@ -159,6 +159,25 @@ SOURCE_RANK: Dict[str, int] = {
     "mirror_of_measured": 75,
     "drawing_deterministic": 70,
     "title_block": 70,
+    # THE TWO READERS THAT PRODUCE EVERY BOM ROW, AND NEITHER WAS IN THIS TABLE.
+    #
+    # rank("bom_table") and rank("vision") both returned 0 — below `inference` (20), below
+    # everything. So the arbiter that decides which reading of a part wins could not rank the
+    # very rows it was merging, and any BOM reading lost to any other source automatically,
+    # including a category default.
+    #
+    # bom_table at 70: a parts table PRINTED ON THE SHEET, read by rule. That is exactly what
+    # drawing_deterministic describes and it sits at the same rank — a ruled table with columns
+    # is if anything the most reliable thing on a drawing to parse. Above bom_tree (60), which
+    # is a structure the engine BUILT rather than one the drawing office typed.
+    #
+    # vision at 40: the same table read as an IMAGE by a model. It sees tables a parser cannot,
+    # which is why it exists, and it can misread a character — a machine transcription, which is
+    # what llm_extract (40) already means. It must never silently displace the deterministic
+    # read of the same table; where the two disagree that is a question for a person, and the
+    # extract now prints both.
+    "bom_table": 70,
+    "vision": 40,
     # WHAT THE DRAWING OFFICE TYPED ON THE EXPORT THAT GOES TO THE LASER.
     #
     # "11650-04-01A_2MM PETG_REVG.DXF" is not a guess and never was. It is a deliberate
@@ -283,6 +302,11 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "drawing_deterministic":  "the drawing",
     "title_block":            "the title block",
     "dxf_filename":           "the DXF filename the drawing office typed",
+    # THE TWO BOM READERS, now that they are ranked. Both name the parts table, because that is
+    # what an estimator is looking at — the difference between them is HOW it was read, and that
+    # is the part that decides which one wins an arbitration.
+    "bom_table":              "the parts table on the drawing",
+    "vision":                 "the parts table, read from the image by the vision model",
     "pdf_overall_dims":       "the drawing's overall dimensions",
     "bom_tree":               "the bill of materials",
     "override_rule":          "an SDI override rule",

@@ -470,3 +470,79 @@ def test_a_reading_never_contains_the_merge_s_own_bookkeeping():
     for reading in row["readings"]:
         for own in ("readings", "also_read_by", "also_on_pages", "merge_notes"):
             assert own not in reading
+
+
+# ── observations per FACT, with rank, through the merge ───────────────────────────────
+#
+# "Every fact keeps a list of observations: {value, source, page/file, rank}. Arbitration picks
+#  one value for costing. The extract prints the winner AND what it beat. Nothing is discarded
+#  because it lost."
+
+
+def test_the_two_readers_that_produce_bom_rows_have_a_rank_at_all():
+    """THE GAP THIS FOUND. source_precedence is well developed and neither bom_table nor vision
+    was in it — rank() returned 0 for both, below `inference` at 20. So the arbiter that decides
+    which reading of a part wins could not rank the rows it was merging, and any BOM reading
+    lost to anything, including a category default."""
+    from source_precedence import rank
+    assert rank("bom_table") > rank("inference")
+    assert rank("bom_table") >= rank("bom_tree"), \
+        "a parts table the drawing office typed beats a tree the engine built"
+    assert rank("vision") == rank("llm_extract"), \
+        "a model transcribing an image is a machine transcription, which already has a rank"
+    assert rank("vision") < rank("bom_table"), \
+        "the image read must never silently displace the deterministic read of the same table"
+
+
+def test_every_observation_of_a_fact_survives_with_its_rank():
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    facts = bre.fact_observations(row)
+    quantities = facts["quantity"]
+    assert {o["value"] for o in quantities} == {2, 4}
+    assert all(set(o) == {"value", "source", "page", "rank"} for o in quantities)
+    assert quantities[0]["rank"] >= quantities[1]["rank"], "best first"
+
+
+def test_the_title_block_joins_the_row_as_its_own_observation_not_a_fake_column():
+    """The SDI parts table has no material column; inventing one would be a lie. The title
+    block is a SEPARATE observation of the same fact, at its own rank, joined to the row by the
+    page stamp — which is only possible because the row now carries its page."""
+    row = _merged({"source": "vision", "source_page": 7})
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 3, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["1.2"]}}}]}
+    materials = bre.fact_observations(row, summary)["material_text"]
+    assert any(o["source"] == "title_block" and o["page"] == 3 for o in materials)
+
+
+def test_the_winner_and_what_it_beat_are_both_printed():
+    row = _merged({"source": "vision", "source_page": 7, "quantity": 4})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    beat = said["what_the_winner_beat"]
+    assert "costing 2" in beat and "bom_table" in beat
+    assert "vision p7 said 4" in beat
+    assert "rank" in beat, "the rank it was judged on, or the decision is unauditable"
+
+
+def test_agreement_is_not_reported_as_a_contest():
+    row = _merged({"source": "vision", "source_page": 7})
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["what_the_winner_beat"] == ""
+
+
+def test_a_tie_on_rank_is_broken_by_the_rule_this_project_already_published():
+    """THE REVIEWER'S OWN EXAMPLE: a DXF 2.5mm against a title-block 1.2mm. Both are rank 70,
+    and source_precedence states which wins there — a filename "is a NAME rather than a field
+    on the sheet -- so where the two disagree outright the printed drawing is the one that was
+    issued" (dxf_filename 0, title_block 2). Sorting on rank alone costed the filename."""
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    row = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
+    row.update({"source": "dxf_filename", "thickness_mm": 2.5})
+    fs._merge_bom_rows(row, dict(row, source="vision", source_page=7, thickness_mm=None))
+    summary = {"document_analysis": {"bom_rows": [row]},
+               "pages": [{"page_number": 3, "page_analysis": {"title_block":
+                          {"thicknesses_mm": ["1.2"]}}}]}
+    beat = bre.bom_sheet(summary)[0]["what_the_winner_beat"]
+    assert "costing 1.2 from title_block" in beat
+    assert "dxf_filename p3 said 2.5" in beat, "and the DXF reading is still on the sheet"
