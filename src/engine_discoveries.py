@@ -76,7 +76,8 @@ _ESTIMATOR = {
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
-# always had.
+# always had. _ENVIRONMENT joins it below, once defined — it is declared after _OURS because
+# the comment explaining why it is not _OURS only makes sense beside _OURS.
 _NOT_OURS = _PACK | _COMMERCE | _ESTIMATOR
 
 # Would a perfect engine still raise it? NO. These are confessions: something was invented,
@@ -100,7 +101,25 @@ _OURS = {
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",
+    # A RECORD THAT DOES NOT SAY WHETHER IT CARRIES THE MONEY. Would a perfect engine raise
+    # it? No: declaring what a record contains costs nothing and needs no drawing, no
+    # supplier and no estimator. Twenty-three archived 7332-01 summaries each looked like the
+    # run behind an accepted price and not one could evidence it, because none of them
+    # mentioned that their totals were never read back. The omission is the engine's.
+    "money_provenance_undeclared",
 }
+
+# A RECORD THAT SAYS, CORRECTLY, THAT IT CANNOT EVIDENCE A PRICE. This one is deliberately
+# NOT in _OURS. On a machine with no Excel a pre-workbook record is the only kind there is,
+# and the engine behaved properly: it completed the estimate, declined to invent the sheet's
+# arithmetic, and declared what it lacks. Counting that as a confession would make the number
+# that must fall rise every time the engine was honest about its environment — and would
+# push whoever is driving it down to suppress the declaration rather than fix the read-back.
+_ENVIRONMENT = {
+    "money_provenance_cannot_evidence_a_price",
+}
+
+_NOT_OURS = _NOT_OURS | _ENVIRONMENT
 
 # Declared assumptions with a named lever. Not a defect and not a decision — a number the
 # engine chose, said so, and told you where to change. Counted apart so tuning them shows up
@@ -117,7 +136,8 @@ _UNVERIFIED_SUFFIX = "_not_evaluated"
 
 
 def classify(code: Any) -> str:
-    """"engine", "drawing", "assumption" or "unverified" for one violation code."""
+    """"engine", "drawing", "commerce", "estimator", "environment", "assumption" or
+    "unverified" for one violation code."""
     c = str(code or "").strip().lower()
     if not c:
         return "engine"                  # an unnamed flag is not evidence of a clean job
@@ -132,6 +152,11 @@ def classify(code: Any) -> str:
         return "commerce"
     if c in _ESTIMATOR:
         return "estimator"
+    if c in _ENVIRONMENT:
+        # NOT "drawing". The drawing office cannot install Excel, and sending a missing
+        # read-back to them is the same misdirection as telling somebody to ask for a vector
+        # export of a file that already is one.
+        return "environment"
     if c in _NOT_OURS:
         return "drawing"
     if c in _ASSUMPTIONS:

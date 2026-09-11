@@ -3166,6 +3166,63 @@ def check_two_sources_disagree_about_the_material(summary: Any) -> List[Dict[str
         parts=disputed)]
 
 
+def check_the_record_declares_whether_it_carries_the_money(summary: Any) -> List[Dict[str, Any]]:
+    """A record that cannot evidence the price it reports must SAY so, on its own face.
+
+    THE WEEK THIS COST. Twenty-three archived 7332-01 records were searched for the run behind
+    an accepted £80.09 workbook. Every one looked like a candidate — right job, right quantity,
+    right part count, plausible timestamps — and not one carried final_estimate.totals, so not
+    one could evidence the accepted price. Nothing in any of them said so. The absence was
+    discoverable only by running the costing code over each record and noticing the totals came
+    back None.
+
+    The skip itself is deliberate and stays: populate_workbook returns a path or nothing, the
+    read-back needs Excel COM, and an estimate that fails because a diagnostic could not open a
+    spreadsheet is worse than one that completes and says what it lacks. The defect was the
+    silence, not the skip.
+
+    WARNING, not BLOCKING, and the distinction is the point. A pre-workbook record is a
+    legitimate artefact — on a machine without Excel it is the only kind there is. What must
+    never happen is a pre-workbook record being mistaken for a priced one, so this fires when
+    the record is missing its declaration, or declares that it cannot evidence a price while
+    something downstream is nonetheless reporting one.
+    """
+    if not isinstance(summary, dict):
+        return _unevaluated("money_provenance_undeclared",
+                            "the summary could not be read.")
+    try:
+        import money_provenance as _mp
+    except Exception as err:                                             # noqa: BLE001
+        return _unevaluated("money_provenance_undeclared",
+                            f"money_provenance could not be imported: {err}")
+
+    stamped = summary.get("money_provenance")
+    verdict = _mp.describe(summary)
+    if not isinstance(stamped, dict):
+        return [_violation(
+            "money_provenance_undeclared", WARNING,
+            "this record carries no money_provenance block, so nothing on its face says "
+            f"whether it can evidence the price it reports. Derived now, it is "
+            f"'{verdict['state']}'. A record whose money provenance has to be worked out by "
+            "running the costing code is how twenty-three archived 7332-01 summaries each "
+            "looked like the accepted run and none of them was.",
+            state=verdict["state"],
+            can_evidence_a_price=verdict["can_evidence_a_price"],
+            evidence=verdict["evidence"])]
+
+    if not stamped.get("can_evidence_a_price"):
+        return [_violation(
+            "money_provenance_cannot_evidence_a_price", WARNING,
+            f"this record is '{stamped.get('state')}' and cannot evidence the price it "
+            f"reports. {stamped.get('why')}. This is a legitimate artefact — on a machine "
+            "without Excel it is the only kind there is — and it is reported so that nothing "
+            "downstream, and nobody reading the file later, treats the engine's own line sums "
+            "as an accepted price. It must not be frozen as a money-bearing replay baseline.",
+            state=stamped.get("state"),
+            evidence=stamped.get("evidence") or {})]
+    return []
+
+
 def check_every_declared_material_layer_is_priced(summary: Any) -> List[Dict[str, Any]]:
     """A part that says it is laminated from N materials must carry N of them in its price.
 
@@ -3658,6 +3715,7 @@ CHECKS = (
     check_two_sources_disagree_about_the_gauge,
     check_a_guessed_blank_its_own_weight_disproves,
     check_every_declared_material_layer_is_priced,
+    check_the_record_declares_whether_it_carries_the_money,
     check_every_unpriced_line_says_why,
     check_a_finish_field_holds_drawing_text,
     check_a_stated_finish_is_costed,

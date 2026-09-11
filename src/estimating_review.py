@@ -67,7 +67,13 @@ INFORMATION = "For information — assumptions the engine made"
 ORDER = (DRAWINGS, PRICES, CONFIRM, BROKEN, INFORMATION)
 
 _BUCKET_FOR = {"drawing": DRAWINGS, "commerce": PRICES, "estimator": CONFIRM,
-               "engine": BROKEN, "assumption": INFORMATION, "unverified": BROKEN}
+               "engine": BROKEN, "assumption": INFORMATION, "unverified": BROKEN,
+               # The run could not reach something on the machine it ran on — no Excel for the
+               # read-back, a share out of reach. Not BROKEN: the engine behaved correctly and
+               # said what it lacks. Not DRAWINGS either: nobody in the drawing office can fix
+               # it. INFORMATION, so it is visible without being filed as a defect against
+               # either the pack or the code.
+               "environment": INFORMATION}
 
 # WHAT TO DO, in a sentence, for the codes that carry a standard action. Anything not listed
 # falls back to the bucket's own instruction rather than inventing advice — a made-up action is

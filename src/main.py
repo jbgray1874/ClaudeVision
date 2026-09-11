@@ -1252,16 +1252,62 @@ def main() -> None:
         # drift from the spreadsheet. Open the populated .xlsx via Excel COM, read the real
         # Material/Labour/Unit totals, and write them into the JSON so every consumer agrees.
         # Failure-isolated: any error leaves the JSON unchanged and never breaks the run.
+        #
+        # AND WHATEVER HAPPENS, THE RECORD SAYS WHICH. _mp_skip collects the reason the workbook
+        # stage did not complete, and it is stamped onto the saved JSON below as
+        # money_provenance. Twenty-three archived 7332-01 records were searched for the run
+        # behind an accepted £80.09 workbook and every one looked like a candidate — right job,
+        # right quantity, right part count — while not one carried final_estimate.totals, and
+        # nothing in any of them said so. The absence was discoverable only by running the
+        # costing code and noticing the totals came back None. That silence is the defect being
+        # closed here; the skip itself is deliberate and stays.
+        _mp_skip = ""
+        if not xlsx_path:
+            _mp_skip = ("populate_workbook returned no path, so no workbook was written and "
+                        "nothing could be read back")
         if xlsx_path:
             try:
                 from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
                 _canon_json = (summary.get("saved_output_paths") or {}).get("json")
                 if _canon_json and Path(_canon_json).exists():
-                    _stamp_wep(str(xlsx_path), str(_canon_json))
+                    if _stamp_wep(str(xlsx_path), str(_canon_json)) is None:
+                        _mp_skip = ("the read-back could not obtain the calculated totals from "
+                                    "the workbook (see the [wep-readback] line above)")
                 else:
+                    _mp_skip = "the canonical JSON path was not found when the read-back ran"
                     print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
             except Exception as _wep_exc:
+                _mp_skip = f"the read-back raised {type(_wep_exc).__name__}: {_wep_exc}"
                 print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
+
+        # ── THE RECORD DECLARES WHETHER IT CARRIES THE MONEY ───────────────────────
+        # UNCONDITIONAL, and that is the whole point: the case worth stamping is the one where
+        # the workbook stage did NOT complete. A record that cannot evidence a price has to say
+        # so on its own face, because the alternative is what happened with 7332 — an archive of
+        # plausible candidates, none of which could, and no way to tell without running the
+        # costing code over each one.
+        try:
+            import money_provenance as _mp
+            _mp_json = (summary.get("saved_output_paths") or {}).get("json")
+            if _mp_json and Path(_mp_json).exists():
+                with open(_mp_json, encoding="utf-8") as _fh_mp:
+                    _mp_doc = json.load(_fh_mp)
+                _mp_verdict = _mp.stamp(_mp_doc, skip_reason=_mp_skip)
+                with open(_mp_json, "w", encoding="utf-8") as _fh_mpw:
+                    json.dump(_mp_doc, _fh_mpw, indent=2, ensure_ascii=False, default=str)
+                summary["money_provenance"] = _mp_verdict
+                if _mp_verdict["can_evidence_a_price"]:
+                    print(f"   [money] this record evidences its price: "
+                          f"{_mp_verdict['evidence']['final_estimate.totals']}", flush=True)
+                else:
+                    print(f"   [money] THIS RECORD CANNOT EVIDENCE A PRICE "
+                          f"({_mp_verdict['state']}). {_mp_verdict['why']}", flush=True)
+                    print(f"   [money] it is stamped money_provenance so nothing downstream, "
+                          f"and nobody reading it later, has to work that out again", flush=True)
+        except Exception as _mp_exc:
+            print(f"   [money] provenance not stamped ({type(_mp_exc).__name__}: {_mp_exc}) — "
+                  f"a record with no money_provenance must be treated as unable to evidence "
+                  f"a price", flush=True)
 
         # THE READ-BACK STAMPS THE FILE ON DISK, NOT THIS SUMMARY.
         #

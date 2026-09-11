@@ -603,6 +603,26 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
             "previous_baseline": previous or "none on file",
         }
 
+    # ── WHAT THE RECORD SAYS ABOUT ITS OWN MONEY ───────────────────────────────
+    # Read the record's declaration rather than re-deriving the rule here: a record stamped by
+    # the run that produced it knows things this tool cannot see, including WHY the workbook
+    # stage did not complete.
+    try:
+        import money_provenance as _mp
+        mp = _mp.describe(full)
+        stamped = full.get("money_provenance")
+        print(f"   money provenance: {mp['state']}"
+              + ("  (stamped by the run)" if isinstance(stamped, dict) else
+                 "  (derived here — this record predates the stamp)"))
+        if not mp["can_evidence_a_price"]:
+            print(f"      {mp['why']}")
+            skipped = (mp.get("evidence") or {}).get("workbook_stage_skipped_because")
+            if skipped:
+                print(f"      the run recorded why: {skipped}")
+        provenance["record_money_provenance"] = mp
+    except Exception as err:                                             # noqa: BLE001
+        print(f"   money provenance could not be read: {type(err).__name__}: {err}")
+
     # ── THE ASSERTED NUMBERS, AGAINST THE RECORD'S OWN ─────────────────────────
     asserted_money = dict(provenance.get("accepted_numbers") or {})
     contradictions = verify_numbers(full, asserted_money)
