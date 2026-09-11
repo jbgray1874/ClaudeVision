@@ -5427,6 +5427,25 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
         _ex_tables = _bre.build_tables(summary, "both")
         _wl_rows = ((summary.get("workbook_labour") or {}).get("rows") or [])
 
+        def _bom_blank_column_notes(_summary) -> list:
+            """Say WHY a column is blank on every row, at the top of the block.
+
+            A blank cell cannot be told apart from a fact that was looked for and found absent.
+            On 7332-01 the "material as printed" column was empty on all eleven rows while the
+            covering email from the same run printed 5mm MS and 2mm Acrylic — so the sheet said,
+            silently, that the drawings printed no materials.
+            """
+            try:
+                missing = _bre.bom_columns_not_recorded(_summary)
+            except Exception:                                            # noqa: BLE001
+                return []
+            if not missing:
+                return []
+            return ["COLUMNS THIS PACK COULD NOT FILL, and why — a blank here is the RECORD "
+                    "not holding the fact, never the drawing failing to state it:"] + [
+                f"    {name.replace('_', ' ')} — {reason}"
+                for name, reason in sorted(missing.items())]
+
         # decision id -> the sheet row that charged it, and who else shares that row.
         _row_for: Dict[str, Dict[str, Any]] = {}
         for _r in _wl_rows:
@@ -5448,7 +5467,8 @@ def _append_ai_sheets(wb, summary: Dict[str, Any], flags: List[str]):
                     "is an estimator's call.",
                     "The quantity is THE ROW'S OWN. It is not rolled through the assembly: a "
                     "2-off inside a 6-off stand is twelve parts, and that multiplication belongs "
-                    "to the route, not to a parts list."],
+                    "to the route, not to a parts list."]
+                + _bom_blank_column_notes(summary),
                 "header": [h.replace("_", " ") for h in _kb],
                 "rows": [[r.get(k) for k in _kb] for r in _bom],
                 "wide": ("description", "material as printed", "what that reader is",

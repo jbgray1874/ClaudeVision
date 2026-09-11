@@ -82,12 +82,14 @@ def _block_rows(sheet, block_title_starts: str) -> list:
     for r in range(1, sheet.max_row + 1):
         first = str(sheet.cell(row=r, column=1).value or "")
         if first.startswith(block_title_starts):
-            for probe in range(r + 1, min(r + 6, sheet.max_row + 1)):
-                if str(sheet.cell(row=probe, column=1).value or "").strip() and \
-                        not str(sheet.cell(row=probe, column=1).value).startswith(("With ",
-                                                                                   "The ", "An ",
-                                                                                   "THE ",
-                                                                                   "Column ")):
+            # THE HEADER IS THE FIRST ROW THAT FILLS SEVERAL COLUMNS. This used to skip intro
+            # lines by matching the words they start with, which is a guess about prose: adding
+            # a line beginning "COLUMNS THIS PACK COULD NOT FILL" made it read an intro sentence
+            # as the header and every column name came back wrong. An intro line occupies one
+            # cell and a header fills the table's width, so ask that instead.
+            for probe in range(r + 1, min(r + 10, sheet.max_row + 1)):
+                filled = sum(1 for c in sheet[probe] if str(c.value or "").strip())
+                if filled >= 3:
                     head = probe
                     break
             break
@@ -230,3 +232,39 @@ def test_the_reconciler_finds_the_yes_no_column_by_role_not_by_name():
     # the decision IS required, and the reconciler must not report it as uncharged noise
     assert folding["required by the route"] == "yes"
     assert "no sheet row is expected" not in (folding["why the counts differ"] or "")
+
+
+def test_a_column_blank_on_every_row_says_why_at_the_top_of_the_block():
+    """SHIPPED BLANK ON 7332-01. Five of eleven BOM columns were empty on every row — material
+    as printed, thickness mm, item no, read from page, read by — while the covering email from
+    the SAME RUN printed 5mm MS and 2mm Acrylic. So the sheet said, silently, that the drawings
+    printed no materials.
+
+    A blank cell cannot be told apart from a fact that was looked for and found absent. It is
+    the same failure as the empty Operations sheet, where a record that could not carry the
+    route read as a pack that stated none.
+    """
+    summary = _summary()
+    # the shape the deterministic table reader actually produces: four keys, nothing else
+    summary["document_analysis"]["bom_rows"] = [
+        {"item_number": "1", "part_number": "7332-01-003", "description": "STRAP",
+         "quantity": 2},
+        {"item_number": "2", "part_number": "7332-01-004", "description": "CAP", "quantity": 2}]
+    ws = _book(summary)["BOMs & Routes"]
+    text = "\n".join(str(c.value) for r in ws.iter_rows() for c in r if c.value)
+    assert "COLUMNS THIS PACK COULD NOT FILL" in text
+    assert "the RECORD not holding the fact, never the drawing failing to state it" in text
+    assert "no reader stamps itself onto a BOM row" in text, \
+        "and the one that matters most for auditing the reading is named"
+
+
+def test_the_item_number_column_is_filled_from_the_key_the_reader_uses():
+    """The parts-table reader builds every row as {item_number, part_number, description,
+    quantity}. The extract asked for "item" and "item_no", so this column was blank on every
+    row of every pack while the value sat on the row under its real name."""
+    summary = _summary()
+    summary["document_analysis"]["bom_rows"] = [
+        {"item_number": "7", "part_number": "7332-01-003", "description": "STRAP",
+         "quantity": 2}]
+    rows = _boms(summary)
+    assert str(rows[0]["item no"]) == "7"

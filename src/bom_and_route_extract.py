@@ -201,7 +201,13 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "quantity": row.get("quantity"),
             "material_as_printed": _text(row.get("material_text")),
             "thickness_mm": row.get("thickness_mm"),
-            "item_no": _text(row.get("item") or row.get("item_no") or ""),
+            # item_number IS THE NAME. The deterministic table reader builds every row as
+            # {item_number, part_number, description, quantity} — extractor_patterns.py:1049 and
+            # :1082 — and part_identity.normalize_bom_row keeps that spelling. Asking for "item"
+            # or "item_no" found nothing, so this column was blank on every row of every pack
+            # while the value sat on the row under its real name.
+            "item_no": _text(row.get("item_number") or row.get("item")
+                             or row.get("item_no") or ""),
             "read_from_page": _text(row.get("source_page") or row.get("page") or ""),
             "read_by": reader,
             "what_that_reader_is": READER_MEANING.get(reader.lower(),
@@ -222,6 +228,50 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
                                  f"up. Not merged here: that is a judgement, and merging would "
                                  f"hide it")
     return rows
+
+
+def bom_columns_not_recorded(summary: Mapping[str, Any]) -> Dict[str, str]:
+    """Columns that are blank on EVERY row, with the reason — because the record never held it.
+
+    A BLANK CELL IS THE WORST WAY FOR A FACT TO BE MISSING. It is indistinguishable from a fact
+    that was looked for and found to be absent: an empty "material as printed" reads as "the
+    drawing printed no material", which on 7332-01 was flatly untrue — the covering email from
+    the same run printed 5mm MS and 2mm Acrylic. Exactly the failure the empty Operations sheet
+    had, where "this pack states no operations" was the record failing to carry them.
+
+    WHAT IS ACTUALLY MISSING, AND WHERE. The deterministic BOM table reader builds each row as
+    {item_number, part_number, description, quantity} and nothing else — extractor_patterns.py
+    :1049 and :1082. No reader stamps `source` or `source_page` onto a BOM row at all. So on a
+    normal pack the material, the gauge, the page and above all WHICH READER PRODUCED THE ROW
+    are absent from the record, not merely unread by this module. That last one matters most:
+    reading quality cannot be audited row by row while a row cannot say who read it.
+
+    Reported per column rather than as one warning, so a pack whose vision rows DO carry a
+    source is not told its rows are anonymous.
+    """
+    rows = bom_sheet(summary)
+    if not rows:
+        return {}
+    why = {
+        "material_as_printed": "no BOM reader records the material column on the row. The "
+                               "material an estimator sees elsewhere was arbitrated from the "
+                               "title block, the DXF filename and the model — not taken from "
+                               "this table",
+        "thickness_mm": "gauge is not captured on the parts-table row; it is resolved later "
+                        "from the title block, the filename and the model",
+        "read_from_page": "the reader does not record which page it read the row from",
+        "read_by": "no reader stamps itself onto a BOM row, so this pack cannot say which "
+                   "reader produced which line",
+        "item_no": "the parts table carried no item numbers on this pack",
+        "description": "no description was read on any row",
+        "quantity": "no quantity was read on any row",
+    }
+    out: Dict[str, str] = {}
+    for column in ("material_as_printed", "thickness_mm", "item_no", "read_from_page",
+                   "read_by", "description", "quantity"):
+        if all(str(r.get(column) or "").strip() == "" for r in rows):
+            out[column] = why.get(column, "not recorded on the BOM row")
+    return out
 
 
 def route_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
@@ -548,5 +598,6 @@ def write_both(summary: Mapping[str, Any], out_dir: Any, job: str = "",
 
 
 __all__ = ["SHEETS", "READER_MEANING", "STATUS_MEANING", "route_payloads", "bom_sheet",
-           "route_sheet", "derivation_sheet", "build_tables", "write_workbook", "write_html",
+           "route_sheet", "derivation_sheet", "source_declaration",
+           "bom_columns_not_recorded", "build_tables", "write_workbook", "write_html",
            "write_both"]
