@@ -250,18 +250,21 @@ def _rank_of(source: str) -> int:
         return 0
 
 
-def _tiebreak_of(source: str) -> int:
+def _tiebreak_of(source: str, field: str = "") -> int:
     """WITHIN-RANK ORDER, WHICH IS NOT DECORATION. The DXF filename and the title block are
     both rank 70, and source_precedence states which wins there: a filename "is a NAME rather
     than a field on the sheet -- so where the two disagree outright the printed drawing is the
     one that was issued" (dxf_filename 0, title_block 2).
 
-    Sorting on rank alone ignored that and costed a filename gauge over a printed one — the
-    exact pair the reviewer used as the example. The ordering already exists; this reads it
-    rather than restating it."""
+    BUT THAT RULE IS ABOUT DIMENSIONS, NOT STOCK, and applying it to gauge would have been
+    expensive. 7332-01's details are cut at 2.5, 5, 1.5, 0.9 and 2 — every one of those is the
+    DXF name — while 1.2 is a GA note repeated across five detail sheets. Reporting "costing 1.2"
+    on the workbook whose sheet cut 2.5 is a provenance column contradicting the sheet it sits
+    in, which is worse than no column. source_precedence.FIELD_TIEBREAK holds the per-fact order;
+    this passes the field so it is used."""
     try:
         from source_precedence import tiebreak_priority
-        return int(tiebreak_priority(source))
+        return int(tiebreak_priority(source, field))
     except Exception:                                                    # noqa: BLE001
         return 0
 
@@ -320,7 +323,7 @@ def fact_observations(row: Mapping[str, Any],
             _add("thickness_mm", thicknesses.get(page), "title_block", page)
 
     for field in facts:
-        facts[field].sort(key=lambda e: (-e["rank"], -_tiebreak_of(e["source"])))
+        facts[field].sort(key=lambda e: (-e["rank"], -_tiebreak_of(e["source"], field)))
     return facts
 
 

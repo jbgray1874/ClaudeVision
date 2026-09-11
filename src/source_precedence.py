@@ -41,7 +41,7 @@ __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
     "corroboration_defends",
     "SOURCE_DISPLAY_NAME", "MEASURED_SOURCES", "display_name", "was_measured",
-    "SOURCE_TIEBREAK", "tiebreak_priority",
+    "SOURCE_TIEBREAK", "tiebreak_priority", "FIELD_TIEBREAK",
 ]
 
 
@@ -273,9 +273,59 @@ SOURCE_TIEBREAK: Dict[str, int] = {
 }
 
 
-def tiebreak_priority(source: Any) -> int:
-    """Within-rank precedence. 0 means "no published ordering" — fall through."""
-    return SOURCE_TIEBREAK.get(str(source or "").strip().lower(), 0)
+# ── WITHIN-RANK ORDER THAT DEPENDS ON WHICH FACT IS BEING SETTLED ───────────────────
+#
+# SOURCE_TIEBREAK above says that where a DXF filename and a title block disagree, "the printed
+# drawing is the one that was issued". That is written for a filename against A DIMENSION ON
+# THAT PART'S OWN SHEET. It is NOT the rule for gauge, and applying it there would have been
+# expensive:
+#
+#   7332-01's details are cut at 2.5 (003, 004), 5 (001), 1.5 (005), 0.9 (008) and 2 (007) —
+#   every one of those figures is the DXF name, "7332-01-003_2.5mm MS_revK.DXF". The 1.2 is a
+#   GA/title note repeated across five detail sheets. Costing 1.2 changes the nest, the laser
+#   time and the weight: a different quote, on a sheet that was accepted twice at GBP 80.34.
+#
+# On this office's packs the cut file IS the issued flat, and the filename is the name of what
+# the laser runs rather than decoration. So for gauge, the DXF sources win a tie — measured flat
+# first, then the file, then the name on it — and the title block is still stored and still shown
+# beside them. Estimating can reverse this; nothing else may.
+#
+# drawing_job_merge already applies the filename gauge as the authority in COSTING
+# (`_apply_field(part, "normalized_thickness_mm", thk, "dxf_filename")`), which is why 7332 was
+# cut at 2.5. This makes the reported precedence agree with the one the engine actually uses —
+# a provenance column that contradicts the sheet it sits in is worse than no column at all.
+_GAUGE_TIEBREAK: Dict[str, int] = {
+    "solidworks_flat_pattern": 5,
+    "dxf_flat_pattern": 5,
+    "dxf": 4,
+    "dxf_filename": 3,
+    "title_block": 1,
+    "drawing_deterministic": 1,
+}
+
+# The same fact travels under more than one name and they must not disagree about their own
+# order, so all three point at ONE dict rather than being assigned in afterwards — a subscript
+# assignment here reads to the arbitrated-fact guard exactly like a direct write of a resolved
+# value, and it was right to stop it.
+FIELD_TIEBREAK: Dict[str, Dict[str, int]] = {
+    "thickness_mm": _GAUGE_TIEBREAK,
+    "normalized_thickness_mm": _GAUGE_TIEBREAK,
+    "gauge_mm": _GAUGE_TIEBREAK,
+}
+
+
+def tiebreak_priority(source: Any, field: Any = None) -> int:
+    """Within-rank precedence. 0 means "no published ordering" — fall through.
+
+    `field` is optional and changes nothing for callers that omit it. Where a fact has its own
+    published order — gauge, today — that order wins, because the general rule about printed
+    sheets beating filenames was written about dimensions and is wrong about stock.
+    """
+    key = str(source or "").strip().lower()
+    per_field = FIELD_TIEBREAK.get(str(field or "").strip().lower())
+    if per_field and key in per_field:
+        return per_field[key]
+    return SOURCE_TIEBREAK.get(key, 0)
 
 
 # ── WHERE A DECISION WAS TAKEN, IN THE ESTIMATOR'S WORDS ────────────────────────────

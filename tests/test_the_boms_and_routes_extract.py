@@ -533,22 +533,54 @@ def test_agreement_is_not_reported_as_a_contest():
     assert said["what_the_winner_beat"] == ""
 
 
-def test_a_tie_on_rank_is_broken_by_the_rule_this_project_already_published():
-    """THE REVIEWER'S OWN EXAMPLE: a DXF 2.5mm against a title-block 1.2mm. Both are rank 70,
-    and source_precedence states which wins there — a filename "is a NAME rather than a field
-    on the sheet -- so where the two disagree outright the printed drawing is the one that was
-    issued" (dxf_filename 0, title_block 2). Sorting on rank alone costed the filename."""
+def test_gauge_ties_go_to_the_dxf_because_the_cut_file_is_the_issued_flat():
+    """THE ONE I GOT WRONG, AND IT WOULD HAVE CONTRADICTED THE SHEET IT SITS ON.
+
+    SOURCE_TIEBREAK says that where a DXF filename and a title block disagree, "the printed
+    drawing is the one that was issued". That is written for a filename against a DIMENSION ON
+    THAT PART'S OWN SHEET. Applied to gauge it inverts 7332-01: its details are cut at 2.5
+    (003, 004), 5 (001), 1.5 (005), 0.9 (008) and 2 (007), and every one of those figures is the
+    DXF name. The 1.2 is a GA/title note repeated across five detail sheets.
+
+    The engine's COSTING path already had this right — drawing_job_merge applies the filename
+    gauge as the authority, which is why the accepted sheet cut 2.5. Only the extract's reported
+    precedence disagreed, so this would have printed "costing 1.2" on the same workbook whose
+    sheet cut 2.5. A provenance column that contradicts the sheet it sits in is worse than none.
+    """
     import file_scan as fs
     from extractor_patterns import extract_bom_rows
-    row = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
-    row.update({"source": "dxf_filename", "thickness_mm": 2.5})
-    fs._merge_bom_rows(row, dict(row, source="vision", source_page=7, thickness_mm=None))
+    row = extract_bom_rows("3 7332-01-003 STRAP 2\n", source_page=5)[0]
+    row.update({"source": "dxf_filename", "thickness_mm": 2.5,
+                "source_pdf": "7332-01-003_2.5mm MS_revK.DXF"})
+    fs._merge_bom_rows(row, dict(row, source="bom_table", source_page=5, thickness_mm=None))
     summary = {"document_analysis": {"bom_rows": [row]},
-               "pages": [{"page_number": 3, "page_analysis": {"title_block":
+               "pages": [{"page_number": 5, "page_analysis": {"title_block":
                           {"thicknesses_mm": ["1.2"]}}}]}
-    beat = bre.bom_sheet(summary)[0]["what_the_winner_beat"]
-    assert "costing 1.2 from title_block" in beat
-    assert "dxf_filename p3 said 2.5" in beat, "and the DXF reading is still on the sheet"
+    said = bre.bom_sheet(summary)[0]
+    assert said["thickness_mm"] == 2.5, "the gauge the laser actually runs"
+    beat = said["what_the_winner_beat"]
+    assert "costing 2.5 from dxf_filename" in beat
+    assert "title_block p5 said 1.2" in beat, "and the title block is still stored and shown"
+
+
+def test_the_general_tiebreak_is_untouched_for_everything_else():
+    """The per-field order overrides ONE fact. A blanket reversal would be the opposite
+    overreach — for a dimension, the printed sheet really is the one that was issued."""
+    from source_precedence import tiebreak_priority
+    assert tiebreak_priority("title_block") > tiebreak_priority("dxf_filename"), \
+        "unchanged where no field is named"
+    assert tiebreak_priority("dxf_filename", "thickness_mm") > \
+        tiebreak_priority("title_block", "thickness_mm"), "reversed for gauge only"
+    for alias in ("normalized_thickness_mm", "gauge_mm"):
+        assert tiebreak_priority("dxf_filename", alias) > tiebreak_priority("title_block", alias), \
+            f"the same fact under {alias} must not disagree with itself"
+
+
+def test_a_measured_flat_still_outranks_the_name_on_the_file():
+    """Within the DXF sources the order is measured first, then the file, then the name on it."""
+    from source_precedence import tiebreak_priority as tb
+    assert tb("dxf_flat_pattern", "thickness_mm") > tb("dxf", "thickness_mm") > \
+        tb("dxf_filename", "thickness_mm")
 
 
 def test_an_observation_names_the_drawing_not_only_the_page():
