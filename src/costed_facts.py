@@ -1522,6 +1522,48 @@ def _operations_from_decisions(source: Any, part_number: Any) -> List[str]:
     return out
 
 
+def route_operations_for_part(source: Any, part_number: Any) -> List[str]:
+    """The operations the canonical route REQUIRES of this part, read from the route itself.
+
+    WHY THIS EXISTS BESIDE `operations` RATHER THAN REPLACING IT. _operations_from_decisions
+    reads decision ids off the priced workbook ROWS, deliberately: its result then names only
+    decisions that survived every gate and reached the sheet, which is exactly what you want
+    when the question is "what is this part charged for?".
+
+    But it answers a different question from "what does the route require?", and the two were
+    being conflated. On every archived 7332-01 summary the canonical route records tubebend on
+    7332-01-002 while the costed line publishes `operations: []`, because those rows carry no
+    decision ids — so a reader asking whether the route bends the tube got "no" from a record
+    whose route says yes. Weakening `operations` to paper over that would destroy the property
+    that makes it useful, so the route's own answer is published alongside it instead and each
+    keeps its meaning:
+
+        operations        what this part is CHARGED for — survived the gates, reached the sheet
+        route_operations  what the route REQUIRES of it — the compiler's decision, status
+                          `required` only
+
+    ONLY `required` COUNTS, and a decision with no status does not qualify. "The compiler
+    considered tubebend" is not "the route bends the tube", and absence is not a claim.
+    """
+    want = str(canonical_identity(source, part_number) or part_number or "").strip().upper()
+    if not want:
+        return []
+    out: List[str] = []
+    for decision in _decisions_by_id(source).values():
+        if str(decision.get("status") or "").strip().lower() != "required":
+            continue
+        targets = {str(decision.get("target_id") or "").strip().upper(),
+                   str(decision.get("subject_id") or "").strip().upper(),
+                   str(decision.get("part_number") or "").strip().upper()}
+        targets |= {str(p).strip().upper() for p in (decision.get("participants") or [])}
+        if want not in (targets - {""}):
+            continue
+        op = str(decision.get("operation") or "").strip()
+        if op and op not in out:
+            out.append(op)
+    return out
+
+
 def removed_identities(source: Any) -> Set[str]:
     """Every identity the identity gates removed from the costed population.
 
@@ -1638,6 +1680,11 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "money_basis": "excel_calculated" if charged_ext is not None else "engine_pre_excel",
             "price_origin": origin,
             "operations": _operations_from_decisions(source, pn),
+            # What the ROUTE requires, beside what the part is CHARGED for. The two answer
+            # different questions and were being conflated: on every archived 7332-01 summary
+            # the route records tubebend on 7332-01-002 while `operations` is empty, because
+            # those rows carry no decision ids.
+            "route_operations": route_operations_for_part(source, pn),
             "length": length,
             "section_profile": profile,
             "review_flags": _estimator_flags(part.get("review_flags")),
@@ -2020,6 +2067,7 @@ def charged_breakdown_by_material(source: Any,
 
 
 __all__ += ["outstanding_summary", "thickness_conflict"]
+__all__ += ["route_operations_for_part"]
 __all__ += ["costed_job", "costed_line", "record_lines", "charged_breakdown_by_material",
             "charged_material_rows_present", "packaging_is_charged", "packaging_status",
             "RESIDUAL_LABEL",

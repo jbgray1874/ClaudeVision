@@ -259,6 +259,16 @@ def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
                         or str(key).lower() in ("run_id", "run_uuid", "uuid", "commit",
                                                 "started_at", "finished_at")):
                     out[f"{holder}.{key}"] = value
+    # run_metadata WHOLESALE. It is where this pipeline actually keeps the run UUID and the
+    # archive version, and a key-name search misses it: the container is named run_metadata and
+    # its children are not. Guessing a field's location is how the reduction pass came to
+    # attempt nothing at all.
+    for holder in ("run_metadata", "runmeta", "run_meta"):
+        block = record.get(holder)
+        if isinstance(block, dict):
+            for key, value in block.items():
+                if isinstance(value, (str, int, float)) and str(value).strip():
+                    out[f"{holder}.{key}"] = value
     out.update(_run_identifiers(record))
     for key, value in _record_totals(record).items():
         out[f"computed.{key}"] = value
@@ -608,9 +618,36 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
         return 5
     unchecked = unchecked_numbers(full, asserted_money)
     if unchecked:
-        print(f"   note: {', '.join(unchecked)} could not be checked — the record computes no "
-              f"such total. Carried as an assertion for the Windows reconciliation to settle.")
-        asserted_money["_unconfirmed_here"] = unchecked
+        # AN UNCHECKABLE FIGURE MUST BLOCK, NOT BE LABELLED AND WAVED THROUGH. Labelling it
+        # "_unconfirmed_here" and freezing anyway made this check vacuous on exactly the data it
+        # was written for: NO archived 7332-01 summary carries final_estimate.totals, so every
+        # asserted figure came back unchecked and the freeze proceeded — the wrong same-day run
+        # could still be frozen wearing the accepted numbers. The synthetic tests passed because
+        # they inject the totals the real records lack.
+        #
+        # The way through is EVIDENCE, not a softer rule. The accepted workbook and its covering
+        # email do carry those figures; supply them and their hashes are recorded, so the
+        # provenance rests on artefacts somebody can re-open rather than on a typed assertion.
+        companions = provenance.get("companion_evidence") or []
+        if not companions:
+            print()
+            print(f"!! REFUSING TO FREEZE — {', '.join(unchecked)} cannot be checked against "
+                  f"this record.")
+            print(f"   It carries no final_estimate.totals, so the accepted workbook figures are "
+                  f"not in it")
+            print(f"   and nothing here can confirm them. Supply the artefacts that DO carry "
+                  f"them:")
+            print(f"       --accepted-workbook output\\estimates\\7332-01_20260907_141722.xlsx")
+            print(f"       --accepted-email     output\\emails\\7332-01_covering.md")
+            print(f"   Their hashes go into provenance, so the baseline rests on evidence rather "
+                  f"than on")
+            print(f"   a typed figure. Nothing has been written.")
+            return 6
+        print(f"   {', '.join(unchecked)} are not in the record; resting on companion evidence:")
+        for item in companions:
+            print(f"       {item['role']:18s} {item['sha256'][:16]}...  {item['path']}")
+        asserted_money["_not_in_the_record"] = unchecked
+        asserted_money["_evidenced_by"] = [c["path"] for c in companions]
         provenance["accepted_numbers"] = asserted_money
     elif asserted_money:
         confirmed = [k for k in ("unit_gbp", "material_gbp", "labour_gbp", "quantity")
@@ -723,6 +760,7 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
              ROOT / "output" / "archive", REPLAY / job]
     roots.extend(Path(r) for r in extra_roots)
     found: Dict[Path, None] = {}
+    not_runs: Dict[Path, None] = {}
     token = job.lower().replace("-", "")
     for root in roots:
         if not root.is_dir():
@@ -737,6 +775,7 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
                 if path.name == "accepted_facts.json":
                     continue                       # the reviewed structure, not a record
                 if _NOT_A_RECORD.search(path.name):
+                    not_runs.setdefault(path.resolve(), None)
                     continue                       # a stage artefact, not a saved run
                 found.setdefault(path.resolve(), None)
 
@@ -854,6 +893,16 @@ def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
         print("   pipeline gap to close before this job has a trustworthy baseline, not")
         print("   something to work around by asserting the figures anyway.")
         print()
+    if not_runs:
+        # LISTED, NOT SILENTLY DROPPED. 7332-01_llm_extract.json is a partial extract from one
+        # stage, not a saved run — but removing it from the output without a word invites
+        # wondering where it went, and somebody finding it on disk later has no way to know it
+        # was considered and classified rather than missed.
+        print("   not candidate runs — partial stage artefacts, shown so their absence from the")
+        print("   list above is a decision rather than an oversight:")
+        for path in sorted(not_runs):
+            print(f"       {path.name:46s} {path}")
+        print()
     print("   Pick the one that was ACCEPTED and pass it with --source. The freeze checks the")
     print("   record's own date AND its own totals against what you assert, so a record that is")
     print("   not that run will be refused rather than relabelled.")
@@ -895,6 +944,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--labour", type=float, default=None, help="accepted labour")
     ap.add_argument("--quantity", type=int, default=None, help="quantity it was settled at")
     ap.add_argument("--notes", default="", help="anything a reader would have to ask")
+    ap.add_argument("--accepted-workbook", default="", metavar="XLSX",
+                    help="the accepted estimate workbook. Hashed into provenance as companion "
+                         "evidence — required when the record itself carries no totals to "
+                         "check the asserted figures against")
+    ap.add_argument("--accepted-email", default="", metavar="FILE",
+                    help="the covering email that states the accepted figures. Hashed into "
+                         "provenance as companion evidence")
+    ap.add_argument("--companion", action="append", default=[], metavar="FILE",
+                    help="any further artefact to hash as evidence (repeatable)")
     ap.add_argument("--reduce", action="store_true",
                     help="attempt fingerprint-verified content reduction. OFF by default: "
                          "compact formatting is safe arithmetic, removing content is a claim "
@@ -940,6 +998,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         "notes": args.notes,
         "baseline_review": args.baseline_review,
     }
+    # COMPANION EVIDENCE, HASHED. The accepted workbook and its covering email carry the
+    # figures the saved JSON does not, so provenance rests on artefacts somebody can re-open
+    # rather than on a number that was typed. A named file that does not exist is an error, not
+    # a silently empty list: "I passed the workbook" and "the workbook was recorded" must not
+    # differ.
+    companions: List[Dict[str, Any]] = []
+    for role, value in (("accepted_workbook", args.accepted_workbook),
+                        ("accepted_email", args.accepted_email)):
+        if str(value).strip():
+            companions.append({"role": role, "path": str(value)})
+    for value in args.companion:
+        if str(value).strip():
+            companions.append({"role": "companion", "path": str(value)})
+    for item in companions:
+        path = Path(item["path"])
+        if not path.is_file():
+            print(f"!! companion evidence not found: {path}")
+            return 2
+        raw = path.read_bytes()
+        item["sha256"] = hashlib.sha256(raw).hexdigest()
+        item["bytes"] = len(raw)
+        item["name"] = path.name
+    if companions:
+        provenance["companion_evidence"] = companions
+
     money = {k: v for k, v in (("unit_gbp", args.unit), ("material_gbp", args.material),
                                ("labour_gbp", args.labour), ("quantity", args.quantity))
              if v is not None}

@@ -164,7 +164,12 @@ def assert_accepted_structure(job_name: str, facts: dict, lines: list,
         line = _find(pn)
         assert line is not None, f"{job_name}: {pn} missing from the record"
         charged = {str(o).lower() for o in (line.get("operations") or [])}
-        routed = required_ops_for(summary or {}, pn) if summary is not None else set()
+        # The line's OWN route_operations first — costed_facts now publishes what the route
+        # requires beside what is charged, so the record answers this itself. The summary read
+        # stays as a fallback for records frozen before that field existed.
+        routed = {str(o).lower() for o in (line.get("route_operations") or [])}
+        if not routed and summary is not None:
+            routed = required_ops_for(summary, pn)
         got_ops = charged | routed
         for op in ops:
             assert op.lower() in got_ops, (

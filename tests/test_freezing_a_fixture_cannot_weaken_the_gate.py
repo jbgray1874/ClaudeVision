@@ -595,26 +595,35 @@ def test_asserted_money_that_matches_is_recorded_as_confirmed(tmp_path, monkeypa
     assert "quantity" in prov["accepted_numbers"]["_confirmed_against_the_record"]
 
 
-def test_a_figure_the_record_cannot_compute_is_carried_as_an_assertion_and_says_so(
+def test_a_figure_the_record_cannot_compute_does_not_get_waved_through(
         tmp_path, monkeypatch):
-    """Honesty about the boundary: the fast layer cannot confirm what Excel computes. An
-    unconfirmable figure is carried and LABELLED, not silently presented as verified."""
+    """THIS TEST PREVIOUSLY ASSERTED THE OPPOSITE, AND THE ASSERTION WAS THE DEFECT.
+
+    It was called ..._is_carried_as_an_assertion_and_says_so and it held that an unverifiable
+    figure should be labelled "_unconfirmed_here" and the freeze allowed to proceed. That reads
+    as honest — the label is true — but it made the whole check vacuous on exactly the data it
+    was written for: no archived 7332-01 summary carries final_estimate.totals, so EVERY
+    asserted figure came back unchecked, every freeze proceeded, and the wrong same-day run
+    could still be frozen wearing the accepted numbers. A label is not a control.
+
+    The boundary is still real — the fast layer cannot confirm what Excel computed — but the
+    answer is to require the artefact that CAN confirm it, not to shrug. See
+    test_companion_evidence_lets_it_through_and_is_hashed."""
     replay = tmp_path / "replay"
     job = replay / "SYN-JOB"
     job.mkdir(parents=True)
     (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(frz, "REPLAY", replay)
-    # a record whose read-back never produced a labour figure — the Excel case this layer
-    # cannot settle
+    # a record whose read-back never produced a labour figure
     record = _record(totals={"unit_gbp": 80.09, "material_gbp": 40.89})
     source = tmp_path / "rec.json"
     source.write_text(json.dumps(record), encoding="utf-8")
     assert _costed(record).get("labour_gbp") is None, "fixture must genuinely lack it"
-    assert frz.freeze("SYN-JOB", source,
-                      {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
-                       "accepted_numbers": {"labour_gbp": 33.59}}) == 0
-    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
-    assert "labour_gbp" in prov["accepted_numbers"]["_unconfirmed_here"]
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                     "accepted_numbers": {"labour_gbp": 33.59}})
+    assert rc == 6, "one unconfirmable figure is enough to block"
+    assert not (job / "summary.json").exists()
 
 
 def test_verify_numbers_checks_only_what_the_record_computes():
@@ -752,3 +761,138 @@ def test_find_labels_a_replay_fixture_as_derived_not_as_evidence(tmp_path, monke
     assert "DERIVED FIXTURE, not independent evidence" in text
     assert "not a second sighting of the run" in text
     assert "Freeze from the archived record, not from a fixture" in text
+
+
+# ── an uncheckable figure blocks; companion evidence is the way through ───────────────
+
+
+def _no_totals(stamp: str = SYN_STAMP) -> dict:
+    """A record shaped like every archived 7332-01 summary: no final_estimate.totals at all."""
+    record = _record(stamp=stamp)
+    record.pop("final_estimate")
+    return record
+
+
+def test_an_asserted_figure_the_record_cannot_check_now_blocks(tmp_path, monkeypatch):
+    """THE CHECK WAS VACUOUS ON EXACTLY THE DATA IT WAS WRITTEN FOR. Labelling an unverifiable
+    figure "_unconfirmed_here" and freezing anyway meant that on the real archives — where NO
+    saved 7332-01 summary carries final_estimate.totals — every asserted figure came back
+    unchecked and the freeze proceeded. The wrong same-day run could still be frozen wearing the
+    accepted numbers. The synthetic tests passed only because they inject the totals the real
+    records lack, which is why this one deliberately removes them."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_no_totals()), encoding="utf-8")
+    assert _costed(_no_totals()).get("unit_gbp") is None, "fixture must lack the totals"
+
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                     "accepted_numbers": {"unit_gbp": 80.09, "material_gbp": 40.89}})
+    assert rc == 6, "an uncheckable figure must block, not be labelled and waved through"
+    assert not (job / "summary.json").exists()
+    assert not (job / "provenance.json").exists()
+
+
+def test_companion_evidence_lets_it_through_and_is_hashed(tmp_path, monkeypatch):
+    """The way past an uncheckable figure is EVIDENCE, not a softer rule. The accepted workbook
+    and its covering email do carry those figures; their hashes are recorded so provenance rests
+    on artefacts somebody can re-open rather than on a number that was typed."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_no_totals()), encoding="utf-8")
+    book = tmp_path / "7332-01_20260907_141722.xlsx"
+    book.write_bytes(b"PK-pretend-workbook")
+    mail = tmp_path / "covering.md"
+    mail.write_text("unit 80.09 / material 40.89 / labour 33.59", encoding="utf-8")
+
+    import hashlib
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                     "accepted_numbers": {"unit_gbp": 80.09},
+                     "companion_evidence": [
+                         {"role": "accepted_workbook", "path": str(book),
+                          "sha256": hashlib.sha256(book.read_bytes()).hexdigest()},
+                         {"role": "accepted_email", "path": str(mail),
+                          "sha256": hashlib.sha256(mail.read_bytes()).hexdigest()}]})
+    assert rc == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert [c["role"] for c in prov["companion_evidence"]] == ["accepted_workbook",
+                                                               "accepted_email"]
+    assert prov["companion_evidence"][0]["sha256"] == hashlib.sha256(
+        book.read_bytes()).hexdigest()
+    # and the record itself is honest about which figures it does not hold
+    assert "unit_gbp" in prov["accepted_numbers"]["_not_in_the_record"]
+    assert str(book) in prov["accepted_numbers"]["_evidenced_by"]
+
+
+def test_a_named_companion_that_does_not_exist_is_an_error(tmp_path, monkeypatch):
+    """"I passed the workbook" and "the workbook was recorded" must not differ."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    replay = tmp_path / "replay"
+    (replay / "SYN-JOB").mkdir(parents=True)
+    (replay / "SYN-JOB" / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_no_totals()), encoding="utf-8")
+    rc = frz.main(["SYN-JOB", "--source", str(source), "--accepted-run", "r",
+                   "--accepted-by", "b", "--accepted-on", SYN_DATE,
+                   "--accepted-workbook", str(tmp_path / "nope.xlsx")])
+    assert rc == 2
+
+
+def test_a_contradicted_figure_still_blocks_even_with_companions(tmp_path, monkeypatch):
+    """Evidence covers what the record cannot answer. It does not overrule what the record
+    answers differently."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_record()), encoding="utf-8")      # HAS totals: 80.09
+    book = tmp_path / "b.xlsx"
+    book.write_bytes(b"x")
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                     "accepted_numbers": {"unit_gbp": 99.99},
+                     "companion_evidence": [{"role": "accepted_workbook", "path": str(book),
+                                             "sha256": "deadbeef"}]})
+    assert rc == 5, "a contradiction is a contradiction"
+
+
+def test_run_metadata_is_read_because_that_is_where_the_uuid_lives():
+    """A key-name search misses it: the CONTAINER is called run_metadata and its children are
+    not. Guessing a field's location is how the reduction pass came to attempt nothing at all."""
+    record = _record()
+    record["run_metadata"] = {"run_uuid": "f9b517c4-fd14-56bc-9508-f19fbcbfd86c",
+                             "archive_version": "v0013"}
+    identity = frz._record_identity(record)
+    assert identity["run_metadata.run_uuid"] == "f9b517c4-fd14-56bc-9508-f19fbcbfd86c"
+    assert identity["run_metadata.archive_version"] == "v0013"
+
+
+def test_a_partial_extract_is_classified_not_silently_dropped(tmp_path, monkeypatch, capsys):
+    """Removing 7332-01_llm_extract.json from the list without a word invites wondering where it
+    went, and somebody finding it on disk later cannot tell it was classified from missed."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    monkeypatch.setattr(frz, "REPLAY", tmp_path / "tests" / "replay")
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    (out / "7332-01.json").write_text(json.dumps(_record()), encoding="utf-8")
+    (out / "7332-01_llm_extract.json").write_text('{"routes": []}', encoding="utf-8")
+
+    assert frz.find_candidates("7332-01") == 0
+    text = capsys.readouterr().out
+    assert "not candidate runs" in text
+    assert "7332-01_llm_extract.json" in text
+    assert "a decision rather than an oversight" in text
+    # and it is not offered as something to freeze
+    assert text.index("not candidate runs") > text.index("7332-01.json")
