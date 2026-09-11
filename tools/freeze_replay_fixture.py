@@ -181,16 +181,36 @@ def _blank_path(record: Any, path: str) -> Any:
     return out
 
 
+def _record_totals(record: Dict[str, Any]) -> Dict[str, Any]:
+    """The money the RECORD itself computes, via the same costed_job() every surface reads.
+
+    These are what make two runs from one day distinguishable. A timestamp and a part count do
+    not: 7332-01 could be run four times in an afternoon with twelve parts each time, and only
+    the totals say which one an estimator signed off.
+    """
+    try:
+        import costed_facts as cf
+        run = (cf.costed_job(copy.deepcopy(record)) or {}).get("run") or {}
+    except Exception as err:                                             # noqa: BLE001
+        return {"_error": f"{type(err).__name__}: {err}"}
+    return {k: run.get(k) for k in
+            ("order_qty", "unit_gbp", "material_gbp", "labour_gbp", "totals_source",
+             "code_version") if run.get(k) is not None}
+
+
 def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
-    """What the RECORD says about itself: when it ran, and anything version-shaped.
+    """What the RECORD says about itself: when it ran, what version, and what it costs.
 
     `processed_at` is stamped by json_normaliser at run time, so it is evidence rather than
-    assertion — it says when this run happened whatever anybody types on the command line.
+    assertion — it says when this run happened whatever anybody types on the command line. The
+    totals come from costed_job(), the same read every surface uses, for the same reason.
     """
     out: Dict[str, Any] = {"processed_at": record.get("processed_at") or "",
                            "schema": record.get("schema") or ""}
     for key, value in record.items():
-        if isinstance(value, (str, int, float)) and "version" in str(key).lower():
+        if isinstance(value, (str, int, float)) and (
+                "version" in str(key).lower() or str(key).lower() in ("commit", "run_id",
+                                                                      "run_uuid", "uuid")):
             out[str(key)] = value
     for holder in ("run", "meta", "metadata"):
         block = record.get(holder)
@@ -198,9 +218,60 @@ def _record_identity(record: Dict[str, Any]) -> Dict[str, Any]:
             for key, value in block.items():
                 if isinstance(value, (str, int, float)) and (
                         "version" in str(key).lower() or "processed" in str(key).lower()
-                        or str(key).lower() in ("run_id", "started_at", "finished_at")):
+                        or str(key).lower() in ("run_id", "run_uuid", "uuid", "commit",
+                                                "started_at", "finished_at")):
                     out[f"{holder}.{key}"] = value
+    for key, value in _record_totals(record).items():
+        out[f"computed.{key}"] = value
     return out
+
+
+# How close an asserted figure has to be to the record's own before it counts as the same
+# number. A penny, because these are pounds-and-pence totals an estimator read off a sheet.
+MONEY_TOLERANCE_GBP = 0.005
+
+
+def verify_numbers(record: Dict[str, Any], asserted: Dict[str, Any]) -> List[str]:
+    """Which asserted accepted numbers the record itself contradicts.
+
+    THE SECOND HALF OF PROVENANCE. Checking the date alone left every price figure a pure user
+    assertion: --unit 80.09 --material 40.89 --labour 33.59 were written into provenance without
+    anything ever comparing them to the record. A fixture can therefore still carry the right
+    DAY and the wrong RUN's money, which is most of the way back to the defect the date check
+    was added for.
+
+    Only figures the record actually computes are checked. Where a total is absent the assertion
+    is carried as an assertion and the freeze says so rather than pretending to have confirmed
+    it — the Windows Excel/read-back run is what settles those.
+    """
+    totals = _record_totals(record)
+    if "_error" in totals:
+        return []                      # cannot check; the caller reports the stage error
+    pairs = (("unit_gbp", "unit_gbp"), ("material_gbp", "material_gbp"),
+             ("labour_gbp", "labour_gbp"), ("quantity", "order_qty"))
+    problems: List[str] = []
+    for asserted_key, record_key in pairs:
+        want = asserted.get(asserted_key)
+        got = totals.get(record_key)
+        if want is None or got is None:
+            continue
+        try:
+            want_f, got_f = float(want), float(got)
+        except (TypeError, ValueError):
+            continue
+        tolerance = 0.5 if record_key == "order_qty" else MONEY_TOLERANCE_GBP
+        if abs(want_f - got_f) > tolerance:
+            problems.append(f"{asserted_key}: you say {want_f:g}, the record computes {got_f:g}")
+    return problems
+
+
+def unchecked_numbers(record: Dict[str, Any], asserted: Dict[str, Any]) -> List[str]:
+    """Asserted figures the record has no total for, so nothing here confirms them."""
+    totals = _record_totals(record)
+    pairs = (("unit_gbp", "unit_gbp"), ("material_gbp", "material_gbp"),
+             ("labour_gbp", "labour_gbp"), ("quantity", "order_qty"))
+    return [a for a, r in pairs
+            if asserted.get(a) is not None and totals.get(r) is None]
 
 
 def verify_provenance(record: Dict[str, Any], asserted_on: str) -> Tuple[bool, str, str]:
@@ -433,6 +504,7 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
     for key in sorted(identity):
         if identity[key] not in ("", None):
             print(f"       {key} = {identity[key]}")
+    provenance["accepted_on_asserted"] = provenance.get("accepted_on", "")
     ok, record_date, why = verify_provenance(full, provenance.get("accepted_on", ""))
     if not ok and not accept_new_baseline:
         print()
@@ -444,12 +516,70 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
         print(f"   can tell. Nothing has been written.")
         return 3
     if not ok and accept_new_baseline:
+        # A BASELINE CHANGE IS A DECISION, NOT A FLAG. --accept-new-baseline used to do nothing
+        # but wave the date check through, which made "this newer run is now the baseline" and
+        # "the date check is in my way" indistinguishable on the file afterwards. It now demands
+        # a stated review decision and records what the baseline WAS beside what it became, so
+        # the change is auditable by whoever finds it next year.
+        if not str(provenance.get("baseline_review") or "").strip():
+            print()
+            print(f"!! --accept-new-baseline needs --baseline-review saying what was reviewed "
+                  f"and decided.")
+            print(f"   Replacing an accepted baseline is a decision somebody owns. Recording it "
+                  f"as a bare flag leaves no way to tell it apart from someone getting the date "
+                  f"check out of the way. Nothing has been written.")
+            return 4
+        previous: Dict[str, Any] = {}
+        prior_path = target_dir / "provenance.json"
+        if prior_path.is_file():
+            try:
+                prior = json.loads(prior_path.read_text(encoding="utf-8"))
+                previous = {k: prior.get(k) for k in
+                            ("accepted_run", "accepted_by", "accepted_on")
+                            if prior.get(k)}
+                previous["structural_fingerprint"] = (
+                    (prior.get("fixture") or {}).get("structural_fingerprint"))
+                previous["source_sha256"] = (prior.get("fixture") or {}).get("source_sha256")
+            except Exception:                                            # noqa: BLE001
+                previous = {"_note": "the previous provenance.json could not be read"}
         print(f"   --accept-new-baseline: recording this run's OWN date ({record_date}), not "
               f"the one asserted")
         provenance["accepted_on"] = record_date
-        provenance["baseline_change"] = (
-            f"Accepted as a NEW baseline. The record ran on {record_date}; it is not the "
-            f"earlier accepted run.")
+        provenance["baseline_change"] = {
+            "what_happened": (f"Accepted as a NEW baseline. The record ran on {record_date}; it "
+                              f"is not the run named by the date originally asserted "
+                              f"({str(provenance.get('accepted_on_asserted') or '')})."),
+            "asserted_date_that_did_not_match": why,
+            "review_decision": provenance.get("baseline_review"),
+            "previous_baseline": previous or "none on file",
+        }
+
+    # ── THE ASSERTED NUMBERS, AGAINST THE RECORD'S OWN ─────────────────────────
+    asserted_money = dict(provenance.get("accepted_numbers") or {})
+    contradictions = verify_numbers(full, asserted_money)
+    if contradictions:
+        print()
+        print(f"!! REFUSING TO FREEZE — the accepted numbers contradict the record.")
+        for line in contradictions:
+            print(f"   {line}")
+        print()
+        print(f"   Checking the date alone left every price figure a pure assertion, so a "
+              f"fixture could")
+        print(f"   carry the right DAY and another run's money. Nothing has been written.")
+        return 5
+    unchecked = unchecked_numbers(full, asserted_money)
+    if unchecked:
+        print(f"   note: {', '.join(unchecked)} could not be checked — the record computes no "
+              f"such total. Carried as an assertion for the Windows reconciliation to settle.")
+        asserted_money["_unconfirmed_here"] = unchecked
+        provenance["accepted_numbers"] = asserted_money
+    elif asserted_money:
+        confirmed = [k for k in ("unit_gbp", "material_gbp", "labour_gbp", "quantity")
+                     if asserted_money.get(k) is not None]
+        if confirmed:
+            print(f"   the record's own totals agree with {', '.join(confirmed)}")
+            asserted_money["_confirmed_against_the_record"] = confirmed
+            provenance["accepted_numbers"] = asserted_money
 
     print("   computing the structural fingerprint of the complete record ...")
     base = _fingerprint(full)
@@ -529,62 +659,138 @@ def freeze(job: str, source: Path, provenance: Dict[str, Any],
 
 
 def find_candidates(job: str, extra_roots: Sequence[Path] = ()) -> int:
-    """List every saved record for this job with the date IT says it ran, newest first.
+    """List every saved record for this job with everything needed to tell them apart.
 
     WHY THIS IS A MODE OF THE TOOL RATHER THAN AN INSTRUCTION TO GO LOOKING. The question "which
-    of these is the accepted run?" is answered by the records themselves — each one carries the
-    processed_at its own run stamped. Asking somebody to type a path they have to go and hunt
-    for invites exactly the mistake this tool now refuses: the nearest plausible file, labelled
-    with the date we wished it had. Run this, read the dates, then pass the one you mean.
+    of these is the accepted run?" is answered by the records themselves. Asking somebody to type
+    a path they have to go and hunt for invites exactly the mistake this tool now refuses: the
+    nearest plausible file, labelled with the date we wished it had.
 
-    Nothing here decides which record is accepted. It reports what exists and what each one
-    says about itself; choosing is a person's job and recording that choice is the freeze.
+    A TIMESTAMP AND A PART COUNT ARE NOT ENOUGH. A job can be run four times in one afternoon
+    with twelve parts each time; only the totals say which one an estimator signed off. Each
+    candidate therefore shows its own unit / material / labour / quantity, its version or commit,
+    its sha256 and its path.
+
+    DEDUPLICATED BY RESOLVED PATH AND BY CONTENT. The same record reached through two paths is
+    one run, and listing it twice invites treating a copy as corroboration. Anything under
+    tests/replay/ is labelled a DERIVED FIXTURE rather than a historical candidate — the
+    mislabelled 7332-01 fixture lives exactly there, and it must never present itself as
+    independent evidence of the run it was mislabelled as.
+
+    Nothing here decides which record is accepted. It reports what exists and what each one says
+    about itself; choosing is a person's job and recording that choice is the freeze.
     """
     roots = [ROOT / "output" / "json", ROOT / "output", ROOT / "archive",
-             ROOT / "output" / "archive", ROOT / "tests" / "replay" / job]
+             ROOT / "output" / "archive", REPLAY / job]
     roots.extend(Path(r) for r in extra_roots)
-    seen: Dict[Path, None] = {}
+    found: Dict[Path, None] = {}
+    token = job.lower().replace("-", "")
     for root in roots:
         if not root.is_dir():
             continue
         for path in sorted(root.rglob("*.json")):
-            if job.lower().replace("-", "") in path.name.lower().replace("-", ""):
-                seen.setdefault(path.resolve(), None)
+            # A frozen fixture is called summary.json — the job is in its DIRECTORY, not its
+            # name — so a name filter alone skipped exactly the file that most needs flagging:
+            # the mislabelled 7332-01 fixture.
+            in_job_dir = path.parent.resolve() == (REPLAY / job).resolve()
+            if token in path.name.lower().replace("-", "") or (
+                    in_job_dir and path.name in ("summary.json", "accepted_facts.json")):
+                if path.name == "accepted_facts.json":
+                    continue                       # the reviewed structure, not a record
+                found.setdefault(path.resolve(), None)
 
-    if not seen:
+    if not found:
         print(f"   no saved record found for {job} under:")
         for root in roots:
             print(f"       {root}{'' if root.is_dir() else '   (does not exist)'}")
         print("   Pass --search with another directory to look there as well.")
         return 1
 
-    rows: List[Tuple[str, Path, int, int]] = []
-    for path in seen:
+    rows: List[Dict[str, Any]] = []
+    by_content: Dict[str, Path] = {}
+    for path in found:
         try:
             raw = path.read_bytes()
+        except Exception as err:                                         # noqa: BLE001
+            rows.append({"stamp": f"unreadable: {type(err).__name__}", "path": path,
+                         "bytes": 0, "parts": 0, "sha": "", "totals": {}, "derived": False})
+            continue
+        sha = hashlib.sha256(raw).hexdigest()
+        if sha in by_content:
+            # Same bytes through another path. One run, not two; say where the copy is.
+            for row in rows:
+                if row.get("sha") == sha:
+                    row.setdefault("also_at", []).append(path)
+            continue
+        by_content[sha] = path
+        try:
             record = json.loads(raw.decode("utf-8"))
         except Exception as err:                                         # noqa: BLE001
-            rows.append((f"unreadable: {type(err).__name__}", path, 0, 0))
+            rows.append({"stamp": f"unreadable: {type(err).__name__}", "path": path,
+                         "bytes": len(raw), "parts": 0, "sha": sha, "totals": {},
+                         "derived": False})
             continue
         if not isinstance(record, dict):
-            rows.append(("not a record (not an object)", path, len(raw), 0))
+            rows.append({"stamp": "not a record (not an object)", "path": path,
+                         "bytes": len(raw), "parts": 0, "sha": sha, "totals": {},
+                         "derived": False})
             continue
         parts = (record.get("estimate_summary") or {}).get("part_estimates") or []
-        rows.append((str(record.get("processed_at") or "NO processed_at"),
-                     path, len(raw), len(parts) if isinstance(parts, list) else 0))
+        try:
+            derived = REPLAY in path.parents
+        except Exception:                                                # noqa: BLE001
+            derived = False
+        rows.append({
+            "stamp": str(record.get("processed_at") or "NO processed_at"),
+            "path": path, "bytes": len(raw), "sha": sha, "derived": derived,
+            "parts": len(parts) if isinstance(parts, list) else 0,
+            "totals": _record_totals(record),
+            "identity": {k: v for k, v in _record_identity(record).items()
+                         if not k.startswith("computed.") and k not in ("processed_at", "schema")
+                         and v not in ("", None)},
+        })
 
-    rows.sort(key=lambda r: r[0], reverse=True)
-    print(f"   saved records for {job}, newest first by what each one says about itself:")
+    rows.sort(key=lambda r: (r.get("derived", False), r["stamp"]), reverse=True)
+    print(f"   saved records for {job} — newest first by what each one says about itself")
     print()
-    for stamp, path, size, parts in rows:
-        print(f"   {stamp:34s} {size / 1_048_576:6.1f} MB  {parts:3d} parts")
-        print(f"   {'':34s} {path}")
-    print()
-    print("   Pick the one that was ACCEPTED and pass it with --source. A record whose date is")
-    print("   not the accepted date will be refused unless you pass --accept-new-baseline,")
-    print("   which records that run's own date rather than the one you type.")
-    overwriteable = [p for _s, p, _z, _n in rows
-                     if p.parent.name == "json" and p.parent.parent.name == "output"]
+    for row in rows:
+        tag = "  [DERIVED FIXTURE, not independent evidence]" if row.get("derived") else ""
+        print(f"   {row['stamp']}{tag}")
+        print(f"       path     {row['path']}")
+        print(f"       sha256   {row['sha'] or '(unreadable)'}")
+        print(f"       size     {row['bytes'] / 1_048_576:.2f} MB, {row['parts']} parts")
+        totals = row.get("totals") or {}
+        if totals.get("_error"):
+            print(f"       totals   could not be computed: {totals['_error']}")
+        elif totals:
+            money = "  ".join(
+                f"{label}={totals[key]}" for label, key in
+                (("qty", "order_qty"), ("unit", "unit_gbp"), ("material", "material_gbp"),
+                 ("labour", "labour_gbp")) if totals.get(key) is not None)
+            print(f"       totals   {money or '(none computed)'}")
+            if totals.get("totals_source"):
+                print(f"       source   {totals['totals_source']}")
+            if totals.get("code_version"):
+                print(f"       version  {totals['code_version']}")
+        else:
+            print(f"       totals   none computed")
+        for key, value in sorted((row.get("identity") or {}).items()):
+            print(f"       {key:8s} {value}")
+        for other in (row.get("also_at") or []):
+            print(f"       ALSO AT  {other}   (identical bytes — the same run, not another)")
+        print()
+
+    print("   Pick the one that was ACCEPTED and pass it with --source. The freeze checks the")
+    print("   record's own date AND its own totals against what you assert, so a record that is")
+    print("   not that run will be refused rather than relabelled.")
+    if any(r.get("derived") for r in rows):
+        print()
+        print("   One or more candidates is a DERIVED FIXTURE under tests/replay/. A fixture was")
+        print("   produced FROM a record; it is not a second sighting of the run, and one of")
+        print("   them was mislabelled. Freeze from the archived record, not from a fixture.")
+    overwriteable = [r["path"] for r in rows
+                     if r["path"].parent.name == "json"
+                     and r["path"].parent.parent.name == "output"]
     if overwriteable:
         print()
         print("   NOTE: these are rewritten by the next run of this job, so archive a copy")
@@ -624,7 +830,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="never reduce, whatever else is passed")
     ap.add_argument("--accept-new-baseline", action="store_true",
                     help="the record is a NEWER run than --accepted-on and you are deliberately "
-                         "making it the baseline. Its own date is recorded, not the one typed")
+                         "making it the baseline. Its own date is recorded, not the one typed. "
+                         "Requires --baseline-review")
+    ap.add_argument("--baseline-review", default="",
+                    help="what was reviewed and decided in replacing the accepted baseline. "
+                         "Required with --accept-new-baseline: a baseline change is a decision "
+                         "somebody owns, and a bare flag cannot be told apart from someone "
+                         "getting the date check out of the way")
     args = ap.parse_args(argv)
 
     if args.find:
@@ -652,6 +864,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "accepted_by": args.accepted_by,
         "accepted_on": args.accepted_on,
         "notes": args.notes,
+        "baseline_review": args.baseline_review,
     }
     money = {k: v for k, v in (("unit_gbp", args.unit), ("material_gbp", args.material),
                                ("labour_gbp", args.labour), ("quantity", args.quantity))

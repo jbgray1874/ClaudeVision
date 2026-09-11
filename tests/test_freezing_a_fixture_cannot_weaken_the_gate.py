@@ -35,17 +35,29 @@ SYN_STAMP = "2026-09-07T14:17:00+00:00"
 SYN_DATE = SYN_STAMP[:10]
 
 
-def _record(page_text: str = "", stamp: str = SYN_STAMP) -> dict:
-    """A small but real-shaped record: one routed part with a blank and a material."""
+# The accepted numbers live in final_estimate.totals — that is what the Excel read-back writes
+# and what costed_job() reports as the run's unit/material/labour. A fixture without it cannot
+# exercise the number check at all, and three of these tests were SKIPPING for exactly that
+# reason: the same silent-skip hole one level down. Given real totals, the check is proved.
+SYN_TOTALS = {"unit_gbp": 80.09, "material_gbp": 40.89, "labour_gbp": 33.59}
+SYN_ORDER_QTY = 6
+
+
+def _record(page_text: str = "", stamp: str = SYN_STAMP, totals: dict = None,
+            order_qty: int = SYN_ORDER_QTY) -> dict:
+    """A small but real-shaped record: one routed part with a blank, a material and totals."""
     return {
         "processed_at": stamp,
+        "final_estimate": {"totals": dict(SYN_TOTALS if totals is None else totals)},
         "pages": [{"page_number": 1, "source_pdf_name": "j.pdf",
                    "text": page_text or ("LOREM IPSUM DRAWING NOTES " * 40),
                    "page_analysis": {"dimensions": {"all_dimensions_mm": [100, 50]}}}],
         "document_analysis": {"bom_rows": [
             {"part_number": "SYN-001", "description": "Synthetic plate",
              "quantity": 2, "material_text": "Steel, Mild 2mm"}]},
-        "estimate_summary": {"part_estimates": [
+        "estimate_summary": {
+            "estimate_workbook_inputs": {"assumed_job_quantity": order_qty},
+            "part_estimates": [
             {"part_number": "SYN-001", "quantity": 2,
              "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 2.0,
              "blank_length_mm": 100.0, "blank_width_mm": 50.0}]},
@@ -189,7 +201,7 @@ def test_a_freeze_writes_the_summary_the_provenance_and_the_fingerprint(tmp_path
     rc = frz.freeze("SYN-JOB", source,
                     {"accepted_run": "the synthetic run", "accepted_by": "a test",
                      "accepted_on": SYN_DATE,
-                     "accepted_numbers": {"unit_gbp": 1.23}})
+                     "accepted_numbers": {"unit_gbp": SYN_TOTALS["unit_gbp"]}})
     assert rc == 0
     summary = json.loads((job_dir / "summary.json").read_text(encoding="utf-8"))
     assert summary["estimate_summary"]["part_estimates"][0]["part_number"] == "SYN-001"
@@ -316,11 +328,14 @@ def test_accepting_a_newer_run_records_its_own_date_not_the_one_typed(tmp_path, 
                       encoding="utf-8")
     assert frz.freeze("SYN-JOB", source,
                       {"accepted_run": "the v0020 run", "accepted_by": "J Gray",
-                       "accepted_on": "2026-09-07"},
+                       "accepted_on": "2026-09-07",
+                       "baseline_review": "reviewed the v0020 run against the 7 Sep figures; "
+                                          "accepted as the new baseline"},
                       accept_new_baseline=True) == 0
     prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
     assert prov["accepted_on"] == "2026-09-10", "the record's own date wins"
-    assert "NEW baseline" in prov["baseline_change"]
+    assert "NEW baseline" in prov["baseline_change"]["what_happened"]
+    assert "accepted as the new baseline" in prov["baseline_change"]["review_decision"]
 
 
 def test_a_record_with_no_timestamp_cannot_be_attributed_and_is_refused(tmp_path, monkeypatch):
@@ -525,3 +540,215 @@ def test_no_documented_command_contains_a_powershell_redirect_placeholder():
             if "freeze_replay_fixture.py" not in line:
                 continue
             assert "<" not in line, f"{path.name}: unrunnable in PowerShell -> {line.strip()}"
+
+
+# ── the numbers are checked too, not just the date ────────────────────────────────────
+
+
+def _costed(record: dict) -> dict:
+    """What this record's own costed_job() computes, so a test can assert against reality
+    rather than against a number I have invented."""
+    return frz._record_totals(record)
+
+
+def test_asserted_money_that_the_record_contradicts_is_refused(tmp_path, monkeypatch):
+    """Checking the date alone left every price figure a pure assertion: --unit 80.09
+    --material 40.89 --labour 33.59 went into provenance without anything comparing them to the
+    record. A fixture could therefore carry the right DAY and another run's money — most of the
+    way back to the defect the date check was added for."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    record = _record()
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(record), encoding="utf-8")
+
+    own = _costed(record)
+    if own.get("unit_gbp") is None:
+        pytest.skip("this record computes no unit total to contradict")
+    wrong = float(own["unit_gbp"]) + 12.34
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                     "accepted_numbers": {"unit_gbp": wrong}})
+    assert rc == 5, "a contradicted total must stop the freeze"
+    assert not (job / "summary.json").exists(), "and write nothing"
+
+
+def test_asserted_money_that_matches_is_recorded_as_confirmed(tmp_path, monkeypatch):
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    record = _record()
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(record), encoding="utf-8")
+    own = _costed(record)
+    if own.get("order_qty") is None:
+        pytest.skip("this record computes no quantity")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                       "accepted_numbers": {"quantity": own["order_qty"]}}) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert "quantity" in prov["accepted_numbers"]["_confirmed_against_the_record"]
+
+
+def test_a_figure_the_record_cannot_compute_is_carried_as_an_assertion_and_says_so(
+        tmp_path, monkeypatch):
+    """Honesty about the boundary: the fast layer cannot confirm what Excel computes. An
+    unconfirmable figure is carried and LABELLED, not silently presented as verified."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    # a record whose read-back never produced a labour figure — the Excel case this layer
+    # cannot settle
+    record = _record(totals={"unit_gbp": 80.09, "material_gbp": 40.89})
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(record), encoding="utf-8")
+    assert _costed(record).get("labour_gbp") is None, "fixture must genuinely lack it"
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "r", "accepted_by": "b", "accepted_on": SYN_DATE,
+                       "accepted_numbers": {"labour_gbp": 33.59}}) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    assert "labour_gbp" in prov["accepted_numbers"]["_unconfirmed_here"]
+
+
+def test_verify_numbers_checks_only_what_the_record_computes():
+    record = _record()
+    own = _costed(record)
+    # a figure the record has no total for cannot be contradicted
+    assert frz.verify_numbers(record, {"nonexistent_gbp": 1.0}) == []
+    if own.get("order_qty") is not None:
+        assert frz.verify_numbers(record, {"quantity": own["order_qty"]}) == []
+        problems = frz.verify_numbers(record, {"quantity": float(own["order_qty"]) + 5})
+        assert problems and "quantity" in problems[0]
+
+
+def test_a_penny_of_difference_is_a_difference():
+    """These are pounds-and-pence totals read off a sheet; 80.09 and 80.10 are not the same
+    number and a tolerance that swallowed the difference would defeat the check."""
+    record = _record()
+    own = _costed(record)
+    if own.get("unit_gbp") is None:
+        pytest.skip("no unit total")
+    assert frz.verify_numbers(record, {"unit_gbp": float(own["unit_gbp"]) + 0.01})
+
+
+def test_a_baseline_change_without_a_stated_review_is_refused(tmp_path, monkeypatch):
+    """--accept-new-baseline used to do nothing but wave the date check through, so "this newer
+    run is now the baseline" and "the date check is in my way" were indistinguishable on the
+    file afterwards."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+    source.write_text(json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")),
+                      encoding="utf-8")
+    rc = frz.freeze("SYN-JOB", source,
+                    {"accepted_run": "r", "accepted_by": "b", "accepted_on": "2026-09-07"},
+                    accept_new_baseline=True)
+    assert rc == 4
+    assert not (job / "summary.json").exists()
+
+
+def test_a_baseline_change_records_what_the_baseline_was(tmp_path, monkeypatch):
+    """So whoever finds this next year can see what was replaced, not just what replaced it."""
+    replay = tmp_path / "replay"
+    job = replay / "SYN-JOB"
+    job.mkdir(parents=True)
+    (job / "accepted_facts.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    source = tmp_path / "rec.json"
+
+    # first baseline
+    source.write_text(json.dumps(_record()), encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source, {"accepted_run": "the 7 Sep pack",
+                                          "accepted_by": "J Gray",
+                                          "accepted_on": SYN_DATE}) == 0
+    # then it is replaced by a newer run
+    source.write_text(json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")),
+                      encoding="utf-8")
+    assert frz.freeze("SYN-JOB", source,
+                      {"accepted_run": "v0020", "accepted_by": "J Gray",
+                       "accepted_on": SYN_DATE,
+                       "baseline_review": "v0020 reviewed and accepted"},
+                      accept_new_baseline=True) == 0
+    prov = json.loads((job / "provenance.json").read_text(encoding="utf-8"))
+    previous = prov["baseline_change"]["previous_baseline"]
+    assert previous["accepted_run"] == "the 7 Sep pack"
+    assert previous["accepted_on"] == SYN_DATE
+    assert previous["source_sha256"], "and the bytes it was, so it can be found again"
+
+
+# ── the finder tells runs apart, and never counts a copy twice ────────────────────────
+
+
+def test_find_shows_the_totals_that_distinguish_two_runs_from_one_day(tmp_path, monkeypatch,
+                                                                     capsys):
+    """A timestamp and "12 parts" do not identify a run: a job can be run four times in an
+    afternoon with twelve parts each time."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    monkeypatch.setattr(frz, "REPLAY", tmp_path / "tests" / "replay")
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    morning = _dated(_record(), "2026-09-07T09:02:00+00:00")
+    afternoon = _dated(_record(), "2026-09-07T14:17:00+00:00")
+    afternoon["estimate_summary"]["part_estimates"][0]["quantity"] = 6
+    (out / "7332-01_am.json").write_text(json.dumps(morning), encoding="utf-8")
+    (out / "7332-01_pm.json").write_text(json.dumps(afternoon), encoding="utf-8")
+
+    assert frz.find_candidates("7332-01") == 0
+    text = capsys.readouterr().out
+    assert "sha256" in text, "each candidate is identified by content"
+    assert text.count("sha256") == 2
+    assert "totals" in text
+    assert "09:02" in text and "14:17" in text
+
+
+def test_find_does_not_list_the_same_bytes_twice(tmp_path, monkeypatch, capsys):
+    """The same record through two paths is ONE run. Listing it twice invites treating a copy
+    as corroboration."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    monkeypatch.setattr(frz, "REPLAY", tmp_path / "tests" / "replay")
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    payload = json.dumps(_record())
+    (out / "7332-01.json").write_text(payload, encoding="utf-8")
+    (archive / "7332-01_copy.json").write_text(payload, encoding="utf-8")
+
+    assert frz.find_candidates("7332-01") == 0
+    text = capsys.readouterr().out
+    assert text.count("sha256") == 1, "one run, listed once"
+    assert "ALSO AT" in text, "but the copy's location is still reported"
+    assert "the same run, not another" in text
+
+
+def test_find_labels_a_replay_fixture_as_derived_not_as_evidence(tmp_path, monkeypatch, capsys):
+    """The mislabelled 7332-01 fixture lives under tests/replay/. It must never present itself
+    as independent evidence of the run it was mislabelled as."""
+    monkeypatch.setattr(frz, "ROOT", tmp_path)
+    replay = tmp_path / "tests" / "replay"
+    monkeypatch.setattr(frz, "REPLAY", replay)
+    job_dir = replay / "7332-01"
+    job_dir.mkdir(parents=True)
+    (job_dir / "summary.json").write_text(
+        json.dumps(_dated(_record(), "2026-09-10T18:59:00+00:00")), encoding="utf-8")
+    out = tmp_path / "output" / "json"
+    out.mkdir(parents=True)
+    (out / "7332-01.json").write_text(
+        json.dumps(_dated(_record(page_text="different"), "2026-09-07T14:17:00+00:00")),
+        encoding="utf-8")
+
+    assert frz.find_candidates("7332-01") == 0
+    text = capsys.readouterr().out
+    assert "DERIVED FIXTURE, not independent evidence" in text
+    assert "not a second sighting of the run" in text
+    assert "Freeze from the archived record, not from a fixture" in text
