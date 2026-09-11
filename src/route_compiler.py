@@ -16,7 +16,7 @@ import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import bought_in_policy
-from source_precedence import rank
+from source_precedence import rank, source_of
 
 
 ROUTE_SCHEMA = "canonical_route.v1"
@@ -273,7 +273,15 @@ class PartNode:
     part_number: str
     description: str = ""
     kind: str = "leaf"  # leaf | assembly | bought_in
+    # WHAT IS COSTED: one per quoted unit, after the cascade and after precedence.
     qty_per_unit: float = 1.0
+    # WHAT THE PART ITSELF SAYS — its own BOM cell or model instance count, and the reader
+    # that won it. Kept alongside the effective figure rather than replaced by it, so an
+    # estimator can see a part whose own line says one and whose assembly needs six without
+    # having to work out which number the sheet used.
+    qty_own: Optional[float] = None
+    qty_own_source: str = ""
+    qty_note: str = ""
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -1676,15 +1684,21 @@ def build_part_graph(
               f"(= {a} + {b} zipped)", flush=True)
 
     quantities: Dict[str, float] = {}
+    # HOW MANY EDGES THE CASCADE CROSSED TO REACH A NODE. A part hanging DIRECTLY off a root
+    # is reached by exactly one edge, so its per-unit quantity IS that edge's quantity: there
+    # is no nesting to multiply. Anything deeper is a product of several edges, where the
+    # part's own BOM cell is per-parent and cannot be set against the product at all.
+    depths: Dict[str, Set[int]] = {}
 
-    def add_descendants(identity: str, factor: float, path: Set[str]) -> None:
+    def add_descendants(identity: str, factor: float, path: Set[str], depth: int = 0) -> None:
         if identity in path:
             return
         quantities[identity] = quantities.get(identity, 0.0) + factor
+        depths.setdefault(identity, set()).add(depth)
         next_path = set(path)
         next_path.add(identity)
         for child_id, child_qty in (children.get(identity) or {}).items():
-            add_descendants(child_id, factor * child_qty, next_path)
+            add_descendants(child_id, factor * child_qty, next_path, depth + 1)
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
@@ -1694,6 +1708,56 @@ def build_part_graph(
         if identity not in quantities:
             quantities[identity] = number(
                 (records.get(identity) or {}).get("quantity"), 1.0) or 1.0
+
+    # ONE QUANTITY, NOT TWO COPIES OF IT. The part record carries an arbitrated quantity —
+    # apply_field owns it and source_of names the reader that won. This graph carries its own
+    # cascade. Both reach the workbook, and the Estimate sheet reads the GRAPH node, so while
+    # the two were independent a job could be costed on a figure the precedence layer had
+    # already rejected: 12349-02 booked three lids, three front covers and three packers
+    # because the general arrangement printed three install arrangements, when the model had
+    # said one per unit and apply_field had kept it. The log said `qty 1 KEPT` and the sheet
+    # said 3.
+    #
+    # Where a part hangs directly off a root, the cascade and the record are two statements
+    # about the same number, so they must agree. When they do not, rank decides — a reader
+    # that outranks the BOM tree is not overturned by a tree edge. The tree still wins where
+    # nothing stronger has spoken: it is then writing a field no better source owns, which is
+    # exactly what it is for.
+    #
+    # Deeper than one edge nothing is compared and nothing moves: the own cell is per-parent,
+    # the cascade is a product, and both are recorded side by side for the estimator instead.
+    qty_own: Dict[str, float] = {}
+    qty_own_source: Dict[str, str] = {}
+    qty_notes: Dict[str, str] = {}
+    _tree_rank = rank("bom_tree")
+    for identity in sorted(identities):
+        record = records.get(identity) or {}
+        _own = number(record.get("quantity"), None)
+        if _own is None:
+            continue
+        qty_own[identity] = _own
+        _own_src = str(source_of(record, "quantity") or "")
+        if _own_src:
+            qty_own_source[identity] = _own_src
+        _eff = quantities.get(identity)
+        if _eff is None or abs(_eff - _own) < 1e-9:
+            continue
+        if depths.get(identity) != {1}:
+            # Genuine nesting, or a node the cascade never reached. Recorded, not touched.
+            continue
+        _src_label = _display_source(_own_src) if _own_src else "an unnamed reader"
+        if rank(_own_src) <= _tree_rank:
+            qty_notes[identity] = (
+                f"the assembly tree cascades {_eff:g} per unit from its parent edge; the "
+                f"part's own quantity is {_own:g} from {_src_label}. Nothing here outranks "
+                f"the tree, so the cascade is what is costed — confirm which is right")
+            continue
+        quantities[identity] = _own
+        qty_notes[identity] = (
+            f"costing {_own:g} per unit from {_src_label}; the assembly tree cascaded "
+            f"{_eff:g} from its parent edge and does not outrank that reader")
+        print(f"   [graph] {identity} qty {_own:g} from {_src_label} KEPT "
+              f"(parent edge cascaded {_eff:g})", flush=True)
 
     nodes: List[PartNode] = []
     for identity in sorted(identities):
@@ -1718,6 +1782,9 @@ def build_part_graph(
             description=str(record.get("description") or ""),
             kind=kind,
             qty_per_unit=quantities.get(identity, 1.0),
+            qty_own=qty_own.get(identity),
+            qty_own_source=qty_own_source.get(identity, ""),
+            qty_note=qty_notes.get(identity, ""),
             parents=sorted(parents.get(identity) or []),
             children=[
                 ChildEdge(part_number=child_id, qty=qty)

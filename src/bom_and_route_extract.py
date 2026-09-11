@@ -406,12 +406,39 @@ def _disagreements(row: Mapping[str, Any]) -> str:
     return " | ".join(out)
 
 
+def graph_quantity_by_code(summary: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Part number -> what the assembly graph settled as its per-quoted-unit quantity.
+
+    TWO QUANTITIES, BOTH TRUE, AND THE SHEET HAS TO SAY WHICH IS WHICH. A BOM cell states how
+    many of a part its own line calls for. The graph states how many the quoted unit needs,
+    after the cascade through every parent and after precedence has ruled on the readers that
+    disagreed. A 2-off inside a 6-off sub-assembly is twelve per unit, and printing only one of
+    those numbers leaves the other to be guessed at.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for payload in route_payloads(summary):
+        for node in (payload.get("nodes") or []):
+            if not isinstance(node, Mapping):
+                continue
+            code = _text(node.get("part_number")).upper()
+            if not code or code in out:
+                continue
+            out[code] = {
+                "qty_effective": node.get("qty_per_unit"),
+                "qty_own": node.get("qty_own"),
+                "qty_own_source": _text(node.get("qty_own_source") or ""),
+                "qty_note": _text(node.get("qty_note") or ""),
+            }
+    return out
+
+
 def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Every parts-list row, with the page it was read from and the reader that read it."""
     rows: List[Dict[str, Any]] = []
     seen_codes: Dict[str, int] = {}
     by_page = _title_block_material_by_page(summary)
     thick_by_page = _title_block_thickness_by_page(summary)
+    graph_qty = graph_quantity_by_code(summary)
     for row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
         if not isinstance(row, Mapping):
             continue
@@ -468,10 +495,42 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             _where = (f"page {page}" if page_number is not None else f"sheet {page}")
             material_from = (f"title block of {_where} — the parts table has no material "
                              f"column")
+        # QTY_OWN AND QTY_EFFECTIVE, NEVER ONE NUMBER STANDING FOR BOTH. qty_own is what this
+        # line itself states — the BOM cell, or the model's instance count where the model is
+        # what was read. qty_effective is what the estimate actually costs for one quoted unit,
+        # taken from the assembly graph after the cascade and after precedence. They agree on
+        # most rows. Where they do not, the row says so and says why, because every way they can
+        # differ matters to the money: a general arrangement printing three install
+        # arrangements, a part nested inside a multiple sub-assembly, or two readers who
+        # disagreed and one of them lost.
+        _g = graph_qty.get(code.upper()) or {}
+        _own = row.get("quantity")
+        _effective = _g.get("qty_effective")
+        _qty_notes: List[str] = []
+        if row.get("quantity_note"):
+            _qty_notes.append(_text(row.get("quantity_note")))
+        if _g.get("qty_note"):
+            _qty_notes.append(_text(_g.get("qty_note")))
+        _differs = ""
+        try:
+            if _own is not None and _effective is not None and \
+                    abs(float(_own) - float(_effective)) > 1e-9:
+                _differs = (f"this line states {float(_own):g}; the quoted unit is costed at "
+                            f"{float(_effective):g}")
+        except (TypeError, ValueError):
+            _differs = ""
+        if _differs and not _qty_notes:
+            _qty_notes.append("no reason recorded for the difference — check the assembly tree "
+                              "and this line's parent before quoting")
         rows.append({
             "part_number": code,
             "description": _text(row.get("description")),
             "quantity": row.get("quantity"),
+            "qty_own": _own,
+            "qty_effective": _effective,
+            "qty_own_and_effective_differ": _differs,
+            "why_the_quantity_is_what_it_is": " / ".join(n for n in _qty_notes if n),
+            "quantity_as_printed_on_the_drawing": row.get("quantity_as_printed"),
             "material_as_printed": material,
             "material_read_from": material_from,
             # SAME PAGE, SAME REASONING. Filled only where the row itself has none, and the
@@ -564,13 +623,17 @@ def bom_columns_not_recorded(summary: Mapping[str, Any]) -> Dict[str, str]:
         "item_no": "the parts table carried no item numbers on this pack",
         "description": "no description was read on any row",
         "quantity": "no quantity was read on any row",
+        "qty_effective": "no assembly graph was compiled for this pack, so no per-quoted-unit "
+                         "quantity exists to set against the BOM cells. The quantity column is "
+                         "what each line states for itself and nothing has rolled it through "
+                         "the assembly",
     }
     out: Dict[str, str] = {}
     # read_from_page is EXCLUDED from this check: a dual-path row records a sheet LABEL and
     # legitimately has no page number, so reporting it as a column the pack could not fill would
     # fire on every normal job and train people to ignore the notice.
     for column in ("material_as_printed", "thickness_mm", "item_no",
-                   "read_by", "description", "quantity"):
+                   "read_by", "description", "quantity", "qty_effective"):
         if all(str(r.get(column) or "").strip() == "" for r in rows):
             out[column] = why.get(column, "not recorded on the BOM row")
     if all(not str(r.get("read_from_page") or "").strip()

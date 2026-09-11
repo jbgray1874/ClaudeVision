@@ -1824,8 +1824,19 @@ def canonicalise_part_estimates_for_workbook(
         if identity != source_id:
             item["_canonical_source_part_number"] = source_id
             item["part_number"] = identity
+        # ONE QUANTITY FIELD. The sheet costs the graph node's per-unit figure, and that
+        # figure is now reconciled against the quantity apply_field owns before it leaves the
+        # compiler — so this is no longer a second, independent copy that can quietly disagree
+        # with the arbitrated record. What the part's own line said is carried alongside it
+        # rather than lost, because a part that is one-off on its own drawing and six-off in
+        # the assembly is two facts an estimator needs, not a contradiction to hide.
         if node.get("qty_per_unit") is not None:
             item["quantity"] = node.get("qty_per_unit")
+        if node.get("qty_own") is not None:
+            item["quantity_own"] = node.get("qty_own")
+            item["quantity_own_source"] = node.get("qty_own_source") or ""
+        if node.get("qty_note"):
+            item["quantity_note"] = node.get("qty_note")
         if not item.get("description") and node.get("description"):
             item["description"] = node.get("description")
         if identity not in normalised:
