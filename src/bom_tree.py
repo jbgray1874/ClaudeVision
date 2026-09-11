@@ -187,6 +187,30 @@ def install_context_codes(bom_rows: List[Dict[str, Any]],
     Deliberately conservative: where this says nothing the old behaviour stands, and the
     ambiguity is reported rather than guessed at.
     """
+    return _install_context(bom_rows, main_ga)[0]
+
+
+def install_context_decision(bom_rows: List[Dict[str, Any]],
+                             main_ga: str) -> str:
+    """WHY this said what it said, in one line, whether or not it found anything.
+
+    THE DEFECT THIS EXISTS FOR, and it cost a run. Every caller of the rule above prints only
+    when the rule FIRES. So a pack where it found nothing produced no line at all, and the
+    11 September runner log carries no `[bom_tree]` entry whatsoever — which was read, reasonably,
+    as "that code never ran". It may equally have run and declined, and the log cannot tell the
+    two apart. A correction that is invisible when it does nothing is a correction nobody can
+    check, and three of its conditions can each silently rule a real pack out.
+
+    So the decision is stated either way: which drawing was taken as the general arrangement,
+    what structural codes were found on it at what quantities, and if it declined, WHICH
+    condition declined it. No costing depends on this string.
+    """
+    return _install_context(bom_rows, main_ga)[1]
+
+
+def _install_context(bom_rows: List[Dict[str, Any]],
+                     main_ga: str) -> "tuple":
+    """The rule and its reason, computed once so the two can never disagree."""
     codes: Dict[str, int] = {}
     for r in bom_rows:
         if str(r.get("source_pdf") or "") != main_ga:
@@ -194,16 +218,34 @@ def install_context_codes(bom_rows: List[Dict[str, Any]],
         code = _norm(r.get("part_number"))
         if code and _family(code):          # structural rows only; a fixing is not an assembly
             codes[code] = max(codes.get(code, 0), _qty(r))
+    _where = f"'{main_ga}'" if main_ga else "no drawing"
     if not codes:
-        return set()
+        return set(), (
+            f"install context: NOT recognised — {_where} was taken as the general arrangement "
+            f"and carries no structural parts-list row at all (of {len(bom_rows)} row(s) read "
+            f"across the pack). Quantities stand as each drawing prints them")
+    _listed = ", ".join(f"{c} x{q}" for c, q in sorted(codes.items()))
     if len({_family(c) for c in codes}) != 1:
-        return set()                        # a bay: several articles, and the unit is all of them
+        return set(), (
+            f"install context: NOT recognised — {_where} lists more than one number family "
+            f"({_listed}), which is a bay: several different articles in one composite, and the "
+            f"parent quantities are real multipliers. Nothing reinterpreted")
     quantities = set(codes.values())
     if len(quantities) != 1:
-        return set()                        # a bill for a composite, not an arrangement
-    if next(iter(quantities)) <= 1:
-        return set()
-    return set(codes)
+        return set(), (
+            f"install context: NOT recognised — {_where} lists one family at MIXED quantities "
+            f"({_listed}), which is a bill for a composite rather than a picture of where the "
+            f"articles go. Nothing reinterpreted — if this IS an arrangement, the parts list "
+            f"needs checking")
+    _n = next(iter(quantities))
+    if _n <= 1:
+        return set(), (
+            f"install context: nothing to reinterpret — {_where} lists {_listed}, one of each, "
+            f"so no parent quantity is being multiplied into anything")
+    return set(codes), (
+        f"install context: RECOGNISED — {_where} shows {_n} arrangements of one family "
+        f"({_listed}). Those quantities are where they go, not what is made, so each is divided "
+        f"by {_n} to give one quoted unit")
 
 
 def resolve_effective_quantities(
@@ -263,7 +305,16 @@ def resolve_effective_quantities(
     # install arrangement may show several variants of one module — 12349-02-69-100 AND -101,
     # three of each — and all of them are install context, not a bill.
     _named = _norm(unit_assembly)
-    _units = {_named} if _named else install_context_codes(bom_rows, main_ga)
+    # A PERSON NAMING THE UNIT REPLACES THE TREE'S READING — it does not join it. That is
+    # deliberate (see test_the_folder_wins_when_it_has_something_to_say): the named article is
+    # what one of is, and the rule does not get to extend somebody's judgement to codes they did
+    # not name.
+    #
+    # Naming a SIBLING costs nothing: the arrangement division below applies to every row on the
+    # main GA, not only to the named code, so the other variants still come down to one per unit.
+    # What the name CAN do is silence the division altogether — see the flag after the loop.
+    _rule_units = install_context_codes(bom_rows, main_ga)
+    _units = {_named} if _named else _rule_units
     multipliers: Dict[str, int] = {}
     install_context: Dict[str, int] = {}
     for r in groups.get(main_ga, []):
@@ -392,6 +443,23 @@ def resolve_effective_quantities(
                 else:
                     effective[code] = _qty(r) * parent
 
+    # THE ONE CASE WHERE NAMING THE UNIT COSTS SOMETHING. The named code replaces the rule's
+    # reading, and the arrangement division is driven by the quantity the named code shows on the
+    # general arrangement. So if the name is for something the GA does NOT show more than one of
+    # — an assembly off the arrangement entirely, or a code read differently from the name — the
+    # division does not happen at all, even though the GA's own shape says it should. Every part
+    # then keeps the parent multiple, which is the whole ×3 defect back again, and silently.
+    if _named and not install_context and _rule_units:
+        flags.append({
+            "severity": "warning",
+            "code": _named,
+            "detail": (f"'{_named}' was named as the unit being quoted, but the general "
+                       f"arrangement does not show more than one of it, so no arrangement "
+                       f"division was applied. The GA's own shape reads "
+                       f"{', '.join(sorted(_rule_units))} as arrangement quantities — if this IS "
+                       f"an install arrangement, every quantity here is still multiplied by it. "
+                       f"Check the unit name against the codes on the drawing"),
+        })
     if _nameless:
         flags.append({
             "severity": "warning",
@@ -415,7 +483,11 @@ def resolve_effective_quantities(
                        f"the parts below it."),
         })
     return {"main_ga": main_ga, "effective": effective, "multipliers": multipliers,
-            "install_context": install_context, "flags": flags}
+            "install_context": install_context, "flags": flags,
+            # STATED WHETHER OR NOT IT FIRED. See install_context_decision: a rule that prints
+            # only when it acts leaves a declined pack indistinguishable from one where the code
+            # never ran, and that is how a log with no [bom_tree] line at all was read.
+            "install_context_decision": install_context_decision(bom_rows, main_ga)}
 
 
 # --------------------------------------------------------------------------

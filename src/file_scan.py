@@ -2975,12 +2975,29 @@ def _finalize_scan_summary(
         _unit_asm = _unit_from(_label, _bt_rows)
         _bt = _resolve_eff_qty(_bt_rows, unit_assembly=_unit_asm) or {}
         _effmap = _bt.get("effective") or {}
+        # ALWAYS ONE LINE, EVEN WHEN THERE IS NOTHING TO DO. Every print in this block used to be
+        # conditional on the rule firing, so a pack it declined produced no [bom_tree] output at
+        # all — and a log with no such line was read as "this code never ran", which is not
+        # something the log could actually distinguish. It says what it decided and why, now,
+        # whichever way it went. No costing depends on it.
+        print(f"   [bom_tree] {len(_bt_rows)} row(s); general arrangement taken as "
+              f"'{_bt.get('main_ga') or '(none found)'}'"
+              + (f"; unit named by the job label as '{_unit_asm}'" if _unit_asm else "")
+              + f"; {len(_effmap)} effective quantit(y/ies) resolved", flush=True)
+        if _bt.get("install_context_decision"):
+            print(f"   [bom_tree] {_bt['install_context_decision']}", flush=True)
         for _f in (_bt.get("flags") or []):
             if _f.get("severity") == "info" and "install context" in str(_f.get("detail")):
                 print(f"   [bom_tree] {_f['detail']}", flush=True)
                 summary.setdefault("review_flags", []).append(_f)
         if _effmap:
             _parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+            # THE CODES THE TREE AGREED WITH, NAMED. Agreement printed nothing, so once the tree
+            # and the records had been brought into line the log went quiet — and a quiet log is
+            # how "did this part go through the quantity rule" became unanswerable. Gathered into
+            # one line rather than one line each, so the audit trail exists without burying the
+            # disagreements that need reading.
+            _agreed: List[str] = []
             for _p in _parts:
                 _code = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
                 if not _code:
@@ -2990,6 +3007,8 @@ def _finalize_scan_summary(
                     # longer files a quantity under no name, and nothing asks it for one.
                     continue
                 _eff = _effmap.get(_code)
+                if _eff is not None and _eff == _p.get("quantity"):
+                    _agreed.append(f"{_p.get('part_number')}={_eff}")
                 if _eff is not None and _eff != _p.get("quantity"):
                     # PRECEDENCE. This pass reads the PDF's GA table; a quantity already set
                     # from the SolidWorks assembly BOM came from the structure the shop
@@ -3004,6 +3023,9 @@ def _finalize_scan_summary(
                         print(f"   [bom_tree] {_p.get('part_number')} qty {_prev} KEPT "
                               f"(GA tree said {_eff}) — stronger source, disagreement flagged",
                               flush=True)
+            if _agreed:
+                print(f"   [bom_tree] per-unit quantity confirmed, tree and record agree: "
+                      f"{', '.join(_agreed)}", flush=True)
         # ── AND THE SAME CORRECTION ON THE ROWS, BECAUSE THERE ARE TWO CASCADES ────────
         #
         # THE 12349-02 FAILURE, AND THE LOG THAT FOUND IT. bom_tree resolved every quantity

@@ -225,3 +225,67 @@ def test_a_nameless_row_is_not_a_quantity_any_nameless_record_can_pick_up():
     assert effective.get(LEAF) == 1
     assert any(f.get("severity") == "warning" and "no part number" in str(f.get("detail"))
                for f in (out.get("flags") or [])), "it is reported, not silently dropped"
+
+
+def test_the_install_context_rule_states_its_decision_either_way():
+    """A RULE THAT ONLY SPEAKS WHEN IT FIRES CANNOT BE AUDITED, and that cost a run. The
+    11 September log carries no `[bom_tree]` line at all, which was read as "that code never
+    ran" — but a pack the rule DECLINED produced exactly the same silence, and the log could not
+    tell the two apart. Each of the three conditions now says so in its own words.
+    """
+    from bom_tree import install_context_decision
+    GA_ROWS = [{"part_number": SUB, "quantity": 3, "source_pdf": GA},
+               {"part_number": "12349-02-69-101", "quantity": 3, "source_pdf": GA},
+               {"part_number": "12349-02-69-08J", "quantity": 3, "source_pdf": GA}]
+    assert "RECOGNISED" in install_context_decision(GA_ROWS, GA)
+    assert "3 arrangements" in install_context_decision(GA_ROWS, GA)
+
+    mixed = [{"part_number": SUB, "quantity": 2, "source_pdf": GA},
+             {"part_number": "12349-02-69-101", "quantity": 1, "source_pdf": GA}]
+    assert "MIXED quantities" in install_context_decision(mixed, GA)
+
+    bay = [{"part_number": "1448-GA", "quantity": 2, "source_pdf": GA},
+           {"part_number": "3886-GA", "quantity": 2, "source_pdf": GA}]
+    assert "more than one number family" in install_context_decision(bay, GA)
+
+    ones = [{"part_number": SUB, "quantity": 1, "source_pdf": GA}]
+    assert "nothing to reinterpret" in install_context_decision(ones, GA)
+
+    assert "no structural parts-list row" in install_context_decision([], GA)
+
+
+def test_naming_a_sibling_costs_nothing_because_the_division_is_per_row():
+    """A person naming the unit replaces the tree's reading — deliberate, and asserted elsewhere.
+    I assumed that left the named code's siblings at the parent multiple. It does not: the
+    arrangement division applies to every row on the main general arrangement, driven by how many
+    arrangements it shows, so the siblings come down to one as well. Pinned, because it is the
+    reason no warning is needed for this case."""
+    from bom_tree import resolve_effective_quantities
+    rows = [{"part_number": SUB, "quantity": 3, "source_pdf": GA},
+            {"part_number": "12349-02-69-101", "quantity": 3, "source_pdf": GA},
+            {"part_number": "12349-02-69-08J", "quantity": 3, "source_pdf": GA},
+            {"part_number": LEAF, "quantity": 1, "source_pdf": SUB}]
+    named = resolve_effective_quantities(rows, main_ga=GA, unit_assembly=SUB)
+    assert set(named["install_context"]) == {SUB}, "the name wins; that is the standing rule"
+    for code in ("12349-02-69-101", "12349-02-69-08J"):
+        assert named["effective"][code] == 1, "a sibling is not left at the arrangement count"
+    assert not any("Check the unit name" in str(f.get("detail")) for f in named["flags"])
+
+
+def test_a_unit_name_the_arrangement_does_not_show_turns_the_division_off_and_says_so():
+    """THE ONE CASE WHERE NAMING THE UNIT COSTS SOMETHING, and it costs the whole fix.
+
+    The division is driven by the quantity the NAMED code shows on the general arrangement. Name
+    something the GA does not show more than one of — an assembly off the arrangement, or a code
+    that reads differently from the folder — and no division happens at all, while the GA's own
+    shape says three arrangements. Every quantity stays multiplied, silently. Flagged.
+    """
+    from bom_tree import resolve_effective_quantities
+    rows = [{"part_number": SUB, "quantity": 3, "source_pdf": GA},
+            {"part_number": "12349-02-69-101", "quantity": 3, "source_pdf": GA},
+            {"part_number": LEAF, "quantity": 1, "source_pdf": SUB}]
+    out = resolve_effective_quantities(rows, main_ga=GA, unit_assembly="12349-02-69-999")
+    assert out["effective"]["12349-02-69-101"] == 3, "this is the defect, unfixed, by design"
+    _flag = next((f for f in out["flags"] if "Check the unit name" in str(f.get("detail"))), None)
+    assert _flag is not None, "and it must not be silent"
+    assert "12349-02-69-100" in str(_flag.get("detail"))
