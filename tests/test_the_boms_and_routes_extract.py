@@ -611,3 +611,32 @@ def test_the_unit_a_line_belongs_to_is_a_contested_fact():
     assert said["belongs_to"] == "7332-01-GA"
     assert "bom parent" in said["what_the_winner_beat"]
     assert "7332-01-101" in said["what_the_winner_beat"], "the losing parent is still on the sheet"
+
+
+def test_the_model_before_dxf_order_is_held_on_purpose_not_by_accident():
+    """AN OPEN QUESTION, PINNED SO IT CANNOT DRIFT EITHER WAY SILENTLY.
+
+    The table is model-first: solidworks_api 90, dxf 80. The review position is the reverse —
+    "DXF reigns supreme, then the .sld files, then the pdf files" — on the reasoning that the
+    DXF is the file the laser actually runs. Both are defensible: the model is the designer's
+    intent and the structure the shop builds from; the flat is what was issued to the machine.
+
+    Not flipped, for scope rather than doubt. These two ranks arbitrate every geometric fact on
+    every job, so reversing them is a costing change across the whole history and needs a parity
+    run against accepted sheets. This test exists so that flip, when it comes, is deliberate —
+    and so the reasoning is not left in a chat log.
+    """
+    from source_precedence import rank
+    assert rank("solidworks_api") > rank("dxf"), "model-first, as decided on 11 Sep 2026"
+    assert rank("solidworks_flat_pattern") > rank("dxf_flat_pattern")
+    text = (ROOT / "src" / "source_precedence.py").read_text(encoding="utf-8")
+    assert "AN OPEN QUESTION" in text and "DXF reigns supreme" in text, \
+        "the alternative position is recorded beside the ranks, not only in a conversation"
+
+
+def test_gauge_is_settled_separately_and_does_not_depend_on_that_question():
+    """The one geometric fact that IS decided: the DXF beats the title block for thickness,
+    whichever way the model-vs-DXF question later goes."""
+    from source_precedence import tiebreak_priority
+    assert tiebreak_priority("dxf_filename", "thickness_mm") > \
+        tiebreak_priority("title_block", "thickness_mm")

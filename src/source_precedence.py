@@ -140,6 +140,31 @@ SOURCE_RANK: Dict[str, int] = {
     # the sheet beats a parser looking at the sheet — and below every measurement. An
     # estimator who knows a DXF is stale says so explicitly and gets rank 100 for it.
     "estimator_read_drawing": 72,
+    # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
+    #
+    # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
+    # other way round — "DXF reigns supreme, then the .sld files, then the pdf files" — on the
+    # reasoning that the DXF is the file the laser actually runs, so where a model and an issued
+    # flat disagree, the flat is what gets made.
+    #
+    # Both are defensible and they are not the same claim. The model is the designer's intent
+    # and the structure the shop builds from; the flat is what was issued to the machine and may
+    # be a revision ahead or behind it.
+    #
+    # NOT FLIPPED, and the reason is scope rather than doubt. These two ranks arbitrate every
+    # geometric fact on every job — blank size, cut length, hole count, bend count, thickness —
+    # so reversing them is a costing change across the whole history, not a display change. It
+    # needs an explicit instruction and a parity run against accepted sheets, exactly like
+    # drawing_notes' rank further down this file, which is held at 0 for the same reason.
+    #
+    # WHAT IS ALREADY SETTLED: gauge. FIELD_TIEBREAK puts the DXF sources above the title block
+    # for thickness, because 7332-01's details are cut at the DXF names (2.5, 5, 1.5, 0.9, 2)
+    # while a GA note repeats 1.2 across five detail sheets. That is a within-rank order for one
+    # fact and it does not touch this.
+    #
+    # Decision on the day: keep model-first, because it is explainable and current, and flip
+    # only on an explicit instruction. A test pins the present order so a change has to be made
+    # on purpose.
     "solidworks_api": 90,
     "solidworks_flat_pattern": 90,
     "dxf": 80,
