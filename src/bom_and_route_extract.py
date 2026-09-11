@@ -570,9 +570,21 @@ def _one_row_per_operation(rows: List[Dict[str, Any]], column: str) -> List[Dict
     each one was decided from, and `decision id` keeps them all so the workbook's route-to-sheet
     join still resolves every one.
 
-    REQUIRED WINS a disagreement between two decisions on one operation: if any evidence says
-    the work is required, the work happens. A route that quietly dropped an operation because a
-    second, weaker reading called it unverified would be the expensive direction to be wrong in.
+    RANK DECIDES; STATUS ONLY BREAKS A TIE. "If any evidence says required, the work happens" is
+    right for a bend mentioned twice and WRONG the moment a weaker line contradicts a stronger
+    rule-out, which is most of what the gates exist to do:
+
+        7332-01-002  tubebend required, laser and folding ruled out — it is a TUBE
+        7332-01-101  weld and dress required, powder ruled out — the sheet says PLATED
+
+    A second "required" powder recognised in a note must not put powder back on the labour
+    sheet. Under "any required wins" it would have, and the rule-out that a gate reached from
+    the stock form or the printed finish is exactly the kind of decision this engine exists to
+    make. So the highest-ranked evidence stands, by the same source_precedence every other fact
+    is arbitrated with; only where two decisions are RANKED EQUAL does required beat not — the
+    bend-mentioned-twice case, where nothing stronger has ruled anything out.
+
+    The loser goes under `other evidence`, never back onto the labour sheet.
     """
     grouped: Dict[Any, Dict[str, Any]] = {}
     order: List[Any] = []
@@ -590,8 +602,13 @@ def _one_row_per_operation(rows: List[Dict[str, Any]], column: str) -> List[Dict
         held["evidence"].append({"status": row["status"], "why": row["why"],
                                  "decided_from": row["decided_from"],
                                  "decision_id": row["decision_id"]})
-        # The strongest statement stands. Everything else is still on the row as evidence.
-        if row[column] == "yes" and held[column] != "yes":
+        # RANK FIRST, THEN REQUIRED. A higher-ranked decision stands whatever it says; an equal
+        # one only displaces a rule-out by being required. Everything else stays as evidence.
+        _new_rank, _held_rank = _rank_of(row["decided_from"]), _rank_of(held["decided_from"])
+        _takes_over = (_new_rank > _held_rank
+                       or (_new_rank == _held_rank
+                           and row[column] == "yes" and held[column] != "yes"))
+        if _takes_over:
             for field in (column, "status", "what_that_status_means", "why", "decided_from"):
                 held[field] = row[field]
         for field in ("scope", "covers_parts"):

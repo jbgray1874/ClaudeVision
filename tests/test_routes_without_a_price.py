@@ -164,3 +164,95 @@ def test_one_operation_on_one_part_is_one_row():
     bends = [r for r in rows
              if r["operation"] == "tubebend" and r["part_or_assembly"] == "7332-01-002"]
     assert len(bends) == 1, f"{len(bends)} rows for one bend on one part"
+
+
+# ── rank decides a collapsed row; status only breaks a tie ────────────────────────────
+#
+# "Do not accept as a blanket: if any evidence says required, the work happens. That is right
+#  for 'bend mentioned twice'. It is WRONG when a weaker line says laser/fold/powder and a
+#  stronger rule already ruled it out."
+
+
+_SEQ = iter(range(1, 10_000))
+
+
+def _decision(part, operation, status, source, why):
+    # A DISTINCT ID PER DECISION, as the compiler emits them. route_sheet de-duplicates on
+    # (decision_id, operation, target) to collapse ONE decision found under both route
+    # spellings; two different decisions sharing an id would be dropped by that, and a fixture
+    # that reuses ids tests the dedupe rather than the rule it means to test.
+    return {"decision_id": f"{part}-{operation}-{next(_SEQ)}", "target_id": part,
+            "operation": operation, "status": status, "source": source,
+            "reason": why, "scope": "part"}
+
+
+def _costed(decisions):
+    return {"workbook_labour": {"rows": [{"workbook_row": 1, "decision_ids": ["x"]}]},
+            "estimate_summary": {"canonical_route_shadow": {"decisions": decisions}}}
+
+
+def _row(record, part, operation):
+    return [r for r in bre.route_sheet(record)
+            if r["part_or_assembly"] == part and r["operation"] == operation][0]
+
+
+def test_a_note_cannot_put_folding_back_on_a_tube():
+    """7332-01-002 is a TUBE. A gate ruled folding out from the stock form; the word FOLD in a
+    note must not overturn that and put a fold setup on the labour sheet."""
+    record = _costed([
+        _decision("7332-01-002", "folding", "not_applicable", "title_block",
+                  "not possible on stock form 'tube'"),
+        _decision("7332-01-002", "folding", "required", "drawing_notes",
+                  "FOLD appears in a note")])
+    row = _row(record, "7332-01-002", "folding")
+    assert row["charged"] == "no"
+    assert row["status"] == "not_applicable"
+    assert "drawing_notes said required" in row["other_evidence"], \
+        "the losing reading is kept as evidence, not discarded"
+
+
+def test_a_note_cannot_put_powder_back_on_a_plated_part():
+    """7332-01-101's sheet says PLATED. A second required powder from a note is the exact
+    failure that had plated members costed as powder once before."""
+    record = _costed([
+        _decision("7332-01-101", "powder_coat", "not_applicable", "title_block",
+                  "the sheet says PLATED"),
+        _decision("7332-01-101", "powder_coat", "required", "drawing_notes",
+                  "POWDER appears in a note")])
+    row = _row(record, "7332-01-101", "powder_coat")
+    assert row["charged"] == "no"
+    assert "POWDER appears in a note" in row["other_evidence"]
+
+
+def test_the_bend_mentioned_twice_is_still_required():
+    """The case "any required wins" got right, and it still is — because nothing stronger ruled
+    anything out here."""
+    record = _costed([
+        _decision("7332-01-002", "tubebend", "required", "dxf", "bent from tube"),
+        _decision("7332-01-002", "tubebend", "unverified", "drawing_notes",
+                  "note mentions a bend")])
+    row = _row(record, "7332-01-002", "tubebend")
+    assert row["charged"] == "yes"
+    assert row["decided_from"] == "dxf"
+    assert row["times_decided"] == 2
+
+
+def test_required_still_wins_between_two_equally_ranked_decisions():
+    """Status breaks a TIE and only a tie. Two readings of the same standing, one saying the
+    work is needed: the work happens, because nothing has ruled it out."""
+    record = _costed([
+        _decision("7332-01-003", "laser_cutting", "unverified", "drawing_notes", "maybe"),
+        _decision("7332-01-003", "laser_cutting", "required", "drawing_notes", "2.5mm flat")])
+    row = _row(record, "7332-01-003", "laser_cutting")
+    assert row["charged"] == "yes"
+
+
+def test_the_loser_never_reaches_the_labour_sheet():
+    """Collapsing is for DISPLAY. The decision ids all survive so the workbook's route-to-sheet
+    join still resolves every one — but only the winning status is the row's."""
+    record = _costed([
+        _decision("7332-01-101", "powder_coat", "not_applicable", "title_block", "PLATED"),
+        _decision("7332-01-101", "powder_coat", "required", "drawing_notes", "note")])
+    row = _row(record, "7332-01-101", "powder_coat")
+    assert row["decision_id"].count(",") == 1, "both ids kept"
+    assert row["status"] == "not_applicable", "one status, and it is the ranked one"
