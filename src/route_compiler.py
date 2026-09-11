@@ -2155,6 +2155,63 @@ def fold_bom_row_fragments(part_lists: Any, bom_rows: Any,
     return sorted(folded)
 
 
+def compile_route_without_pricing(summary: Dict[str, Any]) -> Dict[str, Any]:
+    """The route decisions for a pack that was never costed.
+
+    WHY THIS IS NOT AN APPROXIMATION, which was the thing worth establishing before building on
+    it. compile_job_route takes parts, BOM rows, drawing numbers and page owners — and NO PRICES.
+    project_priced_route, which runs after it on a costed job, drops every non-required decision
+    from `priced_route_rows`, but it copies `decisions` through untouched. So the decision list a
+    costed run publishes and the decision list here are the SAME LIST, produced by the same
+    compiler from the same evidence.
+
+    What is genuinely absent is only ever about money: priced_route_rows, and the two issue codes
+    that compare a decision against a legacy cost (`forbidden_decision_priced`,
+    `legacy_cost_without_canonical_decision`). Both are meaningless without prices, and neither is
+    silently emptied — mode says `uncosted` and bom_and_route_extract reads it.
+
+    ON THE TIME THIS SAVES: less than it sounds. The 7332-01 timing table puts the cost in the
+    READERS, not in costing — extract_pdf_summary 141s, invariants 80s, augment_with_dxf 70s,
+    against write_outputs and deliverables at under 2s each. This is not the fast path. What it
+    is, is the path that works with no price source, no Excel and no workbook, on a pack nobody
+    has estimated.
+    """
+    estimate_summary = summary.get("estimate_summary") or {}
+    population = list((summary.get("manufacturing_writeup") or {}).get("parts") or [])
+    _da = summary.get("document_analysis") or {}
+    compiled = compile_job_route(
+        population,
+        summary.get("llm_full_extract") or {},
+        list(_da.get("bom_rows") or []) + list(_da.get("bay_bom_rows") or []),
+        job_drawing_numbers(summary),
+        _assembly_page_owners(summary),
+        pack_mode=_detect_pack_mode(summary))
+    payload = {
+        "schema": compiled.get("schema"),
+        # NOT "shadow". A costed run publishes mode "shadow", meaning "compiled beside the
+        # legacy costs for comparison". There are no costs to sit beside here, and borrowing the
+        # word would tell a reader this had been compared against something.
+        "mode": "uncosted",
+        "route_schema": compiled.get("schema"),
+        "nodes": list(compiled.get("nodes") or []),
+        "decisions": list(compiled.get("decisions") or []),
+        # STATED, NOT OMITTED. An absent key reads as "none found"; an empty list with a reason
+        # reads as what it is.
+        "priced_route_rows": [],
+        "issues": list(compiled.get("issues") or []),
+        "not_computed": {
+            "priced_route_rows": "nothing was priced, so no decision can be matched to a cost",
+            "legacy_cost_checks": "the two checks that compare a decision against a legacy cost "
+                                  "need costs, and this pack has none",
+        },
+        "counts": {"decisions": len(compiled.get("decisions") or []),
+                   "priced_route_rows": 0},
+    }
+    estimate_summary["canonical_route_shadow"] = payload
+    summary["estimate_summary"] = estimate_summary
+    return payload
+
+
 def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dict[str, Any]:
     """Recompile once the late readers have finished adding rows.
 
