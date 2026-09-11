@@ -713,3 +713,65 @@ def test_a_sheet_label_is_not_reported_as_a_missing_page():
     missing = bre.bom_columns_not_recorded({"document_analysis": {"bom_rows": [row]}})
     assert "read_from_page" not in missing
     assert "read_by" not in missing
+
+
+# ── the real dual-path row, from the 16:36 workbook ───────────────────────────────────
+
+
+def _real_row(**over) -> dict:
+    """A row exactly as the 16:36 run wrote it. Every field here was read off that workbook,
+    not inferred from source."""
+    row = {"part_number": "7332-01-101", "description": "FRAME WELDMENT", "quantity": 1,
+           "source_pdf": "7332-01-GA", "bom_parent": "7332-01-GA", "bom_source": "BOTH",
+           "bom_sheet": "7332-01-GA A3 Signage Stand_revK.pdf#0"}
+    row.update(over)
+    return row
+
+
+def test_BOTH_is_the_strongest_signal_in_the_bom_not_an_unknown_reader():
+    """The 16:36 sheet said "reader recorded as 'BOTH'" — reported as an unrecognised source
+    when it is the best outcome the pipeline produces. merge_boms sets it where the deterministic
+    parser AND the vision model both produced the line, with confidence HIGH."""
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [_real_row()]}})[0]
+    assert said["read_by"] == "BOTH"
+    assert "reader recorded as" not in said["what_that_reader_is"]
+    assert "BOTH readers produced this line independently" in said["what_that_reader_is"]
+    assert "strongest corroboration" in said["what_that_reader_is"]
+
+
+def test_a_row_only_vision_found_is_not_reported_as_corroborated():
+    said = bre.bom_sheet({"document_analysis": {
+        "bom_rows": [_real_row(bom_source="B_RECOVERED")]}})[0]
+    assert "VISION model found this line and the deterministic parser did not" \
+        in said["what_that_reader_is"]
+    assert "no second reader has confirmed" in said["what_that_reader_is"]
+
+
+def test_the_page_is_split_out_of_the_sheet_id_and_is_one_based():
+    """merge_boms builds the sheet id as f"{pdf_name}#{page_index}" with a ZERO-BASED index.
+    Read whole it is neither a page nor a file and joins to nothing. The off-by-one matters:
+    a row reported on "page 0" sends somebody to a page that does not exist."""
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [_real_row()]}})[0]
+    assert said["read_from_page"] == "1", "#0 is the first page"
+    assert said["drawing_file"] == "7332-01-GA A3 Signage Stand_revK.pdf"
+    assert said["grouped_under"] == "7332-01-GA", \
+        "source_pdf on a dual-path row is the parent LABEL used to group the tree, not the file"
+
+
+def test_splitting_the_sheet_id_is_what_lets_the_title_block_join():
+    """Material and gauge were blank on three consecutive real runs for this one reason."""
+    summary = {"document_analysis": {"bom_rows": [_real_row()]},
+               "pages": [{"page_number": 1, "page_analysis": {"title_block":
+                          {"materials": ["MILD STEEL"], "thicknesses_mm": ["2.5"]}}}]}
+    said = bre.bom_sheet(summary)[0]
+    assert said["material_as_printed"] == "MILD STEEL"
+    assert said["thickness_mm"] == 2.5
+    assert "page 1" in said["material_read_from"]
+
+
+def test_a_sheet_id_that_is_not_file_hash_page_does_not_invent_a_page():
+    """Guessing a page from something that is not one would be worse than leaving it blank."""
+    said = bre.bom_sheet({"document_analysis": {
+        "bom_rows": [_real_row(bom_sheet="7332-01-101")]}})[0]
+    assert said["read_from_page"] == ""
+    assert said["read_from_sheet"] == "7332-01-101"

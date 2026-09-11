@@ -43,6 +43,16 @@ READER_MEANING: Dict[str, str] = {
     "bom_tree": "the assembly tree the engine built from the drawing set, not a single page",
     "title_block": "the drawing's title block",
     "dxf_filename": "the DXF filename, which at SDI encodes part, gauge and material",
+    # THE DUAL-PATH READER'S OWN VOCABULARY. It reconciles the deterministic parser (Path A)
+    # against the vision model (Path B) BEFORE these rows reach anything else, and reports the
+    # outcome as the row's source. These are not extra readers — they are verdicts about the two,
+    # and the first of them is the strongest signal in the whole BOM.
+    "both": "BOTH readers produced this line independently — the deterministic parser and the "
+            "vision model — and they agreed. That is the strongest corroboration this pipeline "
+            "can give a parts-list row",
+    "b_recovered": "the VISION model found this line and the deterministic parser did not. A "
+                   "real row that would otherwise have been missing from the BOM entirely, and "
+                   "one no second reader has confirmed",
 }
 
 # ── WHAT READ PRODUCED THESE TABLES ───────────────────────────────────────────────────
@@ -424,6 +434,19 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         page_number = next((v for v in (row.get("source_page"), row.get("page"))
                             if v is not None), None)
         sheet_label = row.get("bom_sheet")
+        # THE PAGE IS INSIDE THE SHEET ID. merge_boms builds it as f"{pdf_name}#{page_index}"
+        # with a ZERO-BASED index — "7332-01-GA A3 Signage Stand_revK.pdf#0" is page 1 of that
+        # drawing. Read whole it is neither a page nor a file and joins to nothing; split, it is
+        # both, and the title block becomes reachable. The off-by-one matters: a row reported on
+        # page 0 sends somebody to a page that does not exist.
+        sheet_file = ""
+        if page_number is None and isinstance(sheet_label, str) and "#" in sheet_label:
+            _name, _, _index = sheet_label.rpartition("#")
+            try:
+                page_number = int(_index) + 1
+                sheet_file = _name
+            except (TypeError, ValueError):
+                page_number = None
         page = page_number if page_number is not None else sheet_label
         also_read = (row.get("also_read_by")
                      # bom_also_on_sheets is other SHEETS, not other readers. It belongs beside
@@ -468,7 +491,11 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             # WHICH DRAWING, and WHICH UNIT it belongs to. A page number alone cannot be
             # checked against the pack, and a line whose parent is unknown cannot have its
             # quantity rolled: a 2-off inside a 6-off stand is twelve.
-            "drawing_file": _text(row.get("source_pdf") or row.get("source_file") or ""),
+            # The PDF this line was read out of, where the sheet id carried it. source_pdf on a
+            # dual-path row is the PARENT LABEL used to group the tree, not the file.
+            "drawing_file": _text(sheet_file or row.get("source_pdf")
+                                  or row.get("source_file") or ""),
+            "grouped_under": _text(row.get("source_pdf") or ""),
             "belongs_to": _text(row.get("bom_parent") or ""),
             "read_by": reader,
             # CORROBORATION, WHICH IS THE WHOLE POINT OF HAVING SIX READERS. A line the table
