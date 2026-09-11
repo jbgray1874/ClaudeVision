@@ -499,7 +499,10 @@ def test_every_observation_of_a_fact_survives_with_its_rank():
     facts = bre.fact_observations(row)
     quantities = facts["quantity"]
     assert {o["value"] for o in quantities} == {2, 4}
-    assert all(set(o) == {"value", "source", "page", "rank"} for o in quantities)
+    # `file` as well as `page`: a pack is twenty-odd drawings and "page 3" is page 3 of which
+    # one? An observation that cannot name its file cannot be checked against the pack, which
+    # is the only check that settles a disagreement.
+    assert all(set(o) == {"value", "source", "page", "file", "rank"} for o in quantities)
     assert quantities[0]["rank"] >= quantities[1]["rank"], "best first"
 
 
@@ -546,3 +549,33 @@ def test_a_tie_on_rank_is_broken_by_the_rule_this_project_already_published():
     beat = bre.bom_sheet(summary)[0]["what_the_winner_beat"]
     assert "costing 1.2 from title_block" in beat
     assert "dxf_filename p3 said 2.5" in beat, "and the DXF reading is still on the sheet"
+
+
+def test_an_observation_names_the_drawing_not_only_the_page():
+    row = _merged({"source": "vision", "source_page": 7, "source_pdf": "7332-01-002_revC.pdf",
+                   "quantity": 4})
+    row["source_pdf"] = "7332-01-GA_revK.pdf"
+    facts = bre.fact_observations(row)
+    files = {o["file"] for o in facts["quantity"]}
+    assert "7332-01-002_revC.pdf" in files
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["drawing_file"] == "7332-01-GA_revK.pdf"
+    assert "in 7332-01-002_revC.pdf p7" in said["what_the_winner_beat"]
+
+
+def test_the_unit_a_line_belongs_to_is_a_contested_fact():
+    """Which unit a line belongs to decides whether a 2-off is two or twelve. Two drawings
+    disagreeing about a part's parent is a structural error that changes the whole job."""
+    import file_scan as fs
+    from extractor_patterns import extract_bom_rows
+    # Both parents must be READINGS. A value written onto the row after the merge is
+    # arbitration output, not an observation, and correctly has no evidence behind it.
+    table = extract_bom_rows("1 7332-01-002 LEG 2\n", source_page=3)[0]
+    table["bom_parent"] = "7332-01-GA"
+    row = dict(table)
+    fs._merge_bom_rows(row, dict(table, source="vision", source_page=7,
+                                 bom_parent="7332-01-101"))
+    said = bre.bom_sheet({"document_analysis": {"bom_rows": [row]}})[0]
+    assert said["belongs_to"] == "7332-01-GA"
+    assert "bom parent" in said["what_the_winner_beat"]
+    assert "7332-01-101" in said["what_the_winner_beat"], "the losing parent is still on the sheet"

@@ -234,7 +234,10 @@ def _title_block_thickness_by_page(summary: Mapping[str, Any]) -> Dict[Any, Any]
 
 # The fields worth reporting a disagreement on. Every one of them changes a cost or an
 # identity; a reader differing on, say, a formatting artefact is noise.
-_CONTESTABLE = ("quantity", "description", "material_text", "thickness_mm")
+# bom_parent is HERE, not merely retained: which unit a line belongs to decides whether a 2-off
+# is two or twelve, and two drawings disagreeing about a part's parent is a structural error that
+# changes the whole job — not a detail.
+_CONTESTABLE = ("quantity", "description", "material_text", "thickness_mm", "bom_parent")
 
 
 def _rank_of(source: str) -> int:
@@ -283,21 +286,26 @@ def fact_observations(row: Mapping[str, Any],
     """
     facts: Dict[str, List[Dict]] = {}
 
-    def _add(field: str, value: Any, source: str, page: Any) -> None:
+    def _add(field: str, value: Any, source: str, page: Any, file: Any = None) -> None:
+        """THE DRAWING, NOT JUST A PAGE NUMBER. A pack is twenty-odd drawings and "page 3" is
+        page 3 of which one? An observation that cannot name its file cannot be checked by
+        anybody holding the pack, which is the only check that settles a disagreement."""
         if value in (None, "", [], {}):
             return
         entry = {"value": value, "source": source or "(unnamed reader)",
-                 "page": page, "rank": _rank_of(source)}
+                 "page": page, "file": file or "", "rank": _rank_of(source)}
         seen = facts.setdefault(field, [])
         if not any(e["value"] == entry["value"] and e["source"] == entry["source"]
-                   and e["page"] == entry["page"] for e in seen):
+                   and e["page"] == entry["page"] and e["file"] == entry["file"]
+                   for e in seen):
             seen.append(entry)
 
     readings = [r for r in (row.get("readings") or []) if isinstance(r, Mapping)] or [row]
     for reading in readings:
         source, page = reading.get("source"), reading.get("source_page")
+        file = reading.get("source_pdf") or reading.get("source_file")
         for field in _CONTESTABLE:
-            _add(field, reading.get(field), source, page)
+            _add(field, reading.get(field), source, page, file)
 
     # THE TITLE BLOCK OF EVERY PAGE THIS ROW WAS SEEN ON. Reachable only because the row now
     # carries its page: before the stamp, the material printed on the sheet the line came from
@@ -330,10 +338,13 @@ def _beaten(facts: Mapping[str, List[Dict]]) -> str:
         winner, rest = entries[0], entries[1:]
         beaten = "; ".join(
             f"{e['source']}"
+            + (f" in {e['file']}" if e["file"] else "")
             + (f" p{e['page']}" if e["page"] is not None else "")
             + f" said {e['value']!r} (rank {e['rank']})" for e in rest)
+        _where = ((f" in {winner['file']}" if winner["file"] else "")
+                  + (f" p{winner['page']}" if winner["page"] is not None else ""))
         out.append(f"{field.replace('_', ' ')}: costing {winner['value']!r} from "
-                   f"{winner['source']} (rank {winner['rank']}) — beat {beaten}")
+                   f"{winner['source']}{_where} (rank {winner['rank']}) — beat {beaten}")
     return " | ".join(out)
 
 
@@ -409,6 +420,11 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "item_no": _text(row.get("item_number") or row.get("item")
                              or row.get("item_no") or ""),
             "read_from_page": _text(row.get("source_page") or row.get("page") or ""),
+            # WHICH DRAWING, and WHICH UNIT it belongs to. A page number alone cannot be
+            # checked against the pack, and a line whose parent is unknown cannot have its
+            # quantity rolled: a 2-off inside a 6-off stand is twelve.
+            "drawing_file": _text(row.get("source_pdf") or row.get("source_file") or ""),
+            "belongs_to": _text(row.get("bom_parent") or ""),
             "read_by": reader,
             # CORROBORATION, WHICH IS THE WHOLE POINT OF HAVING SIX READERS. A line the table
             # parser and the vision model both saw is stronger than either alone, and until the
@@ -534,7 +550,67 @@ def route_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
                 "decision_id": _text(decision.get("decision_id")),
             })
     rows.sort(key=lambda r: (r["part_or_assembly"], r["operation"]))
-    return rows
+    return _one_row_per_operation(rows, _column)
+
+
+def _one_row_per_operation(rows: List[Dict[str, Any]], column: str) -> List[Dict[str, Any]]:
+    """ONE OPERATION ON ONE PART IS ONE ROW, with every piece of evidence behind it.
+
+    The compiler emits a decision PER PIECE OF EVIDENCE, so 7332-01-002's tube bend arrived
+    twice — once for "the drawing states a bend and the stock form is tube" and once for
+    "textual_operations on existing part record". One bend, corroborated twice, printed as two
+    rows. On a sheet an estimator reads, two rows means two setups, and that is how a
+    reconciliation of 27 decisions against 12 labour rows becomes an argument.
+
+    The same rule as a BOM fact: the observations are kept, and the row states the decision.
+    Nothing is dropped for losing — `evidence` names every decision behind the row and what
+    each one was decided from, and `decision id` keeps them all so the workbook's route-to-sheet
+    join still resolves every one.
+
+    REQUIRED WINS a disagreement between two decisions on one operation: if any evidence says
+    the work is required, the work happens. A route that quietly dropped an operation because a
+    second, weaker reading called it unverified would be the expensive direction to be wrong in.
+    """
+    grouped: Dict[Any, Dict[str, Any]] = {}
+    order: List[Any] = []
+    for row in rows:
+        key = (row["part_or_assembly"], row["operation"])
+        held = grouped.get(key)
+        if held is None:
+            row = dict(row)
+            row["evidence"] = [{"status": row["status"], "why": row["why"],
+                                "decided_from": row["decided_from"],
+                                "decision_id": row["decision_id"]}]
+            grouped[key] = row
+            order.append(key)
+            continue
+        held["evidence"].append({"status": row["status"], "why": row["why"],
+                                 "decided_from": row["decided_from"],
+                                 "decision_id": row["decision_id"]})
+        # The strongest statement stands. Everything else is still on the row as evidence.
+        if row[column] == "yes" and held[column] != "yes":
+            for field in (column, "status", "what_that_status_means", "why", "decided_from"):
+                held[field] = row[field]
+        for field in ("scope", "covers_parts"):
+            if not held.get(field) and row.get(field):
+                held[field] = row[field]
+
+    out: List[Dict[str, Any]] = []
+    for key in order:
+        row = grouped[key]
+        evidence = row.pop("evidence")
+        row["times_decided"] = len(evidence)
+        row["decision_id"] = ", ".join(
+            dict.fromkeys(e["decision_id"] for e in evidence if e["decision_id"]))
+        # Only where there is something to say. Corroboration that agrees is counted, not
+        # recited; a column that speaks on every row is one nobody reads.
+        others = [e for e in evidence[1:]
+                  if e["why"] != evidence[0]["why"] or e["status"] != evidence[0]["status"]]
+        row["other_evidence"] = " | ".join(
+            f"{e['decided_from'] or 'source not named'} said {e['status'] or 'no status'}"
+            + (f": {e['why']}" if e["why"] else "") for e in others)
+        out.append(row)
+    return out
 
 
 def derivation_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:

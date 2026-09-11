@@ -151,18 +151,13 @@ def test_an_empty_pack_compiles_to_nothing_rather_than_raising():
 # ── the finding this turned up, recorded rather than quietly fixed ────────────────────
 
 
-@pytest.mark.xfail(reason="ONE OPERATION, TWO ROWS. The compiler emits a separate decision per "
-                          "piece of evidence, so 7332-01-002 gets tubebend twice — once for "
-                          "'the drawing states a bend and the stock form is tube' and once for "
-                          "'textual_operations on existing part record'. That is one bend "
-                          "corroborated twice, and on a sheet an estimator reads, two rows "
-                          "means two setups. It is NOT specific to the uncosted path: the same "
-                          "compiler feeds a costed run, so the Routes sheet has always had this "
-                          "shape. Recorded as a failing expectation rather than fixed in "
-                          "passing, because collapsing rows changes what a costed extract shows "
-                          "and touches the decision-to-sheet-row reconciliation.",
-                   strict=True)
 def test_one_operation_on_one_part_is_one_row():
+    """WAS AN xfail, NOW THE RULE. The compiler emits a decision per piece of EVIDENCE, so
+    7332-01-002's tube bend arrived twice — once for "the drawing states a bend and the stock
+    form is tube" and once for "textual_operations on existing part record". One bend,
+    corroborated twice, printed as two rows; and on a sheet an estimator reads, two rows means
+    two setups. Not specific to the uncosted path — the same compiler feeds a costed run, which
+    is how 27 decisions against 12 labour rows became an argument."""
     summary = _summary()
     rc.compile_route_without_pricing(summary)
     rows = bre.route_sheet(summary)
