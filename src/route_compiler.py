@@ -1748,6 +1748,37 @@ def build_part_graph(
         if _own is None or abs(_own - edge_qty) < 1e-9:
             return edge_qty
         _label = _display_source(_own_src) if _own_src else "an unnamed reader"
+        # ── A CODE THE ARRANGEMENT RULE HAS ALREADY RULED ON BEATS THE EDGE ───────────
+        #
+        # THE STAMP, AND WHY IT IS NOT A SIXTH DIVIDER. `quantity_is_per_quoted_unit` is set by
+        # the install-context rule when it has identified this code as the unit being quoted and
+        # divided the arrangement count out of its record — the count itself is the value, so the
+        # record can say what it divided by.
+        #
+        # The edge cannot be corrected where that division happens: compile_job_route is handed
+        # `parts` and `llm_full_extract` and rebuilds its edges from the extract on every compile,
+        # so a write to the edge there dies on the next one. The record survives, because the
+        # record is what compile is handed.
+        #
+        # WITHOUT THIS, THE GUARD BELOW KEEPS THE WRONG NUMBER, which is exactly what 12349-02 did
+        # at 05:24. The record read 1, every leaf record read 1, and the sheet still printed three
+        # lids — because the rank test below sees `bom_tree` on the record, treats it as a reader
+        # of a cell rather than a counter of instances, and keeps the edge. That test exists to
+        # stop an UNCORRECTED general-arrangement cell of 3 replacing a sub-assembly edge of 1;
+        # here it stopped a CORRECTED record of 1 replacing an uncorrected GA edge of 3. Same
+        # guard, opposite direction.
+        #
+        # A stamp is only present where the correction actually LANDED, so a record a stronger
+        # reader owns carries none and the edge still stands.
+        _stamped = number(record.get("quantity_is_per_quoted_unit"), None)
+        if _stamped:
+            qty_notes.setdefault(child_id, (
+                f"this part is the unit being quoted, so one quoted unit takes {_own:g} of it; "
+                f"{parent_id} lists {edge_qty:g} on the general arrangement, which is {_stamped:g} "
+                f"arrangements of it rather than {edge_qty:g} per unit"))
+            print(f"   [graph] {child_id} is the quoted unit — costing {_own:g} per unit, not the "
+                  f"{edge_qty:g} on the {parent_id} edge ({_stamped:g} arrangements)", flush=True)
+            return _own
         if len(parents.get(child_id) or ()) > 1:
             qty_notes.setdefault(child_id, (
                 f"{child_id} sits under more than one parent, which each take a different "

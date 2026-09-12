@@ -3149,6 +3149,33 @@ def _finalize_scan_summary(
                         if _was != 1 and str(_src_of(_p, "quantity") or "") == "bom_tree":
                             _p["quantity_source"] = ""   # precedence: direct-write ok — clears a stamp the same reader is superseding, so apply_field below records the change
                         if _apply_parent_qty(_p, "quantity", 1, "bom_tree"):
+                            # AND THE STAMP THAT SURVIVES THE NEXT COMPILE.
+                            #
+                            # Correcting this record was not enough on its own, and 12349-02 at
+                            # 05:24 is the proof: the record read 1, every leaf record read 1,
+                            # and the Estimate still printed three lids. The probe named why —
+                            #
+                            #   edge  12349-02-69-GA -> 12349-02-69-100   qty = 3.0
+                            #   node  qty_per_unit = 3.0   (own 1 x parent edge 3)
+                            #
+                            # The graph multiplies by the EDGE, and that edge is the general
+                            # arrangement's printed 3. It cannot be corrected here: compile_job_route
+                            # is handed `parts` and `llm_full_extract` and rebuilds its edges from
+                            # the extract on every compile, so a write to the edge dies on the next
+                            # one. The record is the store that survives, because the record is what
+                            # compile is handed.
+                            #
+                            # So the record carries the RULING as well as the figure: this code is
+                            # the unit, and the arrangement count that was divided out. _per_parent
+                            # honours that stamp ahead of the edge — which is not a sixth divider,
+                            # it is the existing division's verdict reaching the one reader that
+                            # never saw it.
+                            #
+                            # Stamped only where the write LANDED. A refused write means a stronger
+                            # reader owns this quantity and its figure, not this rule's, is the
+                            # per-unit truth — so no stamp, the edge stands, and the refusal is
+                            # already printed below.
+                            _p["quantity_is_per_quoted_unit"] = _n
                             print(f"   [bom_tree] {_p.get('part_number')} is the unit — its "
                                   f"record qty {_was} -> 1 per quoted unit ({_n} arrangements "
                                   f"on {_main}); the cascade below it now starts from one",
