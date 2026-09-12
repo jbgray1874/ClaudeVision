@@ -934,6 +934,62 @@ ACRYLIC_OP_DRIVERS = {
     # Other acrylic ops present in the SDI route (zero on M18, wire as needed): DPOL diamond
     # polish, DRIL drill-acrylic (£25.13/hr), OVEN oven-forming, EDGE edging, PACP assemble/pack.
 }
+# ── SET-UP MINUTES: ONE OWNER, KEYED ON THE DEPARTMENT ───────────────────────────────
+#
+# SET-UP IS A BATCH COST. It does not scale with quantity: one unit and a hundred pay the same
+# ten or fifteen or thirty minutes per tooling group, and only the per-unit SHARE falls, as
+# `setup_min / 60 / order_qty x rate`. That is already how the sheet behaves and it is the whole
+# of the quantity-break story — on 12349-02 at 7 off, GBP 46.41 of GBP 83.77 labour is set-up
+# against GBP 37.36 of run time, so the same job at 100 off sheds about GBP 43 a unit without a
+# single rate changing.
+#
+# WHAT WAS MISSING WAS AN OWNER FOR THE MINUTES, and the drift had already started. The figure
+# lived in three places — this file's ACRYLIC_OP_DRIVERS, sheet_steel_costing.RATE_CARD, and the
+# Estimate template's own rate rows — and two of them disagreed: acrylic laser set-up read 5
+# minutes here and 10 on the rate card. A department cannot have its rate on one book and its
+# set-up invented somewhere else.
+#
+# THE LADDER IS THE SAME AS MATERIAL'S: the labour book wins where it carries a set-up column,
+# this table is the offline fallback, and a department in neither is an explicit nil rather than
+# a guessed number. Ask `sheet_steel_costing.setup_min_for()`; do not write minutes in code.
+#
+# Keyed on the DEPARTMENT CODE, because that is the tooling group — two 5 mm acrylic parts on
+# CNC share one set-up, and a 6 mm MDF packer on CNCJ is a different machine and keeps its own.
+#
+# Values are the Estimate template's own rate rows, which is the book the sheet's LOOKUP reads.
+# The eleven below the first group exist on the template and were absent from the engine's card
+# entirely, so the engine could not cost or check them: two of them, Weld (CO2) and Wet Spray,
+# are used on 12349-02.
+OPERATION_SETUP_MIN = {
+    "PACP": 15, "PACM": 15, "BENC": 30, "CNC": 10, "CNCJ": 15, "DPOL": 10,
+    "DRES": 30, "DRIL": 30, "EDGE": 30, "FOLD": 30, "GLUE": 30, "GUIL": 15,
+    "LASA": 10, "LASM": 10, "LINE": 30, "MC J": 30, "MANA": 15, "MANM": 15,
+    "OVEN": 30, "P/C": 15, "PACJ": 15,
+    # On the template, absent from the engine's rate card until now.
+    "PINR": 30, "PUNC": 10, "ROBO": 15, "ROLL": 45, "SALV": 30, "SAW": 10,
+    "SPOT": 30, "TUBE": 15, "TBEN": 45, "WELD": 30, "SPRY": 25,
+}
+
+# ── AND THE SECOND COPY IS RETIRED HERE ──────────────────────────────────────────────
+#
+# ACRYLIC_OP_DRIVERS above carried its own set-up minutes, which is precisely the "rate on one
+# book, set-up invented in code" this table exists to stop. Five of the six already agreed with
+# the rate card; the sixth did not.
+#
+#   laser_setup_min was 5.0 against the rate card's 10 for LASA
+#
+# COSTING CHANGE, DECLARED RATHER THAN SLIPPED IN. Acrylic laser set-up doubles, which on a
+# GBP 41.21/hr department is about GBP 3.43 added to the ORDER — GBP 0.49 a unit at 7 off, GBP
+# 0.03 at 100. The rate card is the book the sheet's own LOOKUP reads, so it wins; if 5 minutes
+# is the true figure then the rate card row is what to correct, and it is now the only place to
+# correct it.
+for _k, _dept in (("laser_setup_min", "LASA"), ("linebend_setup_min", "LINE"),
+                  ("glue_setup_min", "GLUE"), ("flame_setup_min", "MANA"),
+                  ("diamond_polish_setup_min", "DPOL"), ("peel_setup_min", "MANA")):
+    if _dept in OPERATION_SETUP_MIN:
+        ACRYLIC_OP_DRIVERS[_k] = float(OPERATION_SETUP_MIN[_dept])
+del _k, _dept
+
 ACRYLIC_PROVISIONAL_FLAG = "acrylic_provisional_pending_estimating"
 
 NESTING_RULES = {

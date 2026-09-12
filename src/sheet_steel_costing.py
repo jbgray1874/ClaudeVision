@@ -20,7 +20,13 @@ from __future__ import annotations
 from typing import Optional
 
 # ---- rate card (rows 115-146): name -> (£/hr, setup_mins, dept_code) -----------------
-RATE_CARD = {
+#
+# THE SET-UP MINUTES BELOW ARE NOT THE OWNER OF THAT NUMBER — config.OPERATION_SETUP_MIN is,
+# and `_with_book_setup` overwrites them from it at import. They are kept spelled out here
+# because this table is also the record of what the template's rate rows say, and a reader
+# comparing the two should see both halves side by side; if they ever differ, config wins and
+# a test says so. See setup_min_for() for the ladder.
+_RATE_CARD_AS_READ_OFF_THE_TEMPLATE = {
     "Assemble/pack (Acrylic)": (25.4257, 15, "PACP"),
     "Assemble/pack (Metal)":   (28.5588, 15, "PACM"),
     "Bench Work Joinery":      (28.7350, 30, "BENC"),
@@ -43,6 +49,58 @@ RATE_CARD = {
     "P.Coat":                  (355.43,  15, "P/C"),
     "Packing Joinery":         (28.7350, 15, "PACJ"),
 }
+
+
+def _with_book_setup(card):
+    """One owner for the minutes. The rate stays on this row; the set-up comes from the book."""
+    try:
+        import config as _cfg
+        _book = getattr(_cfg, "OPERATION_SETUP_MIN", {}) or {}
+    except Exception:
+        return dict(card)
+    return {name: (rate, _book.get(dept, setup), dept)
+            for name, (rate, setup, dept) in card.items()}
+
+
+RATE_CARD = _with_book_setup(_RATE_CARD_AS_READ_OFF_THE_TEMPLATE)
+
+# Department code for a rate-card title, so a caller holding either can ask for a set-up.
+DEPT_BY_TITLE = {name: dept for name, (_r, _s, dept) in RATE_CARD.items()}
+
+
+def setup_min_for(dept_or_title, book_setup_min=None):
+    """Minutes of set-up for a tooling group — the one place that answers it.
+
+    THE LADDER, and it is the same one material uses: the labour book wins where it carries a
+    set-up for this department, config.OPERATION_SETUP_MIN is the offline fallback, and a
+    department in neither returns None — an explicit nil, not a guessed fifteen. No caller
+    writes minutes of its own.
+
+    A BATCH COST, ASKED PER TOOLING GROUP. Quantity is not a parameter and must never become
+    one: one unit and a hundred pay the same minutes, and the per-unit share is the caller's
+    division by order quantity, not a different number here.
+    """
+    if book_setup_min is not None:
+        try:
+            _v = float(book_setup_min)
+            if _v >= 0:
+                return _v
+        except (TypeError, ValueError):
+            pass
+    key = str(dept_or_title or "").strip()
+    if not key:
+        return None
+    try:
+        import config as _cfg
+        _book = getattr(_cfg, "OPERATION_SETUP_MIN", {}) or {}
+    except Exception:
+        return None
+    if key in _book:
+        return _book[key]
+    _dept = DEPT_BY_TITLE.get(key)
+    if _dept is None:
+        _dept = next((d for t, d in DEPT_BY_TITLE.items() if t.lower() == key.lower()), None)
+    return _book.get(_dept) if _dept else None
 
 # ---- laser cutting speed by gauge (rows 38-46): gauge_mm -> mm/sec -------------------
 LASER_SPEED_BY_GAUGE = [
