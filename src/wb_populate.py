@@ -4133,8 +4133,28 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # 5-6 hrs/part (£1,050 CNC + £610 spray + £472 glue on Cocktails). Sane defaults let
         # the floor cap them back to ~a minute or two per part. UNMEASURED, config-tunable.
         "CNC Joinery":   30,    # UNMEASURED — CNC router pass
+        # ACRYLIC ROUTING HAS ITS OWN DEPARTMENT NOW, AND IT NEEDED ITS OWN FLOOR.
+        #
+        # Moving acrylic off the joinery router (CNCJ) onto CNC sent the operation to a
+        # department this table had never heard of, so the derived throughput had no floor and
+        # no ceiling — and on the first pack through, the cell came out EMPTY. `Total Hours` is
+        # `60/throughput`, so an empty cell is a division by nothing and the error propagates
+        # into the labour total: the covering email read "not readable from the sheet" and
+        # "Labour is 0 sheet rows" on a sheet whose quantities were finally right.
+        #
+        # Exactly what the note above this group warns about, and I walked into it by adding a
+        # department without adding its row here. Follows CNC Joinery rather than inventing a
+        # faster figure: the two are different machines but nothing measured says by how much,
+        # and a made-up number would be worse than an honest borrowed one.
+        "CNC":           30,    # UNMEASURED — follows CNC Joinery until a measured figure exists
         "Glue":          40,    # UNMEASURED — manual glue-up
         "Wet Spray":         60,    # UNMEASURED — wet spray booth
+        # EDGE BANDING WAS THE SAME TRAP, FOUND BY THE GUARD RATHER THAN BY A PACK. The
+        # joinery map can emit it — a board panel whose drawing says EDGED — and it had no
+        # floor, so the first job with edge banding on it would have blanked its own labour
+        # total exactly as the acrylic router did. Follows the router pass at 30/hr: a machine
+        # pass along an edge, with nothing measured to say otherwise.
+        "Edge Banding":  30,    # UNMEASURED — follows CNC Joinery, a machine pass on board
         # Dress Welds (DRES): linish/grind the CO2 weld bead — a quick hand pass, like deburr.
         # Had no default, so the engine's garbage ~0.88/hr stood: a grouped 16-part line billed
         # 18.6 hrs / £533 — the single largest labour line on Cocktails and the whole gap to the
