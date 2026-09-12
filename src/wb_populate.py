@@ -423,6 +423,18 @@ OP_NAME_MAP_JOINERY = {
     "laser":          "CNC Joinery",
     "laser_cutting":  "CNC Joinery",
     "laser_metal":    "CNC Joinery",
+    # BOARD IS ROUTED ON THE JOINERY ROUTER, AND IT HAS TO SAY SO HERE.
+    #
+    # `cnc_routing` was in neither this map nor the acrylic one, so board and acrylic alike fell
+    # through to OP_NAME_MAP and both landed on CNCJ — which was right for the MDF packer by
+    # accident and wrong for the acrylic by GBP 21/hr. Sending acrylic to CNC without naming
+    # board here would have moved the packer TOO, because _is_board lumps timber in with acrylic
+    # and this map is the only thing that separates them. The test caught it; the point is that
+    # the joinery branch has to claim the operation explicitly rather than rely on a fall-through
+    # that is about to be taken away from it.
+    "cnc_routing":    "CNC Joinery",
+    "cnc":            "CNC Joinery",
+    "cnc_joinery":    "CNC Joinery",
 }
 
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
@@ -974,6 +986,25 @@ def _map_operation(op: str, is_acrylic: bool, stock_form: str = "",
     # and the acrylic map would otherwise name its department after a material it is not.
     if _is_timber(str(material or "")) and key in OP_NAME_MAP_JOINERY:
         return OP_NAME_MAP_JOINERY[key]
+    # ── ACRYLIC IS CUT ON THE CNC, NOT ON THE JOINERY ROUTER ─────────────────────────
+    #
+    # The rate card carries both rows and they are different machines for different stock:
+    # CNC at GBP 43.36/hr with a 10-minute set-up, CNC Joinery at GBP 64.07 with 15. Neither map
+    # claimed `cnc_routing`, so board and acrylic alike fell through to OP_NAME_MAP and both
+    # landed on CNCJ — right for the MDF packer by accident, and wrong for the acrylic by about
+    # GBP 21 an hour. On 12349-02 the 5 mm high-impact acrylic front cover was charged at the
+    # same rate as the 6 mm MDF packer, which is the estimator's own point.
+    #
+    # ASKED OF THE MATERIAL, NOT OF THE MAP, because `is_acrylic` is really _is_board: it is true
+    # of MDF too. Putting this in OP_NAME_MAP_ACRYLIC moved the packer as well — the joinery map
+    # does not list `cnc_routing`, so board fell straight through to the acrylic branch.
+    #
+    # AND ONLY WHERE THE MATERIAL IS KNOWN. A caller that names no material cannot be told board
+    # from acrylic, and this function's contract is that such a call behaves as it did before —
+    # so the joinery row stands rather than an unnamed material quietly taking the cheaper
+    # machine.
+    if key in _CNC_ROUTING_KEYS and _is_acrylic_material(material):
+        return "CNC"
     # Acrylic/board operations
     if is_acrylic and key in OP_NAME_MAP_ACRYLIC:
         return OP_NAME_MAP_ACRYLIC[key]
@@ -1365,6 +1396,20 @@ _TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "
                   "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB",
                   # MFC — melamine faced chipboard, the commonest shop-fitting board.
                   "MELAMINE", "MFC")
+
+
+# The routing words that name a CNC pass, whichever vocabulary produced them.
+_CNC_ROUTING_KEYS = frozenset({"cnc_routing", "cnc", "cnc_joinery"})
+
+
+def _is_acrylic_material(mat: Any) -> bool:
+    """Acrylic proper — the stock cut on the CNC rather than on the joinery router.
+
+    Deliberately positive and narrow: it asks whether the material IS acrylic, not whether it
+    is "not metal". _is_board answers the second question and is true of MDF, which is exactly
+    the confusion this exists to avoid."""
+    m = str(mat or "").upper()
+    return "ACRYLIC" in m or "PERSPEX" in m or "PMMA" in m
 
 
 def _is_timber(mat: str) -> bool:
