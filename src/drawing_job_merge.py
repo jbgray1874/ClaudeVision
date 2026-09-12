@@ -1365,6 +1365,64 @@ def _stamp_assembly_parents(parts: List[Dict[str, Any]]) -> None:
             if "assembly_parent_rolled_up_to_children" not in flags:
                 flags.append("assembly_parent_rolled_up_to_children")
     _stamp_described_assemblies(parts)
+    _stamp_arrangement_parents(parts)
+
+
+def _stamp_arrangement_parents(parts: List[Dict[str, Any]]) -> None:
+    """A parent whose children include ANOTHER assembly parent is an ARRANGEMENT — a
+    general-arrangement node whose immediate members are themselves assemblies.
+
+    WHY THE DISTINCTION EXISTS. 12349-02's GA record carried a Glue labour row ("Glue —
+    6mm TIMBER (12349-02-69)"), minted from the word GLUE in the arrangement drawing's own
+    notes — and the estimator's first question was "What op is this for?", because nobody
+    can say. An arrangement drawing's notes describe its MEMBERS: the gluing they call up
+    is the members' work (the acrylic route books bonding on the bonded assembly, the
+    timber allowance books glue on the timber leaves), so the same word charged on the
+    arrangement is the same work charged twice, against a node that is only a drawing.
+
+    The predicate is deliberately NOT "the root": a weldment that tops its own job
+    (7332-01-101 STAND WELD ASSY over leaf plates) is a root and genuinely performs its
+    joining, and a bonded acrylic assembly (12349-02-69-01A over its seven flats) keeps
+    its UV bond for the same reason. Both have only LEAVES below them. What marks a node
+    as paper rather than a bench is having an ASSEMBLY below it.
+
+    Children are recognised the two ways parents are stamped: by part-number prefix, and
+    by a described-assembly's recorded children."""
+    keyed = [(_normalize_part_key(p.get("part_number", "")), p)
+             for p in parts if isinstance(p, dict)]
+    parents = [(k, p) for k, p in keyed
+               if k and (p.get("is_assembly_parent") or p.get("is_sub_assembly"))]
+    if len(parents) < 2:
+        return
+    parent_keys = {k for k, _ in parents}
+    for k, p in parents:
+        prefix = k + "-"
+        child_ids = {_normalize_part_key(c) for c in (p.get("assembly_children") or [])}
+        if (any(ok != k and ok.startswith(prefix) for ok in parent_keys)
+                or (child_ids & parent_keys)):
+            p["is_arrangement_parent"] = True
+            flags = p.setdefault("review_flags", [])
+            _msg = ("arrangement node — its members include another assembly, so its "
+                    "drawing's process notes describe THEM; note-minted process work is "
+                    "not charged here")
+            if _msg not in flags:
+                flags.append(_msg)
+            # THE OP LEAVES THE RECORD, NOT ONLY THE COSTING. The route-decision report is
+            # compiled from textual_operations; a glue left on the record would print
+            # "required" beside a sheet with no glue row, and a report that contradicts
+            # the sheet it accompanies is worse than either alone. Same shape as
+            # strip_leaf_operations: removed, recorded, flagged — never silent.
+            _removed: List[str] = []
+            for _field in ("textual_operations", "inferred_operations"):
+                _vals = p.get(_field)
+                if isinstance(_vals, list) and any(
+                        str(o).strip().lower() == "glue" for o in _vals):
+                    p[_field] = [o for o in _vals                       # precedence: direct-write ok — removes ops, adds no evidence
+                                 if str(o).strip().lower() != "glue"]
+                    if "glue" not in _removed:
+                        _removed.append("glue")
+            if _removed:
+                p.setdefault("removed_operations", []).extend(_removed)
 
 
 _WITH_SPLIT = re.compile(r"\s+WITH\s+", re.IGNORECASE)

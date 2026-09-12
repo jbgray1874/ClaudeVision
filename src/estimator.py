@@ -4759,8 +4759,21 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         run_times_min["diamond_polish"] = round(max(1.0, (cut_length_mm / 500.0)) if cut_length_mm else 1.5, 2)
 
     if "glue" in ops:
-        setup_times_min["glue"] = 0.5
-        run_times_min["glue"] = 1.0
+        # NOT ON AN ARRANGEMENT. 12349-02's GA record charged "Glue — 6mm TIMBER
+        # (12349-02-69)" off the word GLUE in the arrangement drawing's notes, and the
+        # estimator's question was "What op is this for?" — unanswerable, because an
+        # arrangement's notes describe its MEMBERS, and the members already carry their
+        # own bonding (the acrylic route on the bonded assembly, the timber allowance on
+        # the timber leaves). A node whose children include another assembly is stamped
+        # is_arrangement_parent upstream (drawing_job_merge); a sub-assembly that
+        # genuinely bonds — 01A's UV glue — has only leaves below it and keeps its line.
+        if part.get("is_arrangement_parent"):
+            part.setdefault("review_flags", []).append(
+                "glue note on the arrangement drawing NOT charged here — the gluing it "
+                "calls up belongs to the members, which carry their own bonding time")
+        else:
+            setup_times_min["glue"] = 0.5
+            run_times_min["glue"] = 1.0
 
     if "dress_welds" in ops:
         setup_times_min["dress_welds"] = 0.5

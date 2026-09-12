@@ -39,3 +39,9 @@ dept 08J = CNC Joinery
 
 # ── identity: a hashed key is not a part number ───────────────────────────────────────────
 no_part_number_contains -DXF
+
+# ── an arrangement's notes describe its members ───────────────────────────────────────────
+# "A glue op included on 12349-02-69 for timber. (What op is this for?)" — the estimator,
+# and there is no answer: the GA's glue note is the members' work, charged on them. The UV
+# bond on 01A is untouched — this line matches the bare GA code only.
+must_not_charge Glue on 12349-02-69
