@@ -153,18 +153,53 @@ def test_an_empty_field_is_still_just_filled():
 @pytest.mark.parametrize("field,strong,weak", [
     ("normalized_material", "ABS", "PETG"),
     ("normalized_thickness_mm", 2.2, 2.0),
-    ("quantity", 1, 4),
 ])
 def test_the_rule_is_not_written_for_material(field, strong, weak):
     """11650-04 splits on GAUGE as well as material — six DXFs named 2MM and a catalogue
     stocking 2.0 against one model property saying 2.2. A rule that named material would fix
-    half the defect and leave the pair priced at two rates."""
+    half the defect and leave the pair priced at two rates.
+
+    QUANTITY WAS A THIRD CASE HERE AND IS NOT ANY MORE. It counts by evidence family instead —
+    see the test below, and QUORUM_BY_FAMILY_FIELDS for why it is the only field that does."""
     part = {}
     apply_field(part, field, weak, "title_block")
     apply_field(part, field, strong, "solidworks_api")
     assert value_of(part, field) == strong
     apply_field(part, field, weak, "drawing_deterministic")
     assert value_of(part, field) == weak, f"{field} did not follow the same rule"
+
+
+def test_quantity_counts_voices_by_evidence_family_not_by_reader():
+    """THE DOOR 12349-02 WENT THROUGH TWICE, WITH THE RANKS COMPLETELY UNTOUCHED.
+
+    Quantity is written by exactly two sources in this codebase — `bom_tree` and
+    `drawing_deterministic` — and both are readings of the SAME PDF. Counted as two voices they
+    formed a quorum and displaced the SolidWorks instance count: 90 lost to 60 + 70, and the
+    write SUCCEEDED, so it produced no KEPT line and never looked like a defect. Three lids,
+    three covers, twelve screws and eighteen bumpons on the 23:56 sheet.
+
+    A quorum weighs EVIDENCE, and two readings of one drawing are one piece of evidence read
+    twice. Establishing what the parts table says is not evidence about how many the unit takes.
+    """
+    part = {"part_number": "12349-02-69-100"}
+    apply_field(part, "quantity", 1, "solidworks_api")
+    apply_field(part, "quantity", 3, "bom_tree")
+    assert apply_field(part, "quantity", 3, "drawing_deterministic") is False, (
+        "two readings of one PDF are one voice and must not outvote the model's instance count")
+    assert value_of(part, "quantity") == 1
+    assert source_of(part, "quantity") == "solidworks_api"
+
+
+def test_quantity_still_moves_when_the_voices_are_genuinely_independent():
+    """NOT A BLANKET REFUSAL. Evidence from two different artefacts still outweighs a lone
+    stronger reading — that is the whole rule, and narrowing it to "the model always wins on
+    quantity" would be a different change nobody asked for."""
+    part = {"part_number": "X"}
+    apply_field(part, "quantity", 1, "solidworks_api")
+    apply_field(part, "quantity", 4, "bom_tree")
+    assert apply_field(part, "quantity", 4, "dxf_filename") is True, (
+        "the drawing and the cut file are two artefacts, and two artefacts are two voices")
+    assert value_of(part, "quantity") == 4
 
 
 def test_it_works_on_a_nested_field():

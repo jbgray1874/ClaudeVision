@@ -86,21 +86,27 @@ def test_11650s_door_keeps_the_material_four_readings_agree_on():
 
 # ── precedence, still working ──────────────────────────────────────────────────
 
+# THESE TWO ARE ABOUT THE QUORUM, NOT ABOUT GAUGE, and they used gauge as the vehicle. Gauge now
+# has a published exception — for `normalized_thickness_mm` the cut file outranks the model,
+# because the CNC runs the DXF — so on that field a lone DXF reading correctly holds against
+# SolidWorks and the vehicle no longer carries the test. Moved onto material, where the ordinary
+# order applies and the mechanism under test is the same one.
+
 def test_a_stronger_source_still_corrects_a_value_only_one_source_holds():
     """The common case, and the one the resolver mostly exists for."""
     part = {}
-    sp.apply_field(part, "normalized_thickness_mm", 1.2, "dxf_filename")
-    assert sp.apply_field(part, "normalized_thickness_mm", 2.0, "solidworks_api") is True
-    assert part["normalized_thickness_mm"] == 2.0
+    sp.apply_field(part, "normalized_material", "PETG", "dxf_filename")
+    assert sp.apply_field(part, "normalized_material", "ABS", "solidworks_api") is True
+    assert part["normalized_material"] == "ABS"
 
 
 def test_one_source_saying_it_twice_is_not_a_quorum():
     """Two passes of one reader agreeing with itself is one observation seen twice."""
     part = {}
-    sp.apply_field(part, "normalized_thickness_mm", 1.2, "dxf_filename")
-    sp.apply_field(part, "normalized_thickness_mm", 1.2, "dxf_filename")
-    assert sp.apply_field(part, "normalized_thickness_mm", 6.0, "solidworks_api") is True
-    assert part["normalized_thickness_mm"] == 6.0
+    sp.apply_field(part, "normalized_material", "PETG", "dxf_filename")
+    sp.apply_field(part, "normalized_material", "PETG", "dxf_filename")
+    assert sp.apply_field(part, "normalized_material", "ABS", "solidworks_api") is True
+    assert part["normalized_material"] == "ABS"
 
 
 def test_anything_may_still_fill_an_empty_field():
@@ -131,11 +137,18 @@ def test_an_estimator_is_never_outvoted_by_readers():
 
 
 def test_a_confirming_source_does_not_count_as_an_attacker():
-    """Agreement is handled before any of this and must stay a provenance question."""
-    part = _gauge_read_twice_off_the_drawing()
-    assert sp.apply_field(part, "normalized_thickness_mm", 1.2, "solidworks_api") is False
-    assert part["normalized_thickness_mm"] == 1.2
-    assert sp.source_of(part, "normalized_thickness_mm") == "solidworks_api", (
+    """Agreement is handled before any of this and must stay a provenance question.
+
+    On MATERIAL, because the point is that agreement upgrades the provenance to the stronger
+    source — and on gauge the stronger source for this purpose is now the cut file, so the
+    upgrade has nowhere to go and the assertion would be about the exception rather than about
+    agreement."""
+    part = {}
+    sp.apply_field(part, "normalized_material", "PETG", "dxf_filename")
+    sp.apply_field(part, "normalized_material", "PETG", "title_block")
+    assert sp.apply_field(part, "normalized_material", "PETG", "solidworks_api") is False
+    assert part["normalized_material"] == "PETG"
+    assert sp.source_of(part, "normalized_material") == "solidworks_api", (
         "agreement from a stronger source should still upgrade the provenance")
 
 

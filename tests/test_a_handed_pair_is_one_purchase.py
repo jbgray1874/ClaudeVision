@@ -219,9 +219,14 @@ def test_both_halves_of_a_disagreeing_key_move_together():
     sp.apply_field(base, MAT, "PETG", "drawing_deterministic")
     sp.apply_field(base, MAT, "PETG", "dxf_filename")
     sp.apply_field(base, GAUGE, 2.0, "dxf_filename")
-    # The base still reads 3.0 here: its export's 2.0 lost to its own model on rank, and the
-    # companion rule that corrects that runs inside the settlement, not before it.
-    assert _key(base) == ("PETG", 3.0) and _key(hand) == ("ABS", 3.0)
+    # The base already reads 2.0 here. It used to read 3.0 — its export's gauge lost to its own
+    # model on rank, and the companion rule inside the settlement was what corrected it. Gauge now
+    # has a published exception (for `normalized_thickness_mm` the cut file outranks the model,
+    # because the CNC runs the DXF), so the export's 2.0 is applied on rank and the base is right
+    # before settlement starts. What this test is actually about is unchanged and is the assertion
+    # below: BOTH halves have to reach the hand. A mutant that carries only the material still
+    # fails it, because the hand would then read PETG at its own model's 3.0.
+    assert _key(base) == ("PETG", 2.0) and _key(hand) == ("ABS", 3.0)
     # And the base must WIN it: two readings for its answer against the hand's one. Counting
     # the base's own rejected ABS as evidence for the hand handed this pair to the model.
     merge.settle_handed_pairs([base, hand])

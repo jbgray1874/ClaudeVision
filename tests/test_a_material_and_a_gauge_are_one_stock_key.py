@@ -62,15 +62,49 @@ def _key(p):
     return (p.get(MATERIAL), p.get(GAUGE))
 
 
+def _panel_the_repair_still_has_to_fix():
+    """THE SAME DEFECT, IN THE SHAPE IT CAN STILL REACH THE SHEET IN.
+
+    11650-04 as written above no longer goes wrong: gauge now has a published exception — for
+    `normalized_thickness_mm` the cut file outranks the model, because the CNC runs the DXF — so
+    the export's 2.0 wins on rank and the nonsense pair never forms. The repair moved upstream,
+    which is better, and it leaves this seam needing a case that still reaches it.
+
+    It is the same failure with the gauge named by a reader that is NOT the cut file: the printed
+    sheet says PETG at 2.0 and the machine transcription agrees about the material but says
+    nothing about thickness. Two readings outvote the model on MATERIAL; the gauge has only one
+    holder, so it loses to the model on rank and stays at 2.2. PETG at 2.2 again, assembled from
+    two readings, and nobody stocks it.
+    """
+    p = {}
+    sp.apply_field(p, MATERIAL, "ABS", "solidworks_api")
+    sp.apply_field(p, GAUGE, 2.2, "solidworks_api")
+    sp.apply_field(p, MATERIAL, "PETG", "drawing_deterministic")
+    sp.apply_field(p, GAUGE, 2.0, "drawing_deterministic")
+    sp.apply_field(p, MATERIAL, "PETG", "llm_extract")
+    return p
+
+
 # ── the defect, stated as the test ───────────────────────────────────────────────────
 
 def test_the_pair_the_engine_lands_on_is_one_a_source_actually_asserted():
     """THE WHOLE POINT. Before settling, the record holds PETG at 2.2 — a stock key assembled
     from two readings that contradicted each other, and one no supplier lists."""
-    p = _panel()
+    p = _panel_the_repair_still_has_to_fix()
     assert _key(p) == ("PETG", 2.2), "the defect no longer reproduces; this test is blind"
     sp.settle_companion_facts(p)
     assert _key(p) == ("PETG", 2.0)
+
+
+def test_where_the_cut_file_names_the_gauge_the_pair_never_goes_wrong():
+    """AND THE ORIGINAL 11650-04 SHAPE IS NOW FIXED BEFORE THIS SEAM IS REACHED. The export is
+    named `11650-04-01A_2MM PETG_REVG.DXF`; the cut file outranks the model on gauge, so 2.0 is
+    applied on rank and there is nothing left to repair. Pinned so that if the exception is ever
+    narrowed, this says what was lost."""
+    p = _panel()
+    assert _key(p) == ("PETG", 2.0)
+    assert sp.settle_companion_facts(p) == [], "nothing to move; arbitration already agreed"
+    assert sp.source_of(p, GAUGE) == "dxf_filename"
 
 
 def test_both_halves_end_up_from_the_same_reading():
@@ -91,15 +125,15 @@ def test_the_gauge_that_was_set_aside_is_still_on_the_record():
 
 
 def test_the_move_says_why_in_words_an_estimator_can_check():
-    p = _panel()
+    p = _panel_the_repair_still_has_to_fix()
     sp.settle_companion_facts(p)
     flag = [f for f in p.get("review_flags", []) if "stock key" in f]
     assert flag, "the pair was changed and nothing on the part says so"
-    assert "solidworks_api" in flag[0] and "dxf_filename" in flag[0]
+    assert "solidworks_api" in flag[0] and "drawing_deterministic" in flag[0]
 
 
 def test_what_moved_is_reported_to_the_caller():
-    assert sp.settle_companion_facts(_panel()) == [GAUGE]
+    assert sp.settle_companion_facts(_panel_the_repair_still_has_to_fix()) == [GAUGE]
 
 
 # ── what it must NOT do ──────────────────────────────────────────────────────────────
