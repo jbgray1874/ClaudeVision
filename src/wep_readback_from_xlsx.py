@@ -71,7 +71,8 @@ def _safe_float(v: Any) -> Optional[float]:
 
 
 # ---- Excel COM open + full calc (mirrors estimate_full_parity_report._open_workbook_excel_com) ----
-def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
+def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None,
+                         read_only: bool = True):
     if sys.platform != "win32":
         raise RuntimeError("Excel COM readback is only supported on Windows.")
     import win32com.client  # type: ignore
@@ -85,7 +86,17 @@ def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
     except Exception:
         pass
     try:
-        com_wb = excel.Workbooks.Open(p, 0, True)   # UpdateLinks=0, ReadOnly=True
+        # UpdateLinks=0. Opened WRITABLE when the caller wants the calculated values kept:
+        # openpyxl writes formulas with no cached results, so until somebody saves from
+        # Excel, every non-Excel reader — a preview pane, a data_only read-back, the
+        # pre-flight — sees blank money on a sheet that calculates perfectly. A locked
+        # file falls back to read-only so the READ always still happens.
+        try:
+            com_wb = excel.Workbooks.Open(p, 0, read_only)
+        except Exception:
+            if read_only:
+                raise
+            com_wb = excel.Workbooks.Open(p, 0, True)
     except Exception:
         try:
             excel.Quit()
@@ -122,7 +133,35 @@ def _open_xlsx_excel_com(path: Path, prime_sheet: Optional[str] = None):
     return excel, com_wb
 
 
-def _close_excel(excel, com_wb) -> None:
+def _close_excel(excel, com_wb, save: bool = False) -> None:
+    """Close the COM pair; with save=True, first keep the calculated values in the file.
+
+    THE MONEY WAS COMPUTED AND THROWN AWAY. This function closed with SaveChanges=False on
+    every run, so the workbook on disk kept openpyxl's value-less formulas: correct in
+    Excel, blank everywhere else — a preview pane, a data_only read-back, the pre-flight's
+    error-cell scan all saw nothing where the money is. Saving after the full calculation
+    writes Excel's cached results into the same cells the formulas stay in, so the sheet
+    still SHOWS its formulas to the estimator (the estimator asked for exactly that) and
+    every other reader finally sees the numbers.
+
+    Never at the cost of the read: a workbook that arrived read-only (the fallback for a
+    locked file) is reported and left unsaved, and a failed save changes nothing about the
+    totals already read."""
+    if save and com_wb is not None:
+        try:
+            if bool(getattr(com_wb, "ReadOnly", True)):
+                print("   [wep-readback] workbook opened read-only (file locked?) — "
+                      "calculated values NOT saved into it; previews will show blank "
+                      "formulas until it is opened in Excel", flush=True)
+            else:
+                com_wb.Save()
+                print("   [wep-readback] calculated values saved into the workbook — "
+                      "formulas stay live, and previews/non-Excel readers now see the "
+                      "money instead of blanks", flush=True)
+        except Exception as _save_exc:
+            print(f"   [wep-readback] could not save calculated values "
+                  f"({type(_save_exc).__name__}: {_save_exc}) — the read-back is "
+                  f"unaffected; previews will show blank formulas", flush=True)
     try:
         com_wb.Close(SaveChanges=False)
     except Exception:
@@ -544,8 +583,10 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
 def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
     """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals."""
     excel = com_wb = None
+    _keep_calculated = False
     try:
-        excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name)
+        excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name,
+                                             read_only=False)
         try:
             com_ws = com_wb.Worksheets(sheet_name)
         except Exception:
@@ -571,13 +612,16 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
                 max_row, max_col)
         except Exception as _cexc:
             print(f"   [wep-readback] unit-price composition not read ({_cexc}).", flush=True)
+        # Only a read that actually produced totals earns the save — a workbook whose
+        # calculation failed has nothing worth caching into it.
+        _keep_calculated = bool(out)
         return out or None
     except Exception as exc:
         print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
         return None
     finally:
         if excel is not None:
-            _close_excel(excel, com_wb)
+            _close_excel(excel, com_wb, save=_keep_calculated)
 
 
 # ---- write the real totals into the JSON's WEP + cost_breakdown ----

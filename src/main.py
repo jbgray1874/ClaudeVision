@@ -1972,6 +1972,26 @@ def main() -> None:
             except Exception:                                        # noqa: BLE001
                 _rel3 = {}
             _provisional = bool(_rel3.get("draft")) or not (_inv_rec and _inv_rec.get("may_quote_firm"))
+
+            # ── THE REFUSAL. DETECTION WITHOUT REFUSAL IS A COMMENT ────────────────
+            # A pack shipped whose quantities were finally right and whose money was gone —
+            # #DIV/0! through the labour SUM, "not readable from the sheet" — and the
+            # record already SAID so (money_provenance, stamped above): the system knew and
+            # sent it anyway, under a covering email that summarised it like any other job.
+            # A record that cannot evidence a price gets a DO NOT SEND note in the email's
+            # place and no quote; the workbook still goes to the estimator, because
+            # repairing it needs the file. Deliberately narrow: only when the stamp exists
+            # and says no. A run where the stamp itself failed keeps today's behaviour —
+            # this gate must never be the thing that breaks a healthy run.
+            _mp_block = summary.get("money_provenance")
+            _money_refused = bool(isinstance(_mp_block, dict) and _mp_block
+                                  and not _mp_block.get("can_evidence_a_price"))
+            if _money_refused:
+                _provisional = True
+                print(f"   [covering-note] DO NOT SEND — this record cannot evidence a "
+                      f"price ({(_mp_block or {}).get('state')}); the covering email is "
+                      f"replaced by a refusal and the quote is held", flush=True)
+
             _attach = []
             for _k, _v in _sop.items():
                 if _k in ("json", "covering_email", "quantity_variants") or not _v \
@@ -1982,14 +2002,19 @@ def main() -> None:
                 _attach.append(str(_v))
             try:
                 from estimate_explained import covering_email as _covering_email
-                _note = _covering_email(
-                    Path(xlsx_path),
-                    Path(_sop.get("json") or "") if _sop.get("json") else None,
-                    client=str(summary.get("client") or ""),
-                    deliverables=_attach,
-                    provisional=_provisional,
-                    quantity_sweep=summary.get("quantity_sweep"),
-                )
+                if _money_refused:
+                    from estimate_explained import do_not_send_note as _dns_note
+                    _note = _dns_note(Path(xlsx_path).stem,
+                                      str((_mp_block or {}).get("why") or ""))
+                else:
+                    _note = _covering_email(
+                        Path(xlsx_path),
+                        Path(_sop.get("json") or "") if _sop.get("json") else None,
+                        client=str(summary.get("client") or ""),
+                        deliverables=_attach,
+                        provisional=_provisional,
+                        quantity_sweep=summary.get("quantity_sweep"),
+                    )
                 _note_path = Path(xlsx_path).with_name(
                     f"{Path(xlsx_path).stem}_covering_email.html")
                 _note_path.write_text(

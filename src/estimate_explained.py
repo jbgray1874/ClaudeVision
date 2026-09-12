@@ -2263,6 +2263,51 @@ def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dic
             "rows": len(labour_rows), "known": known}
 
 
+def do_not_send_note(stem: str, why: str) -> Dict[str, str]:
+    """The covering note for a pack whose money cannot be read — a refusal, not a summary.
+
+    WHAT THIS REPLACES. A pack went out whose quantities were finally right and whose money
+    was gone — #DIV/0! through the labour SUM, "not readable from the sheet" — under a
+    covering email that summarised it like any other. The system had already detected the
+    state (money_provenance: the record cannot evidence a price) and shipped anyway;
+    detection without refusal is a comment.
+
+    This note is what goes in the email's place. The subject leads with DO NOT SEND so no
+    mail client, preview, or skim can mistake it; the body names the reason the record
+    gives and what to do. The workbook itself still ships to the ESTIMATOR — repairing it
+    needs the file — but nothing that reads like a price accompanies it."""
+    _stem = str(stem or "this job").strip() or "this job"
+    _why = str(why or "the record carries no calculated totals").strip()
+    subject = f"DO NOT SEND — {_stem}: the money on this pack is not readable"
+    text = (
+        f"{subject}\n\n"
+        f"The estimate record for {_stem} cannot evidence a price:\n"
+        f"  {_why}\n\n"
+        f"The workbook is attached for repair, not for sending. To settle it:\n"
+        f"  1. Open the workbook in Excel and check the totals calculate (no #DIV/0!).\n"
+        f"  2. Run tools\\preflight_before_you_send_it.py against it — it names the "
+        f"blocking rows.\n"
+        f"  3. Fix the cause (usually a labour row with no throughput) and re-run the "
+        f"job.\n\n"
+        f"No quote accompanies this pack. Nothing in it should be read as a price."
+    )
+    html = (
+        f"<h2 style='color:#7f2a2a'>{subject}</h2>"
+        f"<p>The estimate record for <b>{_stem}</b> cannot evidence a price:</p>"
+        f"<blockquote>{_why}</blockquote>"
+        f"<p>The workbook is attached <b>for repair, not for sending</b>. To settle it:</p>"
+        f"<ol><li>Open the workbook in Excel and check the totals calculate "
+        f"(no #DIV/0!).</li>"
+        f"<li>Run <code>tools\\preflight_before_you_send_it.py</code> against it — it "
+        f"names the blocking rows.</li>"
+        f"<li>Fix the cause (usually a labour row with no throughput) and re-run the "
+        f"job.</li></ol>"
+        f"<p><b>No quote accompanies this pack. Nothing in it should be read as a "
+        f"price.</b></p>"
+    )
+    return {"subject": subject, "html": html, "text": text}
+
+
 def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                    client: str = "", deliverables: Optional[List[str]] = None,
                    provisional: bool = True,
