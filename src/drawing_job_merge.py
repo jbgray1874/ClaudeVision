@@ -1041,32 +1041,93 @@ def _bbox_close(a: Tuple[float, float], b: Tuple[float, float], *, tol_pct: floa
     return True
 
 
+def flat_stock_key(path: Path) -> Tuple[Optional[float], str]:
+    """(gauge, material) as the FILENAME states them — the two facts that decide what stock is
+    bought, and therefore what makes two flats the same article rather than one drawn twice."""
+    _mat = material_from_dxf_filename(path)
+    return (thickness_mm_from_dxf_filename(path), str(_mat or "").upper())
+
+
 def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[float, float]], List[Path]]]:
-    """Group paths whose blank bounding boxes match. Each cluster = one physical flat."""
-    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]] = []
+    """Group paths that are the SAME PHYSICAL FLAT. One cluster = one thing that gets cut.
+
+    THE BOUNDING BOX WAS NOT ENOUGH, AND IT LOST REAL PARTS. Clustering on outline alone says
+    two flats are one whenever their blanks are within tolerance — which is true of a revision
+    re-exported, and equally true of THE SAME PROFILE CUT FROM A DIFFERENT GAUGE. A folder
+    holding `…_-01_2MM_…`, `…_-02_3MM_…` and five `…_5MM_…` of one part collapsed the thin ones
+    into the thick, one member was picked per cluster and the rest discarded, and the estimate
+    nested everything at 5 mm. The estimator's words: "not picking up 2/3 mm HIA acrylic — is it
+    classing it as 5 mm".
+    
+    Two flats are one flat only when the stock they are cut from is the same stock. Gauge and
+    material come first and the outline breaks ties within them; a pack whose filenames carry
+    neither is unchanged, because then every flat shares the one empty key and this is the old
+    behaviour exactly.
+    """
+    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path], Tuple[Optional[float], str]]] = []
     for p in paths:
         bb = _dxf_bbox_wh(p)
+        key = flat_stock_key(p)
         placed = False
-        for i, (rep, members) in enumerate(clusters):
+        for rep, members, rep_key in clusters:
+            if rep_key != key:
+                continue          # different stock is never the same flat, whatever the outline
             if bb and rep and _bbox_close(bb, rep):
                 members.append(p)
                 placed = True
                 break
         if not placed:
-            clusters.append((bb, [p]))
-    return clusters
+            clusters.append((bb, [p], key))
+    return [(bb, members) for bb, members, _k in clusters]
 
 
-def _orphan_child_pn(parent: Dict[str, Any], path: Path, index: int = 0) -> str:
-    """Distinct, collision-safe child PN for a parent flat with no matching child.
+def _orphan_child_pn(parent: Dict[str, Any], path: Path, index: int = 0,
+                     taken: Optional[set] = None) -> str:
+    """The name a flat with no matching BOM child should carry under its parent.
 
-    Carries a 'DXF' marker and ends in a digit so the synthesised suffix can never
-    be misread by SDI's single-letter material/identity conventions — a trailing
-    '-T' was routing the acrylic TOP PANEL to MDF/timber, and '-S' to stainless."""
+    IT USED TO BE A SYNTHESISED KEY — `<parent>-DXF<slug><index>` — and that is what put
+    `…-01A-DXF12349026900` on an estimate an estimator has to read. A hashed slug is not a part
+    number: it cannot be looked up, quoted, or matched to anything the shop holds, and four of
+    them on one sheet read as four products where the drawing has one part in several profiles.
+    
+    THE DRAWING OFFICE HAS ALREADY NUMBERED THESE. `12349-02-69-01A_-07_5MM_…` is member 07 of
+    01A, so the name is `…-01A-07`. A ladder, not a guess, and each rung is something a person
+    wrote down:
+    
+        the member number in the filename      -01A-07
+        else the gauge, which the name states  -01A-5MM
+        else the position in the folder        -01A-02
+    
+    Collision-safe against `taken`: two files that resolve to the same rung get the next one
+    down rather than overwriting each other.
+    """
     parent_pn = _normalize_part_key(parent.get("part_number", "")) or "PART"
-    stem = re.sub(r"(?i)rev[\s_]*[a-z]\b|\d+(?:[.,]\d+)?\s*mm|_+", " ", path.stem)
-    slug = re.sub(r"[^A-Z0-9]+", "", stem.upper())[:10] or "FLAT"
-    return f"{parent_pn}-DXF{slug}{index}"
+    _taken = taken if taken is not None else set()
+
+    def _free(candidate: str) -> Optional[str]:
+        _k = _normalize_part_key(candidate)
+        if _k and _k not in _taken:
+            _taken.add(_k)
+            return candidate
+        return None
+
+    # The member number the drawing office gave it: "...01A_-07_5MM..." -> 07
+    _m = re.search(r"[_\s-]-(\d{1,3})(?=[_\s.-])", path.stem)
+    if _m:
+        _hit = _free(f"{parent_pn}-{_m.group(1)}")
+        if _hit:
+            return _hit
+    _thk = thickness_mm_from_dxf_filename(path)
+    if _thk:
+        _hit = _free(f"{parent_pn}-{_thk:g}MM".replace(".", ""))
+        if _hit:
+            return _hit
+    _n = index + 1
+    while True:
+        _hit = _free(f"{parent_pn}-{_n:02d}")
+        if _hit:
+            return _hit
+        _n += 1
 
 
 def _apply_and_report(part: Dict[str, Any], chosen: Path, report: Dict[str, Any], matched_keys: set, *, reason: str = "matched") -> None:
@@ -1203,6 +1264,25 @@ def _split_parent_flats_to_children(
             default=0,
         )
     ordered = sorted(clusters, key=_cluster_overlap, reverse=True)
+    # Names already in use anywhere on the job, so a member number can never overwrite a real
+    # part or a sibling flat that resolved to the same rung.
+    _taken_keys = {_normalize_part_key(p.get("part_number", "")) for p in parts}
+    _taken_keys.discard("")
+    # ── TWO GAUGES ON ONE PART NUMBER IS A DRAWING QUESTION, NOT A SILENT DROP ──────────
+    # A parent whose folder holds flats in more than one gauge is either a part made from two
+    # thicknesses or a part whose alternates were left in the folder. The filenames cannot tell
+    # those apart and neither can we, so BOTH are costed and the estimator is asked. Dropping
+    # the thin ones because we were unsure is how a whole pack came to read 5 mm.
+    _gauges_seen = {g for g, _m in (flat_stock_key(_p) for _cl in clusters for _p in _cl[1])
+                    if g is not None}
+    if len(_gauges_seen) > 1:
+        _g = ", ".join(f"{x:g} mm" for x in sorted(_gauges_seen))
+        parent.setdefault("review_flags", []).append(
+            f"TWO GAUGES ON ONE PART NUMBER: the flats for "
+            f"{parent.get('part_number')} are cut from {_g}. Both are costed — confirm every "
+            f"gauge is made, or say which files are alternates")
+        report.setdefault("multi_gauge_parents", []).append(
+            {"part_number": parent.get("part_number"), "gauges_mm": sorted(_gauges_seen)})
     for _ci, (rep_bbox, cl_paths) in enumerate(ordered):
         chosen = _pick_best_flat(parent, cl_paths) if len(cl_paths) > 1 else cl_paths[0]
         target = None
@@ -1240,7 +1320,7 @@ def _split_parent_flats_to_children(
                 _apply_field(target, "normalized_material", _mat_fn, "dxf_filename")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
         else:
-            pn = _orphan_child_pn(parent, chosen, _ci)
+            pn = _orphan_child_pn(parent, chosen, _ci, _taken_keys)
             orphan = _create_orphan_dxf_part(summary, pn, chosen)
             orphan["part_number"] = pn
             orphan.setdefault("review_flags", []).append("distinct_child_flat_promoted_by_geometry")
