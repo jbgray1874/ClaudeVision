@@ -2686,6 +2686,78 @@ def write_revision_header(ws, summary: Dict[str, Any], job_folder_name: str) -> 
     return False
 
 
+def full_drawing_number(summary: Dict[str, Any], job_folder_name: str) -> str:
+    """The job's WHOLE number for the header's drawing-number box.
+
+    \\d+ against the folder name printed "12349" on a job whose number is 12349-02 — a
+    truncation the estimator has to notice and repair before the sheet can be traced back
+    to its drawings, which is the point of the box ("easier to trace back when requoting
+    same job in future" — the estimator, 12 Sep). Resolved by the ONE resolver that answers
+    "what drawing is this" — title block, then canonical top assembly, then the folder name
+    kept whole to its number groups — same as the Rev box and the quote header, so the
+    three documents cannot name the same job three ways."""
+    try:
+        from client_quote_html import _drawing_identity
+        _num = str((_drawing_identity(summary, job_folder_name) or ("", "", ""))[0] or "").strip()
+        if _num:
+            return _num
+    except Exception:
+        pass
+    _m = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", str(job_folder_name or ""))
+    return _m.group(1).strip(" -_") if _m else str(job_folder_name or "")
+
+
+def write_job_identity_header(ws, summary: Dict[str, Any], job_folder_name: str) -> List[str]:
+    """Fill Description and Date beside the template's own labels. Returns what was written.
+
+    "Could you add description/date/drawing number at top please (easier to trace back when
+    requoting same job in future)" — the estimator, 12 Sep. The labels were already on the
+    template (C4 'Description', C7 'Date') and every pack went out with nothing beside them:
+    a sheet that cannot be matched back to its job without opening the drawings again.
+
+    Same rules as the Rev box, because it is the same shape of write:
+      * Found by EXACT LABEL, never by address — the header block is the estimators' own
+        layout and it moves. Top rows only: 'Date' appears in plenty of blocks further down
+        the sheet, and writing beside the wrong one is how a BOM row number once landed in
+        a labour Set Up cell.
+      * Only into an EMPTY cell, so nothing anyone put on the template is displaced.
+      * The description comes from the ONE resolver that answers "what is this unit" —
+        title block, then canonical top assembly, then the cleaned folder name. Where it
+        can say nothing better than the drawing number, nothing is written: a number
+        repeated under a Description label is noise wearing a label.
+    The date is the day this estimate was produced — the fact a requote needs.
+    """
+    try:
+        from client_quote_html import _drawing_identity
+        _num, _, _desc = _drawing_identity(summary, job_folder_name) or ("", "", "")
+    except Exception:
+        _num, _desc = "", ""
+    _desc = str(_desc or "").strip()
+    if _desc and _desc == str(_num or "").strip():
+        _desc = ""
+    from datetime import date as _date_cls
+    wanted = {"description": _desc,
+              "date": _date_cls.today().strftime("%d/%m/%Y")}
+    written: List[str] = []
+    try:
+        for _row in ws.iter_rows(min_row=1, max_row=10):
+            for _c in _row:
+                if not isinstance(_c.value, str):
+                    continue
+                _label = _c.value.strip().rstrip(":").lower()
+                _val = wanted.get(_label)
+                if not _val:
+                    continue
+                _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = _val
+                    written.append(_label)
+                wanted[_label] = ""          # one label, one write — first (topmost) wins
+    except Exception:
+        pass
+    return written
+
+
 def _write_undrawn_bom_lines(ws, summary: Dict[str, Any], flags: List[str]) -> None:
     """Name, ON THE SHEET, the BOM lines whose drawings were never supplied.
 
@@ -3084,8 +3156,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
                           or 180) or 180)
     ws[hdr["customer"]]   = summary.get("customer") or summary.get("client") or job_folder_name
-    ws[hdr["drawing_no"]] = re.match(r"\s*(\d+)", job_folder_name).group(1) if re.match(r"\s*(\d+)", job_folder_name) else job_folder_name
+    ws[hdr["drawing_no"]] = full_drawing_number(summary, job_folder_name)
     ws[hdr["order_qty"]]  = order_qty
+    write_job_identity_header(ws, summary, job_folder_name)
 
     # THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. 11350's run printed
     # "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank — so an estimator
