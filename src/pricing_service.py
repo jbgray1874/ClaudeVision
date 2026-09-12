@@ -108,6 +108,137 @@ def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Matching a class-word line to UDEF by its DESCRIPTION.
+#
+# "FIXING", "STD PART", "P/P" and "PACKAGING" are drawers, not keys — the code arms above
+# these functions already refuse them. What was left afterwards was one query: the whole
+# drawing description as a verbatim LIKE substring of UDEF's description. One space killed
+# it: the drawing says "M4x10mm FLANGE BUTTON HEAD SCREW, BLACK", Tim's catalogue row says
+# "M4 x 10mm FLANGE BUTTON HEAD SCREW,BLACK", and a screw he has at 2.48p reached him as
+# "MATERIAL UNPRICED: enter a unit rate".
+#
+# So the description match is done the way the price book already does it (the same
+# normaliser, imported not restated): fetch a BOUNDED candidate set on the description's
+# most distinctive words — words survive re-spacing where whole sentences do not — then
+# decide in Python where spelling can be normalised. The decision rules each exist for a
+# reason:
+#
+#   * Every SIZE the drawing states must appear on the catalogue row. An M4x10 and an
+#     M4x16 share every word; the size is the identity, so it is checked as a fact, not
+#     scored as a token.
+#   * Most of the drawing's significant words must appear on the row (the row may say
+#     MORE — catalogues are verbose — but not other things).
+#   * Class words carry no signal and are excluded from scoring, by the same predicate the
+#     code arms use: "FIXING" scoring against a fixings catalogue rewards rows for being
+#     fixings.
+#   * Survivors that disagree on price are REFUSED. Picking one is a coin toss dressed up
+#     as an answer; the line falls through to the labelled-indication path instead.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# A stated size, read from the RAW text so decimals survive: "M4 x 10mm" / "M4x10" / "M4",
+# and "3.5 X 19" / "3.5×19". The M-form is tried first so "M4 x 10" is one size, not "4x10".
+_SIZE_TOKEN_RE = re.compile(
+    r"(?:M\s*\d+(?:\.\d+)?(?:\s*[xX×✕]\s*\d+(?:\.\d+)?)?)"
+    r"|(?:\d+(?:\.\d+)?\s*[xX×✕]\s*\d+(?:\.\d+)?)")
+
+# Tokens that say nothing about WHICH part a line is.
+_DESC_STOP_TOKENS = frozenset({"THE", "AND", "FOR", "PER", "WITH", "DIA", "MM", "OFF", "REF"})
+
+
+def size_signature(text: Any) -> frozenset:
+    """The sizes a description states, spelled one way: {'M4X10', '3.5X19'}."""
+    out = set()
+    for m in _SIZE_TOKEN_RE.finditer(str(text or "").upper()):
+        out.add(re.sub(r"\s+", "", m.group(0)).replace("×", "X").replace("✕", "X"))
+    return frozenset(out)
+
+
+def _looks_like_size(token: str) -> bool:
+    """After normalisation: M4X10MM is a size, 2120 (a supplier reference) is not."""
+    return bool(re.fullmatch(r"M\d+(?:\.\d+)?(?:X[\d.]+)?(?:MM)?", token)
+                or re.fullmatch(r"[\d.]+X[\d.]+(?:MM)?", token)
+                or re.fullmatch(r"\d+(?:\.\d+)?MM", token))
+
+
+def significant_desc_tokens(text: Any) -> frozenset:
+    """The words of a description that identify the part: normalised the same way the price
+    book normalises (one shared spelling of every dimension), minus sizes (checked as facts
+    elsewhere), stop words, and class words."""
+    from bought_in_pricing import _normalise_desc                       # noqa: PLC0415
+    try:
+        from part_code_conventions import is_category_not_a_code        # noqa: PLC0415
+    except ImportError:                                                  # pragma: no cover
+        def is_category_not_a_code(_t):                                  # type: ignore
+            return False
+    out = set()
+    for tok in _normalise_desc(text).split():
+        if len(tok) < 3 and not tok.isdigit():
+            continue
+        if len(tok) < 4 and tok.isdigit():
+            continue
+        if tok in _DESC_STOP_TOKENS or _looks_like_size(tok) or is_category_not_a_code(tok):
+            continue
+        out.add(tok)
+    return frozenset(out)
+
+
+def udef_anchor_tokens(desc: Any) -> List[str]:
+    """Up to two tokens worth asking SQL about — WORDS first, because words survive the
+    re-spacing that breaks whole-sentence LIKE; reference digits ('2120' from PD.2120) only
+    when the line has no words at all."""
+    raw = re.findall(r"[A-Za-z0-9]+", str(desc or "").upper())
+    seen: set = set()
+    alpha = [t for t in raw if t.isalpha() and len(t) >= 4 and t not in _DESC_STOP_TOKENS
+             and not (t in seen or seen.add(t))]
+    if alpha:
+        return sorted(alpha, key=lambda t: (-len(t), raw.index(t)))[:2]
+    digitful = [t for t in raw if any(c.isdigit() for c in t) and len(t) >= 4
+                and not _looks_like_size(t)]
+    return digitful[:2]
+
+
+def choose_udef_description_row(desc: Any, rows: List[Any]):
+    """(the one UDEF row this description is, or None; why not, when None).
+
+    Rows are UDEF-query tuples: [0]=Part code, [1]=Description, [3]=System cost per."""
+    q_sizes = size_signature(desc)
+    q_toks = significant_desc_tokens(desc)
+    if not q_toks and not q_sizes:
+        return None, "the description carries nothing distinctive to match on"
+
+    survivors = []
+    for row in rows or []:
+        try:
+            if float(row[3] or 0.0) <= 0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        cand_text = str(row[1] or "")
+        if q_sizes and not q_sizes <= size_signature(cand_text):
+            continue                      # an M4x10 is not an M4x16, whatever the words say
+        if q_toks:
+            cand_toks = significant_desc_tokens(cand_text)
+            hit = len(q_toks & cand_toks)
+            if hit == 0 or hit / len(q_toks) < 0.6:
+                continue
+            survivors.append((hit / len(q_toks), row))
+        else:
+            # No words at all (a bare reference like PD.2120 yields only sizes/none) — the
+            # size check above is then the whole test, and it must have had sizes to pass.
+            survivors.append((1.0, row))
+
+    if not survivors:
+        return None, "no priced catalogue row carries this line's words and stated sizes"
+    prices = {round(float(r[3]), 4) for _, r in survivors}
+    if len(prices) > 1:
+        codes = sorted({str(r[0] or "").strip() for _, r in survivors})[:4]
+        return None, (f"{len(survivors)} catalogue rows fit and disagree on price "
+                      f"({', '.join(codes)}) — refused rather than guessed")
+    survivors.sort(key=lambda s: (-s[0], len(str(s[1][1] or ""))))
+    return survivors[0][1], ""
+
+
 class PricingService:
     """Workbook-first pricing engine with joined source provenance."""
 
@@ -420,30 +551,100 @@ class PricingService:
             """,
             [code_param, desc, desc, code_param],
         )
-        if not row:
+        anchor = None
+        if row and float(row[3] or 0.0) > 0:
+            matched_code = str(row[0] or "").strip()
+            is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
+
+            # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
+            # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
+            # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
+            # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
+            # token overlap between the query and the matched description, exactly as RAG does, so
+            # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
+            # returning a wrong, expensive price. Exact part-code matches bypass the guard.
+            if is_exact_code:
+                anchor = self._udef_row_to_anchor(row, exact=True)
+            else:
+                _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
+                _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
+                if _match_score >= 0.45:
+                    anchor = self._udef_row_to_anchor(row, exact=False)
+        if anchor:
+            return anchor
+
+        # Everything keyed has now missed. The description is what is left, and it is enough
+        # for the class-word lines (FIXING / STD PART / P/P / PACKAGING) whose code was
+        # dropped at the top of this method — see the module-level notes above
+        # choose_udef_description_row for what may match and what is refused.
+        #
+        # SCOPED TO LINES THAT ARE BOUGHT, because this method runs for every part on the
+        # job: a fabricated bracket with a distinctive name must not borrow a catalogue
+        # row's price just because one row fits. A line qualifies when its code column held
+        # a class word or nothing (part_code is empty by here in both cases), or when the
+        # record itself reads as bought-in.
+        if not part_code or self._is_bought_in_heuristic(part):
+            return self._udef_description_recall(desc)
+        return None
+
+    def _udef_description_recall(self, desc: str) -> Dict[str, Any] | None:
+        """A bounded candidate fetch on the description's distinctive words, decided in
+        Python where spelling can be normalised — SQL LIKE cannot see that 'M4x10mm' and
+        'M4 x 10mm' are the same screw."""
+        if len(str(desc or "").strip()) < 8:
+            return None
+        toks = udef_anchor_tokens(desc)
+        if not toks:
             return None
 
-        price = float(row[3] or 0.0)
-        if price <= 0:
+        _select = """
+            SELECT TOP 40
+                u.[Part code], u.[Description], u.[Supplier name],
+                CAST(u.[System cost per] AS decimal(18,4)), u.[UOM],
+                u.[WO Est lab cost], u.[WO Est mat cost],
+                u.[WO Actual lab cost], u.[WO Actual mat cost]
+            FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING u
+            WHERE u.[System cost per] > 0 AND {where}
+            ORDER BY u.[Part code] ASC
+        """
+        # UPPER on both sides: the table's collation is binary, so a bare LIKE is
+        # case-sensitive and 'flange' would never find 'FLANGE'.
+        _like = "UPPER(u.[Description]) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'"
+        rows: List[Any] = []
+        if len(toks) >= 2:
+            rows = self._fetch_all_with_retry(
+                _select.format(where=f"{_like} AND {_like}"), list(toks[:2])) or []
+        if not rows:
+            # The drawing may carry a word the catalogue does not ("TRANSPARENT" where the
+            # row says "CLEAR") — ask about each word alone before giving up.
+            seen: set = set()
+            for t in toks[:2]:
+                for r in self._fetch_all_with_retry(_select.format(where=_like), [t]) or []:
+                    key = (str(r[0]), str(r[1]))
+                    if key not in seen:
+                        seen.add(key)
+                        rows.append(r)
+
+        chosen, why = choose_udef_description_row(desc, rows)
+        if chosen is None:
+            if rows and why:
+                print(f"   [pricing] UDEF description match refused for "
+                      f"{str(desc)[:60]!r}: {why}", flush=True)
             return None
-
-        matched_code = str(row[0] or "").strip()
-        is_exact_code = bool(part_code) and part_code.upper() == matched_code.upper()
-
-        # Fix A: UDEF's loose arms (part-code prefix LIKE, or description LIKE) can match a
-        # generic stem to an unrelated expensive row, and the price-DESC tiebreaker then picks
-        # the dearest (e.g. token "ELECTRICS" -> "ELECTRICS001" TTi LED panels £539.42;
-        # "Foam Tape" -> "3M 5952F VHB roll" £131.50). For NON-exact matches, require genuine
-        # token overlap between the query and the matched description, exactly as RAG does, so
-        # a loose mismatch is rejected (-> falls through to RAG / LLM estimate) rather than
-        # returning a wrong, expensive price. Exact part-code matches bypass the guard.
-        if not is_exact_code:
-            _query_tokens = self._tokenize(f"{desc} {str(part.get('normalized_material') or '')}")
-            _match_score = self._token_overlap_score(_query_tokens, str(row[1] or ""))
-            if _match_score < 0.45:
-                return None
-
-        return self._udef_row_to_anchor(row, exact=is_exact_code)
+        anchor = self._udef_row_to_anchor(chosen, exact=False)
+        if not anchor:
+            return None
+        sku = str(chosen[0] or "").strip()
+        anchor["matched_on"] = "description"
+        anchor["matched_part_code"] = sku
+        if sku:
+            # THE SKU GOES WHERE THE ESTIMATOR CAN SEE IT. On these lines the sheet's code
+            # cell holds a class word, so the supplier cell is the only place the catalogue
+            # row can be named — and a price with no row behind it cannot be checked.
+            anchor["supplier_name"] = f"{sku} — {anchor['supplier_name']}"
+        anchor["provenance"] += (" | matched on the line's own description (stated sizes "
+                                 "checked; the code column held a class word or missed)")
+        return anchor
 
     def _udef_row_to_anchor(self, row: Any, *, exact: bool) -> Dict[str, Any] | None:
         """One UDEF row, as a priced anchor. Shared so the reference arm and the code arm
