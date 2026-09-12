@@ -3087,6 +3087,79 @@ def _finalize_scan_summary(
                     print(f"   [bom_tree] {_fixed} row(s) on {_main} divided by {_n} — the "
                           f"arrangement quantity is no longer multiplied into the graph the "
                           f"workbook reads", flush=True)
+                # ── AND THE PARENT'S OWN RECORD, BECAUSE THE CASCADE FALLS BACK TO IT ──
+                #
+                # CORRECTING THE EDGE WAS NOT ENOUGH, AND 12349-02 AT 23:56 IS THE PROOF. The
+                # row was divided — the workbook's own BOM block shows -69-100 with qty_own 1
+                # and the arrangement note on it — and the Estimate still printed three lids,
+                # three covers, twelve screws and eighteen bumpons.
+                #
+                # The edge is only read if the cascade gets there. -69-100's parent is the
+                # general arrangement, which is a DRAWING LABEL and not a part node, so the
+                # module has no root above it and build_part_graph never reaches it. It takes
+                # this instead, three lines below the cascade:
+                #
+                #     for identity in identities:
+                #         if identity not in quantities:
+                #             quantities[identity] = number(records[identity]["quantity"], 1.0)
+                #
+                # — the PART RECORD, which still said 3. Every leaf under the module then
+                # multiplied by it, while the general arrangement's OWN leaves (the packer, the
+                # wood screws) were corrected because they hang off the GA directly. That split
+                # is exactly what the sheet printed, and it is why the workbook agreed with
+                # itself while being wrong: one store, holding the parent's uncorrected figure.
+                #
+                # An install-context code IS the unit, so it is one per quoted unit.
+                #
+                # SUBMITTED, NOT WRITTEN. Through apply_field so a reader that genuinely owns
+                # this quantity still wins and the disagreement is recorded — this pass reads a
+                # printed GA table and does not get to overrule a model. That also means the
+                # write can be REFUSED, by a holder at 70 such as drawing_deterministic, and
+                # which of those happened decides whether the next fix is here or in the
+                # corroboration quorum. So the outcome is printed either way and names the
+                # holder: a silent no-op here would look exactly like this run did.
+                if _n > 1 and _ctx:
+                    from source_precedence import apply_field as _apply_parent_qty
+                    from source_precedence import source_of as _src_of
+                    _ctx_codes = {_re_bt.sub(r"\s+", "", str(c)).upper() for c in _ctx}
+                    for _p in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+                        _pc = _re_bt.sub(r"\s+", "", str(_p.get("part_number") or "")).upper()
+                        if not _pc or _pc not in _ctx_codes:
+                            continue
+                        _was = _p.get("quantity")
+                        # A READER MAY CORRECT ITSELF. THAT IS NOT A RANK CONTEST.
+                        #
+                        # apply_field refuses an equal-rank replacement on purpose — two
+                        # title-block readings disagreeing is a conflict, not refinement, and
+                        # letting the later one win would make the answer depend on page order.
+                        # But this is not two readings. It is ONE reader revising its own figure
+                        # on something the earlier pass did not know: that the general
+                        # arrangement is an arrangement. The tree wrote 3 before it recognised
+                        # that, and now says 1.
+                        #
+                        # Left as a plain equal-rank submission it is REFUSED, which is the most
+                        # likely case on a real pack — the 3 on this record is the tree's own —
+                        # so the fix would have changed nothing and failed the same way twice.
+                        #
+                        # Handled by demoting the STALE STAMP rather than by raising anything:
+                        # the provenance belongs to a reading taken before the arrangement was
+                        # known, so it is cleared and the corrected figure submitted normally.
+                        # apply_field then does the rest and records what it displaced. Scoped to
+                        # the tree's own figure: any other holder goes to rank, untouched.
+                        if _was != 1 and str(_src_of(_p, "quantity") or "") == "bom_tree":
+                            _p["quantity_source"] = ""   # precedence: direct-write ok — clears a stamp the same reader is superseding, so apply_field below records the change
+                        if _apply_parent_qty(_p, "quantity", 1, "bom_tree"):
+                            print(f"   [bom_tree] {_p.get('part_number')} is the unit — its "
+                                  f"record qty {_was} -> 1 per quoted unit ({_n} arrangements "
+                                  f"on {_main}); the cascade below it now starts from one",
+                                  flush=True)
+                        elif _was != 1:
+                            _holder = _src_of(_p, "quantity") or "an unnamed reader"
+                            print(f"   [bom_tree] {_p.get('part_number')} is the unit, but its "
+                                  f"record qty {_was} from {_holder} was NOT replaced by 1 — "
+                                  f"everything under it still cascades at {_was}. THIS IS THE "
+                                  f"REMAINING MULTIPLE, AND {_holder} IS WHAT HOLDS IT",
+                                  flush=True)
         except Exception as _rowfix:                                     # noqa: BLE001
             print(f"   [bom_tree] row correction skipped: {_rowfix}", flush=True)
     except Exception as _bte:
