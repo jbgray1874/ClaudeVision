@@ -1,0 +1,41 @@
+# 12349-02 @ 7 off — the golden pack's scorecard.
+#
+# NOT A FROZEN WORKBOOK. A whole sheet as a fixture would teach the engine that everything on
+# it is right, and on this pack it is not: the fasteners still price at nothing and the powder
+# rate is unnamed. This file pins only what has been PROVEN and must never move again.
+#
+# Codes are matched on their SUFFIX, so a line reads as an estimator would say it.
+# Anything not listed here is free to change; adding a line is how a fix becomes permanent.
+#
+#   qty <code> = <n>              the Bill of Materials "Qty Per Unit" cell
+#   gauge <code> = <n>            the thickness the part is nested at
+#   dept <code> = <NAME>          the rate-card row its labour is charged to
+#   no_part_number_contains <s>   no part code on the sheet may contain this
+#   must_exist <code>             a part that has to be on the sheet at all
+#   must_not_charge <op> on <code>  an operation that must not appear against a part
+
+# ── quantity: the general arrangement shows three arrangements; one unit is one of each ──
+# Five fixes missed this before the sixth landed. It does not move again without a reason.
+qty 04M = 1
+qty 06A = 1
+qty 08J = 1
+qty FIXING = 4
+qty STD PART = 6
+qty P/P = 6
+
+# ── gauge: the cut file names the stock, and every flat is nested at its own ──────────────
+# "Not picking up 2/3 mm HIA acrylic — is it classing it as 5 mm" — the estimator, and he was
+# right. These three lines are that complaint, closed.
+gauge 01A-01 = 2
+gauge 01A-02 = 3
+gauge 01A-07 = 5
+gauge 04M = 1.2
+gauge 03M-01 = 1.5
+gauge 08J = 6
+
+# ── department: acrylic is cut on the CNC, board on the joinery router ────────────────────
+dept 06A = CNC
+dept 08J = CNC Joinery
+
+# ── identity: a hashed key is not a part number ───────────────────────────────────────────
+no_part_number_contains -DXF
