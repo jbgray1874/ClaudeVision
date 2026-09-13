@@ -57,6 +57,11 @@ DRAWING_SUFFIXES = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".s
 # any one drawing.
 SIDECAR_NAMES = ("_sw_native_extract.json",)
 
+# The three extensions the engine counts as a native model. Kept here rather than imported
+# because this service does not import the engine, and they must not drift: source_connectors
+# .solidworks._NATIVE_EXTS is the other copy and a fixture compares the two.
+NATIVE_SUFFIXES = (".sldprt", ".sldasm", ".slddrw")
+
 # Pathological-input guards. A pack is tens of files and tens of megabytes; anything wildly past
 # that is somebody having pointed at the wrong folder, and the copy should refuse rather than
 # spend ten minutes filling a share.
@@ -201,7 +206,13 @@ def _sidecars_for(paths: Iterable[str]) -> List[Path]:
     seen: set = set()
     for folder in folders:
         for name in SIDECAR_NAMES:
-            for cand in (folder / name, *sorted(folder.rglob(name))):
+            # ONE LEVEL UP, DIRECT HIT ONLY. A job routinely keeps its drawings and its models
+            # in sibling folders — 12349-02\PDF and 12349-02\Models — and the analyser writes
+            # the extract beside the MODELS. Searching only downward from the drawings folder
+            # therefore never finds it, and the run reads as a job with no models at all.
+            # Upward is one level and an exact filename: no rglob of a parent, which on an
+            # estimating share could be the whole client.
+            for cand in (folder / name, folder.parent / name, *sorted(folder.rglob(name))):
                 try:
                     if cand.is_file() and str(cand).lower() not in seen:
                         seen.add(str(cand).lower())
@@ -209,6 +220,71 @@ def _sidecars_for(paths: Iterable[str]) -> List[Path]:
                 except OSError:
                     continue
     return out
+
+
+def _native_models_beside(paths: Iterable[str]) -> List[Path]:
+    """SolidWorks models sitting with the selection that were not part of it.
+
+    ASKED ONLY WHEN THE ANSWER MATTERS — when the pack arrives with neither an extract nor a
+    model — because it is the difference between the two things "no SOLIDWORKS extract" can
+    mean. A job that has no models is a fact about the job. A job whose models are one click
+    away in the folder the drawings came from is a selection that switched off the strongest
+    source in the building, and nothing anywhere said so.
+    """
+    folders: List[Path] = []
+    for raw in paths:
+        p = Path(str(raw))
+        folders.append(p if p.is_dir() else p.parent)
+
+    out: List[Path] = []
+    seen: set = set()
+    for folder in folders:
+        try:
+            children = sorted(folder.rglob("*"))
+        except OSError:
+            continue
+        for cand in children:
+            try:
+                if not cand.is_file() or cand.suffix.lower() not in NATIVE_SUFFIXES:
+                    continue
+            except OSError:
+                continue
+            if _is_excluded_path(cand, folder):
+                continue
+            key = _norm(cand)
+            if key not in seen:
+                seen.add(key)
+                out.append(cand)
+    return out
+
+
+def _is_excluded_path(path: Path, root: Path) -> bool:
+    """An archive, a backup or a ~lock file is not the live design.
+
+    Same rule the analyser applies when it decides what to read, so the count reported here is
+    the count of models a run could actually use.
+    """
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        rel = Path(path.name)
+    for part in rel.parts[:-1]:
+        n = part.strip().lower()
+        if n.startswith(".") or n.startswith("~"):
+            return True
+        if any(tok in re.split(r"[^a-z0-9]+", n) for tok in _EXCLUDED_DIR_TOKENS):
+            return True
+        if any(ph in n for ph in _EXCLUDED_DIR_PHRASES):
+            return True
+    return path.name.startswith("~$") or path.name.startswith("~")
+
+
+# MUST MATCH source_connectors.solidworks — the consumer's exclusion list and this one answer
+# the same question on two sides of a copy, and a fixture compares them token for token.
+_EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", "backup",
+                        "bak", "dnu", "scrap", "wip", "temp", "tmp",
+                        "previous", "prev")
+_EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
 
 
 def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
@@ -258,12 +334,24 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
         except OSError:
             skipped.append((str(sc), "could not be copied"))
 
+    # NEITHER AN EXTRACT NOR A MODEL REACHED THE PACK. Say whether that is because the job has
+    # none, or because they were beside the drawings and not selected. Three runs of 12349-02
+    # were costed drawings-only and the log's only word on it was "no SOLIDWORKS extract found",
+    # which is true of both and actionable in only one of them.
+    native_staged = [n for n in copied if Path(n).suffix.lower() in NATIVE_SUFFIXES]
+    unselected: List[Path] = []
+    if not sidecars and not native_staged:
+        unselected = _native_models_beside(paths)
+
     return {
         "folder": str(folder),
         "copied": copied,
         "copied_count": len(copied),
         "sidecars": sidecars,
         "sidecars_count": len(sidecars),
+        "native_staged": native_staged,
+        "native_unselected_count": len(unselected),
+        "native_unselected_folders": sorted({str(p.parent) for p in unselected})[:3],
         "replaced_count": replaced,
         "skipped": [{"path": p, "reason": why} for p, why in skipped],
         "skipped_count": len(skipped),

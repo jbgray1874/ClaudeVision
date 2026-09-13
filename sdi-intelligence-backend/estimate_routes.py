@@ -973,9 +973,20 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if staged.get("sidecars"):
         run.line(f"  carried   {', '.join(staged['sidecars'])} — the SOLIDWORKS extract "
                  f"applies to this run")
+    elif staged.get("native_staged"):
+        run.line(f"  no extract yet — {len(staged['native_staged'])} SOLIDWORKS model(s) came "
+                 f"with the drawings and the runner reads them itself")
+    elif staged.get("native_unselected_count"):
+        # THE ONE THAT IS WORTH A SENTENCE. The models are there; they were not on the list, so
+        # the pack arrived without them and Layer 0 is off for a reason nobody chose.
+        _where = ", ".join(staged.get("native_unselected_folders") or []) or "the same folder"
+        run.line(f"  no SOLIDWORKS extract — but {staged['native_unselected_count']} model "
+                 f"file(s) sit beside these drawings in {_where} and were not selected. "
+                 f"The job is costed from the drawings alone: add the models to the selection "
+                 f"(or select the folder) and the runner reads them itself.")
     else:
-        run.line("  no SOLIDWORKS extract found beside these drawings — the job is costed "
-                 "from the drawings")
+        run.line("  no SOLIDWORKS extract and no models beside these drawings — the job is "
+                 "costed from the drawings")
     for _sk in staged["skipped"][:6]:
         run.line(f"  not staged: {Path(_sk['path']).name} — {_sk['reason']}")
     run.line(f"Reading   {job}")
