@@ -2458,10 +2458,26 @@ def _verify_template_matches_cellmap(ws, cm, flags=None):
     truncating a block.
 
     Non-fatal if the formula cannot be found or parsed: we fall back to the constants.
+
+    FOUND BY LABEL, BECAUSE THE CELL MOVES WHEN THE LAYOUT DOES. This read M92 by address —
+    the one cell guaranteed to shift the moment anybody widens a block, which is the only
+    occasion this check exists for. Inserting two rows into Other Sheet Material moves the
+    total to M94, the read finds no formula, the guard returns quietly, and the run writes a
+    stale map into a re-shaped sheet: rows on top of the totals, exactly what this was built
+    to prevent. 12349-02 needs that widening — its ninth acrylic flat has nowhere to go — so
+    the guard has to survive it. The label is what does not move.
     """
     import re as _re
     try:
-        f = ws["M92"].value
+        f = None
+        for _row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 400)):
+            _lbl = next((c for c in _row if isinstance(c.value, str)
+                         and c.value.strip().lower().startswith("total material cost")), None)
+            if _lbl is None:
+                continue
+            f = next((c.value for c in _row
+                      if isinstance(c.value, str) and "SUM(" in c.value), None)
+            break
         if not isinstance(f, str) or "SUM(" not in f:
             return
         spans = _re.findall(r"SUM\(M(\d+):M(\d+)\)", f)
