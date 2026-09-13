@@ -165,6 +165,17 @@ def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
     seen: set = set()
 
     def consider(p: Path) -> None:
+        # A LOCK FILE IS NOT A MODEL. SolidWorks and Office write "~$<name>" beside a document
+        # that is open, and it carries the document's own extension — so "~$12349-02-69-GA
+        # .SLDASM" passed the suffix test and was staged as a drawing. Six of them reached one
+        # pack. They are a few bytes of who-has-it-open, they make the model count wrong, and
+        # handing one to the analyser asks SolidWorks to open a file that is not a document.
+        # Their presence says somebody had those models open when the pack was picked, which
+        # is worth saying rather than silently copying.
+        if p.name.startswith("~$") or p.name.startswith("~"):
+            skipped.append((str(p), "a SolidWorks/Office lock file, not a drawing — it means "
+                                    "someone had that document open"))
+            return
         if p.suffix.lower() not in DRAWING_SUFFIXES:
             skipped.append((str(p), f"not a drawing file ({p.suffix or 'no extension'})"))
             return

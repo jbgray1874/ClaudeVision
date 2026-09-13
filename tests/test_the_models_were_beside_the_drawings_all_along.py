@@ -156,6 +156,45 @@ def test_the_two_exclusion_lists_have_not_drifted(staging):
     assert staging.NATIVE_SUFFIXES == (".sldprt", ".sldasm", ".slddrw")
 
 
+# ── the files SolidWorks leaves behind when somebody has a model open ────────────────────
+
+def test_a_lock_file_is_not_staged_as_a_drawing(staging, tmp_path):
+    """"~$12349-02-69-GA.SLDASM" carries a model's extension and is a few bytes saying who
+    has it open. Six of them reached one pack, where they inflate the model count and invite
+    the analyser to open something that is not a document."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    _model(pack / "12349-02-69-GA.SLDASM")
+    for junk in ("~$12349-02-69-GA.SLDASM", "~$12349-02-69-01A.SLDPRT"):
+        (pack / junk).write_bytes(b"\x00")
+
+    res = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+
+    staged = {p.name for p in Path(res["folder"]).iterdir()}
+    assert not any(n.startswith("~") for n in staged)
+    assert res["native_staged"] == ["12349-02-69-GA.SLDASM"]
+
+
+def test_it_says_why_rather_than_dropping_them_silently(staging, tmp_path):
+    """A lock file in the pack means somebody had that model open when it was picked — and a
+    borrowed document can be read with unsaved changes the fingerprint cannot see."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    (pack / "~$12349-02-69-GA.SLDASM").write_bytes(b"\x00")
+
+    res = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+    reasons = " ".join(s["reason"] for s in res["skipped"])
+    assert "lock file" in reasons and "had that document open" in reasons
+
+
+def test_a_lock_file_does_not_count_as_a_model_beside_the_drawings(staging, tmp_path):
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    (pack / "~$12349-02-69-GA.SLDASM").write_bytes(b"\x00")
+    res = staging.stage([str(pack / "ga.pdf")], client="Fanatics", drawing="12349-02")
+    assert res["native_unselected_count"] == 0
+
+
 # ── and the pack carries their address, so the runner reads them in place ────────────────
 
 def test_the_pack_is_told_where_the_models_are(staging, tmp_path):
