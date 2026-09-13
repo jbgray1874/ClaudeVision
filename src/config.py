@@ -667,6 +667,53 @@ DRESS_AFTER_STRUCTURAL_WELD = True
 # Adjustable: a heavy multi-pass dress would take longer than this minimal rate.
 DRESS_WELD_RUN_MINUTES = 0.5
 
+# ── WELDING A FABRICATED ASSEMBLY: WHAT DRIVES THE TIME ──────────────────────────────────
+#
+# THE DEFECT THIS EXISTS TO CLOSE. Weld run-time was computed as
+# `max(1.0, (pierces * 90 + cut_length_mm * 0.01) / 60)` — hole count and cut length, which
+# are properties of a FLAT BLANK. A weld assembly has no flat of its own, so both drivers
+# read zero on the only kind of part welding ever runs on, and every weldment took the
+# 1-minute floor. On 7332-01 the sheet booked 2 minutes of welding and 1 of dressing where
+# the welding department says 30 minutes and 20 — roughly £25-30 a unit missing on an £80
+# stand. A timer with no valid input is not a low estimate, it is no estimate.
+#
+# THE PUBLISHED METHOD, which is not in dispute anywhere:
+#     arc time   = weld length / travel speed
+#     total time = arc time / operating factor      (MIG ~35%: the share of the hour the
+#                                                    arc is actually burning, the rest being
+#                                                    fit-up, clamping, repositioning,
+#                                                    cleaning and inspection)
+#     plus       handling per joint and set-up per weldment
+# Sources: Miller Electric on arc-on time and operating factor; the Australian Steel
+# Institute's hour-rates for continuous fillet welds (short welds under 250 mm: 0.3 h/m at a
+# 6 mm leg). MIG production travel speeds run 10-25 in/min, i.e. 254-635 mm/min.
+#
+# WHAT WE CANNOT READ, AND SO DO NOT PRETEND TO. Nothing in a pack tells us weld LENGTH or
+# JOINT COUNT: no drawing field, no model property, and on 7332-01 the weldment's members
+# are siblings rather than children, so they cannot even be counted. The length-based model
+# below is therefore live but dormant — it computes the moment a weld length reaches a
+# record, and until then the allowance is used instead.
+#
+# THE ALLOWANCE IS THE SHOP'S OWN NUMBER, NOT OURS. 30 minutes to weld and 20 to dress are
+# what SDI's welding department states for 7332-01 (Howard Thurley, 9 Sep 2026). It is one
+# observation on one sheet-metal weldment and it is flagged as such on every line it prices,
+# because whether it generalises to a small bracket is a question for the shop and not for
+# this file. An over-statement that is flagged gets corrected by an estimator; the 1-minute
+# floor it replaces was wrong by fifteen times and said nothing.
+WELD_TIME_MODEL = {
+    "travel_speed_mm_per_min": float(os.getenv("WELD_TRAVEL_SPEED_MM_PER_MIN", "300")),
+    "operating_factor": float(os.getenv("WELD_OPERATING_FACTOR", "0.35")),
+    "handling_min_per_joint": float(os.getenv("WELD_HANDLING_MIN_PER_JOINT", "2.0")),
+    "setup_min_per_weldment": float(os.getenv("WELD_SETUP_MIN", "3.0")),
+    # Used when the pack states no weld length and no joint count — which is every pack so far.
+    "allowance_min_per_weldment": float(os.getenv("WELD_ALLOWANCE_MIN", "30.0")),
+    "dress_allowance_min_per_weldment": float(os.getenv("WELD_DRESS_ALLOWANCE_MIN", "20.0")),
+    "allowance_source": ("SDI welding department, stated for 7332-01 (9 Sep 2026) — one "
+                         "observation, pending confirmation that it generalises"),
+    "method_source": ("arc time / operating factor, MIG ~35% (Miller Electric); fillet hour-"
+                      "rates per metre (Australian Steel Institute)"),
+}
+
 # ── MANM: insert labour for pressed fasteners (self-clinch nuts, PEM studs) ──
 # Tim books the press/insert time for pressed-in fasteners as MANM (Manual labour
 # Metal, £31.18/hr, 15-min setup). His 12120 REV G manual estimate gives the rule

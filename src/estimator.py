@@ -4300,6 +4300,32 @@ _SPECIAL_ITEM_FAB_OPS = {
 }
 
 
+def _weld_geometry(part: Dict[str, Any]) -> Tuple[float, int]:
+    """(weld length in mm, joint count) as the pack states them — 0 for what it does not.
+
+    Both spellings are read: the part's own fields and its manufacturing_features block,
+    because readers file measured facts in either."""
+    _mf = part.get("manufacturing_features") or {}
+    _mm = _safe_float(part.get("weld_length_mm")) or _safe_float(_mf.get("weld_length_mm")) or 0.0
+    _j = _safe_int(part.get("weld_joint_count")) or _safe_int(_mf.get("weld_joint_count")) or 0
+    return float(_mm), int(_j)
+
+
+def _weld_time_is_an_allowance(part: Dict[str, Any], ops: Any) -> bool:
+    """True when this part is welded, is an assembly, and the pack measures nothing.
+
+    ONE PREDICATE, TWO READERS. Welding and dressing are timed ~90 lines apart and dressing
+    runs FIRST, so it cannot read a flag the weld branch has not set yet. A second copy of
+    the test is how a sheet comes to book 30 minutes of welding beside 1 minute of dressing.
+    """
+    if "welding" not in (ops or ()):
+        return False
+    if not (part.get("is_assembly_parent") or part.get("is_sub_assembly")):
+        return False
+    _mm, _j = _weld_geometry(part)
+    return _mm <= 0 and _j <= 0
+
+
 def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str, Any]:
     geom = part.get("geometry_rollup", {})
     ops = _part_ops(part)
@@ -4834,8 +4860,25 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     if "dress_welds" in ops:
         setup_times_min["dress_welds"] = 0.5
-        # Tim's 12120 "Dress (Minimal)" = 120/hr = 0.5 min/unit (config lever).
-        run_times_min["dress_welds"] = float(getattr(config, "DRESS_WELD_RUN_MINUTES", 0.5))
+        # DRESSING FOLLOWS THE WELD, INCLUDING WHEN THE WELD IS AN ALLOWANCE. 0.5 min is
+        # Tim's "Dress (Minimal)" on 12120 — a single short bead. On a whole weldment the
+        # welding department says 20 minutes, and a sheet that books 30 minutes of welding
+        # beside 1 minute of dressing is not describing the same part twice.
+        # Asked here rather than read off a flag: dressing is timed BEFORE welding in this
+        # function, so the flag the weld branch sets does not exist yet. One predicate, two
+        # readers — a copy that could drift is how 30 minutes of welding ended up beside one
+        # minute of dressing in the first place.
+        if _weld_time_is_an_allowance(part, ops):
+            _dm = getattr(config, "WELD_TIME_MODEL", {}) or {}
+            run_times_min["dress_welds"] = round(
+                float(_dm.get("dress_allowance_min_per_weldment", 20.0)), 2)
+            part.setdefault("review_flags", []).append(
+                f"dressing follows the weld allowance: {run_times_min['dress_welds']:g} min "
+                f"per weldment — {_dm.get('allowance_source', 'shop figure')}")
+        else:
+            # Tim's 12120 "Dress (Minimal)" = 120/hr = 0.5 min/unit (config lever).
+            run_times_min["dress_welds"] = float(
+                getattr(config, "DRESS_WELD_RUN_MINUTES", 0.5))
 
     if "handling" in ops:
         run_times_min["handling"] = round(LABOUR_RULES["handling"]["min_per_part"], 2)
@@ -4848,10 +4891,43 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         )
 
     if "welding" in ops:
-        setup_times_min["welding"] = 3.0
-        run_times_min["welding"] = round(
-            max(1.0, (pierces * 90.0 + cut_length_mm * 0.01) / 60.0), 2
-        )
+        # A WELD ASSEMBLY HAS NO FLAT, AND BOTH DRIVERS HERE ARE PROPERTIES OF ONE.
+        # pierces and cut_length_mm describe a blank; a weldment is what blanks become, so
+        # both read zero on the only kind of part welding runs on and the time took the
+        # 1-minute floor. 7332-01 booked 2 minutes where the welding department says 30.
+        # See config.WELD_TIME_MODEL for the method, the sources, and whose number the
+        # allowance is.
+        _wm = getattr(config, "WELD_TIME_MODEL", {}) or {}
+        setup_times_min["welding"] = float(_wm.get("setup_min_per_weldment", 3.0))
+        _weld_mm, _joints = _weld_geometry(part)
+        _is_weldment = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
+
+        if _weld_mm > 0 or _joints > 0:
+            # The published model, the moment a pack gives it something to measure.
+            _speed = float(_wm.get("travel_speed_mm_per_min", 300.0)) or 300.0
+            _of = float(_wm.get("operating_factor", 0.35)) or 0.35
+            _arc = (_weld_mm / _speed) / _of if _weld_mm > 0 else 0.0
+            _handle = _joints * float(_wm.get("handling_min_per_joint", 2.0))
+            run_times_min["welding"] = round(max(1.0, _arc + _handle), 2)
+            part.setdefault("review_flags", []).append(
+                f"weld timed from geometry: {_weld_mm:g} mm of weld at "
+                f"{_speed:g} mm/min and {_of:.0%} operating factor"
+                + (f", plus {_joints} joint(s) handling" if _joints else ""))
+        elif _is_weldment:
+            # No weld length and no joint count anywhere in the pack. Rather than a floor
+            # that reads as a measurement, the shop's own stated allowance, labelled.
+            run_times_min["welding"] = round(
+                float(_wm.get("allowance_min_per_weldment", 30.0)), 2)
+            part["weld_time_is_an_allowance"] = True
+            part.setdefault("review_flags", []).append(
+                f"WELD TIME IS AN ALLOWANCE, not a measurement: the pack states no weld "
+                f"length or joint count, so this carries "
+                f"{run_times_min['welding']:g} min per weldment — "
+                f"{_wm.get('allowance_source', 'shop figure')}. Supply a weld length or a "
+                f"joint count on the drawing and it is computed instead")
+        else:
+            run_times_min["welding"] = round(
+                max(1.0, (pierces * 90.0 + cut_length_mm * 0.01) / 60.0), 2)
 
     if "resistance_welding" in ops or "spot_welding" in ops:
         _weld_key = "resistance_welding" if "resistance_welding" in ops else "spot_welding"
