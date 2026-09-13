@@ -2718,6 +2718,46 @@ def write_revision_header(ws, summary: Dict[str, Any], job_folder_name: str) -> 
     return False
 
 
+# Directories that are part of the filing system rather than the name of a customer. The
+# enquiry tree is deep — K:\Estimating\Completed\Live Enquiries\completed AI briefs\<client>\
+# <job> — and the folder above the job is the client on every pack seen so far (Harrods,
+# fanatics). These are the ones it must never mistake for one.
+_NOT_A_CLIENT_FOLDER = frozenset("""
+estimating completed live enquiries briefs jobs drawings aisheets output input archive
+sdiintelligenceaisheet aiestimating shared shareddata data temp tmp new current work
+""".split()) | {"completed ai briefs", "live enquiries", "ai estimating"}
+
+
+def client_from_job_folder(summary: Dict[str, Any]) -> str:
+    """The customer, read from the folder the job sits in. "" when it cannot be told.
+
+    "For traceability / easier identification can Client / Job Description / Date be
+    populated for header" — the estimator, and the customer cell was falling back to the JOB
+    NUMBER, so the sheet said "7332-01" under a heading that means Harrods. The client is not
+    on the drawing in any form we read, and it is right there in the path the pack came from.
+
+    Deliberately conservative, because the cost of a wrong customer name on a sheet is worse
+    than a blank: the folder must sit directly above the job folder, must not be one of the
+    filing directories the enquiry tree is made of, and must look like a name rather than a
+    code. Anything else yields "" and the existing fallback stands."""
+    _raw = str((summary or {}).get("job_folder") or "").strip()
+    if not _raw:
+        return ""
+    _parts = [p for p in re.split(r"[\\/]+", _raw) if p.strip()]
+    if len(_parts) < 2:
+        return ""
+    _cand = _parts[-2].strip()
+    if not _cand or _cand.lower() in _NOT_A_CLIENT_FOLDER:
+        return ""
+    if _cand.endswith(":") or len(_cand) < 3 or len(_cand) > 40:
+        return ""          # a drive letter, an initialism, or a sentence
+    if re.fullmatch(r"[\d\-_. ]+", _cand):
+        return ""          # a job number is not a customer
+    if any(_w in _cand.lower() for _w in ("brief", "enquir", "estimat", "drawing")):
+        return ""
+    return _cand
+
+
 def full_drawing_number(summary: Dict[str, Any], job_folder_name: str) -> str:
     """The job's WHOLE number for the header's drawing-number box.
 
@@ -3187,7 +3227,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           or summary.get("order_quantity")
                           or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
                           or 180) or 180)
-    ws[hdr["customer"]]   = summary.get("customer") or summary.get("client") or job_folder_name
+    ws[hdr["customer"]]   = (summary.get("customer") or summary.get("client")
+                             or client_from_job_folder(summary) or job_folder_name)
     ws[hdr["drawing_no"]] = full_drawing_number(summary, job_folder_name)
     ws[hdr["order_qty"]]  = order_qty
     write_job_identity_header(ws, summary, job_folder_name)

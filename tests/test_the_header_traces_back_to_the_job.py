@@ -148,3 +148,41 @@ def test_the_header_then_writes_it():
     written = write_job_identity_header(ws, s, "12349-02")
     assert "description" in written
     assert ws["D4"].value == "GRAVITY FEEDER MODULES"
+
+
+# ── the client, which was falling back to the job number ─────────────────────────────────
+# "For traceability / easier identification can Client / Job Description / Date be populated
+# for header" — the second estimator, the same week as the first asked for description, date
+# and drawing number. The customer cell fell back to the JOB NUMBER, so the sheet read
+# "7332-01" under a heading that means Harrods. The client is not on the drawing in any form
+# we read; it is the folder the pack came from.
+
+def _client(path):
+    from wb_populate import client_from_job_folder
+    return client_from_job_folder({"job_folder": path})
+
+
+def test_the_client_is_read_from_the_enquiry_folder():
+    assert _client(r"K:\Estimating\Completed\Live Enquiries\completed AI briefs"
+                   r"\Harrods\7332-01-A3SignageStand") == "Harrods"
+
+
+def test_the_other_live_pack_reads_too():
+    assert _client(r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating"
+                   r"\AISheets\SDIIntelligenceAISheet\fanatics\12349-02") == "fanatics"
+
+
+def test_a_filing_directory_is_never_mistaken_for_a_customer():
+    """The enquiry tree is deep and most of it is filing, not clients."""
+    for path in (r"K:\Estimating\completed AI briefs\7332-01",
+                 r"C:\ClaudeVision\output\12349-02",
+                 r"K:\Estimating\Live Enquiries\7332-01"):
+        assert _client(path) == "", path
+
+
+def test_a_job_number_above_a_job_is_not_a_customer():
+    assert _client(r"K:\jobs\7332\7332-01") == ""
+
+
+def test_nothing_to_read_is_an_empty_answer_not_a_guess():
+    assert _client("") == "" and _client("12349-02") == ""
