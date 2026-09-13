@@ -1064,9 +1064,14 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         # and the explanation print, so no two documents count the open items differently.
         from costed_facts import outstanding_summary
         _out = outstanding_summary(_record or summary)
+        # NAMED, NOT COUNTED. "4 prices missing + 1 market figure to replace + 2
+        # manufacturing decisions" tells an estimator to go and hunt for which four. The
+        # rows know their own parts, so the banner lists them: an open item he can answer in
+        # a minute reads as a question, and a count reads as a warning to ignore.
         draft_block = (
             '\n    <div class="draft">DRAFT — not for issue'
-            + (" · " + _out["phrase"] if _out["total"] else "") + "</div>")
+            + (" · " + _esc(_out.get("named_phrase") or _out["phrase"])
+               if _out["total"] else "") + "</div>")
 
     ga_block = ""
     if ga_uri:

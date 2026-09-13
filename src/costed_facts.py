@@ -1974,12 +1974,34 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
     if other:
         bits.append(f"{other} other open item{'s' if other != 1 else ''}")
+    # AND WHAT THEY ARE, NOT ONLY HOW MANY. "4 prices missing + 1 market figure to replace +
+    # 2 manufacturing decisions" is a number an estimator cannot act on: he has to open the
+    # workbook and hunt for which four. Every one of those rows already knows its own part,
+    # so the names are free — and a banner that says "pack & delivery, M4 screw, wood screw"
+    # is a list somebody can answer in a minute, which is the whole point of sending it.
+    #
+    # The counts stay exactly as they were. Nothing that reads `phrase` changes; this adds a
+    # second sentence for the surfaces that have room for it.
+    _named: List[str] = []
+    for _d in ds:
+        if str(_d.get("kind") or "") == "indicative_rate":
+            continue                      # advisory: named in its own line, not the blocker
+        _what = str(_d.get("part") or "").strip()
+        if _what and _what.upper() not in {w.upper() for w in _named}:
+            _named.append(_what)
     return {
         "prices_missing": prices, "market_figures": market,
         "manufacturing": mfg, "indicative": house, "other": other,
         "blocking": prices + market + mfg + other, "advisory": house,
         "total": len(ds),
         "phrase": " + ".join(bits) if bits else "nothing outstanding",
+        # The blocking items by name, worst first — the order `decisions_required` is
+        # already sorted in.
+        "open_items": _named,
+        "named_phrase": (" + ".join(bits) + ": " + ", ".join(_named[:6])
+                         + (f" and {len(_named) - 6} more" if len(_named) > 6 else "")
+                         if bits and _named else
+                         (" + ".join(bits) if bits else "nothing outstanding")),
     }
 
 
