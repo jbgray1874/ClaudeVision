@@ -1285,11 +1285,42 @@ def plated_members_deferred_to_their_own_finish(parts: Any, summary: Any,
     return deferred
 
 
+def named_plate_spec(finish_text: Any) -> Optional[Dict[str, Any]]:
+    """The quoted plate spec this finish names, or None.
+
+    Matched with spaces and punctuation removed, because one finish is written "Harrods01",
+    "HARRODS 01" and "Harrods-01" across a pack. A finish that names no spec in the table
+    returns None and the mass rate stands exactly as before."""
+    _t = re.sub(r"[^A-Z0-9]+", "", str(finish_text or "").upper())
+    if not _t:
+        return None
+    for _key, _spec in (getattr(config, "NAMED_PLATE_SPECS", {}) or {}).items():
+        _k = re.sub(r"[^A-Z0-9]+", "", str(_key).upper())
+        if _k and _k in _t:
+            return dict(_spec, matched_spec=_key)
+    return None
+
+
 def plating_unit_price(mass_kg: Any, order_qty: Any,
-                       policy: Dict[str, Any]) -> Tuple[Optional[float], str, str]:
+                       policy: Dict[str, Any],
+                       finish_text: Any = "") -> Tuple[Optional[float], str, str]:
     """Per-unit subcontract plating cost from the plated mass, honouring the plater's per-batch
     vat minimum. Returns (unit_gbp or None, note, cost_method). None where no rate is configured
-    or no mass resolved — the caller then keeps the line as a blocking 'estimator to price'."""
+    or no mass resolved — the caller then keeps the line as a blocking 'estimator to price'.
+
+    A NAMED SPEC IS A QUOTED PRICE AND COMES FIRST. The policy's own note says a decorative
+    or named plate spec is not the per-kilo rate; 7332-01 is that case, its requirement is
+    Brass Harrods 01, and the plater charges £250 a stand against an indicative zinc line of
+    a few pounds on mass. Keyed on the finish the drawing names, so a job calling up no such
+    spec is priced exactly as it was."""
+    _spec = named_plate_spec(finish_text)
+    if _spec and _safe_float(_spec.get("gbp_per_unit")):
+        _unit = round(float(_spec["gbp_per_unit"]), 2)
+        return (_unit,
+                f"{_spec.get('label') or _spec.get('matched_spec')} — £{_unit:.2f} per unit, "
+                f"a quoted price for the named spec and not the per-kilo rate "
+                f"({_spec.get('source', 'source not recorded')})",
+                "subcontract_plating_named_spec")
     rate = (policy or {}).get("gbp_per_kg")
     if rate in (None, ""):
         return None, "no plating rate configured — estimator to price", "estimator_to_price"
@@ -1378,7 +1409,46 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         except Exception:                                            # noqa: BLE001
             _deferred = []
         mass = sum(_member_mass_kg(by_pn[m]) for m in members if m in by_pn)
-        unit, note, method = plating_unit_price(mass, order_qty, policy)
+        # THE FINISH THE DRAWING NAMES, from the weldment this line plates and from its
+        # members — a named spec is stated on whichever of them carries the finish callout,
+        # and reading only one of the two is how "Harrods 01" goes unseen on a line that
+        # exists because of it.
+        _finish_src = [pe.get("_plating_weldment")] + sorted(members)
+        _finish_text = " ".join(
+            _part_finish_text(by_pn[str(m).strip().upper()])
+            for m in _finish_src
+            if m and str(m).strip().upper() in by_pn)
+        unit, note, method = plating_unit_price(mass, order_qty, policy, _finish_text)
+        # GETTING IT THERE AND BACK IS PART OF HAVING IT PLATED.
+        #
+        # "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network -
+        # £20.00 per Unit." Freight the job would not incur if the part were finished in
+        # house, and it was on no line at all. It rides on the plating line rather than a new
+        # commercial line of its own, because that is the cause of it and an estimator
+        # reading "plating" should see what plating costs.
+        #
+        # Held per ORDER with the per-unit share derived, which is the form that survives a
+        # quantity change: £120 over the six stands the figure was quoted against is his £20
+        # a unit. Whether £120 is the round trip or each way the note does not settle, so the
+        # line says which it assumed.
+        # AND IT IS NOT ADDED TO THIS LINE, DELIBERATELY. Freight to and from the plater is
+        # real money the job would not spend if the part were finished in house, but this
+        # line has to equal what the PLATER charges or an estimator cannot check it against
+        # the plater's own quote — which is the whole reason the named spec is priced as a
+        # quote. So the figure is carried on the record and stated in the note, for the
+        # delivery line and for the person reading it, and the plating price stays plating.
+        _plog = getattr(config, "PLATING_LOGISTICS", {}) or {}
+        _freight_order = _safe_float(_plog.get("freight_gbp_per_order")) or 0.0
+        if unit is not None and _freight_order > 0:
+            _q = max(1, int(order_qty or 1))
+            _freight_unit = round(_freight_order / _q, 2)
+            pe["plater_freight_gbp_per_unit"] = _freight_unit
+            pe["plater_freight_gbp_per_order"] = _freight_order
+            note += (f". NOT INCLUDED here: freight to and from the plater, "
+                     f"£{_freight_order:.0f} the "
+                     f"{'round trip' if _plog.get('freight_is_round_trip', True) else 'leg'}"
+                     f" = £{_freight_unit:.2f} a unit at {_q} off — put it on the delivery "
+                     f"line ({_plog.get('source', 'transport figure')})")
         qty = max(1, int(pe.get("quantity") or 1))
         ext = round((unit or 0.0) * qty, 2)
         pe["unit_material_cost_gbp"] = unit or 0.0
@@ -4912,6 +4982,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     if "handling" in ops:
         run_times_min["handling"] = round(LABOUR_RULES["handling"]["min_per_part"], 2)
+        # A PART THAT LEAVES THE BUILDING IS PACKED TWICE.
+        #
+        # "There would be consideration for two ops for Packing — to and from Plater & Final
+        # Assembly / Pack. Manual Estimate for 4 Minutes Pack for Platers / 8 Minutes Final
+        # Assembly & Pack." The sheet booked one pack of 2 minutes for both. The second pack
+        # is not the first one again: the part goes out raw, comes back plated, and is then
+        # assembled and packed for the customer.
+        #
+        # Keyed on the part's own finish naming a plating family, so a job with no plated
+        # part reaches none of it.
+        # A NAMED SPEC IS ITSELF EVIDENCE OF PLATING. finish_families reads the process words
+        # — PLATED, ZINC — and "Harrods01" is neither: it is the customer's name for a brass
+        # plate, which is exactly why the spec table exists. A finish that names a spec in
+        # that table goes to a plater by definition, so it counts here too. Without this the
+        # part whose plating costs £250 was the one part not recognised as plated.
+        _fin_txt = _part_finish_text(part)
+        if _is_plate_finish(_fin_txt) or named_plate_spec(_fin_txt):
+            _pl = getattr(config, "PLATING_LOGISTICS", {}) or {}
+            _to_plater = float(_pl.get("pack_for_plater_min", 4.0))
+            _final = float(_pl.get("final_pack_min", 8.0))
+            if _to_plater + _final > 0:
+                run_times_min["handling"] = round(_to_plater + _final, 2)
+                part["plater_pack_applied"] = True
+                part.setdefault("review_flags", []).append(
+                    f"plated part: packed twice — {_to_plater:g} min to the plater and "
+                    f"{_final:g} min final assembly and pack, in place of the single "
+                    f"{LABOUR_RULES['handling']['min_per_part']:g} min handling allowance "
+                    f"({_pl.get('source', 'shop figure')})")
 
     if "wire_forming" in ops:
         _wire_len_mm = _safe_float(part.get("wire_total_length_mm")) or cut_length_mm

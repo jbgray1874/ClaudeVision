@@ -422,6 +422,53 @@ PLATE_SUBCONTRACT_POLICY = {
     "label": "plating — INDICATIVE zinc/passivate, verify against plater quote",
 }
 
+# A NAMED PLATE SPEC IS A QUOTED PRICE, NOT A RATE PER KILO.
+#
+# The policy above says so itself — "a decorative / named 'Harrods' plate spec is NOT this
+# rate … the line stays blocking until a plater quote confirms". 7332-01 is exactly that
+# case and the quote has now arrived: the requirement is Brass Harrods 01 and the plater
+# charges £250.00 per stand, against an indicative zinc line of a few pounds on mass. That
+# is the largest single error on the sheet by an order of magnitude.
+#
+# Keyed on the FINISH the drawing names, so it can only ever price a job that calls that
+# finish up: a spec not in this table falls through to the mass rate exactly as before, and
+# a job with no plating never reaches either. Per UNIT, because that is how the plater
+# quotes a decorative finish — the mass rate and its vat minimum do not apply.
+#
+# Matched on the finish text with spaces and punctuation removed, because a drawing writes
+# "Harrods01", "HARRODS 01" and "Harrods-01" for one finish.
+NAMED_PLATE_SPECS = {
+    "HARRODS01": {
+        "gbp_per_unit": 250.00,
+        "label": "Brass — Harrods 01",
+        "source": "plater quote via SDI estimating for 7332-01 (Howard Thurley, 9 Sep 2026)",
+    },
+}
+
+# ── WORK A PLATED PART CAUSES THAT AN UNPLATED ONE DOES NOT ──────────────────────────────
+#
+# "There would be consideration for two ops for Packing — to and from Plater & Final
+# Assembly / Pack. Manual Estimate for 4 Minutes Pack for Platers / 8 Minutes Final Assembly
+# & Pack." The sheet booked ONE pack operation of 2 minutes for both. A part that leaves the
+# building and comes back is packed twice, and the second pack is not the first one again.
+#
+# And it travels: "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet
+# Network - £20.00 per Unit". Held as the ORDER figure with the per-unit share derived, which
+# is the form that survives a quantity change — £120 over the six stands that quote was
+# written against is the £20 a unit he quotes. Whether £120 is the round trip or each way is
+# the one thing the note does not settle, so the line says which it assumed.
+#
+# EVERY FIGURE HERE IS KEYED ON PLATING BEING PRESENT, which is what makes it safe: a job
+# with no plated part reaches none of it. 12349-02 has no plating and cannot be touched.
+PLATING_LOGISTICS = {
+    "pack_for_plater_min": float(os.getenv("PLATER_PACK_MIN", "4.0")),
+    "final_pack_min": float(os.getenv("PLATER_FINAL_PACK_MIN", "8.0")),
+    "freight_gbp_per_order": float(os.getenv("PLATER_FREIGHT_GBP", "120.0")),
+    "freight_is_round_trip": True,
+    "source": ("SDI transport department, stated for 7332-01 (Howard Thurley, 9 Sep 2026) — "
+               "£120 pallet network, quoted as £20 a unit"),
+}
+
 # ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────
 # Where the estimator-override loop (client_quote_regen) writes its two deliverables. The
 # regenerated CLIENT QUOTE lands in the AISheets share so the portal can serve it; the amended
