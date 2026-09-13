@@ -4752,6 +4752,72 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["hole_machining"] = round(rule["setup_min"], 2)
         run_times_min["hole_machining"] = round((holes * rule["sec_per_hole"]) / 60.0, 2)
 
+    # ---- TWO THINGS THE SHOP KNOWS THAT THE DRAWING DOES NOT SAY ----------------
+    # Both are FLAGS, never rewrites. An estimator told us each of them about one job;
+    # neither is on the drawing, and acting on either silently would be this engine
+    # inventing a spec. Raised where a person can rule, and the figure stays as drawn.
+    #
+    # "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu – TBC." He marked it TBC
+    # himself. The gauge on the sheet stays 0.9; the line says production may substitute.
+    _gauge_now = _safe_float(part.get("normalized_thickness_mm")) or 0.0
+    if (_mat_u in _SHEET_METALS and 0.85 <= _gauge_now <= 0.95
+            and not part.get("_gauge_substitution_flagged")):
+        part["_gauge_substitution_flagged"] = True
+        part.setdefault("review_flags", []).append(
+            f"drawn at {_gauge_now:g} mm: production has raised substituting 1.0 mm in lieu "
+            f"(estimator, TBC). Costed AS DRAWN — confirm which gauge is bought before issue")
+
+    # "Line 85 – Drawing doesn't annotate – material is brushed prior to sending to platers,
+    # op. for Manual Labour (Metal) 40 Minutes – Grey area as drawing only nominates a finish
+    # as Harrods01." Real work, worth real money, and stated nowhere on the pack. Not added:
+    # named, so a person decides whether this job carries it.
+    if _is_plate_finish(_part_finish_text(part)) or named_plate_spec(_part_finish_text(part)):
+        if not part.get("_brush_before_plate_flagged"):
+            part["_brush_before_plate_flagged"] = True
+            part.setdefault("review_flags", []).append(
+                "plated part: the shop brushes material before it goes to the platers — "
+                "about 40 minutes of Manual labour (Metal) per the estimator — and the "
+                "drawing does not annotate it, so it is NOT costed here. Add it if this "
+                "finish needs it")
+
+    # ---- A TUBE IS ONLY BENT IF SOMETHING SAYS IT BENDS --------------------------
+    # "Line 103 - Tube Bending Op. – Not Required." 7332-01-002 booked two tube bends on a
+    # leg that is straight. tube_bending is not inferred from geometry the way folding is —
+    # it arrives from the drawing read, so a mention near a tube is enough to charge the
+    # tube-bender, its £32.84 rate and its 45-minute set-up.
+    #
+    # The same standard the fold gate already applies: drawing evidence infers a bend, and
+    # the absence of any bend at all rules one out. Bend count, a bend line measured off a
+    # DXF, an angle callout, a textual fold count — any one of them keeps the op. None of
+    # them, and the part is straight and the op comes off, said out loud rather than
+    # silently. A part with no tube-bending op on it is untouched.
+    _tube_bend_ops = [o for o in ops if str(o).strip().lower() in
+                      ("tube_bending", "tubebend", "tube_bend")]
+    if _tube_bend_ops:
+        _bend_evidence = (
+            (bends or 0) > 0
+            or (_safe_int(part.get("bend_count_dxf")) or 0) > 0
+            or len(part.get("angles_deg") or []) > 0
+            or (_safe_int(part.get("fold_count_textual")) or 0) > 0
+            or (_safe_int((part.get("manufacturing_features") or {}).get("bend_count")) or 0) > 0
+        )
+        if not _bend_evidence:
+            ops = [o for o in ops if o not in _tube_bend_ops]
+            for _tf in ("textual_operations", "inferred_operations"):
+                if isinstance(part.get(_tf), list):
+                    part[_tf] = [o for o in part[_tf]                    # precedence: direct-write ok — removes ops, adds no evidence
+                                 if str(o).strip().lower() not in
+                                 ("tube_bending", "tubebend", "tube_bend")]
+            for _timing in (setup_times_min, run_times_min):
+                for _o in _tube_bend_ops:
+                    _timing.pop(_o, None)
+            part.setdefault("removed_operations", []).extend(_tube_bend_ops)
+            part.setdefault("review_flags", []).append(
+                "tube bending removed: nothing on this part states a bend — no bend count, "
+                "no bend line in a DXF, no angle callout. The op was read from the drawing "
+                "text near a tube, and a straight leg does not go on the tube-bender. If it "
+                "does bend, the drawing needs to say so")
+
     # ---- Fold operation inference (general, evidence-based) ----------------------
     # A part folds if it carries fold evidence — PDF callouts (UP/DOWN + angle -> angles_deg
     # / fold_count_textual), a DXF BENDLINES bend count, or textual bend mentions — even when
