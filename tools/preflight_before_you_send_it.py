@@ -52,11 +52,35 @@ def check(path: Path) -> list:
     wv = openpyxl.load_workbook(path, data_only=True)
 
     # 1. Any cell that has already evaluated to an error.
+    #
+    # WHERE THE ERROR IS DECIDES WHETHER IT STOPS THE PACK, and the reason is Excel's own:
+    # ERRORS PROPAGATE. Anything that poisons a figure on the Estimate sheet shows as an
+    # error ON the Estimate sheet, so that is where blocking belongs.
+    #
+    # The estimators' own sheets — Labour, Material Price Break — are structural: the engine
+    # never writes them, and the blank template ships with six cells in the Material Price
+    # Break description mirror reading `=_xlfn.SINGLE(Estimate!#REF!)`, pointing at rows
+    # someone deleted in the template's history. They have been in every pack ever produced
+    # and were invisible until the workbook started carrying its calculated values; the money
+    # columns beside them are empty and the Estimate's price lookups read those columns and
+    # return 0, not an error.
+    #
+    # Blocking on them would stop a pack whose money is sound, which is how a checker gets
+    # turned off. They are named instead, with their owner — the template, not the run.
+    _STRUCTURAL = {"labour", "material price break"}
     for name in wv.sheetnames:
+        _structural = name.strip().lower() in _STRUCTURAL
         for row in wv[name].iter_rows():
             for c in row:
                 if isinstance(c.value, str) and c.value.strip() in _ERRORS:
-                    fails.append(f"{name}!{c.coordinate} is {c.value.strip()}")
+                    if _structural:
+                        warns.append(
+                            f"{name}!{c.coordinate} is {c.value.strip()} — a fault in the "
+                            f"BLANK TEMPLATE, not in this run: the engine never writes this "
+                            f"sheet. It does not reach the Estimate sheet (an error that did "
+                            f"would show there too). Fix it in the template.")
+                    else:
+                        fails.append(f"{name}!{c.coordinate} is {c.value.strip()}")
 
     if "Estimate" not in wf.sheetnames:
         fails.append("no Estimate sheet in this workbook")

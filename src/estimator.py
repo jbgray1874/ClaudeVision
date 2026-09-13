@@ -5177,6 +5177,51 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                 _com.get("review_reason")
                 or "Provisional standard-commodity price — confirm against a supplier quote.")
             return part
+        # AND THE REST OF THE CHAIN IS PAST THIS RETURN TOO.
+        #
+        # The commodity table was brought up here because the price lived past the return.
+        # It is not the only thing that does: UDEF matched on the line's DESCRIPTION,
+        # historical quote lines, the supplier catalogue and the market rung are ALL in
+        # _resolve_part_system_cost, and this branch returns before any of them. So the two
+        # lines an estimator can price in his sleep — 12349-02's M4 flange button screw and
+        # its 3.5x19 wood screw — came back "MATERIAL UNPRICED: enter a unit rate" on run
+        # after run, including runs where the catch-all-zero fix had already opened the road,
+        # because these lines never travel it. Meanwhile the bumpon on the same bill of
+        # materials, which is NOT flagged this way, went down the chain and priced at 35p.
+        #
+        # Same argument as the commodity table, one rung further out: ask, and take an answer
+        # if there is one. A miss changes nothing — the £0/None pass-through below is
+        # untouched — so this can only turn a blank into a priced line, never the reverse.
+        _chain_unit = None
+        try:
+            _chain = _resolve_part_system_cost(part)
+            _chain_unit = _safe_float(_chain.get("applied_unit_cost"))
+        except Exception:                                        # noqa: BLE001
+            _chain, _chain_unit = {}, None
+        if _chain_unit is not None and _chain_unit > 0:
+            _chain_unit = _round_money(_chain_unit)
+            _chain_ext = _round_money(_chain_unit * quantity)
+            _sel = _extract_selected_price(_chain.get("result") or {})
+            _src = str(_sel.get("source") or "price chain")
+            part["material_estimate"] = {
+                "unit_material_cost_gbp": _chain_unit, "cost_per_part_gbp": _chain_unit,
+                "extended_material_cost_gbp": _chain_ext,
+                "cost_method": f"bom_code_priced_by_description:{_src}"}
+            part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0,
+                                       "extended_labour_cost_gbp": 0.0}
+            part["unit_cost_gbp"] = _chain_unit
+            part["unit_total_cost_gbp"] = _chain_unit
+            part["extended_total_cost_gbp"] = _chain_ext
+            part["costing_basis"] = f"bom_code_priced_by_description:{_src}"
+            if _sel.get("provenance"):
+                part["price_provenance_note"] = str(_sel.get("provenance"))
+            if _chain.get("matched_part_code"):
+                part["matched_part_code"] = _chain["matched_part_code"]
+            part.setdefault("review_flags", []).append(
+                f"the code column holds a class word, so this line was priced on its "
+                f"DESCRIPTION against {_src} — check it is the same item before issue")
+            return part
+
         # Recognised but unpriced — pass through £0/None, flagged, NOT re-costed by geometry.
         part["material_estimate"] = {"unit_material_cost_gbp": None, "cost_per_part_gbp": None,
                                      "extended_material_cost_gbp": None,

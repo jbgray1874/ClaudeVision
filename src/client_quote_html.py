@@ -817,6 +817,22 @@ _STEM_NOISE = re.compile(
     re.IGNORECASE)
 
 
+def _part_records(summary: Dict[str, Any]):
+    """Every plain-dict part record on the job, wherever this pipeline files them.
+
+    Three populations hold the same descriptions and no single one is always present: the
+    write-up's parts, the costed estimates, and the raw parts list. Asked in that order
+    because the write-up is the one whose descriptions a person has read."""
+    for _where in (
+        ((summary.get("manufacturing_writeup") or {}).get("parts")),
+        ((summary.get("estimate_summary") or {}).get("part_estimates")),
+        summary.get("parts"),
+    ):
+        for _rec in (_where or []):
+            if isinstance(_rec, dict):
+                yield _rec
+
+
 def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     """(drawing number, revision, unit description) for the quotation header.
 
@@ -861,13 +877,30 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
                                 key=len)
                 if _owned:
                     _top = _owned[0]
-        for _node in (_payload.get("nodes") or []):
-            if not isinstance(_node, dict):
-                continue
-            if _top and str(_node.get("part_number") or "") == _top:
-                _number = _number or str(_node.get("part_number") or "")
-                _title = _title or str(_node.get("description") or "")
+        # AND THE NODE MAY NOT BE A DICT. The graph's nodes are PartNode objects; the
+        # projection copies them as they are, and `json.dump(default=str)` turns each one
+        # into its repr on the way to the saved record. So this arm was looking for a
+        # dictionary in a list that holds objects in memory and strings on disk, and found
+        # neither. The part RECORDS are plain dictionaries in both worlds and carry the same
+        # descriptions the provenance tab prints, so they answer when the nodes cannot.
+        if _top:
+            for _node in (_payload.get("nodes") or []):
+                _npn = (_node.get("part_number") if isinstance(_node, dict)
+                        else getattr(_node, "part_number", None))
+                if str(_npn or "") != _top:
+                    continue
+                _ndesc = (_node.get("description") if isinstance(_node, dict)
+                          else getattr(_node, "description", None))
+                _number = _number or str(_npn or "")
+                _title = _title or str(_ndesc or "")
                 break
+            if not _title:
+                for _rec in _part_records(summary):
+                    if str(_rec.get("part_number") or "").strip().upper() == _top.upper():
+                        _title = str(_rec.get("description") or "").strip()
+                        if _title:
+                            break
+            _number = _number or _top
 
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
     # no description at all rather than a misleading one — "SolidWorks" is not a product.

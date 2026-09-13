@@ -4372,6 +4372,16 @@ def project_priced_route(
         "schema": PRICED_ROUTE_SCHEMA,
         "mode": "shadow",
         "route_schema": route_graph.get("schema"),
+        # WHICH NODE IS THE THING THAT SHIPS, CARRIED FORWARD. The graph works this out and
+        # the projection dropped it, so every consumer reading the SHADOW — which is what
+        # reaches the saved record and the documents — had no way to ask "what is this unit".
+        # The quote/sheet header resolver has an arm for exactly this question and it could
+        # never fire: 12349-02's Description box came out empty on a job whose own provenance
+        # tab names the top node. Both spellings travel, because they answer different
+        # questions: `top_assembly` is the single top and is blank when there are several,
+        # `top_assemblies` is the whole forest.
+        "top_assembly": route_graph.get("top_assembly") or "",
+        "top_assemblies": list(route_graph.get("top_assemblies") or []),
         "nodes": list(route_graph.get("nodes") or []),
         "decisions": list(route_graph.get("decisions") or []),
         "priced_route_rows": rows,
