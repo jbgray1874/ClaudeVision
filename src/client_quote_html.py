@@ -833,6 +833,27 @@ def _part_records(summary: Dict[str, Any]):
                 yield _rec
 
 
+# What the engine writes where a description would be, on a part that has no drawing sheet to
+# take one from. Useful on the provenance tab, never a thing to print as the name of a product.
+_ENGINE_NOTES = ("from the solidworks model", "minted from", "no drawing sheet of its own")
+_BARE_KINDS = ("assembly", "sub-assembly", "sub assembly", "weldment", "part", "component")
+
+
+def _is_an_engine_note(text: Any) -> bool:
+    """True when this 'description' is the engine talking about itself.
+
+    Two shapes: a sentence explaining where a record came from, and a bare kind word —
+    "assembly" is what a thing IS, not what it is called, and a quotation headed "assembly"
+    tells a customer nothing they did not know from the drawing number above it.
+    """
+    t = str(text or "").strip().lower()
+    if not t:
+        return False
+    if any(n in t for n in _ENGINE_NOTES):
+        return True
+    return t.strip(" .-–—()") in _BARE_KINDS
+
+
 def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     """(drawing number, revision, unit description) for the quotation header.
 
@@ -884,6 +905,7 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
         # neither. The part RECORDS are plain dictionaries in both worlds and carry the same
         # descriptions the provenance tab prints, so they answer when the nodes cannot.
         if _top:
+            _title = "" if _is_an_engine_note(_title) else _title
             for _node in (_payload.get("nodes") or []):
                 _npn = (_node.get("part_number") if isinstance(_node, dict)
                         else getattr(_node, "part_number", None))
@@ -900,6 +922,49 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
                         _title = str(_rec.get("description") or "").strip()
                         if _title:
                             break
+            # AND A NOTE THE ENGINE WROTE TO ITSELF IS NOT A PRODUCT NAME.
+            #
+            # An assembly parent minted from the SolidWorks component tree has no drawing
+            # sheet of its own, so it has no description — it carries the sentence saying
+            # where it came from instead. On 12349-02 that parent is also the OUTERMOST
+            # root, so it became the unit's identity, and the customer quotation went out
+            # headed
+            #
+            #     Quotation 12349-02-69-GA - assembly (from the SolidWorks model's own tree)
+            #
+            # with the same phrase in the Description box of the estimate and in the alt
+            # text of the general arrangement. Reading the models made the header worse than
+            # leaving it blank.
+            #
+            # So the note is refused and the search carries on into the roots that DO have a
+            # description — innermost of the ones this drawing number owns, which on this job
+            # is 12349-02-69, "GRAVITY FEEDER MODULES". Nothing is invented: if no root can
+            # say what the unit is, the caller writes nothing, exactly as before.
+            if _is_an_engine_note(_title):
+                _title = ""
+            if not _title:
+                _others = sorted((r for r in _roots if r and r != _top), key=len)
+                # WHOSE JOB IS THIS. `_number` is still empty whenever the title block could
+                # not be read, which is exactly the case this arm exists for — so the prefix
+                # comes from the folder when the drawing cannot supply it. Without it a
+                # second customer's assembly, staged in the same pack, can name this unit.
+                _pref = str(_number or "").strip()
+                if not _pref:
+                    _m0 = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", stem)
+                    _pref = _m0.group(1).strip(" -_") if _m0 else ""
+                if _pref:
+                    _others = [r for r in _others
+                               if r.upper().startswith(_pref.upper())] or _others
+                for _cand in _others:
+                    for _rec in _part_records(summary):
+                        if str(_rec.get("part_number") or "").strip().upper() != _cand.upper():
+                            continue
+                        _d = str(_rec.get("description") or "").strip()
+                        if _d and not _is_an_engine_note(_d):
+                            _title = _d
+                            break
+                    if _title:
+                        break
             _number = _number or _top
 
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
