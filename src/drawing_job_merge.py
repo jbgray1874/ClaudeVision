@@ -1048,6 +1048,19 @@ def flat_stock_key(path: Path) -> Tuple[Optional[float], str]:
     return (thickness_mm_from_dxf_filename(path), str(_mat or "").upper())
 
 
+# The member number the drawing office wrote into the filename: "…01A_-07_5MM…" -> "07".
+# ONE definition, because two passes read it for opposite purposes — the namer to call a flat
+# `01A-07`, and the clusterer to refuse to merge it with `01A-03` — and a pass that read it
+# differently would name parts it had already thrown away.
+_MEMBER_NUMBER_RE = re.compile(r"[_\s-]-(\d{1,3})(?=[_\s.-])")
+
+
+def member_number_from_filename(path: Path) -> str:
+    """"…-01A -03 5MM…" -> "03"; "" when the name carries no member number."""
+    _m = _MEMBER_NUMBER_RE.search(Path(path).stem)
+    return _m.group(1).lstrip("0") or "0" if _m else ""
+
+
 def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[float, float]], List[Path]]]:
     """Group paths that are the SAME PHYSICAL FLAT. One cluster = one thing that gets cut.
 
@@ -1063,15 +1076,29 @@ def _cluster_paths_by_bbox(paths: Sequence[Path]) -> List[Tuple[Optional[Tuple[f
     material come first and the outline breaks ties within them; a pack whose filenames carry
     neither is unchanged, because then every flat shares the one empty key and this is the old
     behaviour exactly.
+
+    AND THE SAME STOCK STILL LOST A PART. 12349-02's folder holds seven 01A flats and the
+    estimate costed six: `-03` and one of the other 5 mm members share an outline, so with
+    gauge and material equal they clustered, one was picked, and `-03` was discarded — a cut
+    file the drawing office supplied, absent from the sheet that prices the job. Two parts CAN
+    share an outline and differ entirely inside it, which is why their cut lengths differ, and
+    the bounding box cannot see that.
+
+    So the member number joins the key. `-03` and `-04` are two numbers a person wrote down,
+    and no outline comparison overrules them. Re-exports and revisions still collapse, because
+    they carry the SAME number; only a pack that numbers its flats is affected, and only to
+    keep the ones it named.
     """
-    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path], Tuple[Optional[float], str]]] = []
+    clusters: List[Tuple[Optional[Tuple[float, float]], List[Path], Tuple[Optional[float], str, str]]] = []
     for p in paths:
         bb = _dxf_bbox_wh(p)
-        key = flat_stock_key(p)
+        _stock = flat_stock_key(p)
+        key = (_stock[0], _stock[1], member_number_from_filename(p))
         placed = False
         for rep, members, rep_key in clusters:
             if rep_key != key:
-                continue          # different stock is never the same flat, whatever the outline
+                continue          # different stock, or a different member number, is never
+                                  # the same flat — whatever the outline says
             if bb and rep and _bbox_close(bb, rep):
                 members.append(p)
                 placed = True

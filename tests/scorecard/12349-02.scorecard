@@ -37,6 +37,12 @@ gauge 08J = 6
 dept 06A = CNC
 dept 08J = CNC Joinery
 
+# ── every cut file the drawing office supplied is on the sheet ────────────────────────────
+# Seven 01A flats went into the 13 Sep run and six came out: -03 shares an outline with
+# another 5 mm member and was clustered away. A supplied part missing from the sheet that
+# prices the job is the one thing an estimator checks against the folder.
+must_exist 01A-03
+
 # ── identity: a hashed key is not a part number ───────────────────────────────────────────
 no_part_number_contains -DXF
 
