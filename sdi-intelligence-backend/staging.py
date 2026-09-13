@@ -323,6 +323,27 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
             f"{MAX_BYTES // (1024 * 1024)} MB limit. Narrow the selection.")
 
     folder.mkdir(parents=True, exist_ok=True)
+
+    # THE EXTRACT THE LAST RUN PAID FOR. Reading a pack of models takes SolidWorks the better
+    # part of half an hour, and a re-run of the same pack was throwing that away every time:
+    # the folder is emptied before the copy, which deleted an extract generated INTO it by the
+    # previous run, and the engine then had no choice but to generate it again.
+    #
+    # Keeping it is safe because it is not trusted on sight. The extract carries a fingerprint
+    # of the models it was taken from, and the engine re-checks that against the models in the
+    # pack before using it: a changed, added or deleted model regenerates it, an unchanged one
+    # is read in seconds. That check is what makes this a saving rather than a stale answer.
+    #
+    # A fresh extract travelling WITH the selection always wins — it is a statement about the
+    # models made by whoever ran it, and this is only ever a cached one.
+    _previous_extract: Optional[bytes] = None
+    for _name in SIDECAR_NAMES:
+        try:
+            _previous_extract = (folder / _name).read_bytes()
+        except OSError:
+            continue
+        break
+
     replaced = _clear_folder(folder)
 
     copied: List[str] = []
@@ -340,13 +361,21 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
         except OSError:
             skipped.append((str(sc), "could not be copied"))
 
+    carried_forward = False
+    if not sidecars and _previous_extract is not None:
+        try:
+            (folder / SIDECAR_NAMES[0]).write_bytes(_previous_extract)
+            carried_forward = True
+        except OSError:
+            pass
+
     # NEITHER AN EXTRACT NOR A MODEL REACHED THE PACK. Say whether that is because the job has
     # none, or because they were beside the drawings and not selected. Three runs of 12349-02
     # were costed drawings-only and the log's only word on it was "no SOLIDWORKS extract found",
     # which is true of both and actionable in only one of them.
     native_staged = [n for n in copied if Path(n).suffix.lower() in NATIVE_SUFFIXES]
     unselected: List[Path] = []
-    if not sidecars and not native_staged:
+    if not sidecars and not carried_forward and not native_staged:
         unselected = _native_models_beside(paths)
 
     # AND THEN POINT THE ENGINE AT THEM, WHERE THEY LIVE.
@@ -376,6 +405,7 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
         "copied_count": len(copied),
         "sidecars": sidecars,
         "sidecars_count": len(sidecars),
+        "extract_carried_forward": carried_forward,
         "native_staged": native_staged,
         "native_unselected_count": len(unselected),
         "native_unselected_folders": sorted({str(p.parent) for p in unselected})[:3],

@@ -973,9 +973,20 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if staged.get("sidecars"):
         run.line(f"  carried   {', '.join(staged['sidecars'])} — the SOLIDWORKS extract "
                  f"applies to this run")
+    elif staged.get("extract_carried_forward"):
+        run.line("  kept      the extract the last run of this pack generated — the engine "
+                 "re-checks it against the models and regenerates it if any have moved on")
     elif staged.get("native_staged"):
-        run.line(f"  no extract yet — {len(staged['native_staged'])} SOLIDWORKS model(s) came "
-                 f"with the drawings and the runner reads them itself")
+        # THIS LINE IS PRINTED WHEN THE JOB IS QUEUED, WHICH IS BEFORE THE ENGINE HAS HAD A
+        # CHANCE TO DO ANYTHING. It used to say "no SOLIDWORKS extract found beside these
+        # drawings — the job is costed from the drawings", and with the models sitting in the
+        # pack that was simply wrong: the engine generates the extract itself, and the half
+        # hour of silence that follows IS that read. Read at the top of a log it looks like a
+        # verdict on the finished estimate, and a perfectly good SolidWorks-backed run was
+        # written off as drawings-only on the strength of it.
+        run.line(f"  {len(staged['native_staged'])} SOLIDWORKS model(s) came with the drawings "
+                 f"and no extract yet — the runner reads them itself before costing anything. "
+                 f"That read is the long silent stretch at the start of the run.")
     elif staged.get("native_unselected_count"):
         # THE ONE THAT IS WORTH A SENTENCE. The models are there; they were not on the list, so
         # the pack arrived without them and Layer 0 is off for a reason nobody chose.

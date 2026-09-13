@@ -191,6 +191,66 @@ def test_the_address_is_not_written_when_the_models_are_in_the_pack(staging, tmp
         "they are already here; there is nowhere else to look"
 
 
+# ── the extract the last run paid half an hour for ───────────────────────────────────────
+
+def test_the_previous_runs_extract_survives_the_clear(staging, tmp_path):
+    """The folder is emptied before the copy, which deleted an extract the ENGINE had
+    generated into it — so every re-run of the same pack spent another half hour in
+    SolidWorks. It is kept, and the engine's own fingerprint check decides whether to trust
+    it."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    _model(pack / "a.SLDPRT")
+
+    first = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+    # What a run does: writes its extract into the job folder it was pointed at.
+    (Path(first["folder"]) / "_sw_native_extract.json").write_text(
+        '{"records": [], "_manifest": {}}', encoding="utf-8")
+
+    second = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+
+    assert second["extract_carried_forward"] is True
+    assert (Path(second["folder"]) / "_sw_native_extract.json").is_file()
+
+
+def test_an_extract_travelling_with_the_selection_wins(staging, tmp_path):
+    """The kept one is a cache. One that came with the drawings is somebody's statement about
+    the models, and it is the newer fact."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+
+    first = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+    (Path(first["folder"]) / "_sw_native_extract.json").write_text("STALE", encoding="utf-8")
+    (pack / "_sw_native_extract.json").write_text("FRESH", encoding="utf-8")
+
+    second = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+
+    assert second["sidecars"] == ["_sw_native_extract.json"]
+    assert second["extract_carried_forward"] is False
+    assert (Path(second["folder"]) / "_sw_native_extract.json").read_text(
+        encoding="utf-8") == "FRESH"
+
+
+def test_a_first_run_carries_nothing_forward(staging, tmp_path):
+    pack = tmp_path / "12422"
+    _pdf(pack / "ga.pdf")
+    res = staging.stage([str(pack)], client="Boots", drawing="12422")
+    assert res["extract_carried_forward"] is False
+
+
+def test_the_drawings_themselves_are_still_replaced(staging, tmp_path):
+    """Keeping the extract must not turn into keeping the pack. A drawing removed from the
+    list must leave the folder — that rule is why the clear exists."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "a.pdf"); _pdf(pack / "b.pdf")
+    staging.stage([str(pack / "a.pdf"), str(pack / "b.pdf")], client="Fanatics",
+                  drawing="12349-02")
+
+    res = staging.stage([str(pack / "a.pdf")], client="Fanatics", drawing="12349-02")
+    assert sorted(p.name for p in Path(res["folder"]).iterdir()
+                  if p.suffix.lower() == ".pdf") == ["a.pdf"]
+
+
 # ── the extract that lives with the models, one folder over ──────────────────────────────
 
 def test_the_extract_is_found_in_the_parent_when_the_drawings_are_in_a_subfolder(
