@@ -4788,18 +4788,46 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         run_times_min["diamond_polish"] = round(max(1.0, (cut_length_mm / 500.0)) if cut_length_mm else 1.5, 2)
 
     if "glue" in ops:
+        # WHO DOES THE BONDING, AND HOW LONG THE BOOK SAYS IT TAKES. One decision, in the
+        # one place glue minutes are set, because this op has been wrong at both ends.
+        #
         # NOT ON AN ARRANGEMENT. 12349-02's GA record charged "Glue — 6mm TIMBER
         # (12349-02-69)" off the word GLUE in the arrangement drawing's notes, and the
         # estimator's question was "What op is this for?" — unanswerable, because an
-        # arrangement's notes describe its MEMBERS, and the members already carry their
-        # own bonding (the acrylic route on the bonded assembly, the timber allowance on
-        # the timber leaves). A node whose children include another assembly is stamped
-        # is_arrangement_parent upstream (drawing_job_merge); a sub-assembly that
-        # genuinely bonds — 01A's UV glue — has only leaves below it and keeps its line.
+        # arrangement's notes describe its MEMBERS, and the members already carry their own
+        # bonding. A node whose children include another assembly is stamped
+        # is_arrangement_parent upstream (drawing_job_merge).
+        #
+        # AND ON A BONDED ACRYLIC ASSEMBLY, FROM THE ACRYLIC BOOK. "Why is operation for
+        # glue 12349-02-69-01A only showing 1 minute (where did this time come from)" — the
+        # same estimator, about the generic default below. ACRYLIC_OP_DRIVERS carries SDI's
+        # own figure, reverse-engineered from the M18 workbook: 2.4 min per bonded assembly
+        # on a 30-minute set-up, and its note says glue and flame-polish are "ONE op per
+        # bonded/display assembly, not per panel". The block that applies it lives in
+        # estimate_part behind `not is_assembly_parent` — so the only kind of part the
+        # driver exists for is the one kind it never reached, and 01A, seven bonded panels,
+        # took the flat minute. That gate stays where it is: it keeps laser, linebend and
+        # the rest of the geometry route off a parent that cuts nothing.
+        _glue_mat = str(part.get("normalized_material") or "").upper().replace("_", " ")
+        _glue_drv = getattr(config, "ACRYLIC_OP_DRIVERS", {}) or {}
+        _glue_assembly = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
+        _glue_acrylic_assembly = (
+            _glue_assembly
+            and _glue_mat in {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA",
+                              "POLYCARBONATE"}
+            and float(_glue_drv.get("glue_min_per_assembly", 0) or 0) > 0)
+
         if part.get("is_arrangement_parent"):
             part.setdefault("review_flags", []).append(
                 "glue note on the arrangement drawing NOT charged here — the gluing it "
                 "calls up belongs to the members, which carry their own bonding time")
+        elif _glue_acrylic_assembly:
+            setup_times_min["glue"] = float(_glue_drv.get("glue_setup_min", 30.0))
+            run_times_min["glue"] = round(float(_glue_drv["glue_min_per_assembly"]), 4)
+            part.setdefault("review_flags", []).append(
+                f"bonded acrylic assembly: glue timed from the SDI acrylic model "
+                f"({run_times_min['glue']:g} min per assembly, set-up "
+                f"{setup_times_min['glue']:g} min), not the generic default")
         else:
             setup_times_min["glue"] = 0.5
             run_times_min["glue"] = 1.0
@@ -5450,6 +5478,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         process["acrylic_route_v2"] = True
         process["acrylic_bonded_detected"] = _bonded
         process["acrylic_laser_applied"] = bool(_laser_signal or _bonded)
+
     labour = estimate_labour_costs(process, job_quantity=order_qty, material=part.get("normalized_material"))
     if debug:
         print(f"[DEBUG] estimate_part labour done {part_number}")

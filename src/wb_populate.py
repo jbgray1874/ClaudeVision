@@ -3501,10 +3501,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 or bool(_p.get("_consumable_qty_unknown")))
 
     if _powder_kg_total > 0 and not any(_is_powder_row(_p) for _p in bom_parts):
+        # "WHERE DID THE PRICE COME FROM FOR POWDER (PER KILO)?" — the estimator's first
+        # question of fifteen, about a line that stated its AREA and not its RATE. The rate
+        # has a name against it (POWDER_COSTING_POLICY: £4/kg standard powder, confirmed by
+        # estimating, Tim, POWDER5 on job 1282) and the line never said so, which is how a
+        # settled figure reads as an invented one. It says so now.
+        _pk_rate = float(_POWDER_COST_PER_KG or 9.73)
+        try:
+            _pk_src = str((getattr(config, "POWDER_COSTING_POLICY", {}) or {}).get(
+                "powder_material_gbp_per_kg_source") or "").strip()
+        except Exception:                                        # noqa: BLE001
+            _pk_src = ""
         bom_parts = list(bom_parts) + [{
             "part_number": "POWDER",
-            "description": "Powder — computed from coated surface area "
-                           f"({_powder_area_m2:.4f} m2)",
+            "description": (f"Powder — computed from coated surface area "
+                            f"({_powder_area_m2:.4f} m2) at £{_pk_rate:.2f}/kg"
+                            + (f" ({_pk_src})" if _pk_src else "")),
             "quantity": 1,
             "_price_explicitly_withheld": True,   # routes through the consumable branch,
             "_consumable_qty_unknown": True,      # which sets qty = kg and price = GBP/kg

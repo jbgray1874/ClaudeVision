@@ -2029,6 +2029,14 @@ POWDER_COSTING_POLICY = {
     # Approximate strip width (mm) along bend lines for extra coated area.
     "bend_coating_strip_mm": 40.0,
     "powder_material_gbp_per_kg": float(os.getenv("POWDER_MATERIAL_GBP_PER_KG", "4.0")),  # £4/kg standard powder, confirmed by estimating (Tim, POWDER5 on job 1282). Was 12.5 (~3x too high).
+    # WHO SAYS SO, IN A FIELD AND NOT A COMMENT. "Where did the price come from for Powder
+    # (Per Kilo)?" was the estimator's first question, about a line that stated its area and
+    # not its rate — and the rate's provenance existed only here, in a comment no sheet can
+    # read. A figure whose source cannot travel with it reads as invented, however well
+    # evidenced it is. The BOM line prints this.
+    "powder_material_gbp_per_kg_source": os.getenv(
+        "POWDER_MATERIAL_GBP_PER_KG_SOURCE",
+        "SDI standard powder rate, confirmed by estimating — POWDER5, job 1282"),
     "special_finish_keywords": [
         "METALLIC",
         "PEARLESCENT",
