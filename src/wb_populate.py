@@ -2520,12 +2520,28 @@ def _make_material_total_error_tolerant(ws, flags=None):
     """
     import re as _re
     try:
-        cell = ws["M92"]
-        f = cell.value
+        # BY LABEL, LIKE ITS SIBLING, AND FOR THE SAME REASON. _verify_template_matches_cellmap
+        # read this total at M92 by address and went blind the moment a block was widened —
+        # which is the one occasion it exists for. This function had the identical address and
+        # the identical blind spot, and a worse consequence: it flags "not the expected SUM
+        # formula", returns, and the material total silently keeps plain SUM. One part with no
+        # blank dimensions then #VALUE!s Total Material, Unit Cost and Sell Price together.
+        # Widening Other Sheet Material — which 12349-02 needs — moves this cell.
+        cell = None
+        for _row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 400)):
+            if not any(isinstance(c.value, str)
+                       and c.value.strip().lower().startswith("total material cost")
+                       for c in _row):
+                continue
+            cell = next((c for c in _row
+                         if isinstance(c.value, str) and "SUM(" in c.value), None)
+            break
+        f = cell.value if cell is not None else None
         if not isinstance(f, str) or "SUM(" not in f:
             if flags is not None:
-                _flag("material-total error-tolerance: M92 is not the expected SUM formula — "
-                      "left as-is (a missing dim will still #VALUE! the total).", flags)
+                _flag("material-total error-tolerance: no Total Material Cost row with a SUM "
+                      "formula was found — left as-is (a missing dim will still #VALUE! the "
+                      "total).", flags)
             return False
         # SUM(  ->  AGGREGATE(9,6,   for every SUM( in the formula. Ranges/bare refs unchanged.
         # AGGREGATE is an Excel 2010+ "future function": openpyxl MUST store it with the

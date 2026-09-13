@@ -1350,12 +1350,46 @@ def _append_traceability_blocks(ws, row: int, summary: Dict[str, Any],
             issues.append(["No DXF flat for this part", pn,
                            "geometry came from the model or the sheet, not a flat pattern"])
     # A MODELLED PART IN NO ASSEMBLY BOM — a fixture, a jig, a setup block in the job
-    # folder. The SolidWorks reader names them; they are not costed into the job.
+    # folder. The SolidWorks reader names them.
+    #
+    # WHETHER IT WAS COSTED IS A FACT, NOT AN ASSUMPTION, AND THIS ASSERTED IT. The line read
+    # "not costed" about every such part without once looking at the costed population, and
+    # 12349-02's 08J — the 6 mm MDF packer — is on the Estimate sheet at £0.95 carrying CNC
+    # Joinery and Wet Spray. So the report told an estimator a part was not in the price while
+    # the sheet beside it charged for the part. A report that contradicts the sheet it
+    # accompanies is worse than either alone.
+    #
+    # Being absent from the assembly BOM is still worth raising either way — it is how a jig
+    # gets priced as a product part, and how a real component goes missing. What changes is
+    # that the row now says which of those happened.
     _sw = summary.get("solidworks_native") if isinstance(summary.get("solidworks_native"), dict) else {}
+    _costed_now: Dict[str, Any] = {}
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates")
+                or summary.get("part_estimates") or []):
+        if isinstance(_pe, dict) and _pe.get("part_number"):
+            _costed_now[str(_pe["part_number"]).strip().upper()] = _pe
     for pn in ((_sw.get("applied") or {}).get("not_in_bom_parts") or []):
-        issues.append(["Modelled but in no assembly BOM", str(pn),
-                       "a fixture, jig or setup part in the model folder — not a component "
-                       "of the product, not costed; confirm"])
+        _hit = _costed_now.get(str(pn).strip().upper())
+        _charged = None
+        if _hit:
+            for _k in ("extended_total_cost_gbp", "unit_total_cost_gbp", "unit_cost_gbp"):
+                try:
+                    _v = float(_hit.get(_k))
+                except (TypeError, ValueError):
+                    continue
+                if _v > 0:
+                    _charged = _v
+                    break
+        if _charged is not None:
+            issues.append(["Modelled but in no assembly BOM", str(pn),
+                           f"read from the model folder and absent from the assembly bill of "
+                           f"materials, but COSTED on this sheet at £{_charged:.2f} — if it is "
+                           f"a fixture or jig it should not be in the price; if it is a "
+                           f"component the bill of materials is short a line. Confirm which"])
+        else:
+            issues.append(["Modelled but in no assembly BOM", str(pn),
+                           "a fixture, jig or setup part in the model folder — not a component "
+                           "of the product, not costed; confirm"])
     heading("4 — IDENTITY AND TRACKING THROUGH THE PACK — where a part's name did not carry "
             "across the drawings, what was costed that nothing drew, and what was read that "
             "nothing costed")
