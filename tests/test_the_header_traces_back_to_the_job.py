@@ -186,3 +186,20 @@ def test_a_job_number_above_a_job_is_not_a_customer():
 
 def test_nothing_to_read_is_an_empty_answer_not_a_guess():
     assert _client("") == "" and _client("12349-02") == ""
+
+
+def test_the_compiled_route_carries_the_roots_to_the_resolver():
+    """THE FIELD THE RESOLVER READS MUST BE THE FIELD THE COMPILER WRITES.
+
+    build_part_graph works out which node is the thing that ships; compile_job_route builds
+    its OWN return dict and dropped it, so project_priced_route — taught to pass the roots
+    on — was reading a key that never existed. Three consecutive runs produced an empty
+    Description box for want of two lines, and no test caught it because both halves were
+    tested in isolation and the join between them was the defect."""
+    import inspect
+    import route_compiler as rc
+    src = inspect.getsource(rc.compile_job_route)
+    assert '"top_assembly": graph.get("top_assembly")' in src
+    assert '"top_assemblies": list(graph.get("top_assemblies")' in src
+    # and the nodes it emits are dicts the resolver can read a description off
+    assert "description" in rc.PartNode.__dataclass_fields__

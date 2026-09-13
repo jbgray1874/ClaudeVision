@@ -3991,6 +3991,13 @@ def compile_job_route(
     return {
         "schema": ROUTE_SCHEMA,
         "mode": "shadow",
+        # THE ROOTS TRAVEL WITH THE GRAPH. build_part_graph works out which node is the
+        # thing that ships and this return dropped it, so every consumer downstream —
+        # including project_priced_route, which was taught to pass them on — has been
+        # reading a field that was never populated. 12349-02's Description box came out
+        # empty on three consecutive runs for want of these two lines.
+        "top_assembly": graph.get("top_assembly") or "",
+        "top_assemblies": list(graph.get("top_assemblies") or []),
         "nodes": [asdict(node) for node in graph["nodes"]],
         "decisions": [asdict(decision) for decision in decisions],
         "issues": issues,

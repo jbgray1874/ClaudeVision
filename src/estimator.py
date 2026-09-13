@@ -5326,6 +5326,26 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                 f"DESCRIPTION against {_src} — check it is the same item before issue")
             return part
 
+        # THE MISS SAYS IT WAS ASKED. Twice now a class-word line has come back blank on a
+        # run whose build contained the fix that should have priced it, and the sheet could
+        # not distinguish "the chain was never reached" from "the chain was reached and
+        # found nothing" — which are different defects with different fixes, and telling
+        # them apart needed the run log. The record answers it now, on its own face.
+        _chain_src = ""
+        try:
+            _chain_sel = _extract_selected_price((_chain or {}).get("result") or {})
+            _chain_src = str(_chain_sel.get("source") or _chain_sel.get("reason") or "")
+        except Exception:                                        # noqa: BLE001
+            _chain_src = ""
+        part["price_chain_consulted"] = True
+        part.setdefault("review_flags", []).append(
+            "the full price chain was asked for this line and returned nothing — catalogue "
+            "by code, catalogue by description, historical quotes, supplier list and the "
+            "market rung all missed"
+            + (f" (last source reached: {_chain_src})" if _chain_src else "")
+            + ". If this item is in the buying database, its code or its description does "
+              "not match what the sheet carries")
+
         # Recognised but unpriced — pass through £0/None, flagged, NOT re-costed by geometry.
         part["material_estimate"] = {"unit_material_cost_gbp": None, "cost_per_part_gbp": None,
                                      "extended_material_cost_gbp": None,

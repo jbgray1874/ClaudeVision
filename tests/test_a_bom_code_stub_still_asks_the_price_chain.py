@@ -116,3 +116,30 @@ def test_the_commodity_table_still_wins_when_it_has_an_answer(monkeypatch):
                    quantity=1), job_quantity=7)
     assert out["unit_total_cost_gbp"] == 1.20
     assert out["costing_basis"] == "standard_commodity_provisional"
+
+
+# ── a miss now says it was asked ──────────────────────────────────────────────────────────
+# Twice a class-word line came back blank on a run whose build contained the fix that should
+# have priced it, and the sheet could not tell "never reached" from "reached and missed" —
+# two different defects with two different fixes, and separating them needed the run log.
+
+def test_a_miss_records_that_the_chain_was_consulted(monkeypatch):
+    _chain_returns(monkeypatch, None)
+    out = _cost(_stub_part(), monkeypatch)
+    assert out.get("price_chain_consulted") is True
+    flags = " ".join(str(f) for f in out.get("review_flags") or [])
+    assert "full price chain was asked" in flags
+    assert "market rung all missed" in flags
+
+
+def test_the_miss_names_the_last_source_it_reached(monkeypatch):
+    _chain_returns(monkeypatch, None, source="UDEF_PARTS_TABLE_FOR_ESTIMATING")
+    out = _cost(_stub_part(), monkeypatch)
+    assert any("UDEF_PARTS_TABLE_FOR_ESTIMATING" in str(f)
+               for f in out.get("review_flags") or [])
+
+
+def test_a_priced_line_carries_no_such_flag(monkeypatch):
+    _chain_returns(monkeypatch, 0.0248)
+    out = _cost(_stub_part(), monkeypatch)
+    assert not out.get("price_chain_consulted")
