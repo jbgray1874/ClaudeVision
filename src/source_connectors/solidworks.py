@@ -50,6 +50,50 @@ APPLIED_MATERIAL_SOURCE = "solidworks_applied_material"
 RELIABILITY = 1.0
 EXTRACT_FILENAME = "_sw_native_extract.json"
 
+# THE MODELS DO NOT HAVE TO BE IN THE JOB FOLDER FOR US TO READ THEM.
+#
+# A staged pack holds exactly the drawings an estimator selected, which is the point of
+# staging — but it means the SLDPRT and SLDASM files are back where they started, and a
+# connector that looks only in the job folder finds nothing and reports a job with no models.
+# That is how 12349-02 was costed from drawings alone three times over, with a full set of
+# models one folder away.
+#
+# Copying models into the pack is the wrong answer: away from their own folder an assembly
+# loses the references that resolve its components, and a pack is then tens of megabytes on
+# every re-run. So the pack carries their ADDRESS instead, written by staging, and the
+# analyser is pointed at them in place. The extract still lands in the job folder, so
+# everything downstream is unchanged.
+MODEL_SOURCES_FILENAME = "_sdi_model_sources.json"
+
+
+def model_source_folders(folder: str | Path) -> List[Path]:
+    """The folders a staged pack says its models are in, in the order staging listed them.
+
+    Absent file, unreadable file, wrong shape: no folders, no exception. This is a hint about
+    where to look, and a malformed hint must degrade to the behaviour we had before it existed.
+    """
+    try:
+        raw = (Path(folder) / MODEL_SOURCES_FILENAME).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    out: List[Path] = []
+    for entry in payload.get("models_folders") or []:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        p = Path(entry.strip())
+        try:
+            if p.is_dir():
+                out.append(p)
+        except OSError:
+            continue
+    return out
+
 
 # ── COM PLUMBING IS NOT AN ESTIMATOR'S PROBLEM ────────────────────────────────────────
 #
@@ -666,9 +710,17 @@ def native_extract_for_job(
         jp = Path(folder) / EXTRACT_FILENAME
 
     _run_error = None
-    if jp is not None and run and folder is not None and _should_run(jp, folder):
+    _analyse_from: Optional[Path] = Path(folder) if folder is not None else None
+    if folder is not None and not native_files_state(folder)["count"]:
+        # No models here. If the pack says where they are, that is what to read — the
+        # extract still lands in the job folder, so nothing downstream changes.
+        for _src in model_source_folders(folder):
+            if native_files_state(_src)["count"]:
+                _analyse_from = _src
+                break
+    if jp is not None and run and _analyse_from is not None and _should_run(jp, _analyse_from):
         _produced: List[str] = []
-        _run_error = _run_analyser(folder, analyser=analyser, python_exe=python_exe,
+        _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
                                    out_path=jp, produced=_produced)
         if _produced and Path(_produced[0]) != jp:
             # It wrote somewhere else — a read-only share, most often. Read what exists,
@@ -678,6 +730,12 @@ def native_extract_for_job(
     records = load_native_extract(jp) if jp else []
     job = normalize_native_extract(records, job_codes=job_codes)
     job.meta.setdefault("extract_path", str(jp) if jp else None)
+    if (_analyse_from is not None and folder is not None
+            and Path(_analyse_from) != Path(folder)):
+        # SAID EITHER WAY. Read from somewhere other than the job folder is a fact about
+        # where this estimate's geometry came from, and it belongs on the record whether the
+        # read succeeded or the analyser never ran.
+        job.meta["models_analysed_from"] = str(_analyse_from)
 
     if folder is not None or jp is not None:
         # FINGERPRINT THE FOLDER THE EXTRACT WAS TAKEN FROM, not the job folder.
@@ -755,10 +813,16 @@ def native_extract_for_job(
         # nothing whatsoever about SolidWorks and looks exactly like a job that has no models.
         if _fp_folder and not _state.get("folder_reachable"):
             job.meta["native_folder_unreachable"] = str(_fp_folder)
-        if _state["count"] and not records:
+        _known_models = _state["count"] or (
+            native_files_state(_analyse_from)["count"]
+            if (_analyse_from is not None and folder is not None
+                and Path(_analyse_from) != Path(folder)) else 0)
+        if _known_models and not records:
             job.meta["native_present_but_unread"] = True
+            job.meta["native_files_present"] = _known_models
+            _where = job.meta.get("models_analysed_from") or "the job folder"
             job.meta["native_unread_reason"] = _run_error or (
-                "native models are in the job folder but no extract has been generated. "
+                f"native models are in {_where} but no extract has been generated. "
                 "Run tools/solidworks/sw_native_analyse.py on a machine with SolidWorks")
     if _run_error:
         job.meta["analyser_error"] = _run_error

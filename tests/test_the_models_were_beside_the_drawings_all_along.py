@@ -77,8 +77,13 @@ def test_the_models_beside_the_selection_are_counted_not_staged(staging, tmp_pat
 
     assert res["native_unselected_count"] == 4
     assert str(pack) in res["native_unselected_folders"]
-    assert sorted(p.name for p in Path(res["folder"]).iterdir()) == ["12349-02-69-GA.PDF"], \
-        "selection means selection — nothing is staged that was not chosen"
+    _drawings = sorted(p.name for p in Path(res["folder"]).iterdir()
+                       if p.suffix.lower() != ".json")
+    assert _drawings == ["12349-02-69-GA.PDF"], \
+        "selection means selection — no drawing is staged that was not chosen"
+    assert not any(p.suffix.lower() in staging.NATIVE_SUFFIXES
+                   for p in Path(res["folder"]).iterdir()), \
+        "the models stay where they live; only their address travels"
 
 
 def test_a_job_that_genuinely_has_no_models_says_nothing(staging, tmp_path):
@@ -149,6 +154,41 @@ def test_the_two_exclusion_lists_have_not_drifted(staging):
     for phrase in staging._EXCLUDED_DIR_PHRASES:
         assert f'"{phrase}"' in src, phrase
     assert staging.NATIVE_SUFFIXES == (".sldprt", ".sldasm", ".slddrw")
+
+
+# ── and the pack carries their address, so the runner reads them in place ────────────────
+
+def test_the_pack_is_told_where_the_models_are(staging, tmp_path):
+    """The runner has SOLIDWORKS. Given the address it analyses them where they live and
+    writes the extract into the job folder — no models copied, no JSON moved by hand."""
+    import json
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    _model(pack / "12349-02-69-03M.SLDPRT")
+
+    res = staging.stage([str(pack / "ga.pdf")], client="Fanatics", drawing="12349-02")
+
+    pointer = Path(res["folder"]) / staging.MODEL_SOURCES_FILENAME
+    assert pointer.is_file()
+    payload = json.loads(pointer.read_text(encoding="utf-8"))
+    assert payload["models_folders"] == [str(pack)]
+    assert payload["model_count"] == 1
+
+
+def test_no_address_is_written_when_there_is_nothing_to_point_at(staging, tmp_path):
+    pack = tmp_path / "12422"
+    _pdf(pack / "ga.pdf")
+    res = staging.stage([str(pack)], client="Boots", drawing="12422")
+    assert not (Path(res["folder"]) / staging.MODEL_SOURCES_FILENAME).exists()
+
+
+def test_the_address_is_not_written_when_the_models_are_in_the_pack(staging, tmp_path):
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    _model(pack / "12349-02-69-03M.SLDPRT")
+    res = staging.stage([str(pack)], client="Fanatics", drawing="12349-02")
+    assert not (Path(res["folder"]) / staging.MODEL_SOURCES_FILENAME).exists(), \
+        "they are already here; there is nowhere else to look"
 
 
 # ── the extract that lives with the models, one folder over ──────────────────────────────

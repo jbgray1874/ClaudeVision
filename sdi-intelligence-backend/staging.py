@@ -25,6 +25,7 @@ inside the staging root.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -61,6 +62,11 @@ SIDECAR_NAMES = ("_sw_native_extract.json",)
 # because this service does not import the engine, and they must not drift: source_connectors
 # .solidworks._NATIVE_EXTS is the other copy and a fixture compares the two.
 NATIVE_SUFFIXES = (".sldprt", ".sldasm", ".slddrw")
+
+# THE ADDRESS OF THE MODELS, WRITTEN INTO THE PACK WHEN THE MODELS THEMSELVES STAY PUT.
+# Read by source_connectors.solidworks, which analyses those folders in place and writes the
+# extract into the job folder. The name is shared with the engine and must not drift.
+MODEL_SOURCES_FILENAME = "_sdi_model_sources.json"
 
 # Pathological-input guards. A pack is tens of files and tens of megabytes; anything wildly past
 # that is somebody having pointed at the wrong folder, and the copy should refuse rather than
@@ -342,6 +348,27 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
     unselected: List[Path] = []
     if not sidecars and not native_staged:
         unselected = _native_models_beside(paths)
+
+    # AND THEN POINT THE ENGINE AT THEM, WHERE THEY LIVE.
+    #
+    # Telling the estimator to select the models as well would work and is the wrong answer:
+    # a model copied out of its folder loses the references that resolve its components, the
+    # copy is tens of megabytes over a share on every re-run, and it asks somebody to know
+    # which files the costing engine happens to need. None of that is their job.
+    #
+    # So the pack carries the ADDRESS of the models rather than the models. The runner has
+    # SOLIDWORKS; with this it analyses them in place, writes the extract into the job folder,
+    # and Layer 0 applies without anybody copying a JSON around by hand.
+    if unselected:
+        _sources = sorted({str(p.parent) for p in unselected})
+        (folder / MODEL_SOURCES_FILENAME).write_text(
+            json.dumps({"models_folders": _sources,
+                        "model_count": len(unselected),
+                        "note": "Written by staging: the drawings were selected out of these "
+                                "folders and the SolidWorks models are still in them. Analyse "
+                                "them in place — do not copy models into a staged pack."},
+                       indent=2),
+            encoding="utf-8")
 
     return {
         "folder": str(folder),
