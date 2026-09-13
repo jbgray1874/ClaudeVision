@@ -870,11 +870,37 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
             "get a fingerprint check.",
             freshness_check=sw.get("freshness_check")))
     if sw.get("analyser_error"):
-        out.append(_violation(
-            "native_analyser_failed", WARNING,
-            f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
-            f"existing extract was used if one was present.",
-            analyser_error=sw.get("analyser_error")))
+        # IT TRIED AND IT FAILED, WITH THE MODELS RIGHT THERE, AND NOTHING WAS READ.
+        #
+        # native_models_not_read above is deliberately a WARNING because a job that has no
+        # SolidWorks seat is normal — the engine uses the model when it is there and the
+        # drawings when it is not, which is the design. This is the other case, and it is not
+        # normal: the models are in the pack, a seat was found, the analyser was invoked, it
+        # returned an error, and the estimate went on to be costed from the drawings alone.
+        #
+        # That is an estimate missing evidence it was supposed to have, produced by a failure
+        # somebody can fix — a licence, a COM dialog left open on the desktop, a model that
+        # will not open. Reported at the same severity as "no models at all" it reads as the
+        # ordinary drawings-only path, which is exactly how three runs of one job were taken
+        # for finished work. When an extract WAS applied the run still has model geometry and
+        # the old wording holds.
+        _tried_and_got_nothing = bool(sw.get("native_files_present")) and not sw.get("found")
+        if _tried_and_got_nothing:
+            out.append(_violation(
+                "native_analyser_failed", BLOCKING,
+                f"{sw.get('native_files_present')} SolidWorks model file(s) are in this job "
+                f"and the analyser was RUN and FAILED: {sw.get('analyser_error')}. Nothing "
+                f"was read from them, so this estimate is costed from the drawings alone "
+                f"while the geometry it should have been costed from sat unread. Fix the "
+                f"analyser and re-run rather than treating this as a drawings-only job.",
+                analyser_error=sw.get("analyser_error"),
+                native_files_present=sw.get("native_files_present")))
+        else:
+            out.append(_violation(
+                "native_analyser_failed", WARNING,
+                f"The SolidWorks analyser reported a problem: {sw.get('analyser_error')}. An "
+                f"existing extract was used if one was present.",
+                analyser_error=sw.get("analyser_error")))
     return out
 
 
