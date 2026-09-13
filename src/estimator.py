@@ -4300,14 +4300,34 @@ _SPECIAL_ITEM_FAB_OPS = {
 }
 
 
-def _weld_geometry(part: Dict[str, Any]) -> Tuple[float, int]:
-    """(weld length in mm, joint count) as the pack states them — 0 for what it does not.
+def _weld_members(part: Dict[str, Any]) -> int:
+    """How many parts this weldment joins, where the record can say. 0 when it cannot.
 
-    Both spellings are read: the part's own fields and its manufacturing_features block,
-    because readers file measured facts in either."""
+    Read from every spelling the pipeline files children under, because a weldment's members
+    reach the record by three different routes and a reader that knows one of them counts
+    zero on the other two."""
+    for _field in ("child_parts", "children", "assembly_children"):
+        _kids = part.get(_field)
+        if isinstance(_kids, (list, tuple, set)) and len(_kids) >= 2:
+            return len(_kids)
+    return 0
+
+
+def _weld_geometry(part: Dict[str, Any]) -> Tuple[float, int]:
+    """(weld length in mm, joint count) for this part — 0 for what nothing states.
+
+    Weld length is read only where a pack states it. The joint count is stated where a pack
+    states it and DERIVED otherwise from the members being joined: a weldment of N parts has
+    at least N-1 joints, which is the difference between a two-part holder and a four-member
+    frame and therefore the difference between a rule and a blanket.
+
+    Both spellings are read for each, because readers file measured facts in either."""
     _mf = part.get("manufacturing_features") or {}
     _mm = _safe_float(part.get("weld_length_mm")) or _safe_float(_mf.get("weld_length_mm")) or 0.0
     _j = _safe_int(part.get("weld_joint_count")) or _safe_int(_mf.get("weld_joint_count")) or 0
+    if not _j:
+        _members = _weld_members(part)
+        _j = max(0, _members - 1)
     return float(_mm), int(_j)
 
 
@@ -4868,13 +4888,23 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # function, so the flag the weld branch sets does not exist yet. One predicate, two
         # readers — a copy that could drift is how 30 minutes of welding ended up beside one
         # minute of dressing in the first place.
+        _dm = getattr(config, "WELD_TIME_MODEL", {}) or {}
+        _d_mm, _d_joints = _weld_geometry(part)
+        _d_weldment = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
         if _weld_time_is_an_allowance(part, ops):
-            _dm = getattr(config, "WELD_TIME_MODEL", {}) or {}
             run_times_min["dress_welds"] = round(
                 float(_dm.get("dress_allowance_min_per_weldment", 20.0)), 2)
             part.setdefault("review_flags", []).append(
                 f"dressing follows the weld allowance: {run_times_min['dress_welds']:g} min "
                 f"per weldment — {_dm.get('allowance_source', 'shop figure')}")
+        elif _d_weldment and _d_joints > 0 and _d_mm <= 0 and "welding" in (ops or ()):
+            # Scaled with the weld it follows. A sheet that books welding per joint and
+            # dressing per bead is describing two different parts.
+            run_times_min["dress_welds"] = round(
+                _d_joints * float(_dm.get("dress_min_per_joint", 6.7)), 2)
+            part.setdefault("review_flags", []).append(
+                f"dressing timed per joint: {_d_joints} joint(s) at "
+                f"{_dm.get('dress_min_per_joint', 6.7):g} min, following the weld")
         else:
             # Tim's 12120 "Dress (Minimal)" = 120/hr = 0.5 min/unit (config lever).
             run_times_min["dress_welds"] = float(
@@ -4902,17 +4932,28 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _weld_mm, _joints = _weld_geometry(part)
         _is_weldment = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
 
-        if _weld_mm > 0 or _joints > 0:
-            # The published model, the moment a pack gives it something to measure.
+        if _weld_mm > 0:
+            # The published model, the moment a pack states a weld LENGTH.
             _speed = float(_wm.get("travel_speed_mm_per_min", 300.0)) or 300.0
             _of = float(_wm.get("operating_factor", 0.35)) or 0.35
-            _arc = (_weld_mm / _speed) / _of if _weld_mm > 0 else 0.0
+            _arc = (_weld_mm / _speed) / _of
             _handle = _joints * float(_wm.get("handling_min_per_joint", 2.0))
             run_times_min["welding"] = round(max(1.0, _arc + _handle), 2)
             part.setdefault("review_flags", []).append(
                 f"weld timed from geometry: {_weld_mm:g} mm of weld at "
                 f"{_speed:g} mm/min and {_of:.0%} operating factor"
                 + (f", plus {_joints} joint(s) handling" if _joints else ""))
+        elif _joints > 0:
+            # No length, but the joints can be counted — so the time scales with the work.
+            # This is what keeps a four-member frame's 30 minutes off a two-part holder.
+            run_times_min["welding"] = round(
+                max(1.0, _joints * float(_wm.get("weld_min_per_joint", 10.0))), 2)
+            part["weld_time_is_per_joint"] = _joints
+            part.setdefault("review_flags", []).append(
+                f"weld timed per joint: {_joints} joint(s) at "
+                f"{_wm.get('weld_min_per_joint', 10.0):g} min — the pack states no weld "
+                f"length, so the joints are counted from the {_joints + 1} members this "
+                f"weldment joins. Rate from {_wm.get('allowance_source', 'the shop')}")
         elif _is_weldment:
             # No weld length and no joint count anywhere in the pack. Rather than a floor
             # that reads as a measurement, the shop's own stated allowance, labelled.

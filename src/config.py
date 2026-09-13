@@ -705,7 +705,17 @@ WELD_TIME_MODEL = {
     "operating_factor": float(os.getenv("WELD_OPERATING_FACTOR", "0.35")),
     "handling_min_per_joint": float(os.getenv("WELD_HANDLING_MIN_PER_JOINT", "2.0")),
     "setup_min_per_weldment": float(os.getenv("WELD_SETUP_MIN", "3.0")),
-    # Used when the pack states no weld length and no joint count — which is every pack so far.
+    # PER JOINT, BECAUSE ONE NUMBER FOR EVERY WELDMENT IS NOT A RULE, IT IS A BLANKET.
+    # The stated 30 minutes is for 7332-01-101, a frame of four members — three joints — so
+    # it reads as 10 minutes a joint, and the 20 minutes of dressing as 6.7. Scaled that way
+    # it reproduces the shop's own figure on the part the shop measured, and it does not put
+    # a Harrods frame's time onto 12349-02-69-03M, which is two laser-cut parts welded once.
+    # A weldment of N members has at least N-1 joints; where the members can be counted, the
+    # count is used, and where they cannot the flat allowance below stands and says so.
+    "weld_min_per_joint": float(os.getenv("WELD_MIN_PER_JOINT", "10.0")),
+    "dress_min_per_joint": float(os.getenv("WELD_DRESS_MIN_PER_JOINT", "6.7")),
+    # Used when the pack states no weld length, no joint count, and the members cannot even
+    # be counted — 7332-01-101, whose members are siblings rather than children.
     "allowance_min_per_weldment": float(os.getenv("WELD_ALLOWANCE_MIN", "30.0")),
     "dress_allowance_min_per_weldment": float(os.getenv("WELD_DRESS_ALLOWANCE_MIN", "20.0")),
     "allowance_source": ("SDI welding department, stated for 7332-01 (9 Sep 2026) — one "

@@ -89,8 +89,13 @@ def test_joints_add_their_handling():
 
 
 def test_a_joint_count_alone_is_enough_to_leave_the_allowance():
+    """A stated joint count with no length prices per JOINT, not as arc handling.
+
+    The 2 min handling figure supplements arc time; it is not the cost of making a joint.
+    Where the only fact is how many joints there are, the per-joint rate is what applies —
+    the shop's 30 minutes over the three joints of the frame it was measured on."""
     out = estimate_process_times(_weldment(weld_joint_count=6))
-    assert out["run_times_min_per_unit"]["welding"] == 12.0
+    assert out["run_times_min_per_unit"]["welding"] == 60.0
 
 
 def test_geometry_is_not_reported_as_an_allowance():
@@ -127,3 +132,56 @@ def test_the_model_names_its_sources():
     assert "operating factor" in m["method_source"].lower()
     assert "welding department" in m["allowance_source"]
     assert m["operating_factor"] == 0.35
+
+
+# ── one number for every weldment is a blanket, not a rule ───────────────────────────────
+# The shop's 30 minutes is for 7332-01-101, a frame of FOUR members — three joints. Applied
+# flat it also landed on 12349-02-69-03M, which is two laser-cut parts welded once, on the
+# very sheet about to go to a different customer. Scaled per joint it reproduces the shop's
+# own figure on the part the shop measured, and stays proportionate on the part it did not.
+
+def test_the_four_member_frame_still_comes_out_at_the_stated_thirty():
+    out = estimate_process_times(_weldment(children=["a", "b", "c", "d"]))
+    assert out["run_times_min_per_unit"]["welding"] == 30.0
+    assert out["run_times_min_per_unit"]["dress_welds"] == round(3 * 6.7, 2)
+
+
+def test_a_two_part_holder_is_not_charged_like_a_frame():
+    """12349-02-69-03M: one joint, so a tenth of the frame's work, not all of it."""
+    out = estimate_process_times(_weldment(
+        part_number="12349-02-69-03M", children=["12349-02-69-03M-01",
+                                                 "12349-02-69-03M-02"]))
+    assert out["run_times_min_per_unit"]["welding"] == 10.0
+    assert out["run_times_min_per_unit"]["dress_welds"] == 6.7
+
+
+def test_the_line_says_how_many_joints_and_where_the_rate_came_from():
+    part = _weldment(children=["a", "b", "c"])
+    estimate_process_times(part)
+    flags = " ".join(str(f) for f in part.get("review_flags") or [])
+    assert "2 joint(s) at 10 min" in flags and "3 members" in flags
+    assert "welding department" in flags
+
+
+def test_members_are_counted_from_any_spelling():
+    for field in ("child_parts", "children", "assembly_children"):
+        out = estimate_process_times(_weldment(**{field: ["a", "b", "c"]}))
+        assert out["run_times_min_per_unit"]["welding"] == 20.0, field
+
+
+def test_a_weldment_whose_members_cannot_be_counted_keeps_the_flat_allowance():
+    """7332-01-101's members are siblings, not children — nothing to count."""
+    part = _weldment()
+    out = estimate_process_times(part)
+    assert out["run_times_min_per_unit"]["welding"] == 30.0
+    assert part.get("weld_time_is_an_allowance") is True
+
+
+def test_a_stated_joint_count_beats_the_member_count():
+    out = estimate_process_times(_weldment(children=["a", "b"], weld_joint_count=5))
+    assert out["run_times_min_per_unit"]["welding"] == 50.0
+
+
+def test_a_stated_weld_length_still_wins_over_both():
+    out = estimate_process_times(_weldment(children=["a", "b", "c"], weld_length_mm=600))
+    assert out["run_times_min_per_unit"]["welding"] == round(5.714 + 2 * 2.0, 2)
