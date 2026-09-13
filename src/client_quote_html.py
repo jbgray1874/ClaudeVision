@@ -839,7 +839,28 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     if not _number or not _title:
         _payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
                     or summary.get("canonical_route_shadow") or {})
+        # `top_assembly` IS BLANK WHENEVER A JOB HAS MORE THAN ONE ROOT — the compiler says
+        # so where it emits the field, and it is the common case on a pack of modules.
+        # Reading only that field meant this fell through to the drawing NUMBER as the unit
+        # description, and on 12349-02 the Description box came out empty (a description
+        # that is only the number is not written) on a job whose own provenance tab prints
+        # "GRAVITY FEEDER MODULES" against the very node the graph calls the top.
+        #
+        # So the forest is consulted too, and narrowed the only way that cannot invent a
+        # product name: the root the drawing number PREFIXES, outermost first — 12349-02
+        # picks 12349-02-69 over 12349-02-69-100. Where several roots ship and none is the
+        # outermost of the others, nothing is claimed and the caller writes nothing, which
+        # is the honest answer to "what is this one unit called" when there are two.
+        _roots = [str(r) for r in (_payload.get("top_assemblies") or []) if r]
         _top = str(_payload.get("top_assembly") or "")
+        if not _top and _roots:
+            if len(_roots) == 1:
+                _top = _roots[0]
+            elif _number:
+                _owned = sorted((r for r in _roots if r.upper().startswith(_number.upper())),
+                                key=len)
+                if _owned:
+                    _top = _owned[0]
         for _node in (_payload.get("nodes") or []):
             if not isinstance(_node, dict):
                 continue

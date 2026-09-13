@@ -1678,6 +1678,27 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     best_result: Dict[str, Any] = {}
     best_price: Optional[float] = None
     matched_part_code: Optional[str] = None
+    # A ZERO IS NOT A PRICE. IT IS THE ABSENCE OF ONE, AND IT ENDED THE SEARCH.
+    #
+    # UDEF holds catch-all rows — FIXING, and ~900 under MISC — priced £0.00. The legacy
+    # connector's code-seek is `WHERE [Part code] = ?` with no positive-price filter, so a
+    # line coded FIXING matched that row, came back at 0.0, and `price is not None` returned
+    # it from here on the spot. Everything downstream was then unreachable for exactly the
+    # lines that needed it most: the PricingService rungs (UDEF by description, historical
+    # quotes, supplier catalogue, the market fallback) AND the standard-commodity provisional
+    # at the bottom of this function, which is itself gated on `best_price is None`.
+    #
+    # That is why 12349-02's M4 flange button screw and 3.5x19 wood screw reached the
+    # estimator as "MATERIAL UNPRICED: enter a unit rate" while the bumpon on the same BOM —
+    # coded P/P, which has NO catch-all row — fell through to the market rung and priced at
+    # 35p. One class word with a £0.00 row in the catalogue, and one without.
+    #
+    # So a zero no longer terminates the search; it is REMEMBERED and returned only if
+    # nothing better is found, which keeps today's answer wherever today's answer was all
+    # there was. Nothing is overwritten by a worse figure: every later rung returns only a
+    # price greater than zero.
+    zero_result: Dict[str, Any] = {}
+    zero_code: Optional[str] = None
 
     for code in dedup_codes or [""]:
         result = get_best_price(
@@ -1689,11 +1710,12 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         )
         selected = _extract_selected_price(result)
         price = _selected_price_value(selected)
-        if price is not None:
+        if price is not None and price > 0:
             return {"result": result, "applied_unit_cost": price, "matched_part_code": code}
+        if price is not None and not zero_result:
+            zero_result, zero_code = result, code
         if not best_result:
             best_result = result
-            best_price = price
             matched_part_code = code
 
     # FALLBACK: the legacy connector found no price. Try the newer PricingService
@@ -1799,6 +1821,13 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 # Matched on the description, not a code — say so rather than claim a code hit.
                 "matched_part_code": None,
             }
+
+    # The remembered zero, if that is genuinely all the catalogue had to say. Returned with
+    # its own result and code so the line reads exactly as it did before this rung learned
+    # to keep looking.
+    if best_price is None and zero_result:
+        return {"result": zero_result, "applied_unit_cost": 0.0,
+                "matched_part_code": zero_code}
 
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 

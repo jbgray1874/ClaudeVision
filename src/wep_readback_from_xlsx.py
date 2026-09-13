@@ -583,10 +583,14 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
 def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
     """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals."""
     excel = com_wb = None
-    _keep_calculated = False
     try:
-        excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name,
-                                             read_only=False)
+        # READ-ONLY, AND DELIBERATELY SO. Caching the calculated values into the file is a
+        # real need, but it cannot be done here: the explanation tab and AI Provenance are
+        # written through openpyxl AFTER this runs, and every openpyxl save discards Excel's
+        # stored results. A save at this point is overwritten minutes later and buys nothing
+        # but a file lock during the read. The cache is written by a final pass, once
+        # nothing else will touch the workbook — see quantity_sweep.recache_workbooks.
+        excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name)
         try:
             com_ws = com_wb.Worksheets(sheet_name)
         except Exception:
@@ -612,16 +616,13 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
                 max_row, max_col)
         except Exception as _cexc:
             print(f"   [wep-readback] unit-price composition not read ({_cexc}).", flush=True)
-        # Only a read that actually produced totals earns the save — a workbook whose
-        # calculation failed has nothing worth caching into it.
-        _keep_calculated = bool(out)
         return out or None
     except Exception as exc:
         print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
         return None
     finally:
         if excel is not None:
-            _close_excel(excel, com_wb, save=_keep_calculated)
+            _close_excel(excel, com_wb)
 
 
 # ---- write the real totals into the JSON's WEP + cost_breakdown ----

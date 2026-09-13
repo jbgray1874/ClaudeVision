@@ -90,3 +90,61 @@ def test_a_sheet_with_no_labels_takes_no_writes():
     wb = openpyxl.Workbook()
     ws = wb.active
     assert write_job_identity_header(ws, _summary(), "12349-02") == []
+
+
+# ── the unit's name, when the job has more than one root ─────────────────────────────────
+# 12349-02's Description box came out EMPTY on the 13 Sep pack, on a job whose own provenance
+# tab prints "GRAVITY FEEDER MODULES 3 A GRAVITY FEEDERS" against the node the graph calls
+# the top. The compiler leaves `top_assembly` blank whenever a job has more than one root —
+# it says so where it emits the field — and the resolver read only that one field, so the
+# title fell through to the drawing NUMBER, which this module then correctly refuses to write
+# under a Description label. The forest is `top_assemblies`.
+
+def _shadow(roots, top="", nodes=()):
+    return {"llm_full_extract": {"drawing_info": {"drawing_number": "12349-02"}},
+            "estimate_summary": {"canonical_route_shadow": {
+                "top_assembly": top, "top_assemblies": list(roots),
+                "nodes": [{"part_number": p, "description": d} for p, d in nodes]}}}
+
+
+def test_the_outermost_root_names_the_unit():
+    """Several roots ship; the drawing number owns 12349-02-69, and -69 is outside -69-100."""
+    from client_quote_html import _drawing_identity
+    s = _shadow(["12349-02-69", "12349-02-69-100"],
+                nodes=[("12349-02-69", "GRAVITY FEEDER MODULES"),
+                       ("12349-02-69-100", "GRAVITY FEEDERS, 9 WIDE")])
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDER MODULES"
+
+
+def test_a_single_root_names_the_unit_whatever_its_code():
+    from client_quote_html import _drawing_identity
+    s = _shadow(["ASSY-1"], nodes=[("ASSY-1", "COUNTER UNIT")])
+    assert _drawing_identity(s, "12349-02")[2] == "COUNTER UNIT"
+
+
+def test_two_unrelated_roots_claim_nothing():
+    """When two different things ship and neither contains the other, there is no single
+    answer to 'what is this unit called' — and inventing one is worse than a blank."""
+    from client_quote_html import _drawing_identity
+    s = _shadow(["8100-01", "9200-01"],
+                nodes=[("8100-01", "LEFT STAND"), ("9200-01", "RIGHT STAND")])
+    assert _drawing_identity(s, "12349-02")[2] == "12349-02"
+
+
+def test_an_explicit_top_assembly_still_wins():
+    from client_quote_html import _drawing_identity
+    s = _shadow(["12349-02-69", "12349-02-69-100"], top="12349-02-69-100",
+                nodes=[("12349-02-69", "GRAVITY FEEDER MODULES"),
+                       ("12349-02-69-100", "GRAVITY FEEDERS, 9 WIDE")])
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDERS, 9 WIDE"
+
+
+def test_the_header_then_writes_it():
+    """End to end: the shape this pack had now fills the Description cell."""
+    ws = _sheet()
+    s = _shadow(["12349-02-69", "12349-02-69-100"],
+                nodes=[("12349-02-69", "GRAVITY FEEDER MODULES"),
+                       ("12349-02-69-100", "GRAVITY FEEDERS, 9 WIDE")])
+    written = write_job_identity_header(ws, s, "12349-02")
+    assert "description" in written
+    assert ws["D4"].value == "GRAVITY FEEDER MODULES"

@@ -236,6 +236,14 @@ def recache_workbooks(paths: List[Any]) -> int:
 
     Windows-only and failure-isolated: returns how many files were refreshed, and a file it
     cannot refresh is left exactly as written — the totals still compute on open in Excel.
+
+    IT OPENED THE FILE READ-ONLY AND THEN ASKED EXCEL TO SAVE IT. `_open_xlsx_excel_com`
+    passes ReadOnly=True — right for the read-back it was written for, and fatal here: the
+    Save() below could never succeed, so this function has refreshed nothing since it was
+    written. It printed "cache not refreshed for <file>" each time and the run carried on,
+    which is why every filed workbook still answers a data_only read with blanks — 823
+    formula cells and not one cached value on 12349-02's 13 Sep pack, including the unit
+    cost the covering email quotes. Opened writable, the save works.
     """
     if sys.platform != "win32":                                  # pragma: no cover
         return 0
@@ -247,8 +255,11 @@ def recache_workbooks(paths: List[Any]) -> int:
     for book in todo:
         excel = com_wb = None
         try:
-            excel, com_wb = _open_xlsx_excel_com(book)
+            excel, com_wb = _open_xlsx_excel_com(book, read_only=False)
             excel.CalculateFull()
+            if bool(getattr(com_wb, "ReadOnly", False)):
+                raise RuntimeError("Excel could only open this file read-only (is it open "
+                                   "in Excel, or locked by another user?)")
             com_wb.Save()
             done += 1
         except Exception as exc:                                 # noqa: BLE001

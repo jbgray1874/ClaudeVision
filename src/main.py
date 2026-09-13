@@ -1336,6 +1336,11 @@ def main() -> None:
         # nothing in any of them said so. The absence was discoverable only by running the
         # costing code and noticing the totals came back None. That silence is the defect being
         # closed here; the skip itself is deliberate and stays.
+        # Every workbook this stage writes, refreshed through Excel once at the end so the
+        # saved files carry their own calculated totals — see THE CALCULATED VALUES ARE
+        # WRITTEN LAST. The baseline is always in the list; the sweep appends its variants.
+        _recache_books: List[str] = [str(xlsx_path)] if xlsx_path else []
+
         _mp_skip = ""
         if not xlsx_path:
             _mp_skip = ("populate_workbook returned no path, so no workbook was written and "
@@ -1667,13 +1672,14 @@ def main() -> None:
                         # nothing. One open/save round trip per file makes Excel calculate
                         # and store the results. Windows-only, and a nicety: failure leaves
                         # the workbooks exactly as written.
-                        try:
-                            from quantity_sweep import recache_workbooks as _recache
-                            _recache([xlsx_path] + list(_swept.get("variants") or []))
-                        except Exception as _rc_exc:             # noqa: BLE001
-                            print(f"   [qty-sweep] formula caches not refreshed "
-                                  f"({_rc_exc}) — totals compute when opened in Excel.",
-                                  flush=True)
+                        # The variants are filed here; the refresh itself runs once for
+                        # every workbook at the end of this stage — see THE CALCULATED
+                        # VALUES ARE WRITTEN LAST below. Doing it here as well refreshed
+                        # the baseline before the sweep's own openpyxl saves had finished
+                        # with it, and left the baseline unrefreshed entirely on the far
+                        # more common run where no sweep happens at all.
+                        _recache_books.extend(
+                            str(_v) for _v in (_swept.get("variants") or []))
                         print(f"   [qty-sweep] {len(_swept.get('variants') or [])} variant "
                               f"workbook(s) filed at {', '.join(str(q) for q in _breaks)} off"
                               + ("" if _order_freight else
@@ -1682,6 +1688,29 @@ def main() -> None:
                 except Exception as _sw_exc:                     # noqa: BLE001
                     print(f"   [qty-sweep] variants not written ({_sw_exc}) — the estimate "
                           f"itself is unaffected.", flush=True)
+
+            # ── THE CALCULATED VALUES ARE WRITTEN LAST ────────────────────────────────
+            # EVERY openpyxl SAVE STRIPS EXCEL'S STORED RESULTS, and three of them run after
+            # the read-back: the shared-tally banner, the explanation tab and AI Provenance.
+            # So this has to be the last thing that touches the workbook, and it was not —
+            # the only caller sat inside the quantity-sweep branch, which most runs never
+            # enter, and ran mid-stage when it did.
+            #
+            # What that costs is on 12349-02's 13 Sep pack: 823 formula cells, not one
+            # carrying a value. The sheet is correct the moment Excel opens it and blank to
+            # everything else — the preview pane, a data_only read, the pre-flight's own
+            # error-cell scan — including G6, the unit cost the covering email quotes.
+            #
+            # Windows-only and failure-isolated: a workbook that cannot be refreshed is left
+            # exactly as written and still calculates on open.
+            if _recache_books:
+                try:
+                    from quantity_sweep import recache_workbooks as _recache
+                    _recache(_recache_books)
+                except Exception as _rc_exc:                     # noqa: BLE001
+                    print(f"   [workbook] formula caches not refreshed ({_rc_exc}) — the "
+                          f"totals compute when opened in Excel, but the saved files read "
+                          f"as blank to anything else.", flush=True)
 
             # The covering note is written at the END of the run — after the checks and after
             # the quote and the report exist — see THE COVERING NOTE, WRITTEN LAST below.
