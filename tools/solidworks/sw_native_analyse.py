@@ -2050,8 +2050,25 @@ def main():
     # report to the PARENT directory and died with a confusing FileNotFoundError. A path
     # we cannot see is a setup problem, and it should say so.
     if not os.path.exists(target):
+        # THE CAUSE THIS LIST USED TO MISS, AND IT IS THE COMMONEST ONE. Every folder in the
+        # estimating tree has spaces in it — "AI Estimating", "Live Enquiry", "Gravity
+        # Feeders" — so an unquoted path arrives as a dozen arguments and this sees only the
+        # first word of it. The old message then blamed hidden shares, elevation and typos,
+        # and an operator whose only mistake was leaving off a pair of quotes went looking
+        # at network credentials. If there are arguments left over, that is what happened,
+        # and the rejoined path is almost certainly the one that was meant.
+        if argv[1:]:
+            _rejoined = " ".join(argv)
+            print(f"ERROR: the path was not quoted, so only its first word reached this "
+                  f"tool:\n  {target}")
+            print(f"\nEvery folder in the estimating tree has spaces in it. Try:\n"
+                  f'  python sw_native_analyse.py "{_rejoined}"')
+            if os.path.exists(_rejoined):
+                print("\n(That path exists — quoting it is the whole fix.)")
+            sys.exit(2)
         print(f"ERROR: path not found or not accessible:\n  {target}")
         print("\nCommon causes:")
+        print("  - the path contains SPACES and was not quoted — wrap it in \"double quotes\".")
         print("  - UNC path to a hidden/admin share (\\\\host\\name$\\...): the process may have")
         print("    no session to it. Try the MAPPED DRIVE instead, e.g. K:\\Estimating\\...")
         print("  - running from an ELEVATED PowerShell: an admin shell does not inherit the")
