@@ -4818,6 +4818,61 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 "text near a tube, and a straight leg does not go on the tube-bender. If it "
                 "does bend, the drawing needs to say so")
 
+    # ---- ONE BLANK IS CUT OUT ONCE ------------------------------------------------
+    #
+    # Laser and CNC router are two ways of cutting the SAME profile out of the SAME sheet.
+    # Charging both bills the cut twice, and it is the kind of double that survives review
+    # because each line is individually plausible: 12349-02-69-06A, a 5 mm acrylic front
+    # cover, is in the 5 mm laser group AND carries its own CNC line at £6.81.
+    #
+    # THE CUT FILE ALREADY SAID WHICH. The DXF interpretation reads the layers and names a
+    # recommended process — "router" for 06A — and nothing consulted it. So it is consulted:
+    # the named process keeps its op and the other comes off, out loud, with the file that
+    # settled it. Where the file names a combination, or names nothing, BOTH STAY and the
+    # line is flagged instead, because a part can genuinely be profiled one way and pocketed
+    # another and this rule must not be the thing that decides that silently.
+    #
+    # PER PART, WHICH IS THE WHOLE OF ITS SAFETY. An assembly that carries CNC while its own
+    # flats carry laser is the correct shape — 01A takes glue and routing, its seven flats
+    # take the laser — and nothing here touches it: neither part has both ops. A part with
+    # one cutting op is untouched too.
+    _LASER_OPS = ("laser_cutting", "laser", "punch", "punching")
+    _ROUTER_OPS = ("cnc_routing", "cnc", "cnc_machining", "cnc_joinery", "pin_router", "router")
+    _laser_on = [o for o in ops if str(o).strip().lower() in _LASER_OPS]
+    _router_on = [o for o in ops if str(o).strip().lower() in _ROUTER_OPS]
+    if _laser_on and _router_on:
+        _named = str(((part.get("dxf_interpretation") or {}).get("recommended_process")
+                      or "")).strip().lower()
+        _drop: List[str] = []
+        _kept = ""
+        if _named in ("router",):
+            _drop, _kept = list(_laser_on), "router"
+        elif _named in ("laser", "punch"):
+            _drop, _kept = list(_router_on), _named
+        if _drop:
+            _src_file = str(part.get("dxf_source_file") or "the cut file")
+            ops = [o for o in ops if o not in _drop]
+            for _tf in ("textual_operations", "inferred_operations"):
+                if isinstance(part.get(_tf), list):
+                    part[_tf] = [o for o in part[_tf] if o not in _drop]   # precedence: direct-write ok — removes ops, adds no evidence
+            for _timing in (setup_times_min, run_times_min):
+                for _o in _drop:
+                    _timing.pop(_o, None)
+            part.setdefault("removed_operations", []).extend(_drop)
+            part.setdefault("review_flags", []).append(
+                f"{', '.join(_drop)} removed: this blank was charged BOTH a laser cut and a "
+                f"routed cut, which is the same profile paid for twice. {_src_file} names "
+                f"'{_kept}' as the process, so that one is costed. If the part really is "
+                f"profiled one way and machined another, say so and both go back on")
+        else:
+            part.setdefault("review_flags", []).append(
+                f"CUT TWICE? This part carries both a laser cut and a routed cut "
+                f"({', '.join(_laser_on + _router_on)}) — usually the same profile costed "
+                f"twice. The cut file names "
+                + (f"'{_named}'" if _named else "no single process")
+                + ", so nothing has been removed. Confirm which one the shop uses, or "
+                  "confirm it genuinely needs both")
+
     # ---- Fold operation inference (general, evidence-based) ----------------------
     # A part folds if it carries fold evidence — PDF callouts (UP/DOWN + angle -> angles_deg
     # / fold_count_textual), a DXF BENDLINES bend count, or textual bend mentions — even when
