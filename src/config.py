@@ -538,6 +538,26 @@ STANDARD_COMMODITY_PRICE_GBP = {
 #
 # Widen this list ONLY with a process the £2.50 card genuinely covers. Anything else
 # belongs in NAMED_PLATE_SPECS below as a quoted price, or stays blocking.
+# WHEN ONE LABOUR ROW IS HIDING TWO VERY DIFFERENT PARTS.
+#
+# "Line 98 – Laser Rate Mild Steel 2.5mm – 2 Separate Components x 2 per each component one
+# Labour Rate shown – Is AI linking both parts with average rate input?"
+#                                       — Howard Thurley, SDI estimating, 9 Sep 2026
+#
+# Parts of one material and gauge share a laser set-up, so they share a row — that grouping
+# is right and the set-up is genuinely booked once. What it costs is visibility: 7332-01's
+# row is a 441 x 10 strap beside a 15.88 mm square cap, and his own figures for the two are
+# 235/hr and 900/hr. A single blended number cannot be checked against either.
+#
+# The row rate is total pieces / total hours, which is the correct combination and NOT a
+# mean — a mean of 235 and 900 is 567.5, the true combination of two at each is 372.7, and
+# only one of those is a rate. That arithmetic is right and stays. The row now shows its
+# members' own rates, and says so loudly when they are this far apart.
+#
+# The ratio at which "far apart" starts. 3x is a strap against a cap; 1.5x is two similar
+# blanks and not worth a sentence.
+LABOUR_GROUP_RATE_SPREAD_FLAG = 3.0
+
 # ── DECISIONS AN ESTIMATOR MADE ONCE, APPLIED WHEREVER THEY ARE TRUE ────────────────────
 #
 #     "All changes we do should be worked to be inherited or it's a pointless one off hack

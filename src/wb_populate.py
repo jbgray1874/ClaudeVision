@@ -2462,6 +2462,12 @@ def canonical_labour_groups(
             _rh = _safe({str(k).strip().lower(): v for k, v in _rhpu.items()}.get(operation))
             if _rh and _rh > 0:
                 group["run_hours_per_unit"] = (group.get("run_hours_per_unit") or 0.0) + _rh
+            # The same record on the canonical path, so a grouped row can show its working
+            # whichever route built it. See the note in populate_workbook: only the SUM was
+            # kept, so a row combining a long strap and a small cap could not be audited.
+            if (hours and hours > 0) or (_rh and _rh > 0):
+                group.setdefault("hours_by_part", {})[str(representative_id)] = {
+                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1)}
 
             geometry = estimates[representative_id].get("normalized_geometry") or {}
             if operation == "folding":
@@ -5067,6 +5073,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _bh = _safe(batch_hours.get(op))
             if _bh and _bh > 0:
                 g["bh"] += float(_bh)
+            # WHOSE HOURS THEY WERE, keptt alongside the total.
+            #
+            # "Line 98 – Laser Rate Mild Steel 2.5mm – 2 Separate Components x 2 per each
+            # component one Labour Rate shown – Is AI linking both parts with average rate
+            # input?"  The row is 7332-01-003 (a 441 x 10 strap) and 7332-01-004 (a 15.88
+            # square cap) at one blended 441/hr, and his own figures for the two are 235 and
+            # 900 — nearly four to one. A single number cannot be checked against either.
+            #
+            # Only the SUM was retained, so the row could not show its working even in
+            # principle. The parts' own hours cost nothing to keep and are the difference
+            # between a figure an estimator can audit and one he can only accept.
+            if _pn and _bh and _bh > 0:
+                g.setdefault("hours_by_part", {})[_pn] = {
+                    "bh": float(_bh), "qty_per_unit": float(_qty_pu or 1)}
             if _pn and _pn not in g["parts"]:
                 g["parts"].append(_pn)
 
@@ -5370,6 +5390,66 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"quantity they were built for — this rate moves with the order size "
                       f"and should not. The estimator recorded no per-piece run time for "
                       f"this operation.", flags)
+            # ── THE ROW SHOWS ITS WORKING WHERE IT COMBINES SEVERAL PARTS ──────────────
+            #
+            # "Is AI linking both parts with average rate input?" — the answer is no, and
+            # the honest version of that answer is arithmetic he can see. The row rate is
+            # total pieces divided by total hours, which is the CORRECT combination and not
+            # a mean: a mean of 235 and 900 is 567.5, and the true combination of two at
+            # each is 372.7. Those are different numbers and only one of them is a rate.
+            #
+            # But a single blended figure cannot be checked against either part, and where
+            # the members run at very different speeds it hides a fast part behind a slow
+            # one. 7332-01's row is a 441 x 10 strap beside a 15.88 square cap.
+            #
+            # So the row names its members and their own rates, and says loudly when they
+            # are far apart. Nothing about the money changes — this is the working, not a
+            # new figure, and the grouping stays because the set-up is genuinely shared.
+            _hbp = g.get("hours_by_part") or {}
+            if len(_hbp) > 1 and order_qty:
+                _per_part = []
+                for _ppn, _rec in _hbp.items():
+                    _pbh = _safe(_rec.get("bh"))
+                    _pq = _safe(_rec.get("qty_per_unit"), 1) or 1
+                    if not _pbh or _pbh <= 0:
+                        continue
+                    _per_part.append((_ppn, (order_qty * _pq) / _pbh, _pbh))
+                if len(_per_part) > 1:
+                    _rates = [r for _, r, _ in _per_part]
+                    _spread = max(_rates) / max(1e-9, min(_rates))
+                    _shown = "; ".join(f"{p} {r:.0f}/hr" for p, r, _ in
+                                       sorted(_per_part, key=lambda x: -x[1]))
+                    _msg = (f"labour '{wb_op}' is ONE row covering {len(_per_part)} parts — "
+                            f"{_shown}. The row rate is total pieces / total hours, which is "
+                            f"the true combination and NOT an average of those figures "
+                            f"(a mean would be a different number and would not be a rate). "
+                            f"Set-up is booked once because the parts share it.")
+                    if _spread >= float(getattr(config, "LABOUR_GROUP_RATE_SPREAD_FLAG", 3.0)):
+                        _msg += (f" THESE RUN {_spread:.1f}x APART: a fast part is sharing a "
+                                 f"row with a slow one, so neither can be checked against "
+                                 f"the single figure. Split them on the sheet if the "
+                                 f"difference matters.")
+                    _flag(_msg, flags)
+                    g["members_own_rates"] = {p: round(r, 1) for p, r, _ in _per_part}
+                    # ON THE ROW ITSELF, not only in a flag. Every question this engine has
+                    # raised in a review flag so far has reached neither deliverable, and a
+                    # breakdown an estimator cannot see answers nothing.
+                    _desc_cell = ws.cell(row=row, column=lb["col_desc"])
+                    _desc_cell.value = (f"{str(_desc_cell.value or '')}  —  each: {_shown}"
+                                        )[:200]
+                    if _spread >= float(getattr(
+                            config, "LABOUR_GROUP_RATE_SPREAD_FLAG", 3.0)):
+                        _inputs.append({
+                            "kind": "assumption_unconfirmed",
+                            "part": ", ".join(p for p, _, _ in _per_part),
+                            "where": f"Estimate row {row}",
+                            "what": (f"ONE {wb_op} row covers parts running {_spread:.1f}x "
+                                     f"apart ({_shown}). The row rate is the true "
+                                     f"combination, not an average, but neither part can be "
+                                     f"checked against it. Split them if the difference "
+                                     f"matters to the price."),
+                        })
+
             if (_rhpu and _rhpu > 0) or (bh and bh > 0):
                 throughput = _derived
                 if default_tp:
