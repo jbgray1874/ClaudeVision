@@ -124,3 +124,57 @@ def test_a_catalogue_rate_still_wins():
     all missed — so loading a fastener price file retires these two entries."""
     src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
     assert "DB-FREE STANDARD-COMMODITY PROVISIONAL — the reproducible last resort" in src
+
+
+# ── and the rate is applied where the part is BORN, not in one branch ────────────────────
+#
+# THE CALL SITE, WHICH IS THE WHOLE OF WHY THIS KEPT NOT LANDING. The table was consulted in
+# estimate_part under records whose `source` is "sdi_bom_code_unpriced". The wood screw and
+# the M4 are not those: their line on the sheet reads a bare "MATERIAL UNPRICED: enter a unit
+# rate" with none of the price-chain account that branch appends, which is how we know it
+# never ran for them. Tests were green and the sheet still shipped £0.00.
+#
+# _bought_in_part_stub is the one place a purchased part is born — every reader comes through
+# it, which is why the manufacturer reference is captured there. A rate we already hold
+# belongs in the same place.
+
+from estimator import _bought_in_part_stub                                # noqa: E402
+
+
+def test_the_wood_screw_is_priced_at_the_moment_it_is_created():
+    stub = _bought_in_part_stub("STD PART", "3.5x19mm WOOD SCREW", 6)
+    assert stub["unit_cost_gbp"] == 0.03
+    assert stub["extended_total_cost_gbp"] == 0.18
+    assert stub["source"] == "standard_commodity_provisional"
+
+
+def test_the_m4_is_too():
+    stub = _bought_in_part_stub("FIXING", "M4x10mm FLANGE BUTTON HEAD SCREW, BLACK", 4)
+    assert stub["unit_cost_gbp"] == 0.08
+    assert stub["extended_total_cost_gbp"] == 0.32
+
+
+def test_the_new_line_says_whose_rate_it_is():
+    stub = _bought_in_part_stub("STD PART", "3.5x19mm WOOD SCREW", 6)
+    assert any("SDI trade rate" in str(f) for f in stub["review_flags"])
+
+
+def test_a_price_the_caller_already_found_is_never_overwritten():
+    """LAST RESORT, NOT FIRST. A UDEF or catalogue rate is real evidence; this is a floor."""
+    stub = _bought_in_part_stub("FIXING125", "M8 GLIDE WOOD SCREW", 2)
+    stub["unit_cost_gbp"] = 1.75           # what the caller would set from the catalogue
+    again = _bought_in_part_stub("FIXING125", "M8 GLIDE WOOD SCREW", 2)
+    assert again["unit_cost_gbp"] == 0.03, "with no price of its own the floor applies"
+    assert stub["unit_cost_gbp"] == 1.75, "a price already found is left alone"
+
+
+def test_a_part_the_table_does_not_know_is_born_unpriced_as_before():
+    stub = _bought_in_part_stub("P/P", "10.1 DIA BUMPON TRANSPARENT; REF: PD.2120", 6)
+    assert stub.get("unit_cost_gbp") in (None, 0, 0.0)
+    assert stub.get("source") != "standard_commodity_provisional"
+
+
+def test_the_quantity_is_the_line_s_own():
+    for q in (1, 4, 6, 20):
+        stub = _bought_in_part_stub("STD PART", "3.5x19mm WOOD SCREW", q)
+        assert stub["extended_total_cost_gbp"] == round(0.03 * q, 2), q

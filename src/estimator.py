@@ -6451,6 +6451,54 @@ def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> D
         "normalized_thickness_mm": None,
         "_bought_in_from_text_scan": True,
     }
+
+    # THE RATE WE ALREADY HOLD, APPLIED WHERE THE PART IS BORN.
+    #
+    # The commodity table was consulted in estimate_part, under one branch — the records
+    # whose `source` is "sdi_bom_code_unpriced". 12349-02's wood screw and M4 button head are
+    # not those: their line on the sheet reads a bare "MATERIAL UNPRICED: enter a unit rate"
+    # with none of the price-chain account that branch appends, which is how we know it never
+    # ran for them. Two lines with a rate sitting in config shipped at £0.00 on run after run,
+    # and a zero on a quote is a free part.
+    #
+    # This function is the one place a purchased part is born — its own docstring says every
+    # reader comes through here, which is why the manufacturer reference is captured here and
+    # not in any of them. The same argument applies to a price we already hold: asked once,
+    # here, and every reader gets the answer instead of four of them needing the same fix.
+    #
+    # LAST RESORT, NOT FIRST. Only a stub with no price of its own is touched, so a UDEF or
+    # catalogue rate found by the caller still wins, and the pricing chain downstream can
+    # still better it — a provisional is a floor, not a ceiling. Flagged, and it says whose
+    # rate it is.
+    if stub.get("unit_cost_gbp") in (None, 0, 0.0):
+        try:
+            from pricing_service import standard_commodity_price as _std_com
+            _com = _std_com(stub)
+        except Exception:                                        # noqa: BLE001
+            _com = None
+        try:
+            _com_unit = float((_com or {}).get("unit_price_gbp") or 0)
+        except (TypeError, ValueError):
+            _com_unit = 0.0
+        if _com_unit > 0:
+            _q = _safe_int(quantity) or 1
+            stub["unit_cost_gbp"] = round(_com_unit, 2)
+            stub["unit_material_cost_gbp"] = round(_com_unit, 2)
+            stub["extended_total_cost_gbp"] = round(_com_unit * _q, 2)
+            stub["source"] = "standard_commodity_provisional"
+            stub["cost_source"] = "standard_commodity_provisional"
+            stub["price_verified"] = False
+            stub["review_flags"].append(
+                (_com or {}).get("review_reason")
+                or "Provisional standard-commodity price — confirm against a supplier quote.")
+            try:
+                print(f"   [pricing] {part_number} ({str(description)[:40]}) priced from the "
+                      f"standard commodity table at £{_com_unit:.2f} — "
+                      f"{(_com or {}).get('price_source_note') or 'source not recorded'}",
+                      flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
+
     return _supplier_reference.attach_references(stub)
 
 
