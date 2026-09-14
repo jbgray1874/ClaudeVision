@@ -5485,6 +5485,18 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             part.setdefault("review_flags", []).append(
                 _com.get("review_reason")
                 or "Provisional standard-commodity price — confirm against a supplier quote.")
+            # SAY IT ON THE CONSOLE. Whether this table fired was only visible by opening the
+            # finished workbook and reading one cell — so a run made before a rate was added,
+            # and a run where the rate failed to match, looked identical from the outside and
+            # cost an evening to tell apart. One line naming the part, the price and where the
+            # rate came from answers it while the run is still on screen.
+            try:
+                print(f"   [pricing] {part.get('part_number') or '?'} "
+                      f"({str(part.get('description') or '')[:40]}) priced from the standard "
+                      f"commodity table at £{_com_unit:.2f} — "
+                      f"{_com.get('price_source_note') or 'source not recorded'}", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
             return part
         # AND THE REST OF THE CHAIN IS PAST THIS RETURN TOO.
         #

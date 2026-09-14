@@ -965,6 +965,29 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
                             break
                     if _title:
                         break
+            if not _title and _pref:
+                # AND THE ROOTS LIST MAY HOLD ONLY THE MINTED PARENT — which is the whole of
+                # this case, not an edge of it. The SolidWorks tree mints one node above
+                # everything, so it becomes the only root, and a search confined to the roots
+                # has nowhere to go: the Description box came out EMPTY, which is the fault
+                # that was fixed before the models were ever read.
+                #
+                # The part records are where the descriptions live. Take the outermost code
+                # this drawing number owns — shortest first, so 12349-02-69 answers before
+                # 12349-02-69-100 — skipping the minted parent and anything that is the
+                # engine talking about itself.
+                for _rec in sorted(
+                        _part_records(summary),
+                        key=lambda r: len(str(r.get("part_number") or "")) or 999):
+                    _pn = str(_rec.get("part_number") or "").strip()
+                    if not _pn or _pn.upper() == _top.upper():
+                        continue
+                    if not _pn.upper().startswith(_pref.upper()):
+                        continue
+                    _d = str(_rec.get("description") or "").strip()
+                    if _d and not _is_an_engine_note(_d):
+                        _title = _d
+                        break
             _number = _number or _top
 
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields

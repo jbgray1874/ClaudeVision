@@ -77,6 +77,28 @@ def test_the_gravity_feeder_quote_is_headed_by_the_product():
     assert desc == "GRAVITY FEEDER MODULES"
 
 
+def test_the_minted_parent_is_usually_the_ONLY_root():
+    """AND THIS IS THE CASE, NOT AN EDGE OF IT. The SolidWorks tree mints one node above
+    everything on the job, so it becomes the only root — and a search confined to the roots
+    then has nowhere to go. The Description box came out EMPTY on the 14:42 run of 12349-02:
+    the note was correctly refused and nothing replaced it, which is the fault that was fixed
+    before the models were ever read, arriving back by another door."""
+    s = _summary("12349-02-69-GA", ["12349-02-69-GA"],
+                 [_rec("12349-02-69-GA", "assembly (from the SolidWorks model's own tree)"),
+                  _rec("12349-02-69", "GRAVITY FEEDER MODULES"),
+                  _rec("12349-02-69-100", "GRAVITY FEEDER MODULES, 3 WIDE"),
+                  _rec("12349-02-69-04M", "LID")])
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDER MODULES"
+
+
+def test_the_records_search_still_respects_the_owning_number():
+    s = _summary("12349-02-69-GA", ["12349-02-69-GA"],
+                 [_rec("12349-02-69-GA", "assembly (from the SolidWorks model's own tree)"),
+                  _rec("7332-01-101", "HARRODS STAND FRAME"),
+                  _rec("12349-02-69", "GRAVITY FEEDER MODULES")])
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDER MODULES"
+
+
 def test_the_note_never_survives_even_where_no_other_root_has_one():
     """Refusing it is not conditional on having something better. A blank Description is a
     gap; a sentence about the engine's internals is a wrong answer."""

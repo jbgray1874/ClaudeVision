@@ -1383,9 +1383,18 @@ def _append_traceability_blocks(ws, row: int, summary: Dict[str, Any],
         if _charged is not None:
             issues.append(["Modelled but in no assembly BOM", str(pn),
                            f"read from the model folder and absent from the assembly bill of "
-                           f"materials, but COSTED on this sheet at £{_charged:.2f} — if it is "
-                           f"a fixture or jig it should not be in the price; if it is a "
-                           f"component the bill of materials is short a line. Confirm which"])
+                           # WHOSE FIGURE IT IS, because it is not the sheet's. This is the
+                           # engine's own pre-workbook cost for the part; the workbook then
+                           # nests it, applies its own rates and arrives somewhere else —
+                           # 12349-02's 08J reads £7.56 here and £14.07 across the Estimate
+                           # sheet's own cells. Two numbers for one part, one of them
+                           # labelled "on this sheet", is how a report ends up arguing with
+                           # the thing it is reporting on.
+                           f"materials, but IS COSTED — the engine prices it at £{_charged:.2f} "
+                           f"(the Estimate sheet's own cells are the figure that ships, and "
+                           f"they may differ) — if it is a fixture or jig it should not be in "
+                           f"the price; if it is a component the bill of materials is short a "
+                           f"line. Confirm which"])
         else:
             issues.append(["Modelled but in no assembly BOM", str(pn),
                            "a fixture, jig or setup part in the model folder — not a component "
