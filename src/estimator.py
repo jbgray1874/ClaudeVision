@@ -4370,6 +4370,37 @@ _SPECIAL_ITEM_FAB_OPS = {
 }
 
 
+def _cut_method_rule(part: Dict[str, Any]) -> str:
+    """Which machine SDI cuts this material on, from the shop's own written rule. "" if none.
+
+    DELIBERATELY NOT A READ OF THE DRAWING OR THE CUT FILE. Both were tried and neither can
+    answer: the DXF layer set is a fixed SolidWorks export template that names no process,
+    and the model asked to infer one returned a different answer on ten consecutive runs of
+    the same unchanged file. A costing decision taken from a source that cannot repeat itself
+    is not a decision, it is a coin flip with a price attached.
+
+    So this reads config.CUT_METHOD_BY_MATERIAL — a table a person maintains — and returns ""
+    when it holds nothing for this material and gauge, which leaves the caller flagging the
+    line rather than picking a machine.
+    """
+    _mat = str(part.get("normalized_material") or part.get("material") or "").strip().upper()
+    if not _mat:
+        return ""
+    _th = _safe_float(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+    for _rule in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or []):
+        if not isinstance(_rule, dict):
+            continue
+        if str(_rule.get("material") or "").strip().upper() != _mat:
+            continue
+        _max = _safe_float(_rule.get("max_thickness_mm"))
+        if _max is not None and (_th is None or _th > _max):
+            continue
+        _method = str(_rule.get("method") or "").strip().lower()
+        if _method in ("laser", "punch", "router"):
+            return _method
+    return ""
+
+
 def _weld_members(part: Dict[str, Any]) -> int:
     """How many parts this weldment joins, where the record can say. 0 when it cannot.
 
@@ -4841,8 +4872,23 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     _laser_on = [o for o in ops if str(o).strip().lower() in _LASER_OPS]
     _router_on = [o for o in ops if str(o).strip().lower() in _ROUTER_OPS]
     if _laser_on and _router_on:
-        _named = str(((part.get("dxf_interpretation") or {}).get("recommended_process")
-                      or "")).strip().lower()
+        # NOT FROM THE DXF INTERPRETER. This keyed on `recommended_process` for one commit,
+        # and the runner's own log is the refutation: the SAME FILE, unchanged, comes back
+        #
+        #   06A: laser · laser · laser · router · laser · router · laser · router · router
+        #
+        # across ten runs. It is a model being asked which machine and guessing, and SDI's
+        # cut files cannot tell it — the layer set is a fixed SolidWorks export template
+        # (SLD-0, BENDLINES, ETCHING, RIB, C_SNK, REBATE, LANCEFORM) and not one layer names
+        # a process. Keyed on that, this rule would have stripped the laser on some runs and
+        # the router on others, on the same pack: a visible double charge turned into an
+        # invisible coin flip, which is worse than what it replaced.
+        #
+        # So the decision comes from a rule somebody wrote down, or it is not made here at
+        # all. CUT_METHOD_BY_MATERIAL is the shop's own practice, keyed on material and
+        # gauge, reproducible, and empty until the shop fills it — an absent entry flags the
+        # line for a person rather than picking one.
+        _named = _cut_method_rule(part)
         _drop: List[str] = []
         _kept = ""
         if _named in ("router",):
@@ -4850,7 +4896,6 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         elif _named in ("laser", "punch"):
             _drop, _kept = list(_router_on), _named
         if _drop:
-            _src_file = str(part.get("dxf_source_file") or "the cut file")
             ops = [o for o in ops if o not in _drop]
             for _tf in ("textual_operations", "inferred_operations"):
                 if isinstance(part.get(_tf), list):
@@ -4861,17 +4906,18 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             part.setdefault("removed_operations", []).extend(_drop)
             part.setdefault("review_flags", []).append(
                 f"{', '.join(_drop)} removed: this blank was charged BOTH a laser cut and a "
-                f"routed cut, which is the same profile paid for twice. {_src_file} names "
-                f"'{_kept}' as the process, so that one is costed. If the part really is "
-                f"profiled one way and machined another, say so and both go back on")
+                f"routed cut, which is the same profile paid for twice. SDI's own rule for "
+                f"this material and gauge (config.CUT_METHOD_BY_MATERIAL) is '{_kept}', so "
+                f"that one is costed. If the part really is profiled one way and machined "
+                f"another, say so and both go back on")
         else:
             part.setdefault("review_flags", []).append(
                 f"CUT TWICE? This part carries both a laser cut and a routed cut "
                 f"({', '.join(_laser_on + _router_on)}) — usually the same profile costed "
-                f"twice. The cut file names "
-                + (f"'{_named}'" if _named else "no single process")
-                + ", so nothing has been removed. Confirm which one the shop uses, or "
-                  "confirm it genuinely needs both")
+                f"twice, and it is the shop that knows which machine. Nothing has been "
+                f"removed: the cut file cannot say (SDI's DXF layers are a fixed export "
+                f"template and name no process) and config.CUT_METHOD_BY_MATERIAL holds no "
+                f"rule for this material and gauge. Put one there and every job answers it")
 
     # ---- Fold operation inference (general, evidence-based) ----------------------
     # A part folds if it carries fold evidence — PDF callouts (UP/DOWN + angle -> angles_deg

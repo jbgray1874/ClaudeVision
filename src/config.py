@@ -345,6 +345,35 @@ PACKAGING_CONFIG = {
 COMMERCIAL_LINE_GBP_PER_ORDER = {
 }
 
+# --- Which machine cuts a blank, when a part is charged two ways -------------------
+#
+# A part carrying BOTH a laser cut and a routed cut is the same profile paid for twice.
+# 12349-02-69-06A, a 5 mm acrylic front cover, was in the 5 mm laser group AND had its own
+# CNC line at £6.81.
+#
+# THE CUT FILE CANNOT ANSWER IT, AND THE MODEL THAT CLAIMED TO WAS GUESSING. The DXF
+# interpreter returns a `recommended_process`, and the runner's own log shows the SAME
+# unchanged file coming back
+#
+#     06A: laser · laser · laser · router · laser · router · laser · router · router · laser
+#
+# over ten runs. SDI's cut files cannot tell it either: the layer set is a fixed SolidWorks
+# export template — SLD-0, BENDLINES, ETCHING, RIB, C_SNK, HIDDEN, REBATE, LANCEFORM — and
+# not one layer names a machine. A rule keyed on that would strip the laser on some runs and
+# the router on others, on one pack: a visible double charge turned into an invisible coin
+# flip, which is worse than the double.
+#
+# So the decision is the SHOP'S, written down once and applied to every job. Keyed on
+# normalised material, with an optional maximum gauge, first match wins:
+#
+#     {"material": "HIGH_IMPACT_ACRYLIC", "max_thickness_mm": 8, "method": "laser"}
+#
+# method is "laser", "punch" or "router". EMPTY ON PURPOSE: with no rule the two ops both
+# stay and the line is flagged for a person, which is the honest answer to "which machine"
+# when nobody has told us. Nothing here is guessed from a drawing.
+CUT_METHOD_BY_MATERIAL: list = [
+]
+
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
 # ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack
