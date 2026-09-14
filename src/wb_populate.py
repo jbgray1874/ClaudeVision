@@ -1895,6 +1895,84 @@ def canonicalise_part_estimates_for_workbook(
         print(f"   [wb_populate] canonical identity absorbed {len(_synth_merged)} "
               f"engine-minted duplicate(s): {', '.join(_synth_merged)}", flush=True)
 
+    # A BOUGHT-IN THAT ARRIVED WITH A RECORD AND NO PRICE IS THE SAME LINE AS ONE THAT
+    # ARRIVED WITH NO RECORD AT ALL.
+    #
+    # The mint below already asks the DB-free commodity table — and could never answer for
+    # these two, because its first statement skips any node that is not kind "bought_in" OR
+    # whose identity is already in `normalised`. (Paraphrased rather than quoted: a comment
+    # reproducing that line verbatim is found by the source-inspection test that guards the
+    # mint's squash-match, which then reads the wrong window.)
+    #
+    # It prices a bought-in it is about to INVENT. 12349-02's "STD PART / 3.5x19mm WOOD
+    # SCREW" and "FIXING / M4x10mm FLANGE BUTTON HEAD SCREW" already HAVE records — priceless
+    # ones, filed into `normalised` by the loop just above — so they took that `continue`
+    # silently and shipped at £0.00 run after run, while the same table answers £0.03 and
+    # £0.08 the moment it is asked. Four fixes were written in estimator.py and every one of
+    # them sat upstream of whichever reader made those records. This loop is downstream of
+    # all of them, over the exact dictionary the BOM rows are written from, so it sees the
+    # line whoever made it and under either spelling.
+    #
+    # LAST RESORT, NEVER AN OVERWRITE. A line already carrying money — from UDEF, a
+    # catalogue, history or the market rung — is left exactly as it stands, and so is one the
+    # engine deliberately withheld.
+    for _identity, _item in normalised.items():
+        _kind0 = str(_item.get("_canonical_kind")
+                     or (nodes.get(_identity) or {}).get("kind") or "").strip().lower()
+        _roles0 = {str(r).strip().lower() for r in (_item.get("page_roles") or [])}
+        if _kind0 in ("assembly", "leaf"):
+            continue                    # a part we MAKE is not a commodity somebody buys
+        if _kind0 != "bought_in" and "bought_in" not in _roles0:
+            continue
+        if _item.get("_price_explicitly_withheld"):
+            continue                    # withheld on purpose; the row says so and means it
+        if _bom_line_price(_item) is not None:
+            continue                    # the one price chain the row itself reads
+        _me0 = _item.get("material_estimate") or {}
+        if any(_safe(_v) for _v in (_item.get("unit_cost_gbp"),
+                                    _item.get("unit_material_cost_gbp"),
+                                    _item.get("extended_material_cost_gbp"),
+                                    _me0.get("unit_material_cost_gbp"),
+                                    _me0.get("cost_per_part_gbp"),
+                                    _me0.get("extended_material_cost_gbp"))):
+            continue                    # a figure the engine resolved and declined
+        # A TABLE OF COMPONENT PROVISIONALS MUST NEVER ANSWER FOR A COMMERCIAL ALLOWANCE.
+        # 18a19c2: the commodity PALLET entry matched the word "pallet" inside the packaging
+        # placeholder and invented £12.00 on the one line config holds empty by decision.
+        _code0 = str(_item.get("part_number") or _identity or "").strip().upper()
+        _desc0 = str(_item.get("description") or "").upper()
+        if (_code0 in ("PACKAGING", "DELIVERY", "CARRIAGE", "FREIGHT")
+                or "PER-UNIT SHARE" in _desc0 or "ESTIMATOR TO PRICE" in _desc0):
+            continue
+        try:
+            from pricing_service import standard_commodity_price as _std_com0
+            _com0 = _std_com0({"part_number": _code0,
+                               "description": _item.get("description") or ""})
+        except Exception:                                        # noqa: BLE001
+            _com0 = None
+        _u0 = _safe((_com0 or {}).get("unit_price_gbp"))
+        if _u0 is None or _u0 <= 0:
+            continue
+        _u0 = round(float(_u0), 2)
+        _q0 = _safe(_item.get("quantity")) or 1
+        _e0 = round(_u0 * float(_q0), 2)
+        _item["unit_cost_gbp"] = _u0
+        _item["unit_material_cost_gbp"] = _u0
+        _item["extended_total_cost_gbp"] = _e0
+        _item["cost_source"] = "standard_commodity_provisional"
+        _item["costing_basis"] = "standard_commodity_provisional"
+        _item["material_estimate"] = {
+            **(_me0 if isinstance(_me0, dict) else {}),
+            "unit_material_cost_gbp": _u0, "cost_per_part_gbp": _u0,
+            "extended_material_cost_gbp": _e0,
+            "cost_method": "standard_commodity_provisional"}
+        _item.setdefault("review_flags", []).append(
+            (_com0 or {}).get("review_reason")
+            or "Provisional standard-commodity price — confirm against a supplier quote.")
+        print(f"   [wb_populate] {_code0} ({str(_item.get('description') or '')[:40]}) "
+              f"priced from the standard commodity table at £{_u0:.2f} — "
+              f"{(_com0 or {}).get('price_source_note') or 'source not recorded'}", flush=True)
+
     # An explicit bought-in BOM line must remain visible even when no pricing record was
     # created. It is safer as an unpriced estimator row than absent from the BOM.
     #
