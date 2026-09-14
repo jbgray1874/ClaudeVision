@@ -1141,9 +1141,30 @@ def _is_plate_metal(text: Any) -> bool:
 
 
 def _part_finish_text(part: Dict[str, Any]) -> str:
-    return " ".join(str(v) for v in (
-        part.get("normalized_finish"), part.get("finish"), part.get("surface_finish"),
-    ) if v) or " ".join(str(v) for v in (part.get("surface_finishes") or []))
+    """Every word this part carries about its finish, normalised AND as drawn.
+
+    THE `or` THAT COST HOWARD'S £250. This read the normalised fields and consulted the
+    RAW list only when all of them were empty. A named spec is exactly the case where they
+    are not: the finish classifier recognises "Harrods01" as a plate and writes its own word
+    — "zinc plated" — into normalized_finish, and the drawing's actual callout stays in
+    surface_finishes where nothing then looked. So 7332-01-101 priced on the indicative
+    zinc card, £15.83 of trade plating against a quoted £250 a stand: the largest single
+    error on that sheet, by an order of magnitude, caused by an `or`.
+    #
+    The engine's word for a finish and the drawing's word for it are different facts and
+    both are wanted. Joined, deduplicated, order preserved so the normalised token still
+    reads first.
+    """
+    _seen = set()
+    _out: List[str] = []
+    for _v in (part.get("normalized_finish"), part.get("finish"),
+               part.get("surface_finish"), *(part.get("surface_finishes") or [])):
+        _s = str(_v or "").strip()
+        if not _s or _s.upper() in _seen:
+            continue
+        _seen.add(_s.upper())
+        _out.append(_s)
+    return " ".join(_out)
 
 
 def _part_material_text(part: Dict[str, Any]) -> str:

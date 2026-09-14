@@ -167,3 +167,56 @@ def test_the_freight_is_not_added_to_the_plating_price():
     assert "NOT INCLUDED here: freight to and from the plater" in src
     assert "put it on the delivery" in src
     assert "plater_freight_gbp_per_unit" in src
+
+
+# ── the drawing's own callout, not only the engine's word for it ─────────────────────────
+#
+# THE `or` THAT COST THE WHOLE POINT. _part_finish_text read the normalised fields and
+# consulted the RAW list only when all of them were empty. A named spec is exactly the case
+# where they are not: the finish classifier recognises "Harrods01" as a plate and writes its
+# own word — "zinc plated" — into normalized_finish, and the drawing's actual callout stays in
+# surface_finishes where nothing then looked. 7332-01-101 priced on the indicative zinc card,
+# £15.83 against a quoted £250 a stand, on a live run of the build that had the named-spec
+# table in it. The table was right and the text never reached it.
+
+from estimator import _part_finish_text                                  # noqa: E402
+
+
+def test_the_callout_survives_the_classifier_naming_it_something_else():
+    part = {"normalized_finish": "zinc plated", "surface_finishes": ["Harrods01"]}
+    text = _part_finish_text(part)
+    assert "Harrods01" in text
+    assert (named_plate_spec(text) or {}).get("gbp_per_unit") == 250.00
+    assert plating_unit_price(2.4, 6, POLICY, text)[0] == 250.00
+
+
+def test_every_spelling_of_the_finish_fields_is_read():
+    for part in (
+        {"normalized_finish": "Harrods01"},
+        {"finish": "HARRODS 01"},
+        {"surface_finish": "Harrods-01"},
+        {"surface_finishes": ["BRASS HARRODS 01 FINISH"]},
+        {"normalized_finish": "plated", "finish": "brass",
+         "surface_finishes": ["Harrods01", "brushed"]},
+    ):
+        assert named_plate_spec(_part_finish_text(part)) is not None, part
+
+
+def test_an_ordinary_plated_part_is_unchanged():
+    part = {"normalized_finish": "zinc plated", "surface_finishes": ["ZINC PASSIVATE"]}
+    text = _part_finish_text(part)
+    assert named_plate_spec(text) is None
+    assert plating_unit_price(2.4, 6, POLICY, text)[0] == 15.83
+
+
+def test_nothing_is_repeated_when_the_fields_agree():
+    """The classifier and the drawing often say the same word. Saying it twice helps nobody
+    and makes a matcher's job harder."""
+    part = {"normalized_finish": "powder coated", "finish": "POWDER COATED",
+            "surface_finishes": ["powder coated"]}
+    assert _part_finish_text(part).lower() == "powder coated"
+
+
+def test_a_part_with_no_finish_reads_empty():
+    assert _part_finish_text({}) == ""
+    assert _part_finish_text({"surface_finishes": []}) == ""
