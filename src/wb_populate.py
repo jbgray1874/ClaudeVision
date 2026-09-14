@@ -4363,7 +4363,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "P.Coat":                   458,    # 316 lines | was 424 — close; my "2-3x too slow"
                                             #             claim was wrong, this one was fine
         "Laser (Metal)":            269,    # 305 lines | was 180
-        "Laser (Acrylic)":          252,    # 13 lines  | was 120
+        # 95/hr, NOT 252. "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual
+        # Estimate 95 p/hour" — Howard Thurley, SDI estimating, 9 Sep 2026.
+        #
+        # 252 was measured, and measured off THIRTEEN lines — the thinnest sample in this
+        # whole table, against 305 for metal laser and 329 for fold. Thirteen historical
+        # lines is not better evidence than the estimator who runs the department, and the
+        # corpus cannot say which of those thirteen were small parts nested many-up.
+        #
+        # It went into 7332-01's own answers file first, where it governed one drawing and
+        # every other acrylic job kept the figure he had already told us was wrong. A rate
+        # correction is not a decision about one stand: it is how the department runs, so it
+        # belongs here where it reaches every job.
+        "Laser (Acrylic)":           95,    # Howard Thurley (SDI estimating), 9 Sep 2026
+                                            #   | was 252 from 13 corpus lines | was 120
         "Manual labour (Acrylic)":  122,    # 13 lines  | was 40
         "Linebend":                 118,    # 18 lines  | was 40
         "Punch":                    116,    # 126 lines | was 100

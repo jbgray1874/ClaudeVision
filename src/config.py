@@ -538,6 +538,53 @@ STANDARD_COMMODITY_PRICE_GBP = {
 #
 # Widen this list ONLY with a process the £2.50 card genuinely covers. Anything else
 # belongs in NAMED_PLATE_SPECS below as a quoted price, or stays blocking.
+# ── DECISIONS AN ESTIMATOR MADE ONCE, APPLIED WHEREVER THEY ARE TRUE ────────────────────
+#
+#     "All changes we do should be worked to be inherited or it's a pointless one off hack
+#      that we will be found out on with the next drawing with the same characteristics"
+#                                                     — James Gray, SDI, 14 Sep 2026
+#
+# Brass Harrods 01 at £250 was put in 7332-01's own answers file, which governs 7332-01 and
+# nothing else. That is correct for a decision about one stand and WRONG for this one: the
+# next Harrods stand states the same bare "PLATED", blocks for the same reason, and somebody
+# types the same £250 again. Same characteristics, same manual work, every time — which is
+# the hack he is describing.
+#
+# THIS REVERSES A TEST I WROTE ON PURPOSE. test_the_customer_name_alone_buys_nothing pinned
+# that a client called Harrods buys no plate spec, and the reasoning was sound: the ENGINE
+# must never infer a price from a customer's name. It still must not. What changed is that
+# this is not an inference. An estimator stated it, for stated conditions, and recording that
+# is the opposite of guessing — it is the difference between "Harrods, so probably brass" and
+# "Howard Thurley told us on 9 Sep that Harrods stands calling up a bare PLATED are Brass
+# Harrods 01 at £250".
+#
+# WHAT MAKES INHERITANCE SAFE IS THAT IT ANNOUNCES ITSELF. Every entry carries who decided
+# it, when, and on which job; every line it reaches says it was inherited and asks to be
+# confirmed. An inherited decision that arrives silently is indistinguishable from a rate the
+# engine invented, which is the whole thing this codebase refuses to do.
+#
+# `when` is ALL of its conditions — every key must match or the entry does not apply. An
+# entry with no conditions is rejected rather than applied to everything.
+INHERITED_ESTIMATOR_DECISIONS = [
+    {
+        "id": "harrods-bare-plate",
+        "when": {
+            "customer": "HARRODS",
+            "finish_family": "plate",
+            "spec_identified": False,
+        },
+        "then": {
+            "plating_gbp_per_unit": 250.00,
+            "plating_spec": "Brass — Harrods 01",
+        },
+        "decided_by": "Howard Thurley (SDI estimating)",
+        "decided_on": "9 Sep 2026",
+        "decided_on_job": "7332-01",
+        "why": ("the drawing states only PLATED; the requirement is Brass Harrods 01 and the "
+                "plater charges £250 a stand"),
+    },
+]
+
 # BRUSHED BEFORE IT GOES TO THE PLATERS — work the drawing never mentions.
 #
 # "Line 85 – Drawing doesn't annotate – material is brushed prior to sending to platers, op.

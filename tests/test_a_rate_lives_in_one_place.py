@@ -238,7 +238,10 @@ def test_working_variables_are_not_counted_as_rates():
 def test_the_throughput_that_sets_the_sheets_rate_column_is_named():
     """Howard Thurley asked why acrylic laser reads 252/hr. The answer is a row in this
     table — so the audit has to be able to point at it."""
-    import wb_populate                                                  # noqa: PLC0415
     src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert '"Laser (Acrylic)":          252' in src
+    # 252 was the corpus figure, off thirteen lines. It is now 95 — the department's own —
+    # and the table records both, because a rate that replaced a measurement has to say what
+    # it replaced or nobody can reopen the question.
+    assert '"Laser (Acrylic)":           95,' in src
+    assert "was 252 from 13 corpus lines" in src
     assert "UNMEASURED" in src            # and the ones with no corpus behind them say so

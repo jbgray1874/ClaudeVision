@@ -1340,6 +1340,92 @@ def named_plate_spec(finish_text: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def inherited_decision(kind: str, facts: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The decision an estimator already made for conditions like these, or None.
+
+    A DECISION MADE ONCE SHOULD NOT HAVE TO BE MADE AGAIN. Brass Harrods 01 went into
+    7332-01's own answers file, which governs 7332-01 and nothing else — so the next Harrods
+    stand states the same bare "PLATED", blocks for the same reason, and somebody types the
+    same £250. Same characteristics, same manual work, every time.
+
+    EVERY CONDITION MUST MATCH. An entry's `when` is a conjunction, and an entry with no
+    conditions at all is refused rather than applied to everything — a rule that matches
+    every job is not a rule, it is a default, and defaults belong in the policy tables where
+    they can be seen.
+
+    Strings compare case- and space-insensitively because "Harrods", "HARRODS" and
+    "Harrods Ltd" are one customer; booleans compare exactly, because "the spec could not be
+    identified" is not nearly true.
+
+    Returns the entry's `then` with its provenance attached, so the caller can say on the
+    line where the figure came from. Nothing here is silent: an inherited price that arrives
+    without its history is indistinguishable from one the engine invented.
+    """
+    def _norm(v: Any) -> Any:
+        if isinstance(v, bool) or v is None:
+            return v
+        return re.sub(r"[^A-Z0-9]+", "", str(v).upper())
+
+    def _norm_customer(v: Any) -> str:
+        """One trading name, however the job folder spelled it.
+
+        "Harrods", "Harrods Ltd" and "Harrods 7332-01" are one customer, and an inheritance
+        rule that misses two of the three is the one-off hack it was written to replace. The
+        job-code token is dropped by the same function the quote header already uses — the
+        question "is this the same customer" must not grow a second answer — and the legal
+        suffix is dropped here, which that function deliberately does not do because a quote
+        heading should print the company's real name."""
+        _s = str(v or "")
+        try:
+            from client_quote_html import _clean_customer_name as _ccn
+            _s = _ccn(_s)
+        except Exception:                                            # noqa: BLE001
+            pass
+        _s = re.sub(r"\b(LTD|LIMITED|PLC|LLP|INC|GROUP|HOLDINGS|UK|GB|CO)\b", " ",
+                    _s.upper())
+        return re.sub(r"[^A-Z0-9]+", "", _s)
+
+    for _entry in (getattr(config, "INHERITED_ESTIMATOR_DECISIONS", []) or []):
+        if not isinstance(_entry, dict):
+            continue
+        _when = _entry.get("when")
+        if not isinstance(_when, dict) or not _when:
+            continue                                  # no conditions is not "always"
+        _then = _entry.get("then")
+        if not isinstance(_then, dict) or kind not in _then:
+            continue
+        _hit = True
+        for _k, _want in _when.items():
+            _got = facts.get(_k)
+            if isinstance(_want, bool) or isinstance(_got, bool) or _want is None:
+                if _got != _want:
+                    _hit = False
+                    break
+            elif _k == "customer":
+                if not _norm_customer(_got) or \
+                        _norm_customer(_got) != _norm_customer(_want):
+                    _hit = False
+                    break
+            elif _norm(_got) != _norm(_want):
+                _hit = False
+                break
+        if _hit:
+            return dict(_then,
+                        _decision_id=_entry.get("id") or "",
+                        _decided_by=_entry.get("decided_by") or "an estimator",
+                        _decided_on=_entry.get("decided_on") or "",
+                        _decided_on_job=_entry.get("decided_on_job") or "",
+                        _why=_entry.get("why") or "")
+    return None
+
+
+def job_customer(summary: Any) -> str:
+    """The customer this job is for, as the workbook header reads it."""
+    if not isinstance(summary, dict):
+        return ""
+    return str(summary.get("customer") or summary.get("client") or "").strip()
+
+
 def named_plate_spec_anywhere_on_the_pack(
         *record_lists: Any) -> Tuple[Optional[Dict[str, Any]], str, str]:
     """A registered plate spec named on ANY part of this pack: (spec, part_number, text).
@@ -1532,6 +1618,11 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # than inheriting a price nobody re-checked.
         _dec = (summary or {}).get("estimator_decisions") or {} \
             if isinstance(summary, dict) else {}
+        # Bound before either branch: the description block below reads it, and only one of
+        # the two paths assigns it. An unbound name here is a NameError on the one run that
+        # takes the other path, which is the class of defect the name-resolution gate exists
+        # to catch and the kind that reaches a live job.
+        _inh: Optional[Dict[str, Any]] = None
         _dec_plate = _safe_float(_dec.get("plating_gbp_per_unit"))
         if _dec_plate and _dec_plate > 0:
             _who = _dec.get("decided_by") or "an estimator"
@@ -1566,6 +1657,37 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                 note += (f". The spec is not stated on this weldment or its members — it was "
                          f"read from {_found_on}'s own finish on this pack; confirm it "
                          f"governs the plated members listed here")
+            # ── AND A DECISION ALREADY MADE FOR CONDITIONS LIKE THESE ──────────────────
+            #
+            # The pack could not identify the spec, so the line blocks — which is right, and
+            # on the SECOND Harrods stand it is also useless: it blocks for exactly the
+            # reason it blocked the first time, and somebody types £250 again. A rule that
+            # produces the same manual work on every drawing with the same characteristics
+            # is not a rule.
+            #
+            # Only consulted where the pack has NOT answered. A drawing that names its own
+            # spec is read, never overruled by something an estimator said about a different
+            # job, and a priced line is left alone entirely.
+            if method == "subcontract_plating_spec_unidentified":
+                _inh = inherited_decision("plating_gbp_per_unit", {
+                    "customer": job_customer(summary),
+                    "finish_family": "plate",
+                    "spec_identified": False,
+                })
+                if _inh and _safe_float(_inh.get("plating_gbp_per_unit")):
+                    _prev_note = note
+                    unit = round(float(_inh["plating_gbp_per_unit"]), 2)
+                    method = "inherited_estimator_decision"
+                    note = (
+                        f"{_inh.get('plating_spec') or 'as previously decided'} — "
+                        f"£{unit:.2f} per unit, INHERITED from a decision "
+                        f"{_inh['_decided_by']} made on {_inh['_decided_on_job']}"
+                        f"{' (' + _inh['_decided_on'] + ')' if _inh['_decided_on'] else ''}: "
+                        f"{_inh.get('_why') or 'no reason recorded'}. THIS DRAWING DOES NOT "
+                        f"STATE THE SPEC — it states a plate and no process, and this figure "
+                        f"comes from the earlier job, not from the pack in front of you. "
+                        f"Confirm it applies to this stand. Without it the line would read: "
+                        f"{_prev_note}")
         # GETTING IT THERE AND BACK IS PART OF HAVING IT PLATED.
         #
         # "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network -
@@ -1647,6 +1769,13 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             pe["description"] = (
                 f"{_pn_plate} plating — SPEC NOT IDENTIFIED: the drawing names a plate but "
                 f"not which plate. NOT PRICED — confirm the process with the plater").strip()
+        elif method == "inherited_estimator_decision":
+            _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
+            _inh_lbl = str((_inh or {}).get("plating_spec") or "").strip()
+            pe["description"] = (
+                f"{_pn_plate} plating — {_inh_lbl or 'as previously decided'}, INHERITED from "
+                f"{(_inh or {}).get('_decided_on_job') or 'an earlier job'} — confirm it "
+                f"applies here").strip()
         elif method == "estimator_stated_price":
             # AND THE LINE SAYS WHOSE PRICE IT IS. A figure a person set must never read on
             # the sheet like one the engine sourced — that is the rule the answers file was
