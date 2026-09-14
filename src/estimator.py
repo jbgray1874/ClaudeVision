@@ -6850,10 +6850,28 @@ def _recognise_sdi_coded_bought_in(
             #
             # Keep the ROW: the code and colour are real, drawing-derived and useful. Drop the
             # invented money and say plainly that the estimator must supply the quantity.
-            if (not _qty_known) and any(
-                str(code or "").upper().startswith(_cp)
+            # A STRIP IS NOT A ROLL, AND A KNOWN QUANTITY OF THE WRONG UNIT IS WORSE THAN AN
+            # UNKNOWN ONE.
+            #
+            # 0355255's TAPE113C is supplied on a 10 METRE ROLL. The drawing asks for three
+            # strips across the base — about 600 mm, six hundredths of a roll, 28p. The line
+            # was costed 3 x the ROLL price: £13.63 against 28p, on a unit whose whole
+            # manual estimate is £7.63. It is the entire gap between the two sheets, and it
+            # does not amortise, which is why the AI column barely moves between 10 off and
+            # 1000 off while the manual falls by a third.
+            #
+            # The guard below was written for exactly this and could not fire, twice over:
+            # TAPE was not in the list, and the list only applies when the quantity is
+            # UNKNOWN. Here the quantity is perfectly well known and is a count of PIECES
+            # CUT FROM the pack, which is the one number that must never multiply a pack
+            # price. So roll goods are withheld whether or not a count was read.
+            _code_u = str(code or "").upper()
+            _roll_goods = _code_u.startswith(("TAPE", "VINYL", "FOAM", "FELT", "REEL"))
+            if (not _qty_known or _roll_goods) and any(
+                _code_u.startswith(_cp)
                 for _cp in ("POWDER", "PAINT", "LACQUER", "PRIMER",
-                            "ADHESIVE", "SEALANT", "SOLVENT")
+                            "ADHESIVE", "SEALANT", "SOLVENT",
+                            "TAPE", "VINYL", "FOAM", "FELT", "REEL")
             ):
                 # Clear EVERY field that holds this price. The last attempt cleared two of
                 # four and wb_populate's BOM fallback chain simply moved to the next one and
@@ -6884,16 +6902,35 @@ def _recognise_sdi_coded_bought_in(
                     stub["_catalogue_rate_gbp"] = float(cat["unit_price_gbp"])
                 except Exception:
                     pass
-                stub.setdefault("review_flags", []).append(
-                    f"CONSUMABLE {code}: NOT PRICED. The quantity is not on the drawing, and a "
-                    f"consumable is sold by weight/volume — defaulting to 1 would mean 1kg "
-                    f"(that is how this line reached £8.03 on a £6.74 job). Estimator to "
-                    f"supply the quantity. Catalogue rate £{cat['unit_price_gbp']:.2f}/unit"
-                    + (f", {cat['supplier']}" if cat.get("supplier") else "")
-                    + ". NOTE: powder is also computed by the workbook's Powder Qty Calculator, "
-                      "which only understands SHEET area — wire/tube parts contribute nothing, "
-                      "so a wire job gets zero powder until that is fixed."
-                )
+                if _roll_goods:
+                    # SAY THE ARITHMETIC, so confirming it is one line rather than a
+                    # calculation. The estimator already does this sum in his head; what he
+                    # cannot do is see that the sheet did a different one.
+                    stub.setdefault("review_flags", []).append(
+                        f"ROLL GOODS {code}: NOT PRICED, and NOT charged as "
+                        f"{_use_qty} x £{cat['unit_price_gbp']:.2f} = "
+                        f"£{cat['unit_price_gbp'] * _use_qty:.2f}. This is sold by the roll "
+                        f"and the drawing asks for pieces CUT FROM one — a piece count must "
+                        f"never multiply a pack price. Give the strip count and length and "
+                        f"it prices as (length used ÷ roll length) × "
+                        f"£{cat['unit_price_gbp']:.2f}"
+                        + (f", {cat['supplier']}" if cat.get("supplier") else "")
+                        + ". On 0355255 that was 3 x 200 mm = 600 mm of a 10 m roll = 0.06 "
+                          "of a roll, about 28p — against £13.63 costed, on a £7.63 unit."
+                    )
+                else:
+                    stub.setdefault("review_flags", []).append(
+                        f"CONSUMABLE {code}: NOT PRICED. The quantity is not on the drawing, "
+                        f"and a consumable is sold by weight/volume — defaulting to 1 would "
+                        f"mean 1kg (that is how this line reached £8.03 on a £6.74 job). "
+                        f"Estimator to supply the quantity. Catalogue rate "
+                        f"£{cat['unit_price_gbp']:.2f}/unit"
+                        + (f", {cat['supplier']}" if cat.get("supplier") else "")
+                        + ". NOTE: powder is also computed by the workbook's Powder Qty "
+                          "Calculator, which only understands SHEET area — wire/tube parts "
+                          "contribute nothing, so a wire job gets zero powder until that is "
+                          "fixed."
+                    )
             stub.setdefault("review_flags", []).append(
                 f"BOM-code bought-in: {code} priced from UDEF catalogue "
                 f"(\u00a3{cat['unit_price_gbp']:.2f}"
