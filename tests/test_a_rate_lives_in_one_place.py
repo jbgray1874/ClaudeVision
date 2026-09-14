@@ -4,11 +4,10 @@
      modified config file. not scattered around all over the code"
                                                     — James Gray, SDI, 14 Sep 2026
 
-The audit behind this is `tools/where_do_the_rates_live.py`, and it found what the
-instruction predicted: 35 rate constants and tables outside config.py holding 171 numbers,
-and six rates written down in more than one place. Four of the six currently agree. Two
-do not, and neither of those is a mistake anybody made — each is two people being right in
-two files, years apart:
+The audit behind this is `tools/where_do_the_rates_live.py`: 53 rate constants and tables
+outside config.py holding 192 numbers across 16 modules, and six rates written down in more
+than one place with different values. Four more duplicates agree today. Neither of the six
+is a mistake anybody made — each is two people being right in two files, years apart:
 
     FOAMEX   550 kg/m3 in config   500 in the two modules that decide what a pallet weighs
     PLYWOOD  680 kg/m3 in config   600 in the same two
@@ -17,7 +16,15 @@ two files, years apart:
     wire     £1500/tonne default   £1600 in wire_costing, and 1600 on the sheet that shipped
     steel    £950/tonne default    £900 on the sheet that shipped
 
-THIS FILE IS A RATCHET, NOT A CLEAN-UP. Migrating 171 numbers is a week's work with an
+THE FIRST COUNT WAS WRONG, AND WRONG IN THE PLACE THAT MATTERED MOST. It said 35 tables and
+171 numbers, and reported wb_populate.py as holding no rates at all — because the scanner
+walked only module level, and `_THROUGHPUT_DEFAULTS` is declared INSIDE populate_workbook().
+That table is thirty operations in pieces-per-hour and it is what actually sets the Rate Per
+Hour column an estimator reads: Howard Thurley's "Laser Rate Acrylic AI 252 p/hour" is a row
+in it. A rate does not stop being a rate because it is indented, and a tool built to answer
+"where do the rates live" could not see the biggest answer.
+
+THIS FILE IS A RATCHET, NOT A CLEAN-UP. Migrating 192 numbers is a week's work with an
 estimator's ruling needed on each disagreement, and doing it silently would move money on
 live jobs. So the list below is frozen at what exists TODAY, with the sizes recorded. A new
 rate in a module that is not on the list fails. A listed module that GROWS a rate fails. A
@@ -42,18 +49,21 @@ from where_do_the_rates_live import (against_the_template, clashes,      # noqa:
 # Every one of these is a migration waiting for a ruling. Lower a number when you move rates
 # out; never raise one.
 FROZEN_BUDGET = {
-    "src/sheet_steel_costing.py": 71,   # the department rate card, laser speeds, powder
-    "src/wire_costing.py": 20,          # gauge table + £/tonne + scrap
+    "src/sheet_steel_costing.py": 72,   # the department rate card, laser speeds, powder
+    "src/wb_populate.py": 36,           # _THROUGHPUT_DEFAULTS — the pieces/hour that set the
+                                        #   Rate Per Hour column an estimator actually reads
     "src/commercial_lines.py": 19,      # density table (copy 2 of 3)
     "src/palletising.py": 19,           # density table (copy 3 of 3)
+    "src/concept_pricing.py": 15,
     "src/dxf_reader.py.py": 12,         # density again, in g/mm3
     "src/estimator.py": 7,
-    "src/invariants.py": 1,
     "src/bought_in_recogniser.py": 2,
     "src/costed_facts.py": 2,
+    "src/wire_costing.py": 2,          # gauge table at module level; £/tonne + scrap
     "src/blank_credibility.py": 1,
-    "src/client_quote_html.py": 1,      # MARKUP_FACTOR — the customer's price, in an HTML module
+    "src/client_quote_html.py": 1,     # MARKUP_FACTOR — the customer's price, in an HTML module
     "src/enquiry.py": 1,
+    "src/invariants.py": 1,
     "src/parity_check.py": 1,
     "src/web_scrape_price_lookup.py": 1,
 }
@@ -203,3 +213,32 @@ def test_the_setup_minutes_still_have_exactly_one_owner():
             assert abs(float(entry[1]) - float(book[name])) < 1e-9, (
                 f"{name}: rate card says {entry[1]} set-up minutes, config says {book[name]} "
                 f"— config is the owner and _with_book_setup should have applied it")
+
+
+# ── the blind spot that hid the biggest table, pinned ────────────────────────────────────
+
+def test_a_rate_table_inside_a_function_is_still_a_rate_table():
+    """_THROUGHPUT_DEFAULTS lives inside populate_workbook(). The first audit walked module
+    level only and reported wb_populate.py as clean — while the table that sets the Rate Per
+    Hour column sat in it. Indentation is not a hiding place."""
+    names = {row[2] for row in inventory()}
+    assert "_THROUGHPUT_DEFAULTS" in names
+    wb = [row for row in inventory() if row[2] == "_THROUGHPUT_DEFAULTS"]
+    assert wb and wb[0][3] >= 25, wb
+
+
+def test_working_variables_are_not_counted_as_rates():
+    """`_cost = area * rate * qty` matches every name pattern and is arithmetic, not a rate.
+    Counting those buried the thirty numbers that matter under three hundred that did not."""
+    names = {row[2] for row in inventory()}
+    for noise in ("_cost", "unit_cost", "hit_min", "priced", "_scrap", "credible_cost"):
+        assert noise not in names, noise
+
+
+def test_the_throughput_that_sets_the_sheets_rate_column_is_named():
+    """Howard Thurley asked why acrylic laser reads 252/hr. The answer is a row in this
+    table — so the audit has to be able to point at it."""
+    import wb_populate                                                  # noqa: PLC0415
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert '"Laser (Acrylic)":          252' in src
+    assert "UNMEASURED" in src            # and the ones with no corpus behind them say so

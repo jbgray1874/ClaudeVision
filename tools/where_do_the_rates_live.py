@@ -45,14 +45,18 @@ SKIP_FILE = re.compile(r"^_|_old\.py$|backup|baclkup|estimator1\.py$|^diag_|^tes
 RATE_NAME = re.compile(
     r"(gbp|price|cost|rate|speed|per_hour|per_kg|per_m2|per_sheet|per_tonne|tonne|charge|"
     r"margin|markup|minute|_min\b|_sec\b|setup|scrap|waste|yield|hourly|uplift|multiplier|"
-    r"factor|density|coverage|card|bars_per)", re.I)
+    r"factor|density|coverage|card|bars_per|throughput|per_item|items_per|allowance)", re.I)
 
 # Names that match the pattern and are not money: layout, tolerances and sort keys.
 NOT_A_RATE = re.compile(
     r"^(_MARGIN|_ABS_TOL_GBP|_PER_ROW_TOL_GBP|_TOLERANCE_TABLE|cost_cols_present)", re.I)
 
 
-def _count_numbers(node: ast.AST) -> int:
+def _count_numbers(node: Any) -> int:
+    # `x: float` with no value is an AnnAssign whose .value is None — legal, and nothing to
+    # count. Walking it raises, which took the whole audit down.
+    if node is None:
+        return 0
     return sum(1 for x in ast.walk(node)
                if isinstance(x, ast.Constant)
                and isinstance(x.value, (int, float)) and not isinstance(x.value, bool))
@@ -69,7 +73,19 @@ def inventory() -> List[Tuple[str, int, str, int]]:
             tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
         except Exception:                                            # noqa: BLE001
             continue
-        for node in tree.body:                 # module level only: a real shared constant
+        # EVERY SCOPE, NOT ONLY THE MODULE'S.
+        #
+        # The first version of this walked tree.body alone, on the reasoning that a real
+        # shared constant lives at module level. It does not. The single most consequential
+        # rate table in the engine — _THROUGHPUT_DEFAULTS, thirty-odd operations in
+        # pieces-per-hour, the thing that actually sets the Rate Per Hour column an
+        # estimator reads — is declared INSIDE populate_workbook(), and the audit reported
+        # wb_populate.py as holding no rates at all.
+        #
+        # A rate does not stop being a rate because it is indented. James Gray asked "is the
+        # throughput not on the sheets? the config." and the honest answer was neither — and
+        # the tool built to answer exactly that question could not see it.
+        for node in ast.walk(tree):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)):
                 continue
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -77,6 +93,24 @@ def inventory() -> List[Tuple[str, int, str, int]]:
                 if not isinstance(t, ast.Name):
                     continue
                 if not RATE_NAME.search(t.id) or NOT_A_RATE.match(t.id):
+                    continue
+                # A RATE IS WRITTEN DOWN. A working variable is worked out.
+                #
+                # `_cost = area * rate * qty` matches the name pattern and is not a rate —
+                # it is the arithmetic that USES one, and counting it buries the thirty
+                # numbers that matter under three hundred that do not. So the value has to
+                # be a literal: a number, or a table of them. That is what "the rate lives
+                # here" means, and it is what can be moved to config or to the sheet.
+                try:
+                    _lit = ast.literal_eval(node.value)
+                except Exception:                                    # noqa: BLE001
+                    continue
+                # A RATE OF ZERO IS NOT A RATE. `priced = 0` and `credible_cost = 0.0` are
+                # accumulators being opened, and both match the name pattern. A rate that
+                # really is held at zero is a deliberate commercial decision and belongs in
+                # config with a note, which is where PACKAGING and DELIVERY already are.
+                if isinstance(_lit, (int, float)) and not isinstance(_lit, bool) \
+                        and float(_lit) == 0.0:
                     continue
                 n = _count_numbers(node.value)
                 if n:
