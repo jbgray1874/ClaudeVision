@@ -93,16 +93,28 @@ def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 continue
             if _price <= 0:
                 continue
+            # WHOSE NUMBER IS IT. The label says what the item is; it never said where the
+            # figure came from, so a rate an estimator gave us and a rate somebody guessed
+            # reached the sheet looking identical — and the only honest thing to do with a
+            # figure of unknown origin is delete it. Printed with the price, so the question
+            # "where did 3p come from" is answered on the sheet rather than in this file.
+            _src = str(_c.get("source") or "").strip()
+            _prov = f"Standard commodity provisional: {_c.get('label', _tok)}"
+            if _src:
+                _prov += f" — source: {_src}"
             return {
                 "source": "standard_commodity_provisional",
                 "source_type": "standard_commodity_provisional",
                 "price_is_reproducible": True,      # a fixed config number, same every run
                 "unit_price_gbp": round(_price, 2),
                 "confidence": 0.5,
-                "provenance": f"Standard commodity provisional: {_c.get('label', _tok)}",
+                "provenance": _prov,
+                "price_source_note": _src,
                 "review_flag": True,
-                "review_reason": ("Provisional standard-commodity price — confirm against a "
-                                  "supplier quote or add the item to the purchasing catalogue."),
+                "review_reason": ("Provisional standard-commodity price"
+                                  + (f" ({_src})" if _src else "")
+                                  + " — confirm against a supplier quote or add the item to "
+                                    "the purchasing catalogue."),
                 "supplier_name": "SDI standard commodity (provisional)",
             }
     return None

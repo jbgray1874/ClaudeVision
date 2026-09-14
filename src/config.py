@@ -378,11 +378,17 @@ COMMERCIAL_LINE_ASK_MARKET = False
 #   token -> {price_gbp, label}. A token is matched as an UPPER-CASE substring of the
 #   description; join tokens with "+" ("PERFO+CLIP") to require that EVERY one is present,
 #   which keeps a generic word from over-matching a part it does not name.
+#
+#   AND EVERY ENTRY SAYS WHERE ITS FIGURE CAME FROM. `source` is printed with the price, so an
+#   estimator reading a provisional can see whose number it is without opening this file. A
+#   provisional whose origin is unrecorded is indistinguishable from one somebody invented,
+#   which is the difference between a figure worth confirming and a figure worth deleting.
 STANDARD_COMMODITY_PRICE_GBP = {
     "PALLET": {
         "price_gbp": 12.00,
         "label": "standard 1200x1000 UK pallet (new) — PROVISIONAL, confirm new/recon and "
                  "whether an ISPM-15 heat-treated stamp is needed for export",
+        "source": "market rate for a new 1200x1000 UK pallet — no supplier quote on file",
     },
     # 11762-17 item "STD PART / PERFO PLASTIC LOCKING CLIP" — the plastic clip that locks a
     # bottle-shelf into a perforated panel. No SDI part code, so the purchasing DB cannot
@@ -392,6 +398,7 @@ STANDARD_COMMODITY_PRICE_GBP = {
         "price_gbp": 1.20,
         "label": "perforated-panel plastic locking clip — PROVISIONAL per-each, confirm "
                  "against a supplier quote or add the item to the purchasing catalogue",
+        "source": "provisional set when 11762-17 surfaced the line — no supplier quote on file",
     },
     # 7332-01 item "P/P / BLACK FELT PAD, SELF-ADHESIVE, 25mm DIA" — the stick-on foot pad.
     # No SDI part code (the drawing prints the class word "P/P"), so the line read as £0.00 and
@@ -403,6 +410,38 @@ STANDARD_COMMODITY_PRICE_GBP = {
     "FELT+PAD": {
         "price_gbp": 0.20,
         "label": "Self-adhesive felt pad 25 mm (INDICATIVE) — confirm against a supplier quote",
+        "source": "derived from a retail pack (~£3.50 per 16 ≈ £0.22 each), held at £0.20 as a "
+                  "trade indication — no supplier quote on file",
+    },
+    # 12349-02's two fasteners, and the reason they needed an entry at all.
+    #
+    # THE ONE TABLE THAT SHOULD HOLD A SCREW PRICE IS EMPTY. supplier_price_list.py's own audit
+    # measures it: UDEF 93,837 rows, historical RAG 68,489, bought-in catalogue 0. So every
+    # screw, castor, clip and lock falls past the rung meant for it. The market rung then finds
+    # nothing either, because a generic fastener has no reference to search on — the bumpon on
+    # the same bill of materials priced at 35p off its maker's code PD.2120, and "3.5x19mm WOOD
+    # SCREW" carries no equivalent. Two lines an estimator prices in his sleep came back £0.00
+    # on run after run, and a zero on a quote is a free part.
+    #
+    # KEYED ON THE FAMILY, PRICED AT THE SIZE WE WERE GIVEN. The rate is a small-gauge rate and
+    # says so in its own label: a 3.5 x 19 wood screw is 3p and a 6 x 80 coach screw is not, so
+    # a materially larger fastener carries the same line into review rather than being quietly
+    # undercharged. Narrower keys would be safer still and would price nothing on the next job,
+    # which is the failure this table exists to end.
+    #
+    # These go the moment a fastener price file is loaded — a real catalogue rate wins over a
+    # provisional at every rung above this one.
+    "WOOD+SCREW": {
+        "price_gbp": 0.03,
+        "label": "wood screw, small gauge — trade (rate given for 3.5 x 19 mm); confirm for "
+                 "materially larger gauges",
+        "source": "SDI trade rate, James Gray (SDI estimating), 14 Sep 2026",
+    },
+    "BUTTON+HEAD": {
+        "price_gbp": 0.08,
+        "label": "socket button head screw, small metric — trade (rate given for M4 x 10 mm, "
+                 "black); confirm for materially larger sizes",
+        "source": "SDI trade rate, James Gray (SDI estimating), 14 Sep 2026",
     },
 }
 
