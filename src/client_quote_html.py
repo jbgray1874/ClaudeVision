@@ -965,30 +965,40 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
                             break
                     if _title:
                         break
-            if not _title and _pref:
-                # AND THE ROOTS LIST MAY HOLD ONLY THE MINTED PARENT — which is the whole of
-                # this case, not an edge of it. The SolidWorks tree mints one node above
-                # everything, so it becomes the only root, and a search confined to the roots
-                # has nowhere to go: the Description box came out EMPTY, which is the fault
-                # that was fixed before the models were ever read.
-                #
-                # The part records are where the descriptions live. Take the outermost code
-                # this drawing number owns — shortest first, so 12349-02-69 answers before
-                # 12349-02-69-100 — skipping the minted parent and anything that is the
-                # engine talking about itself.
-                for _rec in sorted(
-                        _part_records(summary),
-                        key=lambda r: len(str(r.get("part_number") or "")) or 999):
-                    _pn = str(_rec.get("part_number") or "").strip()
-                    if not _pn or _pn.upper() == _top.upper():
-                        continue
-                    if not _pn.upper().startswith(_pref.upper()):
-                        continue
-                    _d = str(_rec.get("description") or "").strip()
-                    if _d and not _is_an_engine_note(_d):
-                        _title = _d
-                        break
             _number = _number or _top
+
+    # THE PART RECORDS, WHATEVER THE GRAPH DID — and this arm sits OUTSIDE the top-assembly
+    # block on purpose, because that is where it was and that is why it did not fire.
+    #
+    # Both earlier attempts lived under `if _top:`, so both depended on the graph naming a
+    # root. When SolidWorks applies, the tree mints a parent above everything and that parent
+    # is the only root, carrying the engine's own note for a description. When SolidWorks does
+    # NOT apply, there may be no named root at all — and then neither fix ran, the title stayed
+    # empty, and 12349-02's Description box came out blank on run after run of a job whose own
+    # provenance tab prints "GRAVITY FEEDER MODULES" against 12349-02-69.
+    #
+    # A description does not need a graph. It needs the part records, which every run has, and
+    # the drawing number to say which of them is this unit: the outermost code the number owns,
+    # shortest first, skipping anything that is the engine talking about itself. Nothing is
+    # invented — no owned record with a real description means nothing is written, exactly as
+    # before.
+    if not _title:
+        # THE JOB'S NUMBER, NOT THE TOP ASSEMBLY'S CODE. `_number` may by now BE the minted
+        # parent — 12349-02-69-GA — and filtering the records by that prefix matches only the
+        # minted parent itself, whose description is the note we are here to refuse. The
+        # folder is the job, and the job is who owns these records.
+        _m1 = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", stem or "")
+        _pref2 = (_m1.group(1).strip(" -_") if _m1 else "") or str(_number or "").strip()
+        if _pref2:
+            for _rec in sorted(_part_records(summary),
+                               key=lambda r: len(str(r.get("part_number") or "")) or 999):
+                _pn = str(_rec.get("part_number") or "").strip()
+                if not _pn or not _pn.upper().startswith(_pref2.upper()):
+                    continue
+                _d = str(_rec.get("description") or "").strip()
+                if _d and not _is_an_engine_note(_d):
+                    _title = _d
+                    break
 
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
     # no description at all rather than a misleading one — "SolidWorks" is not a product.

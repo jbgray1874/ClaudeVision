@@ -139,6 +139,32 @@ def test_a_title_block_description_is_still_what_it_always_was():
     assert (num, rev, desc) == ("12349-02-69-GA", "Rev A", "GRAVITY FEEDERS")
 
 
+def test_a_job_with_no_named_root_at_all_still_finds_its_name():
+    """THE RUN WITH NO SOLIDWORKS. No minted parent, and the graph names no root — so every
+    fix that lived under "if there is a top assembly" did not run, and the Description box
+    came out blank on a job whose own provenance tab prints GRAVITY FEEDER MODULES. A
+    description does not need a graph; it needs the part records."""
+    s = {"canonical_route_shadow": {"top_assembly": "", "top_assemblies": [], "nodes": []},
+         "parts": [_rec("12349-02-69-04M", "LID"),
+                   _rec("12349-02-69", "GRAVITY FEEDER MODULES"),
+                   _rec("12349-02-69-100", "GRAVITY FEEDER MODULES, 3 WIDE")]}
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDER MODULES"
+
+
+def test_with_no_root_it_still_will_not_take_another_customers_part():
+    s = {"canonical_route_shadow": {"top_assembly": "", "top_assemblies": [], "nodes": []},
+         "parts": [_rec("7332-01", "HARRODS STAND"),
+                   _rec("12349-02-69", "GRAVITY FEEDER MODULES")]}
+    assert _drawing_identity(s, "12349-02")[2] == "GRAVITY FEEDER MODULES"
+
+
+def test_with_no_root_and_nothing_owned_it_writes_nothing():
+    s = {"canonical_route_shadow": {"top_assembly": "", "top_assemblies": [], "nodes": []},
+         "parts": [_rec("7332-01", "HARRODS STAND")]}
+    _num, _rev, desc = _drawing_identity(s, "12349-02")
+    assert desc in ("", "12349-02"), desc
+
+
 def test_a_job_whose_root_has_a_description_is_unchanged():
     """The ordinary path: one root, a real description, nothing to refuse."""
     s = _summary("7332-01-101", ["7332-01-101"], [_rec("7332-01-101", "HARRODS STAND")])
