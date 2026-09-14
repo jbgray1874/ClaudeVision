@@ -345,6 +345,32 @@ PACKAGING_CONFIG = {
 COMMERCIAL_LINE_GBP_PER_ORDER = {
 }
 
+# --- Goods sold off a roll, priced by the length actually used ---------------------
+#
+# 0355255's tape line is the whole gap between our sheet and the estimator's: £19.50 a unit
+# against £7.63, and £18.84 against £4.55 at a thousand off. TAPE113C is supplied on a 10
+# METRE ROLL at £4.50. The drawing asks for three strips across the base, 200 mm each — six
+# hundredths of a roll, twenty-eight pence. The line was costed 3 x £4.37, a PER-EACH default
+# material rate, and came to £13.63. A per-each charge does not amortise either, which is why
+# our column barely moved across the quantity breaks while the estimator's fell by a third.
+#
+# The record already knew enough to get it right: the description carries "LENGTH: 200.00" and
+# the quantity is 3. What was missing is the only thing a roll needs — how long the roll is and
+# what it costs. So that is what this table holds, keyed on the SDI code.
+#
+#   length_used = per-piece length x quantity;  price = length_used / roll_length x roll price
+#
+# A code NOT in this table is not guessed at: the line is withheld and says so, the same as a
+# consumable with no quantity. Nothing here was inferred from a drawing.
+ROLL_GOODS_CATALOGUE = {
+    "TAPE113C": {
+        "roll_length_mm": 10000.0,
+        "roll_price_gbp": 4.50,
+        "label": "EPDM closed-cell tape 25 x 1 mm — 10 m roll",
+        "source": "Howard Thurley (SDI estimating/buying), 0355255 review, 9 Sep 2026",
+    },
+}
+
 # --- Which machine cuts a blank, when a part is charged two ways -------------------
 #
 # A part carrying BOTH a laser cut and a routed cut is the same profile paid for twice.
@@ -1101,7 +1127,18 @@ ACRYLIC_OP_DRIVERS = {
     "laser_load_unload_sec_per_sheet": 300.0, # ÷ parts-per-sheet (300/15=20s; 300/192=1.56s)
     "laser_sec_per_hole": 3.0,                # non-profile (hole) cutting
     "laser_setup_min": 5.0,
-    "min_per_linebend": 1.0,                  # FRONT/TOP/BACK 2 bends -> 30 parts/hr
+    # THE ACRYLIC DEPARTMENT'S OWN FIGURE, which beats a number reverse-engineered from one
+    # workbook. 0355255 line 97 booked Linebend at 30 parts/hr — 1.0 min per bend on a
+    # two-bend part — and Howard Thurley relayed the department's timing as 60 parts/hour for
+    # that part. Same class of evidence as the welding department's 30/20 on 7332-01: the
+    # people who do the work, in writing, through the estimator who owns the job.
+    #
+    # READ AS PER PART, CONVERTED TO PER BEND. 60/hr on the two-bend A01 is one minute for the
+    # part, so half a minute a bend — which is what scales honestly to a part with three. If
+    # the department meant 60/hr whatever the bend count, that is a different rule and the
+    # line's flag is where it gets corrected.
+    "min_per_linebend": 0.5,                  # Acrylic Dept via Howard Thurley, 0355255,
+                                              # 9 Sep 2026: 60 parts/hr on a 2-bend part
     "linebend_setup_min": 30.0,
     "glue_min_per_assembly": 2.4,             # GLUE: one op per bonded assembly (25 parts/hr)
     "glue_setup_min": 30.0,

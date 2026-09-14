@@ -3086,7 +3086,91 @@ def _price_declared_material_layers(part: Dict[str, Any],
     return material
 
 
+_ROLL_GOODS_WORDS = ("TAPE", "VINYL", "FOAM STRIP", "FELT STRIP", "REEL", "WEBBING")
+_ROLL_LENGTH_RE = re.compile(r"LENGTH\s*[:=]\s*([\d.]+)", re.IGNORECASE)
+
+
+def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Price a length off a roll, or say why it cannot be. None if this is not roll goods.
+
+    A PIECE COUNT MUST NEVER MULTIPLY A PACK PRICE. 0355255's tape was costed 3 x a per-each
+    default rate and came to £13.63 where the length used makes it 28p — on a unit whose whole
+    manual estimate is £7.63. The record knew enough all along: its description carries
+    "LENGTH: 200.00" and its quantity is 3. What it lacked was the roll's own length and price,
+    which is a buying fact and now lives in config.ROLL_GOODS_CATALOGUE.
+
+    Returns a material estimate priced by consumed length when the code is in that table, and a
+    WITHHELD one naming the arithmetic when it is not. Never a per-each guess.
+    """
+    _blob = " ".join(str(part.get(k) or "") for k in ("part_number", "description")).upper()
+    if not any(w in _blob for w in _ROLL_GOODS_WORDS):
+        return None
+
+    # MATCHED WITH THE SPACES AND HYPHENS TAKEN OUT, because one code is written three ways in
+    # a single pack: 0355255's own line reads "TAPE 113C" where the catalogue says "TAPE113C",
+    # and a straight substring test misses it — which is a silent miss, priced as an each.
+    _table = getattr(config, "ROLL_GOODS_CATALOGUE", {}) or {}
+    _squashed = re.sub(r"[^A-Z0-9]", "", _blob)
+    _entry, _code = None, ""
+    for _c, _e in _table.items():
+        if re.sub(r"[^A-Z0-9]", "", str(_c).upper()) in _squashed:
+            _entry, _code = _e, str(_c).upper()
+            break
+
+    _qty = _safe_int(part.get("quantity")) or 1
+    _m = _ROLL_LENGTH_RE.search(_blob)
+    _piece_mm = _safe_float(_m.group(1)) if _m else _safe_float(part.get("overall_length_mm"))
+    _used_mm = (_piece_mm or 0) * _qty
+
+    if not _entry or not _used_mm:
+        _why = ("the length of each piece is not stated" if not _used_mm
+                else f"{_code or 'this code'} is not in the roll-goods catalogue, so the roll "
+                     f"length and roll price are not known")
+        part.setdefault("review_flags", []).append(
+            f"ROLL GOODS: NOT PRICED. This is sold off a roll and the drawing asks for pieces "
+            f"cut from one — a piece count must never multiply a pack price, which is how "
+            f"0355255's tape reached £13.63 against 28p. Withheld because {_why}. Give the "
+            f"roll length and roll price (and the piece length if it is not on the drawing) "
+            f"and it prices as length used ÷ roll length × roll price")
+        return {"material": part.get("normalized_material"), "thickness_mm": None,
+                "blank_length_mm": None, "blank_width_mm": None, "blank_area_m2": None,
+                "unit_material_mass_kg": None, "unit_material_cost_gbp": None,
+                "cost_per_part_gbp": None, "extended_material_cost_gbp": None,
+                "stock_estimate": None, "stock_form": "roll",
+                "requires_flat_blank": False,
+                "cost_method": "roll_goods_withheld_estimator_to_price",
+                "price_source": {"source": "roll_goods_withheld", "applied": False}}
+
+    _roll_mm = _safe_float(_entry.get("roll_length_mm")) or 0.0
+    _roll_gbp = _safe_float(_entry.get("roll_price_gbp")) or 0.0
+    if _roll_mm <= 0 or _roll_gbp <= 0:
+        return None
+    _cost = round(_used_mm / _roll_mm * _roll_gbp, 4)
+    part.setdefault("review_flags", []).append(
+        f"ROLL GOODS {_code}: {_qty} x {_piece_mm:g} mm = {_used_mm:g} mm of a "
+        f"{_roll_mm:g} mm roll at £{_roll_gbp:.2f} = £{_cost:.2f} for the line — priced by "
+        f"the length used, not by the piece. Roll data: {_entry.get('source') or 'config'}")
+    return {"material": part.get("normalized_material"), "thickness_mm": None,
+            "blank_length_mm": _piece_mm, "blank_width_mm": None, "blank_area_m2": None,
+            "unit_material_mass_kg": None,
+            "unit_material_cost_gbp": _cost, "cost_per_part_gbp": _cost,
+            "extended_material_cost_gbp": _cost,
+            "stock_estimate": None, "stock_form": "roll", "requires_flat_blank": False,
+            "cost_method": "roll_goods_by_length",
+            "roll_length_mm": _roll_mm, "roll_price_gbp": _roll_gbp,
+            "length_used_mm": _used_mm,
+            "price_source": {"source": "roll_goods_catalogue", "applied": True,
+                             "provenance": _entry.get("source")}}
+
+
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
+    # BEFORE ANY PER-EACH OR PER-KILO RATE. A thing sold off a roll is priced by the length
+    # taken off it; everything below this line prices a blank, a weight or an each, and all
+    # three are the wrong unit for a strip of tape.
+    _roll = roll_goods_material(part)
+    if _roll is not None:
+        return _roll
+
     material = part.get("normalized_material") or _first(part.get("materials", []))
 
     # A CROSS-REFERENCE IS NOT A MATERIAL.
