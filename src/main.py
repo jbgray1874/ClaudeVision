@@ -310,6 +310,20 @@ def main() -> None:
     args = parse_args()
     ensure_directories()
 
+    # WHICH BUILD IS ABOUT TO RUN, said before it runs anything.
+    #
+    # The runner spawns this file fresh per job, so the source on disk at THIS moment is
+    # the source that costs the job — and when a book comes back carrying a number a
+    # committed fix was supposed to have changed, the only two explanations are a stale
+    # checkout and a defect. They need opposite responses and nothing in the deliverables
+    # could tell them apart. Now the log opens with the answer and the workbook carries the
+    # same string, so the question is settled by comparison rather than by inference.
+    try:
+        from build_stamp import print_build_stamp as _print_build_stamp
+        _print_build_stamp()
+    except Exception:                                        # noqa: BLE001
+        pass
+
     # ── CAN THIS MACHINE RUN THE ENGINE? ASKED FIRST, NOT DISCOVERED MID-SCAN ───────
     # A box whose environment had lost two packages produced, in this order: a four-line
     # warning that every catalogue price was missing, a timing table saying the first phase

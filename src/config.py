@@ -525,10 +525,24 @@ STANDARD_COMMODITY_PRICE_GBP = {
 # per-batch floor: a small order is charged the minimum however light it is, so the ORDER total
 # is max(mass x rate x qty, vat_minimum); the per-unit line is that divided back by the order.
 # Set gbp_per_kg to None to withhold the rate entirely (the line then reads "estimator to price").
+#
+# rate_covers IS THE HALF THE POLICY NEVER SAID OUT LOUD, and 7332-01 shipped £15.83
+# because of it. The paragraph above states plainly that the £/kg card is zinc + passivate
+# and that a decorative spec is not this rate — but the CODE had no way to tell the two
+# apart, so every plate finish took the card, including a bare "PLATED" that names no
+# process at all. A finish naming one of these words is a plating this rate actually
+# prices. A finish naming none of them is a plating we cannot identify, and £2.50/kg is
+# then not an indication of anything: brass, nickel and decorative specs run an order of
+# magnitude above it, and the £250 Howard Thurley quoted for Brass Harrods 01 against the
+# card's £15.83 is that order of magnitude on one line of one job.
+#
+# Widen this list ONLY with a process the £2.50 card genuinely covers. Anything else
+# belongs in NAMED_PLATE_SPECS below as a quoted price, or stays blocking.
 PLATE_SUBCONTRACT_POLICY = {
     "gbp_per_kg": 2.50,
     "vat_minimum_gbp": 95.0,
     "label": "plating — INDICATIVE zinc/passivate, verify against plater quote",
+    "rate_covers": ("ZINC", "PASSIVAT", "GALVAN", "ELECTRO-ZINC", "ELECTROZINC"),
 }
 
 # A NAMED PLATE SPEC IS A QUOTED PRICE, NOT A RATE PER KILO.

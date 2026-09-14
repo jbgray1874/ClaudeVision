@@ -754,9 +754,22 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 f"Unit cost (calculated by the Estimate sheet): £{_engine_total:.2f}"
                 if _wb_unit is not None else
                 f"Part material only — no workbook total: £{_engine_total:.2f}")
+    # THE BUILD IS PART OF THE PROVENANCE OF EVERY NUMBER BELOW IT.
+    #
+    # This tab exists to say where each figure came from. The source that computed them is
+    # the first of those facts and was the only one missing — which is how 7332-01's book
+    # came back without two ops whose commits were ancestors of the tip the runner was on,
+    # and nobody could say whether that was a stale checkout or a defect. Compare this
+    # string against the one the log printed; if they differ from the build you expect, the
+    # answer is `git pull`, not a day's debugging.
+    try:
+        from build_stamp import build_stamp_line as _build_stamp_line
+        _build_txt = f"   |   Build: {_build_stamp_line()}"
+    except Exception:                                            # noqa: BLE001
+        _build_txt = ""
     cell(2, 1,
          f"Drawing: {pdf_name}   |   Job: {job_no}   |   Scanned: {scan_dt}   |   "
-         f"Parts: {len(provenance)}   |   {_tot_txt}",
+         f"Parts: {len(provenance)}   |   {_tot_txt}{_build_txt}",
          bg="2F5496", fg=C_HEADER_FG, align="center", size=10)
     ws.row_dimensions[2].height = 18
     # ── Legend ─────────────────────────────────────────────────────────────────

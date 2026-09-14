@@ -76,8 +76,13 @@ def test_an_unnamed_finish_still_takes_the_mass_rate():
     assert unit == 15.83
 
 
-def test_no_finish_text_at_all_is_unchanged():
-    assert plating_unit_price(2.4, 6, POLICY)[2] == "subcontract_plating_indicative"
+def test_no_finish_text_at_all_names_no_process_either():
+    """A plating line with no finish text is the same state as one reading "PLATED": the
+    pack says this goes to a plater and does not say what for. The zinc card is not an
+    approximation of an unknown process — it is a different product — so the line blocks."""
+    unit, note, method = plating_unit_price(2.4, 6, POLICY)
+    assert unit is None and method == "subcontract_plating_spec_unidentified"
+    assert "not stated" in note
 
 
 def test_a_withheld_rate_is_still_withheld():

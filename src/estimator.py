@@ -1322,6 +1322,36 @@ def named_plate_spec(finish_text: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+def named_plate_spec_anywhere_on_the_pack(
+        *record_lists: Any) -> Tuple[Optional[Dict[str, Any]], str, str]:
+    """A registered plate spec named on ANY part of this pack: (spec, part_number, text).
+
+    THE CALLOUT IS ON THE PACK, NOT NECESSARILY ON THE LINE THAT PAYS FOR IT. 7332-01's
+    plating line is synthesised against the weldment and its members, and the finish those
+    records carried read "PLATED" — while the estimator's own account of the drawing is
+    that it "only nominates a finish as Harrods01". A general note, a GA title block and a
+    BOM finish column are all places a pack states a finish once for the whole job, and a
+    reader that only ever looks at the plated members will miss every one of them.
+
+    So the search widens to the pack and STOPS THERE. It is the pack's text that is read —
+    never the customer's name, never the job number, never a folder. A spec found this way
+    is a token the drawing set actually contains; a job containing no registered token
+    finds nothing, which is every job but the ones we hold a quote for.
+
+    The part it was found on comes back with it, because a price taken from another part's
+    finish field has to say which part, or an estimator cannot check it.
+    """
+    for _records in record_lists:
+        for _rec in (_records or []):
+            if not isinstance(_rec, dict):
+                continue
+            _text = _part_finish_text(_rec)
+            _spec = named_plate_spec(_text)
+            if _spec:
+                return _spec, str(_rec.get("part_number") or "?"), _text
+    return None, "", ""
+
+
 def plating_unit_price(mass_kg: Any, order_qty: Any,
                        policy: Dict[str, Any],
                        finish_text: Any = "") -> Tuple[Optional[float], str, str]:
@@ -1359,6 +1389,43 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             + (f", plater vat minimum £{vat_min:.0f} spread over {q} off" if hit_min
                else f" × {q} off")
             + " — INDICATIVE zinc/passivate, verify against a plater quote")
+
+    # ---- AND THE CARD ONLY PRICES THE PLATING IT IS A CARD FOR --------------------
+    #
+    # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£250.00 per each
+    # stand.)" The engine had not stated zinc because it read zinc. It stated zinc because
+    # zinc is what this rate is, and it applied the rate to a drawing whose finish field says
+    # only "PLATED" — a word that names a family and no process inside it.
+    #
+    # £2.50/kg is a trade zinc-and-passivate card. Against a decorative brass it is not an
+    # approximation, it is a different product: £15.83 against £250.00, sixteen to one, on a
+    # line an estimator has no reason to look twice at because it carries a plausible number
+    # and the word INDICATIVE. A wrong figure that reads as considered is worse than a blank,
+    # and this is the shape of wrong that survives review.
+    #
+    # So the card prices what the card covers, and an unidentified plate goes to the person
+    # who can ring the plater — carrying the card's arithmetic as a CANDIDATE, and every
+    # quoted spec we hold beside it, so accepting one is a decision and not a retype.
+    _covers = tuple((policy or {}).get("rate_covers") or ())
+    _fin_u = str(finish_text or "").upper()
+    if _covers and not any(str(tok).upper() in _fin_u for tok in _covers):
+        _named = str(finish_text or "").strip() or "not stated"
+        _cands = "; ".join(
+            f"{(_s.get('label') or _k)} £{float(_s['gbp_per_unit']):.2f} per unit "
+            f"({_s.get('source', 'source not recorded')})"
+            for _k, _s in (getattr(config, "NAMED_PLATE_SPECS", {}) or {}).items()
+            if _safe_float(_s.get("gbp_per_unit")))
+        return (None,
+                f"PLATING SPEC NOT IDENTIFIED — the drawing's finish reads {_named!r}, which "
+                f"names a plate but not which plate. The £{float(rate):.2f}/kg card is trade "
+                f"zinc/passivate and prices nothing else: on this mass it would be "
+                f"£{unit:.2f} a unit ({note}) — that figure is a CANDIDATE and is NOT "
+                f"charged. Quoted specs on file: "
+                + (_cands or "none")
+                + ". Confirm the process with the plater and enter the price, or accept the "
+                  "zinc candidate deliberately",
+                "subcontract_plating_spec_unidentified")
+
     return unit, note, "subcontract_plating_indicative"
 
 
@@ -1439,7 +1506,21 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             _part_finish_text(by_pn[str(m).strip().upper()])
             for m in _finish_src
             if m and str(m).strip().upper() in by_pn)
+        # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
+        # A finish stated once for the whole job — on a GA title block, a general note, the
+        # BOM's own finish column — is on no plated member's record, and reading only the
+        # members is how "Harrods01" went unseen on the line that exists because of it.
+        _found_on = ""
+        if not named_plate_spec(_finish_text):
+            _spec_pack, _found_on, _spec_text = named_plate_spec_anywhere_on_the_pack(
+                part_estimates, parts if parts is not None else [])
+            if _spec_pack:
+                _finish_text = f"{_finish_text} {_spec_text}".strip()
         unit, note, method = plating_unit_price(mass, order_qty, policy, _finish_text)
+        if _found_on and method == "subcontract_plating_named_spec":
+            note += (f". The spec is not stated on this weldment or its members — it was "
+                     f"read from {_found_on}'s own finish on this pack; confirm it governs "
+                     f"the plated members listed here")
         # GETTING IT THERE AND BACK IS PART OF HAVING IT PLATED.
         #
         # "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network -
@@ -1510,6 +1591,17 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
               "nickel is not this rate) and that this member list is what the plater quotes"]
         # The member list on the DESCRIPTION too, so it survives onto the sheet line itself and
         # not only into a review flag an estimator has to go looking for.
+        # AND THE LINE STOPS CALLING ITSELF ZINC WHEN IT IS NOT PRICED AS ZINC.
+        # The placeholder is minted with the policy's own label — "INDICATIVE
+        # zinc/passivate" — because at mint time the only rate in view is the card. Once the
+        # spec turns out to be unidentified, that label is the single most misleading string
+        # on the sheet: it names a process the drawing never stated, on a line carrying no
+        # money, in the description column an estimator reads first.
+        if method == "subcontract_plating_spec_unidentified":
+            _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
+            pe["description"] = (
+                f"{_pn_plate} plating — SPEC NOT IDENTIFIED: the drawing names a plate but "
+                f"not which plate. NOT PRICED — confirm the process with the plater").strip()
         if _contrib or _deferred:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
             _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
@@ -4962,6 +5054,23 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 "no bend line in a DXF, no angle callout. The op was read from the drawing "
                 "text near a tube, and a straight leg does not go on the tube-bender. If it "
                 "does bend, the drawing needs to say so")
+        elif not ((_safe_int(part.get("bend_count_dxf")) or 0) > 0
+                  or len(part.get("angles_deg") or []) > 0):
+            # KEPT, AND STILL WORTH ASKING ABOUT. The gate above only removes the op where
+            # NOTHING states a bend. 7332-01-002 is the other case: a textual bend statement
+            # and no measurement behind it — no DXF bend line, no angle callout — and the
+            # estimator's answer was "Line 103 - Tube Bending Op. – Not Required."
+            #
+            # A word is weaker evidence than a measurement, and the tube-bender is £32.84 an
+            # hour with a 45-minute set-up, so the weak case is worth a sentence. It is NOT
+            # worth a silent deletion: the drawing did say something, and removing charged
+            # work because one estimator disagreed with one drawing is how a rule stops
+            # describing anything. Charged as read; raised so a person rules on it.
+            part.setdefault("review_flags", []).append(
+                f"tube bending CHARGED on the drawing's word alone: the text states a bend "
+                f"but nothing measures one — no bend line in a DXF, no angle callout. "
+                f"{len(_tube_bend_ops)} tube-bend op(s) at the bender's rate and set-up. "
+                f"Confirm the leg actually bends, or take the op off")
 
     # ---- ONE BLANK IS CUT OUT ONCE ------------------------------------------------
     #

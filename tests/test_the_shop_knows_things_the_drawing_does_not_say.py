@@ -70,6 +70,44 @@ def test_any_evidence_of_a_bend_keeps_the_op():
         assert "tube_bending" in (part.get("textual_operations") or []), ev
 
 
+# ── kept on a word alone, and still worth asking about ───────────────────────────────────
+#
+# "Line 103 - Tube Bending Op. – Not Required." The gate above only removes the op where
+# NOTHING states a bend, and 7332-01-002 is the other case: the drawing text states one and
+# no measurement backs it — no bend line in a DXF, no angle callout. The op stays, because
+# the drawing did say something and deleting charged work on one estimator's disagreement
+# with one drawing is how a rule stops describing anything. But the tube-bender is £32.84 an
+# hour with a 45-minute set-up, and a word is weaker evidence than a measurement, so the
+# weak case costs a sentence.
+
+def test_a_bend_stated_in_words_only_is_charged_and_raised():
+    part = _tube(fold_count_textual=2)
+    estimate_process_times(part)
+    assert "tube_bending" in (part.get("textual_operations") or [])   # still charged
+    assert "CHARGED on the drawing's word alone" in _flags(part)
+    assert "Confirm the leg actually bends" in _flags(part)
+
+
+def test_a_measured_bend_is_not_second_guessed():
+    """A DXF bend line or an angle callout IS the measurement. Flagging those would put a
+    question on every bent tube in the shop, which is noise, not review."""
+    for ev in ({"bend_count_dxf": 1}, {"angles_deg": [90]},
+               {"bend_count_dxf": 2, "angles_deg": [45, 45]}):
+        part = _tube(**ev)
+        estimate_process_times(part)
+        assert "tube_bending" in (part.get("textual_operations") or []), ev
+        assert "word alone" not in _flags(part), ev
+
+
+def test_a_removed_bend_is_not_also_queried():
+    """The two states are exclusive: it either came off with its reason, or it stayed with
+    its question. Both on one part would be the sheet arguing with itself."""
+    part = _tube()
+    estimate_process_times(part)
+    assert "tube bending removed" in _flags(part)
+    assert "word alone" not in _flags(part)
+
+
 def test_a_part_with_no_tube_bend_op_is_untouched():
     part = {"part_number": "X", "normalized_material": "MILD_STEEL",
             "normalized_thickness_mm": 1.5, "textual_operations": ["laser_cutting"]}

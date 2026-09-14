@@ -200,7 +200,14 @@ def test_the_member_list_is_re_derived_from_the_compiled_hierarchy():
     assert plate["_plating_members"] == ["7332-01-002", "7332-01-008"]
     assert "7332-01-001" not in plate["_plating_members"]        # RAW base still excluded
     assert plate["material_estimate"]["unit_material_mass_kg"] == 2.426
-    assert plate["unit_cost_gbp"] == 15.83                       # £95 vat floor over 6
+    # The mass is what this test is about and the mass is right. The PRICE is no longer
+    # £15.83: these parts state "PLATED", which names a plate and not which plate, so the
+    # trade-zinc card does not price them and the line is blocking with that £15.83 carried
+    # as a candidate. 7332-01 is the job that taught us the difference — its requirement is
+    # a £250 brass.
+    assert plate["unit_cost_gbp"] == 0.0
+    assert plate["_price_explicitly_withheld"] is True
+    assert "15.83" in " ".join(str(f) for f in plate["review_flags"])
     assert "7332-01-002" in plate["description"]                 # named on the sheet line
 
 
