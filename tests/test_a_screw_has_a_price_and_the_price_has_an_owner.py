@@ -178,3 +178,41 @@ def test_the_quantity_is_the_line_s_own():
     for q in (1, 4, 6, 20):
         stub = _bought_in_part_stub("STD PART", "3.5x19mm WOOD SCREW", q)
         assert stub["extended_total_cost_gbp"] == round(0.03 * q, 2), q
+
+
+# ── and it must never answer for a commercial allowance ──────────────────────────────────
+#
+# THE REGRESSION THIS PINS, WHICH REACHED A LIVE RUN. PACKAGING and DELIVERY are not bought-in
+# components: they are per-order allowances owned by commercial_lines and
+# COMMERCIAL_LINE_GBP_PER_ORDER, which is HELD EMPTY BY DECISION until the estimators' own
+# figures land. The placeholder reads "Packaging (box / pallet — per-unit share)", the PALLET
+# entry matched the word "pallet" inside it, and the line came out at £12.00 — a figure nobody
+# had agreed, on the one line the config comment says must stay at an honest zero.
+
+def test_the_packaging_placeholder_is_never_priced_from_the_component_table():
+    stub = _bought_in_part_stub(
+        "PACKAGING", "Packaging (box / pallet — per-unit share, estimator to price)", 1)
+    assert stub.get("unit_cost_gbp") in (None, 0, 0.0)
+    assert stub.get("source") != "standard_commodity_provisional"
+    assert stub.get("_commercial_line") is True
+
+
+def test_nor_is_delivery():
+    stub = _bought_in_part_stub(
+        "DELIVERY", "Delivery (per-unit share of order haulage — estimator to price)", 1)
+    assert stub.get("unit_cost_gbp") in (None, 0, 0.0)
+    assert stub.get("_commercial_line") is True
+
+
+def test_a_real_pallet_on_the_bill_of_materials_still_prices():
+    """THE EDGE THE GUARD MUST NOT CROSS. A pallet the display is BUILT ON is a component and
+    has a provisional; a pallet mentioned in a packaging allowance's placeholder text is not."""
+    stub = _bought_in_part_stub("STD PART", "PALLET, 1200x1000", 1)
+    assert stub["unit_cost_gbp"] == 12.00
+    assert not stub.get("_commercial_line")
+
+
+def test_the_screws_are_unaffected_by_the_guard():
+    assert _bought_in_part_stub("STD PART", "3.5x19mm WOOD SCREW", 6)["unit_cost_gbp"] == 0.03
+    assert _bought_in_part_stub(
+        "FIXING", "M4x10mm FLANGE BUTTON HEAD SCREW, BLACK", 4)["unit_cost_gbp"] == 0.08

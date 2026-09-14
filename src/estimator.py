@@ -6554,7 +6554,24 @@ def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> D
     # catalogue rate found by the caller still wins, and the pricing chain downstream can
     # still better it — a provisional is a floor, not a ceiling. Flagged, and it says whose
     # rate it is.
-    if stub.get("unit_cost_gbp") in (None, 0, 0.0):
+    # EXCEPT A COMMERCIAL LINE, WHICH THIS IMMEDIATELY GOT WRONG. PACKAGING and DELIVERY are
+    # not bought-in components: they are per-order allowances owned by commercial_lines and
+    # COMMERCIAL_LINE_GBP_PER_ORDER, which is HELD EMPTY BY DECISION until the estimators'
+    # own figures land. The placeholder text reads "Packaging (box / pallet — per-unit
+    # share)", the commodity table's PALLET entry matched the word "pallet" in it, and the
+    # line came out at £12.00 — a figure nobody had agreed, on the one line the whole config
+    # comment says must stay at an honest zero. A table of COMPONENT provisionals must never
+    # answer for a commercial allowance.
+    _cl_code = str(part_number or "").strip().upper()
+    _cl_desc = str(description or "").upper()
+    _is_commercial_line = (
+        _cl_code in ("PACKAGING", "DELIVERY", "CARRIAGE", "FREIGHT")
+        or "PER-UNIT SHARE" in _cl_desc
+        or "ESTIMATOR TO PRICE" in _cl_desc
+    )
+    if _is_commercial_line:
+        stub["_commercial_line"] = True
+    if not _is_commercial_line and stub.get("unit_cost_gbp") in (None, 0, 0.0):
         try:
             from pricing_service import standard_commodity_price as _std_com
             _com = _std_com(stub)
