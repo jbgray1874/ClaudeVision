@@ -72,14 +72,30 @@ def _flags(part):
 
 
 def test_the_brushing_question_is_raised_on_a_plated_part():
+    """It is now CHARGED rather than flagged — the estimator stated it, so leaving it off was
+    under-charging. The question survives the change, because the drawing still does not say
+    it and he called it a grey area: the line asks him to confirm or take it off, and that
+    is what gets promoted to the outstanding list."""
     part = {"part_number": "7332-01-101", "description": "FRAME WELDMENT",
             "normalized_material": "MILD_STEEL", "normalized_finish": "PLATED",
             "textual_operations": ["welding", "assembly"], "quantity": 1}
-    estimate_process_times(part, 6)
+    out = estimate_process_times(part, 6)
+    assert out["run_times_min_per_unit"]["manual_labour_metal"] == 40.0
+    text = _flags(part)
+    assert "THE DRAWING DOES NOT ANNOTATE THIS" in text
+    assert "40 min" in text
+    assert "Confirm" in text and "take it off" in text     # it ASKS — so it gets promoted
+
+
+def test_a_plated_part_that_is_not_the_weldment_still_only_asks():
+    part = {"part_number": "7332-01-008", "description": "BACK PANEL",
+            "normalized_material": "MILD_STEEL", "normalized_finish": "PLATED",
+            "textual_operations": ["laser_cutting"], "quantity": 1}
+    out = estimate_process_times(part, 6)
+    assert "manual_labour_metal" not in out["run_times_min_per_unit"]
     text = _flags(part)
     assert "brushes material before it goes to the platers" in text
-    assert "40 minutes" in text
-    assert "Add it if" in text                       # it ASKS — so it gets promoted
+    assert "Confirm whether this finish needs it" in text
 
 
 def test_the_gauge_substitution_question_is_raised_at_zero_nine():

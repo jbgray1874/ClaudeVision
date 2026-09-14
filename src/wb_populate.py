@@ -5232,6 +5232,33 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=lb["col_qty"],       value=_qty)
 
         default_tp = _THROUGHPUT_DEFAULTS.get(wb_op or "")
+        # AND THE ESTIMATOR'S OWN THROUGHPUT OUTRANKS THE CORPUS.
+        #
+        # "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95 p/hour."
+        # 252 is a row in the table above, measured off THIRTEEN historical lines. Howard
+        # Thurley runs the department. Thirteen lines is not better evidence than the person
+        # who does the work, and until now there was no way for him to say so except for us
+        # to edit a dict inside a function — which is precisely the complaint that the rates
+        # are scattered through the code.
+        #
+        # His figure, for this job, named as his. It does not inherit: the answers file is
+        # named for the drawing. A rate that should govern every job belongs in the table or
+        # on the template, which is a separate decision and a deliberate one.
+        _dec_tp = ((summary.get("estimator_decisions") or {}).get("throughput_per_hour") or {}) \
+            if isinstance(summary, dict) else {}
+        _tp_override = _safe(_dec_tp.get(wb_op or ""))
+        if _tp_override and _tp_override > 0:
+            ws.cell(row=row, column=lb["col_throughput"], value=round(float(_tp_override), 4))
+            g["rate_basis"] = "estimator_stated"
+            _flag(f"throughput for '{wb_op}' is "
+                  f"{float(_tp_override):g}/hr — "
+                  f"{(summary.get('estimator_decisions') or {}).get('decided_by', 'the estimator')}"
+                  f"'s own figure for this job, in place of the "
+                  f"{default_tp if default_tp else 'derived'}/hr the corpus gives. Governs "
+                  f"this drawing only.", flags)
+            g["workbook_row"] = row
+            row += 1
+            continue
         # HOW THIS RATE WAS ARRIVED AT, as data rather than a code comment.
         #
         # Tube 40/hr is an UNMEASURED constant; P.Coat 458/hr is a historical observation;

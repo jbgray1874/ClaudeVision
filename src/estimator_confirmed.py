@@ -306,13 +306,112 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
         elif not any(p.startswith(f"{code_s}:") for p in problems):
             problems.append(f"{code_s}: no usable field — skipped")
 
+    _decisions, _dec_problems = _read_decisions(raw, path)
+    problems.extend(_dec_problems)
+
     return {
         "confirmed_by": str(raw.get("confirmed_by") or "").strip(),
         "confirmed_on": str(raw.get("confirmed_on") or "").strip(),
         "note": str(raw.get("note") or "").strip(),
         "parts": clean,
+        "estimator_decisions": _decisions,
         "path": str(path),
     }, problems
+
+
+# ── THE ESTIMATOR'S OWN DECISIONS, WHICH ARE A DIFFERENT THING FROM A READING ────────────
+#
+# `parts` above refuses prices and rates, and the reason is sound and unchanged: a price
+# typed into a side file would read in the output exactly like one the engine sourced, so it
+# has to be entered on the sheet where it shows as a person's decision.
+#
+# The trouble is that it did not show up there either. Howard Thurley's answers to 7332-01 —
+# Brass Harrods 01 at £250, the tube bend not required, acrylic laser at 95/hr not 252 — have
+# no home at all. Each is a config edit by us or an overtype that dies with that workbook,
+# and the next run of the same job asks him the same questions again.
+#
+# So this block exists BESIDE `parts`, never inside it, and the distinction is the whole
+# point:
+#
+#   parts               "the drawing says 1.0 mm"        a READING, ranked with the readers
+#   estimator_decisions "we are charging £250 for this"  a DECISION, ranked as a person's
+#
+# A decision carries its owner's name and date onto every line it touches and is reported as
+# theirs, never as the engine's. It is not a price the engine found; it is a price a person
+# set, and the sheet says so.
+#
+# AND IT DOES NOT INHERIT. The file is named for the drawing, so it governs that job and no
+# other. Anything that SHOULD apply to every job — the weld allowance, the plater freight,
+# the brushing minutes — belongs in config.py, which is where those already are. The two
+# homes answer two different questions: "how does SDI work" and "what did we decide about
+# this stand".
+_DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
+                  "throughput_per_hour")
+
+
+def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], List[str]]:
+    out: Dict[str, Any] = {}
+    problems: List[str] = []
+    block = raw.get("estimator_decisions")
+    if block in (None, {}):
+        return out, problems
+    if not isinstance(block, Mapping):
+        return out, [f"{path}: 'estimator_decisions' must be an object, not "
+                     f"{type(block).__name__}"]
+
+    for key in block:
+        if str(key).strip() not in _DECISION_KEYS:
+            problems.append(
+                f"estimator_decisions: '{key}' is not a decision this engine applies — "
+                f"known: {', '.join(_DECISION_KEYS)}. The line did nothing")
+
+    _plate = _num(block.get("plating_gbp_per_unit"), positive=True) \
+        if block.get("plating_gbp_per_unit") is not None else None
+    if block.get("plating_gbp_per_unit") is not None and _plate is None:
+        problems.append("estimator_decisions.plating_gbp_per_unit: not a positive number — "
+                        "ignored")
+    elif _plate is not None:
+        out["plating_gbp_per_unit"] = _plate
+        out["plating_spec"] = str(block.get("plating_spec") or "").strip()
+
+    _off = block.get("operations_off")
+    if _off is not None:
+        if not isinstance(_off, Mapping):
+            problems.append("estimator_decisions.operations_off: expected {part: [ops]} — "
+                            "ignored")
+        else:
+            clean_off: Dict[str, List[str]] = {}
+            for code, ops in _off.items():
+                if isinstance(ops, str):
+                    ops = [ops]
+                if not isinstance(ops, (list, tuple)):
+                    problems.append(f"estimator_decisions.operations_off[{code}]: expected a "
+                                    f"list of operation names — ignored")
+                    continue
+                names = [str(o).strip().lower().replace(" ", "_") for o in ops if str(o).strip()]
+                if names:
+                    clean_off[str(code).strip().upper()] = names
+            if clean_off:
+                out["operations_off"] = clean_off
+
+    _tp = block.get("throughput_per_hour")
+    if _tp is not None:
+        if not isinstance(_tp, Mapping):
+            problems.append("estimator_decisions.throughput_per_hour: expected "
+                            "{operation: pieces per hour} — ignored")
+        else:
+            clean_tp: Dict[str, float] = {}
+            for op, val in _tp.items():
+                n = _num(val, positive=True)
+                if n is None:
+                    problems.append(f"estimator_decisions.throughput_per_hour[{op}]: not a "
+                                    f"positive number — ignored")
+                    continue
+                clean_tp[str(op).strip()] = n
+            if clean_tp:
+                out["throughput_per_hour"] = clean_tp
+
+    return out, problems
 
 
 def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dict[str, Any]:

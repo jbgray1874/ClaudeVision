@@ -538,6 +538,30 @@ STANDARD_COMMODITY_PRICE_GBP = {
 #
 # Widen this list ONLY with a process the £2.50 card genuinely covers. Anything else
 # belongs in NAMED_PLATE_SPECS below as a quoted price, or stays blocking.
+# BRUSHED BEFORE IT GOES TO THE PLATERS — work the drawing never mentions.
+#
+# "Line 85 – Drawing doesn't annotate – material is brushed prior to sending to platers, op.
+# for Manual Labour (Metal) 40 Minutes – Grey area as drawing only nominates a finish as
+# Harrods01."   — Howard Thurley, SDI estimating, 9 Sep 2026
+#
+# It was carried as a flag for a while, on the reasoning that forty minutes nobody drew is an
+# invention. That was half right: forty minutes nobody drew AND nobody mentioned would be an
+# invention, but an estimator has mentioned it, with a duration, and leaving it off is simply
+# under-charging — the direction nobody notices, because a quote that is too low is accepted.
+#
+# PER CONSIGNMENT. What goes to the platers is the weldment, so this is booked once against
+# the part the plating line plates — never once per plated member, which on 7332-01 would be
+# four hours of linishing on one stand.
+#
+# Set enabled False to go back to naming it without costing it.
+BRUSH_BEFORE_PLATE = {
+    "enabled": True,
+    "minutes_per_consignment": 40.0,
+    "setup_min": 0.0,
+    "operation": "manual_labour_metal",
+    "source": "SDI shop practice via Howard Thurley (SDI estimating), 7332-01, 9 Sep 2026",
+}
+
 PLATE_SUBCONTRACT_POLICY = {
     "gbp_per_kg": 2.50,
     "vat_minimum_gbp": 95.0,

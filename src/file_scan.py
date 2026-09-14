@@ -3441,6 +3441,47 @@ def _finalize_scan_summary(
                 "confirmed_on": _ec_data.get("confirmed_on"),
                 "note": _ec_data.get("note"),
             }
+            # THE DECISIONS GO ON THE SUMMARY, NOT ONTO THE PARTS.
+            #
+            # A reading belongs to a part and is stamped on it. A decision — what we charge
+            # for the plating, which operation comes off, what the acrylic laser runs at —
+            # is about the JOB, and the places that act on it are the costing pass, the
+            # route and the workbook, all of which read the summary. Carried whole, with
+            # whose decision it is, so every line it touches can say so.
+            _dec = _ec_data.get("estimator_decisions") or {}
+            if _dec:
+                summary["estimator_decisions"] = dict(
+                    _dec,
+                    decided_by=_ec_data.get("confirmed_by") or "an estimator",
+                    decided_on=_ec_data.get("confirmed_on") or "",
+                    decided_in=_ec_path.name)
+                print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
+                      f"{_ec_path.name}: {', '.join(sorted(_dec))} — "
+                      f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "
+                      f"theirs and recorded as theirs", flush=True)
+                # An operation taken off is a per-PART decision, so it is stamped on the
+                # part rather than left on the summary for every reader to re-derive.
+                # A code that matches no part is reported, exactly as an unmatched
+                # reading is — a typo that silently does nothing is how a feature comes
+                # to be trusted while contributing nothing.
+                _offs = _dec.get("operations_off") or {}
+                if _offs:
+                    _seen_off = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _offs:
+                            _p["_estimator_operations_off"] = list(_offs[_pc])
+                            _seen_off.add(_pc)
+                            print(f"   [confirmed] {_pc}: "
+                                  f"{', '.join(_offs[_pc])} taken OFF by "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}",
+                                  flush=True)
+                    for _pc in sorted(set(_offs) - _seen_off):
+                        print(f"   [confirmed] operations_off names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing. Check "
+                              f"the code", flush=True)
     except Exception as _ec_err:
         print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
 

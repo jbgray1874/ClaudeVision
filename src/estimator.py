@@ -865,6 +865,24 @@ def _part_ops(part: Dict[str, Any]) -> List[str]:
         s = str(op).strip()
         if s and s not in ops:
             ops.append(s)
+    # AN OPERATION THE ESTIMATOR HAS TAKEN OFF STAYS OFF.
+    #
+    # "Line 103 - Tube Bending Op. – Not Required." The drawing's text states a bend and
+    # nothing measures one, so the engine charges it and asks — which is right, because
+    # deleting charged work on one disagreement with one drawing is how a rule stops
+    # describing anything. But once the person who knows has answered, the answer has to
+    # survive the next run, and until now it did not: he deleted the row, we re-ran, and the
+    # row came back.
+    #
+    # Stamped by file_scan from the job's own answers file, so it governs this drawing and
+    # no other. The removal is recorded on the part, never silent.
+    _off = (part.get("_estimator_operations_off") or [])
+    if _off:
+        _keep = [o for o in ops if str(o).strip().lower() not in _off]
+        if len(_keep) != len(ops):
+            part.setdefault("removed_operations", []).extend(
+                [o for o in ops if o not in _keep])
+        ops = _keep
     return ops
 
 
@@ -1501,26 +1519,53 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # members — a named spec is stated on whichever of them carries the finish callout,
         # and reading only one of the two is how "Harrods 01" goes unseen on a line that
         # exists because of it.
-        _finish_src = [pe.get("_plating_weldment")] + sorted(members)
-        _finish_text = " ".join(
-            _part_finish_text(by_pn[str(m).strip().upper()])
-            for m in _finish_src
-            if m and str(m).strip().upper() in by_pn)
-        # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
-        # A finish stated once for the whole job — on a GA title block, a general note, the
-        # BOM's own finish column — is on no plated member's record, and reading only the
-        # members is how "Harrods01" went unseen on the line that exists because of it.
-        _found_on = ""
-        if not named_plate_spec(_finish_text):
-            _spec_pack, _found_on, _spec_text = named_plate_spec_anywhere_on_the_pack(
-                part_estimates, parts if parts is not None else [])
-            if _spec_pack:
-                _finish_text = f"{_finish_text} {_spec_text}".strip()
-        unit, note, method = plating_unit_price(mass, order_qty, policy, _finish_text)
-        if _found_on and method == "subcontract_plating_named_spec":
-            note += (f". The spec is not stated on this weldment or its members — it was "
-                     f"read from {_found_on}'s own finish on this pack; confirm it governs "
-                     f"the plated members listed here")
+        # ── THE ESTIMATOR'S OWN PRICE, IF HE HAS GIVEN ONE ─────────────────────────────
+        #
+        # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£250.00 per
+        # each stand.)" The spec is not written on the drawing — every finish field in the
+        # pack reads PLATED — so no amount of reading gets the engine there, and the line
+        # correctly blocks. What it needed was somewhere for his answer to live that is not
+        # a code change by us and not an overtype that dies with the workbook.
+        #
+        # This is his figure, applied as his, named as his, and it governs this job only:
+        # the file is named for the drawing, so the next Harrods stand asks again rather
+        # than inheriting a price nobody re-checked.
+        _dec = (summary or {}).get("estimator_decisions") or {} \
+            if isinstance(summary, dict) else {}
+        _dec_plate = _safe_float(_dec.get("plating_gbp_per_unit"))
+        if _dec_plate and _dec_plate > 0:
+            _who = _dec.get("decided_by") or "an estimator"
+            _when = f", {_dec['decided_on']}" if _dec.get("decided_on") else ""
+            _spec_lbl = str(_dec.get("plating_spec") or "").strip()
+            unit = round(float(_dec_plate), 2)
+            note = (f"{_spec_lbl + ' — ' if _spec_lbl else ''}£{unit:.2f} per unit, "
+                    f"{_who}'s own figure for this job{_when} "
+                    f"(from {_dec.get('decided_in', 'the estimator answers file')}). NOT a "
+                    f"rate this engine sourced and not read off the drawing — the pack states "
+                    f"only a plate family. It governs this drawing alone")
+            method = "estimator_stated_price"
+            _found_on = ""
+        else:
+            _finish_src = [pe.get("_plating_weldment")] + sorted(members)
+            _finish_text = " ".join(
+                _part_finish_text(by_pn[str(m).strip().upper()])
+                for m in _finish_src
+                if m and str(m).strip().upper() in by_pn)
+            # AND IF NEITHER OF THEM NAMES A SPEC, ASK THE REST OF THE PACK.
+            # A finish stated once for the whole job — on a GA title block, a general note,
+            # the BOM's own finish column — is on no plated member's record, and reading only
+            # the members is how "Harrods01" went unseen on the line that exists for it.
+            _found_on = ""
+            if not named_plate_spec(_finish_text):
+                _spec_pack, _found_on, _spec_text = named_plate_spec_anywhere_on_the_pack(
+                    part_estimates, parts if parts is not None else [])
+                if _spec_pack:
+                    _finish_text = f"{_finish_text} {_spec_text}".strip()
+            unit, note, method = plating_unit_price(mass, order_qty, policy, _finish_text)
+            if _found_on and method == "subcontract_plating_named_spec":
+                note += (f". The spec is not stated on this weldment or its members — it was "
+                         f"read from {_found_on}'s own finish on this pack; confirm it "
+                         f"governs the plated members listed here")
         # GETTING IT THERE AND BACK IS PART OF HAVING IT PLATED.
         #
         # "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network -
@@ -1602,6 +1647,15 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             pe["description"] = (
                 f"{_pn_plate} plating — SPEC NOT IDENTIFIED: the drawing names a plate but "
                 f"not which plate. NOT PRICED — confirm the process with the plater").strip()
+        elif method == "estimator_stated_price":
+            # AND THE LINE SAYS WHOSE PRICE IT IS. A figure a person set must never read on
+            # the sheet like one the engine sourced — that is the rule the answers file was
+            # built on, and it is worth nothing if the description still says zinc.
+            _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
+            _spec_lbl2 = str(_dec.get("plating_spec") or "").strip()
+            pe["description"] = (
+                f"{_pn_plate} plating — {_spec_lbl2 or 'as specified'}, "
+                f"{_dec.get('decided_by') or 'the estimator'}'s stated price").strip()
         if _contrib or _deferred:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
             _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
@@ -5049,14 +5103,47 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # op. for Manual Labour (Metal) 40 Minutes – Grey area as drawing only nominates a finish
     # as Harrods01." Real work, worth real money, and stated nowhere on the pack. Not added:
     # named, so a person decides whether this job carries it.
+    # AND IT IS COSTED NOW, BECAUSE HE TOLD US IT HAPPENS.
+    #
+    # The paragraph above called the flag "the only honest third option". It was not. A flag
+    # nobody could read is not a third option, it is the second one with extra steps — and
+    # grepping the 20:26 book proved it reached neither deliverable. The estimator has stated
+    # a real operation with a real duration; leaving it off the sheet is under-charging, and
+    # under-charging is the direction nobody notices.
+    #
+    # ONCE PER CONSIGNMENT, NOT ONCE PER MEMBER. What goes to the platers is the weldment.
+    # Booking 40 minutes against each of 7332-01-101's six members would be four hours of
+    # linishing on one stand, which is how a defensible figure becomes an absurd one. So it
+    # lands on the part the plating line actually plates.
+    #
+    # THE LIMIT, SAID OUT LOUD: a plated LEAF with no weldment above it gets the flag and no
+    # charge, exactly as before. That job is under-charged by this operation and the line
+    # says so rather than the engine guessing at a part it has never been given a figure for.
     if _is_plate_finish(_part_finish_text(part)) or named_plate_spec(_part_finish_text(part)):
-        if not part.get("_brush_before_plate_flagged"):
+        _bb = getattr(config, "BRUSH_BEFORE_PLATE", {}) or {}
+        _bb_min = _safe_float(_bb.get("minutes_per_consignment")) or 0.0
+        _bb_op = str(_bb.get("operation") or "manual_labour_metal")
+        if (_bb.get("enabled") and _bb_min > 0 and is_weldment_parent(part)
+                and not part.get("_brush_before_plate_applied")):
+            part["_brush_before_plate_applied"] = True
+            ops = list(ops) + ([_bb_op] if _bb_op not in ops else [])
+            run_times_min[_bb_op] = round(
+                float(run_times_min.get(_bb_op, 0.0)) + _bb_min, 2)
+            setup_times_min.setdefault(_bb_op, float(_bb.get("setup_min", 0.0)))
+            record_operation(part, _bb_op, "override_rule")
+            part.setdefault("review_flags", []).append(
+                f"brushed before plating: {_bb_min:g} min of "
+                f"{_bb_op.replace('_', ' ')} on this weldment before it goes to the "
+                f"platers. THE DRAWING DOES NOT ANNOTATE THIS — it is the shop's practice "
+                f"as stated by the estimator ({_bb.get('source', 'shop figure')}). Confirm "
+                f"it applies to this finish, or take it off")
+        elif not part.get("_brush_before_plate_flagged"):
             part["_brush_before_plate_flagged"] = True
             part.setdefault("review_flags", []).append(
                 "plated part: the shop brushes material before it goes to the platers — "
-                "about 40 minutes of Manual labour (Metal) per the estimator — and the "
-                "drawing does not annotate it, so it is NOT costed here. Add it if this "
-                "finish needs it")
+                f"about {_bb_min or 40:g} minutes of Manual labour (Metal) per the estimator "
+                "— and this part is not the weldment that goes in the tank, so it is NOT "
+                "costed here. Confirm whether this finish needs it")
 
     # ---- A TUBE IS ONLY BENT IF SOMETHING SAYS IT BENDS --------------------------
     # "Line 103 - Tube Bending Op. – Not Required." 7332-01-002 booked two tube bends on a
@@ -8006,6 +8093,67 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 if debug:
                     print(f"[DEBUG] Added subcontract plating line for {_wpn} "
                           f"({len(_plate_members)} plated member(s))")
+
+                # ---- AND GETTING IT THERE AND BACK IS A LINE, NOT A SENTENCE ----------
+                #
+                # "** Delivery to & from Platers from Transport Dept. For Ref. £120.00
+                # Pallet Network - £20.00 per Unit."   — Howard Thurley, 9 Sep 2026
+                #
+                # The plating line carries this in its note and deliberately does not add it,
+                # so that the plating figure equals what the PLATER charges and can be checked
+                # against the plater's own quote. That reasoning is right and it stays. What
+                # was wrong is the conclusion drawn from it: the freight then appeared on no
+                # line at all, which is not "kept separate", it is "not charged". Real money
+                # the job would not spend if the part were finished in house, missing from
+                # the total.
+                #
+                # So it gets its own line, beside the plating rather than inside it. Both
+                # halves of the rule are then satisfied — the plating equals the plater's
+                # quote, and the freight is in the price.
+                #
+                # IT INHERITS, AND IT SHOULD. Any job that sends work out to a platers pays
+                # to send it and pays to get it back. Keyed on the plating line existing, so
+                # a job with no plating never sees it.
+                _plog2 = getattr(config, "PLATING_LOGISTICS", {}) or {}
+                _fr_order = _safe_float(_plog2.get("freight_gbp_per_order")) or 0.0
+                _fr_code = "PLATERFREIGHT"
+                if _fr_order > 0 and _fr_code not in _have:
+                    _fq = max(1, int(_commercial_order_quantity(summary) or 1))
+                    _fr_unit = round(_fr_order / _fq, 2)
+                    _fstub = _bought_in_part_stub(
+                        _fr_code,
+                        f"Delivery to and from the platers — "
+                        f"£{_fr_order:.0f} the "
+                        f"{'round trip' if _plog2.get('freight_is_round_trip', True) else 'leg'}"
+                        f" over {_fq} off", 1)
+                    _fstub["source"] = "plater_freight_stated"
+                    _fstub["_commercial_placeholder"] = True
+                    _fstub["_plater_freight"] = True
+                    _fstub["textual_operations"] = []
+                    _fstub["inferred_operations"] = []
+                    _fstub["unit_cost_gbp"] = _fr_unit
+                    _fstub["unit_material_cost_gbp"] = _fr_unit
+                    _fstub["extended_total_cost_gbp"] = _fr_unit
+                    _fstub["material_estimate"] = {
+                        "unit_material_cost_gbp": _fr_unit,
+                        "cost_per_part_gbp": _fr_unit,
+                        "extended_material_cost_gbp": _fr_unit,
+                        "cost_method": "plater_freight_stated",
+                    }
+                    _fstub["cost_source"] = "plater_freight_stated"
+                    _fstub["costing_basis"] = "plater_freight_stated"
+                    _fstub["price_verified"] = False
+                    _fstub["review_flag"] = True
+                    _fstub["review_flags"] = [
+                        f"plater freight: £{_fr_order:.0f} per order spread over {_fq} off "
+                        f"= £{_fr_unit:.2f} a unit. NOT part of the plating line, which is "
+                        f"held equal to the plater's own quote so it can be checked against "
+                        f"it. Moves with the order quantity "
+                        f"({_plog2.get('source', 'transport figure')}). Confirm the round "
+                        f"trip and the carrier"]
+                    parts.append(_fstub)
+                    print(f"   [plating] plater freight charged as its own line: "
+                          f"£{_fr_order:.0f} / {_fq} off = £{_fr_unit:.2f} a unit", flush=True)
 
         # SDI Intelligence — powder coating / wet spray is declared once in the
         # drawing title block (e.g. "POWDER COATED"), not per part. Stamp the
