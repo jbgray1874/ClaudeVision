@@ -4638,6 +4638,47 @@ def _weld_geometry(part: Dict[str, Any]) -> Tuple[float, int]:
     return float(_mm), int(_j)
 
 
+def is_weldment_parent(part: Dict[str, Any]) -> bool:
+    """Is this the weldment, rather than a part welded into one?
+
+    TWO BOOLEANS WERE THE WHOLE GATE, AND ONE MISSING BOOLEAN COST 47 MINUTES A UNIT.
+
+    7332-01-101 is a FRAME WELDMENT. The Provenance tab prints it as an assembly, the route
+    graph gives it six children, the plating line lists its members by name — and its record
+    carried neither `is_assembly_parent` nor `is_sub_assembly`. So the weld allowance the
+    welding department stated, already sitting in config, never applied: the sheet booked
+    2 minutes of welding and 1 of dressing against their 30 and 20, about GBP 28.57 a unit
+    on a GBP 63 stand.
+
+    The same lesson as the plating member list, which had to stop reading the parent's own
+    child list and re-derive from the compiled hierarchy: ASK WHAT THE JOB SAYS THIS PART IS,
+    not whether one reader happened to set one flag. Every signal here is already used
+    elsewhere in the engine to mean assembly — the flags, the children, the page role, and
+    config's own weldment-naming tables, which exist precisely to recognise this.
+
+    Narrow by construction: every caller also requires a welding operation on the part, so a
+    bracket nobody welds reaches none of it whatever it is called.
+    """
+    if part.get("is_assembly_parent") or part.get("is_sub_assembly"):
+        return True
+    if _weld_members(part) >= 2:
+        return True
+    _roles = part.get("page_roles")
+    if isinstance(_roles, (list, tuple, set)) and any(
+            str(r).strip().lower() in ("assembly", "sub_assembly", "weldment") for r in _roles):
+        return True
+    if str(part.get("kind") or "").strip().lower() in ("assembly", "weldment"):
+        return True
+    # config already keeps the shop's own words for this, for exactly this question.
+    _desc = str(part.get("description") or "").upper()
+    if _desc and any(str(tok).upper() in _desc
+                     for tok in (getattr(config, "WELDMENT_PARENT_DESC_TOKENS", []) or [])):
+        return True
+    _pn = str(part.get("part_number") or "")
+    return any(re.search(str(_sfx), _pn, re.IGNORECASE)
+               for _sfx in (getattr(config, "WELDMENT_PARENT_PN_SUFFIXES", []) or []))
+
+
 def _weld_time_is_an_allowance(part: Dict[str, Any], ops: Any) -> bool:
     """True when this part is welded, is an assembly, and the pack measures nothing.
 
@@ -4647,7 +4688,7 @@ def _weld_time_is_an_allowance(part: Dict[str, Any], ops: Any) -> bool:
     """
     if "welding" not in (ops or ()):
         return False
-    if not (part.get("is_assembly_parent") or part.get("is_sub_assembly")):
+    if not is_weldment_parent(part):
         return False
     _mm, _j = _weld_geometry(part)
     return _mm <= 0 and _j <= 0
@@ -5351,7 +5392,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # minute of dressing in the first place.
         _dm = getattr(config, "WELD_TIME_MODEL", {}) or {}
         _d_mm, _d_joints = _weld_geometry(part)
-        _d_weldment = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
+        _d_weldment = is_weldment_parent(part)
         if _weld_time_is_an_allowance(part, ops):
             run_times_min["dress_welds"] = round(
                 float(_dm.get("dress_allowance_min_per_weldment", 20.0)), 2)
@@ -5366,6 +5407,26 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             part.setdefault("review_flags", []).append(
                 f"dressing timed per joint: {_d_joints} joint(s) at "
                 f"{_dm.get('dress_min_per_joint', 6.7):g} min, following the weld")
+        elif _d_weldment and _d_mm > 0 and "welding" in (ops or ()):
+            # THE THIRD BRANCH, WHICH WAS THE 0.5-MINUTE HOLE. A pack that states a weld
+            # LENGTH sends welding to the arc-time model and left dressing on Tim's minimal
+            # single-bead figure — so the better the drawing, the more absurd the pair: a
+            # metre of weld beside thirty seconds of linishing.
+            #
+            # Dressing is a fixed fraction of welding in both of the shop's own statements —
+            # 20 against 30 on the weldment, 6.7 against 10 a joint, 0.67 either way — so the
+            # length branch uses the same fraction rather than a fourth number nobody gave us.
+            _speed_d = float(_dm.get("travel_speed_mm_per_min", 300.0)) or 300.0
+            _of_d = float(_dm.get("operating_factor", 0.35)) or 0.35
+            _weld_min_d = (_d_mm / _speed_d) / _of_d + _d_joints * float(
+                _dm.get("handling_min_per_joint", 2.0))
+            _ratio_d = (float(_dm.get("dress_min_per_joint", 6.7))
+                        / max(1e-9, float(_dm.get("weld_min_per_joint", 10.0))))
+            run_times_min["dress_welds"] = round(max(0.5, _weld_min_d * _ratio_d), 2)
+            part.setdefault("review_flags", []).append(
+                f"dressing scaled to the weld: {_weld_min_d:.1f} min of welding on "
+                f"{_d_mm:g} mm × {_ratio_d:.0%} — the shop's own dress-to-weld ratio, "
+                f"because the pack states a length but no dressing time")
         else:
             # Tim's 12120 "Dress (Minimal)" = 120/hr = 0.5 min/unit (config lever).
             run_times_min["dress_welds"] = float(
@@ -5419,7 +5480,12 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _wm = getattr(config, "WELD_TIME_MODEL", {}) or {}
         setup_times_min["welding"] = float(_wm.get("setup_min_per_weldment", 3.0))
         _weld_mm, _joints = _weld_geometry(part)
-        _is_weldment = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
+        # THE SECOND COPY OF THE TEST, AND THE ONE THAT HELD THE MONEY. Dressing read the
+        # same two booleans through _weld_time_is_an_allowance and welding read them here
+        # directly, so widening one left a sheet booking 20 minutes of dressing beside one
+        # minute of welding — the exact shape the predicate above exists to prevent, in the
+        # other direction. One reader now, for both.
+        _is_weldment = is_weldment_parent(part)
 
         if _weld_mm > 0:
             # The published model, the moment a pack states a weld LENGTH.

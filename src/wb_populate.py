@@ -3223,6 +3223,34 @@ def build_workbook_labour(
     }
 
 
+# A TIME A PERSON GAVE US, AND WHY THAT OUTRANKS A MEDIAN.
+#
+# The costing stage stamps a part when its time is a stated shop figure rather than a
+# derivation. Corpus medians describe jobs in general; a stated time describes this one.
+_STATED_SHOP_TIME_MARKERS = (
+    ("weld_time_is_an_allowance",
+     "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
+    ("weld_time_is_per_joint",
+     "the welding department's stated per-joint weld time (config.WELD_TIME_MODEL)"),
+    ("plater_pack_applied",
+     "the stated pack times for a part that goes out to a plater "
+     "(config.PLATING_LOGISTICS)"),
+)
+
+
+def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str]) -> bool:
+    """True when any part on this labour row was timed from a figure a department gave us."""
+    return any(str(_p).strip().upper() in stated for _p in ((group or {}).get("parts") or []))
+
+
+def _stated_shop_time_source(group: Any, stated: Dict[str, str]) -> str:
+    for _p in ((group or {}).get("parts") or []):
+        _hit = stated.get(str(_p).strip().upper())
+        if _hit:
+            return _hit
+    return "a stated shop figure"
+
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -4408,6 +4436,30 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Symmetric, and deliberately as conservative as the ceiling: only implausible
     # outliers are substituted, and every substitution is FLAGGED with both numbers.
     _THROUGHPUT_FLOOR_DIVISOR = 5        # derived < default ÷ 5 → use default
+    # WHICH OF THESE TIMES A DEPARTMENT ACTUALLY GAVE US.
+    #
+    # The costing stage stamps a part when its time came from a person rather than from a
+    # model: the welding department's weldment allowance, its per-joint rate, and the
+    # 4 + 8 minute plater pack. Collected here so the floor guard below can tell a stated
+    # figure from a garbage derivation — which it could not, and which is why the shop's own
+    # numbers were replaced by corpus medians on the one job where an estimator had written
+    # them down for us.
+    _stated_time_by_pn: Dict[str, str] = {}
+    _stamped_records = list(bom_parts or [])
+    for _srcname in ("parts",):
+        _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
+    _stamped_records += [r for r in ((summary.get("estimate_summary") or {}).get(
+        "part_estimates") or []) if isinstance(r, dict)]
+    for _sp in _stamped_records:
+        if not isinstance(_sp, dict):
+            continue
+        _spn = str(_sp.get("part_number") or "").strip().upper()
+        if not _spn:
+            continue
+        for _marker, _why in _STATED_SHOP_TIME_MARKERS:
+            if _sp.get(_marker):
+                _stated_time_by_pn.setdefault(_spn, _why)
+                break
     lb = cm["labour"]
     row = lb["first_row"]
     labour_overflow = False
@@ -5288,11 +5340,29 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                         _flag(f"throughput CEILING hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {_derived/default_tp:.1f}x the default {default_tp}/hr "
                               f"— using default (was UNDER-charging).", flags)
-                    elif _derived < _floor:
+                    elif _derived < _floor and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn):
                         throughput = float(default_tp)
                         _flag(f"throughput FLOOR hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {default_tp/_derived:.1f}x SLOWER than the default "
                               f"{default_tp}/hr — using default (was OVER-charging).", flags)
+                    elif _derived < _floor:
+                        # A DEPARTMENT'S OWN FIGURE IS NOT AN OUTLIER TO BE CORRECTED.
+                        #
+                        # The floor exists to catch garbage derivations — a missing bend
+                        # count deriving 0.17/hr and billing five hours to route a panel.
+                        # It cannot tell those from a time the shop actually gave us, and
+                        # on 7332-01 it could not: the welding department's 30 minutes and
+                        # the 4 + 8 minute plater pack both derive far below their corpus
+                        # medians, so the median replaced them and the sheet booked two
+                        # minutes. The engine was right, the guard overruled it, and the
+                        # estimator's own numbers never reached the page he reads.
+                        #
+                        # Corpus medians are evidence about jobs in general. A stated time
+                        # is evidence about this one, and it wins.
+                        _flag(f"throughput floor NOT applied on '{wb_op}': derived "
+                              f"{_derived:.2f}/hr is below the {default_tp}/hr corpus "
+                              f"median, but this time was STATED by the shop — "
+                              f"{_stated_shop_time_source(g, _stated_time_by_pn)} — so it stands.", flags)
                 # Derived from this job's own geometry unless a guard replaced it with the
                 # default, in which case the default's own basis stands.
                 if throughput == _derived:
@@ -5363,6 +5433,42 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                      f"Measured sheets imply 1.7-4.9x more. Confirm the rate "
                      f"(config.POWDER_KG_PER_M2) or override the quantity here."),
         })
+
+    # ── THE QUESTIONS THE ENGINE RAISED, WHICH REACHED NOBODY ───────────────────────────
+    #
+    # Every ruling this engine asks a person for was written to part["review_flags"], and
+    # part review_flags reach NEITHER the workbook NOR the report. Grepped on 7332-01's
+    # 20:26 book: zero hits for the brushing question, the 1.0 mm substitution, the tube
+    # bend charged on a word alone, or the double plater pack. Four commits' worth of "raised
+    # so a person can rule on it" were private notes to ourselves, and from the estimator's
+    # side the sheet looked as though his email had been read and ignored.
+    #
+    # A decision costs nothing to write and everything to lose. These are the flags that ASK
+    # something — a confirm, a TBC, a call that is the estimator's — put where the other
+    # outstanding inputs already are, so one list is the whole of what is unresolved.
+    _ASKS = ("confirm", "tbc", "your call", "estimator", "rule on", "add it if",
+             "needs to say", "or take the op off", "which gauge is bought")
+    _seen_asks = set()
+    _question_records = list(bom_parts or [])
+    _question_records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]
+    _question_records += [r for r in ((summary.get("estimate_summary") or {}).get(
+        "part_estimates") or []) if isinstance(r, dict)]
+    for _qp in _question_records:
+        if not isinstance(_qp, dict):
+            continue
+        _qpn = str(_qp.get("part_number") or "").strip()
+        for _fl in (_qp.get("review_flags") or []):
+            _txt = str(_fl or "").strip()
+            if not _txt or not any(_w in _txt.lower() for _w in _ASKS):
+                continue
+            _key = (_qpn.upper(), _txt[:120])
+            if _key in _seen_asks:
+                continue
+            _seen_asks.add(_key)
+            _inputs.append({
+                "kind": "assumption_unconfirmed", "part": _qpn or "—",
+                "where": "engine question", "what": _txt[:400],
+            })
 
     _write_estimator_inputs(ws, _inputs, flags)
     _write_undrawn_bom_lines(ws, summary, flags)

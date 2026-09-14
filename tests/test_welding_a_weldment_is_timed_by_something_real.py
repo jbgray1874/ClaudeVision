@@ -103,7 +103,34 @@ def test_geometry_is_not_reported_as_an_allowance():
     estimate_process_times(part)
     assert not part.get("weld_time_is_an_allowance")
     assert any("timed from geometry" in str(f) for f in part.get("review_flags") or [])
-    assert estimate_process_times(part)["run_times_min_per_unit"]["dress_welds"] == 0.5
+
+
+def test_a_stated_length_dresses_in_proportion_to_its_weld():
+    """THE 0.5-MINUTE HOLE, WHICH THIS FILE USED TO PIN OPEN.
+
+    The allowance branch dresses 20 against 30, and the per-joint branch 6.7 against 10 —
+    and the LENGTH branch dressed a metre of weld in thirty seconds, because Tim's minimal
+    single-bead figure was the `else`. So the better the drawing, the more absurd the pair,
+    which is the same defect Howard Thurley reported from the other end: "Weld & Dress AI
+    Estimate for 2 Minutes & 1 Minute respectively."
+
+    Dressing is 0.67 of welding in both of the shop's own statements, so the length branch
+    uses that fraction rather than a fourth number nobody gave us."""
+    part = _weldment(weld_length_mm=600)
+    out = estimate_process_times(part)
+    weld = out["run_times_min_per_unit"]["welding"]
+    dress = out["run_times_min_per_unit"]["dress_welds"]
+    assert dress == round(weld * 0.67, 2), (weld, dress)
+    assert any("dressing scaled to the weld" in str(f)
+               for f in part.get("review_flags") or [])
+
+
+def test_a_part_that_is_not_welded_gains_no_dressing():
+    """The proportion applies to welding, so a part with no weld has nothing to be a
+    proportion of — 12349-02 must not pick up a dress line from this."""
+    part = _weldment(weld_length_mm=600, textual_operations=["laser_cutting"])
+    out = estimate_process_times(part)
+    assert not out["run_times_min_per_unit"].get("dress_welds")
 
 
 def test_the_features_block_is_read_too():
