@@ -4370,6 +4370,30 @@ _SPECIAL_ITEM_FAB_OPS = {
 }
 
 
+def _cut_method_entry(part: Dict[str, Any]) -> Dict[str, Any]:
+    """The shop rule row that covers this part's material and gauge, or {}."""
+    _mat = str(part.get("normalized_material") or part.get("material") or "").strip().upper()
+    if not _mat:
+        return {}
+    _th = _safe_float(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
+    for _rule in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or []):
+        if not isinstance(_rule, dict):
+            continue
+        if str(_rule.get("material") or "").strip().upper() != _mat:
+            continue
+        _max = _safe_float(_rule.get("max_thickness_mm"))
+        if _max is not None and (_th is None or _th > _max):
+            continue
+        if str(_rule.get("method") or "").strip().lower() in ("laser", "punch", "router"):
+            return _rule
+    return {}
+
+
+def _cut_method_source(part: Dict[str, Any]) -> str:
+    """Whose rule decided this part's cut, for the line that says so."""
+    return str(_cut_method_entry(part).get("source") or "").strip()
+
+
 def _cut_method_rule(part: Dict[str, Any]) -> str:
     """Which machine SDI cuts this material on, from the shop's own written rule. "" if none.
 
@@ -4383,22 +4407,7 @@ def _cut_method_rule(part: Dict[str, Any]) -> str:
     when it holds nothing for this material and gauge, which leaves the caller flagging the
     line rather than picking a machine.
     """
-    _mat = str(part.get("normalized_material") or part.get("material") or "").strip().upper()
-    if not _mat:
-        return ""
-    _th = _safe_float(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
-    for _rule in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or []):
-        if not isinstance(_rule, dict):
-            continue
-        if str(_rule.get("material") or "").strip().upper() != _mat:
-            continue
-        _max = _safe_float(_rule.get("max_thickness_mm"))
-        if _max is not None and (_th is None or _th > _max):
-            continue
-        _method = str(_rule.get("method") or "").strip().lower()
-        if _method in ("laser", "punch", "router"):
-            return _method
-    return ""
+    return str(_cut_method_entry(part).get("method") or "").strip().lower()
 
 
 def _weld_members(part: Dict[str, Any]) -> int:
@@ -4907,9 +4916,10 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             part.setdefault("review_flags", []).append(
                 f"{', '.join(_drop)} removed: this blank was charged BOTH a laser cut and a "
                 f"routed cut, which is the same profile paid for twice. SDI's own rule for "
-                f"this material and gauge (config.CUT_METHOD_BY_MATERIAL) is '{_kept}', so "
-                f"that one is costed. If the part really is profiled one way and machined "
-                f"another, say so and both go back on")
+                f"this material and gauge is '{_kept}' "
+                f"({_cut_method_source(part) or 'config.CUT_METHOD_BY_MATERIAL'}), so that "
+                f"one is costed. If the drawing or the issued CAM calls for the other on "
+                f"this part, say so and both go back on")
         else:
             part.setdefault("review_flags", []).append(
                 f"CUT TWICE? This part carries both a laser cut and a routed cut "

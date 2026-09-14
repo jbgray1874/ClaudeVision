@@ -42,6 +42,16 @@ import config                                                           # noqa: 
 from estimator import estimate_process_times, _cut_method_rule          # noqa: E402
 
 
+# Captured at import, BEFORE the fixture below empties it — the table as it actually ships.
+_SHIPPED = list(getattr(config, "CUT_METHOD_BY_MATERIAL", []) or [])
+
+
+@pytest.fixture()
+def shipped_rules(monkeypatch):
+    """The real table, for the tests that are about what SDI actually does."""
+    monkeypatch.setattr(config, "CUT_METHOD_BY_MATERIAL", _SHIPPED)
+
+
 @pytest.fixture(autouse=True)
 def _no_shop_rule(monkeypatch):
     """Empty, exactly as it ships. Every test that wants a rule asks for one."""
@@ -211,8 +221,42 @@ def test_the_mdf_packer_keeps_its_joinery(monkeypatch):
     assert not part.get("removed_operations")
 
 
-def test_the_table_ships_empty():
-    """So no job's price can move because somebody added a rule they had not agreed."""
-    assert config.CUT_METHOD_BY_MATERIAL == [] or all(
-        isinstance(r, dict) and r.get("method") in ("laser", "punch", "router")
-        for r in config.CUT_METHOD_BY_MATERIAL)
+def test_every_shipped_rule_is_a_method_we_can_act_on():
+    """A typo in the method word would silently disable the rule rather than fail."""
+    assert all(isinstance(r, dict) and r.get("method") in ("laser", "punch", "router")
+               for r in _SHIPPED)
+
+
+# ── the shop's defaults as they ship ─────────────────────────────────────────────────────
+
+def test_the_table_carries_sdis_own_defaults(shipped_rules):
+    """Filled from the shop, not inferred from a pack — acrylic lasered, board routed, mild
+    steel lasered — and every row says whose rule it is."""
+    by_mat = {str(r.get("material")).upper(): r
+              for r in _SHIPPED if isinstance(r, dict)}
+    assert by_mat["ACRYLIC"]["method"] == "laser"
+    assert by_mat["HIGH_IMPACT_ACRYLIC"]["method"] == "laser"
+    assert by_mat["MDF"]["method"] == "router"
+    assert by_mat["MILD_STEEL"]["method"] == "laser"
+    for mat, rule in by_mat.items():
+        assert "James Gray" in str(rule.get("source") or ""), mat
+
+
+def test_the_front_cover_is_now_settled_without_asking_anyone(shipped_rules):
+    """06A carried both cuts and was Tim's question. It is the shop's rule now, not his."""
+    part = {"part_number": "12349-02-69-06A",
+            "normalized_material": "HIGH_IMPACT_ACRYLIC", "normalized_thickness_mm": 5.0,
+            "textual_operations": ["laser_cutting", "cnc_routing", "manual_labour_acrylic"]}
+    out = estimate_process_times(part)
+    assert "cnc_routing" not in out["run_times_min_per_unit"]
+    assert "laser_cutting" in out["run_times_min_per_unit"]
+    assert "James Gray" in _flags(part)
+
+
+def test_a_material_with_no_rule_still_refuses_to_guess(shipped_rules):
+    part = {"part_number": "X", "normalized_material": "POLYCARBONATE",
+            "normalized_thickness_mm": 3.0,
+            "textual_operations": ["laser_cutting", "cnc_routing"]}
+    estimate_process_times(part)
+    assert not part.get("removed_operations")
+    assert "CUT TWICE?" in _flags(part)

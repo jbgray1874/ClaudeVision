@@ -371,7 +371,22 @@ COMMERCIAL_LINE_GBP_PER_ORDER = {
 # method is "laser", "punch" or "router". EMPTY ON PURPOSE: with no rule the two ops both
 # stay and the line is flagged for a person, which is the honest answer to "which machine"
 # when nobody has told us. Nothing here is guessed from a drawing.
+#
+# FILLED FROM THE SHOP, NOT FROM A DRAWING. These are SDI's own defaults as stated by James
+# Gray (SDI estimating), 14 Sep 2026: acrylic is lasered unless the drawing or the issued CAM
+# calls for CNC; board goes to the router; mild steel is lasered. A material NOT in this list
+# still flags rather than guesses — nothing here was inferred from a pack.
 CUT_METHOD_BY_MATERIAL: list = [
+    {"material": "ACRYLIC", "method": "laser",
+     "source": "SDI shop default, James Gray, 14 Sep 2026 — laser unless the drawing or the "
+               "issued CAM calls for CNC"},
+    {"material": "HIGH_IMPACT_ACRYLIC", "method": "laser",
+     "source": "SDI shop default, James Gray, 14 Sep 2026 — laser unless the drawing or the "
+               "issued CAM calls for CNC"},
+    {"material": "MDF", "method": "router",
+     "source": "SDI shop default, James Gray, 14 Sep 2026 — board is routed, not lasered"},
+    {"material": "MILD_STEEL", "method": "laser",
+     "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
 
 # --- ...and whether to ask the market when there is no house figure ---------------
