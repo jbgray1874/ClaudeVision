@@ -2442,6 +2442,50 @@ def canonical_labour_groups(
             group["work_units"] = insert_count
             continue
 
+        # ── AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS ──────────────────────────────
+        #
+        # The rule below is right about the danger and too broad about the remedy. Summing
+        # participant hours for an assembly-level operation IS an over-count — five members
+        # do not get welded five times — so assembly work falls to the department throughput.
+        # But that throws away the case where the estimator computed a time FOR THE ASSEMBLY
+        # ITSELF, which is not a sum of anything.
+        #
+        # 7332-01-101 is that case, and it is the whole of Howard Thurley's line 86/87:
+        #
+        #     "Weld & Dress AI Estimate for 2 Minutes & 1 Minute respectively, Timings from
+        #      Welding Dept. 0.5 Hours & 20 Minutes respectively."
+        #
+        # The engine computes 50 minutes of welding and 33.5 of dressing on that weldment —
+        # the sheet's own outstanding-inputs list prints the working, "5 joint(s) at 10 min".
+        # Both are assembly-scoped, so neither reached this grouping at all, and the rows
+        # fell to Weld (CO2) 29/hr and Dress Welds 60/hr: the department medians, 2 minutes
+        # and 1. About £28 a unit on a £63 stand, on every book 7332-01 has ever produced.
+        #
+        # So the target's OWN record is read where it has a time for this operation. One
+        # part, one number, no summing — the thing the warning above is about cannot happen
+        # here. Where the assembly carries no time of its own, the department throughput
+        # stands exactly as before.
+        _asm_id = target_id if (scope == "assembly" and target_id in estimates) else None
+        if _asm_id:
+            _asm_bh = {str(k).strip().lower(): v for k, v in
+                       ((estimates[_asm_id].get("labour_estimate") or {}).get(
+                           "batch_hours") or {}).items()}
+            _asm_rh = {str(k).strip().lower(): v for k, v in
+                       ((estimates[_asm_id].get("labour_estimate") or {}).get(
+                           "run_hours_per_unit") or {}).items()}
+            _h = _safe(_asm_bh.get(operation))
+            _r = _safe(_asm_rh.get(operation))
+            if (_h and _h > 0) or (_r and _r > 0):
+                if _h and _h > 0:
+                    group["bh"] += float(_h)
+                if _r and _r > 0:
+                    group["run_hours_per_unit"] = (
+                        group.get("run_hours_per_unit") or 0.0) + float(_r)
+                group.setdefault("hours_by_part", {})[str(_asm_id)] = {
+                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1)}
+                group["assembly_own_time"] = True
+                continue
+
         # Geometry-derived batch hours are valid for leaf events. Assembly work uses the
         # department throughput because summing participant hours is the old over-count.
         if scope == "part" and representative_id:
@@ -3245,7 +3289,13 @@ _STATED_SHOP_TIME_MARKERS = (
 
 
 def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str]) -> bool:
-    """True when any part on this labour row was timed from a figure a department gave us."""
+    """True when any part on this labour row was timed from a figure a department gave us.
+
+    assembly_own_time is the same claim from the grouping side: the row's hours came from
+    the ASSEMBLY's own record rather than from summing its members, so they are one number
+    for one thing and the corpus median has nothing better to offer."""
+    if (group or {}).get("assembly_own_time"):
+        return True
     return any(str(_p).strip().upper() in stated for _p in ((group or {}).get("parts") or []))
 
 
@@ -3254,6 +3304,8 @@ def _stated_shop_time_source(group: Any, stated: Dict[str, str]) -> str:
         _hit = stated.get(str(_p).strip().upper())
         if _hit:
             return _hit
+    if (group or {}).get("assembly_own_time"):
+        return "the assembly's own computed time, not a sum of its members"
     return "a stated shop figure"
 
 
