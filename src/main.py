@@ -1634,6 +1634,63 @@ def main() -> None:
                         if isinstance(_cl, dict) and _cl.get("order_gbp"):
                             _order_freight[str(_cl.get("code") or "").upper()] = float(
                                 _cl["order_gbp"])
+                    # THE BREAK TABLE IS FILLED BEFORE THE SWEEP RECALCULATES. The
+                    # 19:02 book had the sheet perfectly right and the Quantity Breaks
+                    # comparison flat at £4.09 material: the sweep set D6 to each
+                    # quantity while break row 8 was still empty, so J14's guard fell
+                    # to the 1-off literal and every quantity carried the whole £1.92.
+                    # The table is the thing the sweep measures; it goes in first.
+                    try:
+                        _mpb = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
+                        if _mpb.get("enabled") and xlsx_path:
+                            import openpyxl as _oxl
+                            from material_price_break import (lines_from_record,
+                                                              write_price_breaks)
+                            _bk = _oxl.load_workbook(str(xlsx_path))
+                            _mpb_lines = lines_from_record(summary)
+                            if not _mpb_lines:
+                                # SAY WHY AN EMPTY TABLE IS EMPTY. Every line's row
+                                # comes from the workbook READ-BACK — a price cannot be
+                                # placed on a row nobody has read — so no read-back
+                                # means no table, and that must not look like "this job
+                                # has nothing that moves with quantity".
+                                print("   [price-break] no read-back rows on this run, "
+                                      "so no line can be placed against a sheet row.",
+                                      flush=True)
+                            _res = write_price_breaks(
+                                _bk, _mpb_lines, _breaks, _mpb)
+                            if _res.get("rows"):
+                                _bk.save(str(xlsx_path))
+                            summary["material_price_break"] = _res
+                            print(f"   [price-break] {_res.get('rows', 0)} line(s) at "
+                                  f"{len(_res.get('quantities') or [])} quantities"
+                                  + (f" — refused: {'; '.join(_res['refused'])}"
+                                     if _res.get("refused") else ""), flush=True)
+                            if _res.get("repaired_lookups") or \
+                                    _res.get("cleared_broken_refs"):
+                                # SAID ON EVERY RUN, because the repair is only in this
+                                # book. The blank template is the estimators' document
+                                # and it is still damaged until somebody fixes it there.
+                                print("   [price-break] TEMPLATE DAMAGE repaired in "
+                                      "this workbook only — the blank template still "
+                                      "needs fixing: "
+                                      + "; ".join((_res.get("repaired_lookups") or [])
+                                                  + [f"{c} was #REF! (cleared)" for c in
+                                                     (_res.get("cleared_broken_refs")
+                                                      or [])]), flush=True)
+                            if _res.get("outside_table"):
+                                # SAID ON THE RUN, not left to be noticed. The break
+                                # table is shorter than the BOM block; a material past
+                                # its last row is absent from the table, and an absent
+                                # row reads as one that does not move with quantity.
+                                print("   [price-break] BELOW THE TABLE, so not priced "
+                                      "across the breaks — the Material Price Break tab "
+                                      "stops at Estimate row "
+                                      f"{_mpb.get('last_bom_row')}: "
+                                      + ", ".join(_res["outside_table"]), flush=True)
+                    except Exception as _exc:                       # noqa: BLE001
+                        print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
+                              f"estimate is unchanged.", flush=True)
                     _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
                                     order_freight=_order_freight or None)
                     if _swept:
@@ -1647,63 +1704,6 @@ def main() -> None:
                         # The sweep saves a workbook per quantity, which is right for sending
                         # one out and wrong for the job he is doing: comparing four breaks
                         # meant four files open and reading the unit cost out of each by eye.
-                        # The variants stay — they are what gets sent; this is what gets read.
-                        # AND THE SHEET'S OWN BREAK TABLE, which is the version that makes
-                        # ONE workbook serve every quantity rather than four workbooks
-                        # serving one each. Off until the template is repaired — see
-                        # config.MATERIAL_PRICE_BREAK for the six rows that currently
-                        # mis-route.
-                        try:
-                            _mpb = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
-                            if _mpb.get("enabled") and xlsx_path:
-                                import openpyxl as _oxl
-                                from material_price_break import (lines_from_record,
-                                                                  write_price_breaks)
-                                _bk = _oxl.load_workbook(str(xlsx_path))
-                                _mpb_lines = lines_from_record(summary)
-                                if not _mpb_lines:
-                                    # SAY WHY AN EMPTY TABLE IS EMPTY. Every line's row
-                                    # comes from the workbook READ-BACK — a price cannot be
-                                    # placed on a row nobody has read — so no read-back
-                                    # means no table, and that must not look like "this job
-                                    # has nothing that moves with quantity".
-                                    print("   [price-break] no read-back rows on this run, "
-                                          "so no line can be placed against a sheet row.",
-                                          flush=True)
-                                _res = write_price_breaks(
-                                    _bk, _mpb_lines, _breaks, _mpb)
-                                if _res.get("rows"):
-                                    _bk.save(str(xlsx_path))
-                                summary["material_price_break"] = _res
-                                print(f"   [price-break] {_res.get('rows', 0)} line(s) at "
-                                      f"{len(_res.get('quantities') or [])} quantities"
-                                      + (f" — refused: {'; '.join(_res['refused'])}"
-                                         if _res.get("refused") else ""), flush=True)
-                                if _res.get("repaired_lookups") or \
-                                        _res.get("cleared_broken_refs"):
-                                    # SAID ON EVERY RUN, because the repair is only in this
-                                    # book. The blank template is the estimators' document
-                                    # and it is still damaged until somebody fixes it there.
-                                    print("   [price-break] TEMPLATE DAMAGE repaired in "
-                                          "this workbook only — the blank template still "
-                                          "needs fixing: "
-                                          + "; ".join((_res.get("repaired_lookups") or [])
-                                                      + [f"{c} was #REF! (cleared)" for c in
-                                                         (_res.get("cleared_broken_refs")
-                                                          or [])]), flush=True)
-                                if _res.get("outside_table"):
-                                    # SAID ON THE RUN, not left to be noticed. The break
-                                    # table is shorter than the BOM block; a material past
-                                    # its last row is absent from the table, and an absent
-                                    # row reads as one that does not move with quantity.
-                                    print("   [price-break] BELOW THE TABLE, so not priced "
-                                          "across the breaks — the Material Price Break tab "
-                                          "stops at Estimate row "
-                                          f"{_mpb.get('last_bom_row')}: "
-                                          + ", ".join(_res["outside_table"]), flush=True)
-                        except Exception as _exc:                       # noqa: BLE001
-                            print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
-                                  f"estimate is unchanged.", flush=True)
                         try:
                             from quantity_breaks_tab import (write_quantity_breaks_tab,
                                                              select_show_formulas)

@@ -97,3 +97,16 @@ def test_no_copies_filed_is_said_out_loud_not_left_blank():
     src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
     assert "Every quantity is in THIS workbook" in src
     assert "No separate copies are filed." in src
+
+
+def test_the_break_table_is_filled_before_the_sweep_measures_it():
+    """The 19:02 book: the SHEET was perfectly right — break row 8 stepped exactly as
+    predicted — and the Quantity Breaks comparison was flat at £4.09 material, because the
+    sweep set D6 to each quantity while the table was still empty: J14's guard fell to the
+    1-off literal and every quantity carried the whole £1.92 of packing. The table is the
+    thing the sweep measures, so it goes in first."""
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    fill = src.index("write_price_breaks(")
+    sweep = src.index("_swept = _sweep(")
+    tab = src.index("write_quantity_breaks_tab(")
+    assert fill < sweep < tab, "fill the table, then recalc against it, then compare"
