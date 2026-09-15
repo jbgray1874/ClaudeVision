@@ -120,8 +120,17 @@ def price_rows(summary: dict) -> None:
     import costed_facts as cf                                           # noqa: PLC0415
     job = cf.costed_job(summary)
     lines = job.get("lines") or []
+    # WITHOUT THE WORKBOOK READ-BACK THIS IS NOT THE RUN'S ANSWER, AND IT SAYS SO.
+    # A real run reads the calculated sheet back, which is where each line learns its BLOCK
+    # — so "costed by nest on the Sheet Steel block" becomes "unrecorded" here for every
+    # fabricated part. The classification of BOUGHT-IN and COMMERCIAL lines does not depend
+    # on that, and those are the ones a relabel is usually about.
+    print("  NOTE: no workbook read-back, so fabricated parts will read 'unrecorded' here\n"
+          "  where a real run says 'costed by nest'. Bought-in and commercial lines are\n"
+          "  classified the same either way.\n")
     print(f"  {len(lines)} costed line(s)\n")
-    hdr = f"  {'part':26} {'£/unit':>9}  {'firmness':18} class / label"
+    hdr = (f"  {'part':26} {'£/unit':>9}  {'firmness':18} {'class':22} "
+           f"classified on")
     print(hdr)
     print("  " + "-" * (len(hdr) - 2))
     for l in lines:
@@ -129,10 +138,14 @@ def price_rows(summary: dict) -> None:
         money = l.get("charged_unit_gbp")
         if money is None:
             money = l.get("engine_unit_gbp")
+        # THE TOKEN IT DECIDED ON. "market_ai" is a verdict; the string it matched is the
+        # reason, and the reason is what says whether a fix reached this record at all.
+        _me = l.get("material_estimate") if isinstance(l.get("material_estimate"), dict) else {}
+        _tok = str(_me.get("cost_method") or l.get("cost_source") or l.get("source") or "")
         print(f"  {str(l.get('part_number') or '')[:25]:26} "
               f"{(f'{float(money):.2f}' if money not in (None, '') else '—'):>9}  "
-              f"{str(po.get('firmness') or '?'):18} "
-              f"{po.get('class') or '?'} — {str(po.get('label') or '')[:60]}")
+              f"{str(po.get('firmness') or '?'):18} {str(po.get('class') or '?'):22} "
+              f"{_tok or '(no method on the record)'}")
     out = cf.outstanding_summary(job)
     print(f"\n  headline: {out['phrase']}")
 

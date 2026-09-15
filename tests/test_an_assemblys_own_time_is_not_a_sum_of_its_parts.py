@@ -54,7 +54,7 @@ def test_an_assembly_scoped_op_reads_the_assemblys_own_time():
 def test_it_takes_both_the_batch_hours_and_the_per_piece_rate():
     """run_hours_per_unit is the one that matters — a rate derived from batch hours carries
     the quantity it was built for, which is a separate defect this file must not reintroduce."""
-    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:3200]
+    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:4800]
     assert 'group["bh"] += float(_h)' in block
     assert 'group["run_hours_per_unit"]' in block
 
@@ -62,7 +62,7 @@ def test_it_takes_both_the_batch_hours_and_the_per_piece_rate():
 def test_it_does_not_sum_participants():
     """The danger the original rule names. One part, one number — the over-count cannot
     happen on this path because nothing is added up."""
-    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:3200]
+    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:4800]
     assert "participants" not in block
     assert 'hours_by_part", {})[str(_asm_id)]' in block
 
@@ -77,7 +77,7 @@ def test_an_assembly_with_no_time_of_its_own_still_takes_the_department_rate():
 def test_leaf_parts_are_untouched():
     """Everything geometry-derived keeps the path it had. This adds a branch above the
     existing one; it does not replace it."""
-    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:3200]
+    block = SRC.split("AN ASSEMBLY'S OWN TIME IS NOT A SUM OF ITS PARTS")[1][:4800]
     assert 'scope == "assembly"' in block
 
 
@@ -165,3 +165,42 @@ def test_a_stated_group_with_no_hours_falls_back_rather_than_dividing_by_nothing
 def test_the_row_says_the_time_was_stated_not_derived():
     assert '_rate_basis = "stated_shop_time"' in SRC
     assert "was not derived, it was stated" in SRC
+
+
+# ── and the hours are asked for by DEPARTMENT, not by spelling ───────────────────────────
+#
+# The dry-run tool answered this in seconds where four job runs had not: Assemble/pack
+# (Metal) reached the emit loop with rhpu and bh both empty, so it took the median whatever
+# else was fixed. The route names the operation "assembly"; the estimator times it
+# "handling". department_codes has said they are one thing since it was written —
+# _alias("PACM", "handling", "assembly", ...) — and an exact-key lookup asked neither of
+# them that question.
+#
+# Two names for one thing, at a fourth layer of the same job.
+
+def test_handling_and_assembly_are_one_department():
+    import sys as _s
+    _s.path.insert(0, str(ROOT / "src"))
+    from department_codes import code_for
+    assert code_for("handling") == code_for("assembly") == "PACM"
+
+
+def test_the_assembly_lookup_falls_back_to_the_department():
+    assert "ASKED BY DEPARTMENT, NOT BY SPELLING" in SRC
+    block = SRC.split("ASKED BY DEPARTMENT, NOT BY SPELLING")[1][:1600]
+    assert "from department_codes import code_for as _dept_of" in block
+    assert "_dept_of(_alt) == _want" in block
+
+
+def test_the_exact_key_is_still_tried_first():
+    """An exact match is the strongest answer and must not be displaced by an alias scan."""
+    block = SRC.split("ASKED BY DEPARTMENT, NOT BY SPELLING")[1][:1600]
+    assert "_h = _safe(_asm_bh.get(operation))" in block
+    assert "if not _h and not _r:" in block
+
+
+def test_an_unresolvable_operation_costs_the_run_nothing():
+    """department_codes returning None, or not importing at all, must leave the old
+    behaviour rather than raise inside a costing pass."""
+    block = SRC.split("ASKED BY DEPARTMENT, NOT BY SPELLING")[1][:1600]
+    assert "except Exception:" in block

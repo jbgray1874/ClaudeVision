@@ -2473,8 +2473,34 @@ def canonical_labour_groups(
             _asm_rh = {str(k).strip().lower(): v for k, v in
                        ((estimates[_asm_id].get("labour_estimate") or {}).get(
                            "run_hours_per_unit") or {}).items()}
+            # ASKED BY DEPARTMENT, NOT BY SPELLING.
+            #
+            # The route names this operation "assembly"; the estimator times it "handling".
+            # department_codes has said they are one thing since it was written —
+            # _alias("PACM", "handling", "assembly", ...) — and an exact-key lookup asked
+            # neither of them that question, so Assemble/pack (Metal) reached the emit loop
+            # with no hours at all and took the department median. Twelve minutes of pack
+            # (four out to the plater, eight on final assembly) against two.
+            #
+            # The same two-names-for-one-thing that has cost a fix at every layer of this
+            # job. Resolved once, here, by asking the thing that owns the answer.
             _h = _safe(_asm_bh.get(operation))
             _r = _safe(_asm_rh.get(operation))
+            if not _h and not _r:
+                try:
+                    from department_codes import code_for as _dept_of
+                    _want = _dept_of(operation)
+                    if _want:
+                        for _alt, _v in _asm_bh.items():
+                            if _dept_of(_alt) == _want and _safe(_v):
+                                _h = _safe(_v)
+                                break
+                        for _alt, _v in _asm_rh.items():
+                            if _dept_of(_alt) == _want and _safe(_v):
+                                _r = _safe(_v)
+                                break
+                except Exception:                                    # noqa: BLE001
+                    pass
             if (_h and _h > 0) or (_r and _r > 0):
                 if _h and _h > 0:
                     group["bh"] += float(_h)
