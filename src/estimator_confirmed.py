@@ -36,6 +36,7 @@ to be trusted while contributing nothing.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -133,6 +134,30 @@ def _num(value: Any, *, positive: bool = True) -> Optional[float]:
     return out
 
 
+def drawing_stems(drawing_number: Any) -> List[str]:
+    """The names a person actually calls the job by, most specific first.
+
+    The engine knows a pack by its GA sheet — "10975-02-GA" — and the office knows the job
+    by the number on the folder — "10975-02". A confirmations file is written by the office,
+    so `10975-02_confirmed.json` sat unread beside a job whose only recognised name carried
+    the sheet-role suffix, and Howard's answers did nothing. The suffix (GA, DETAIL, an
+    issue letter) is the engine's business, not the author's, so every trailing PURELY
+    ALPHABETIC dash-segment yields a further stem. Segments with digits are the code itself
+    ("-02", "-A01") and are never stripped: "10975" alone could name a different job in the
+    same folder, which is exactly the quiet cross-governance the specific-name-first rule
+    exists to prevent.
+    """
+    stems: List[str] = []
+    text = str(drawing_number or "").strip()
+    while text and text not in stems:
+        stems.append(text)
+        head, sep, tail = text.rpartition("-")
+        if not sep or not head or not tail.isalpha():
+            break
+        text = head
+    return stems
+
+
 def find_corrections_file(job_folder: Any, pdf_path: Any = None,
                           drawing_number: Any = None) -> Optional[Path]:
     """The confirmations file for this job, if one has been written. None is the normal case.
@@ -140,7 +165,7 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
     Looked for beside the job's drawings, so it travels with the job rather than living in the
     engine — a pack handed to someone else carries its confirmations with it.
     """
-    drawing = str(drawing_number or "").strip()
+    stems = drawing_stems(drawing_number)
     roots: List[Path] = []
     for candidate in (job_folder, (Path(pdf_path).parent if pdf_path else None)):
         if not candidate:
@@ -153,9 +178,13 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
             roots.append(root)
     for root in roots:
         for pattern in FILE_NAMES:
-            if "{drawing}" in pattern and not drawing:
+            if "{drawing}" in pattern:
+                for stem in stems:
+                    path = root / pattern.format(drawing=stem)
+                    if path.is_file():
+                        return path
                 continue
-            path = root / pattern.format(drawing=drawing)
+            path = root / pattern
             if path.is_file():
                 return path
     return None
@@ -421,6 +450,66 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
     return out, problems
 
 
+def _same_figure(held: Any, stated: Any) -> bool:
+    """Whether the part already holds what the file states — numerically where both are
+    numbers, as normalised text otherwise. Used only to tell an AGREEMENT apart from a
+    REFUSAL after apply_field returns False for both."""
+    if held is None:
+        return False
+    try:
+        return abs(float(held) - float(stated)) < 1e-9
+    except (TypeError, ValueError):
+        pass
+    a = re.sub(r"[\s_\-]+", " ", str(held).strip().upper())
+    b = re.sub(r"[\s_\-]+", " ", str(stated).strip().upper())
+    return bool(a) and a == b
+
+
+def confirmation_match_keys(part: Mapping[str, Any]) -> List[str]:
+    """Every name a person could reasonably write in the file for THIS part, bare-coded.
+
+    The record's own part_number is a COMPONENT name when the part came from the model —
+    "10975 EPDM Closed Cell Tape^10975-02-GA" — and nobody types that into a confirmations
+    file. The BOM calls the same tape "10975"; the folded duplicate row called it
+    "10975-02-00"; each is a name somebody actually read off a sheet. Howard's
+    `"10975": {"piece_length_mm": 200}` matched nothing and his answer did nothing —
+    silently, which is the one failure mode this module promises not to have.
+
+    So a part answers to: its part_number as stored; that name with any ^configuration
+    tail removed; the LEADING CODE of a "CODE Description" component name (digits-led,
+    four or more, and never a category word — "TAPE" names a drawer, not a part); and
+    every identity the duplicate fold has recorded onto it.
+    """
+    try:
+        from part_code_conventions import bare_code, is_category_not_a_code
+    except Exception:                                                     # noqa: BLE001
+        def bare_code(text: str) -> str:                                  # type: ignore
+            return re.sub(r"[\s\-]+", "", str(text or "").upper())
+
+        def is_category_not_a_code(text: str) -> bool:                    # type: ignore
+            return False
+
+    keys: List[str] = []
+
+    def _add(text: Any) -> None:
+        code = bare_code(str(text or ""))
+        if code and code not in keys:
+            keys.append(code)
+
+    raw = str(part.get("part_number") or "") if isinstance(part, Mapping) else ""
+    name = raw.split("^", 1)[0].strip()
+    _add(raw)
+    _add(name)
+    lead = name.split(None, 1)[0] if name else ""
+    if lead and lead != name and re.match(r"^\d{4,}", lead) \
+            and not is_category_not_a_code(lead):
+        _add(lead)
+    if isinstance(part, Mapping):
+        for alias in (part.get("folded_duplicate_identities") or []):
+            _add(alias)
+    return keys
+
+
 def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dict[str, Any]:
     """Stamp the confirmed figures onto the parts. Returns a report for the operator.
 
@@ -429,7 +518,8 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
     matches no part in the job is returned in `unmatched`, NOT swallowed: the person who wrote
     it is entitled to know their line did nothing.
     """
-    report: Dict[str, Any] = {"stamped": 0, "fields": 0, "unmatched": [], "matched": []}
+    report: Dict[str, Any] = {"stamped": 0, "fields": 0, "unmatched": [], "matched": [],
+                              "agreed": 0}
     if not isinstance(parts, Sequence) or not isinstance(corrections, Mapping):
         return report
     wanted = corrections.get("parts")
@@ -449,7 +539,8 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
     by_code: Dict[str, List[Dict[str, Any]]] = {}
     for part in parts:
         if isinstance(part, dict):
-            by_code.setdefault(bare_code(str(part.get("part_number") or "")), []).append(part)
+            for key in confirmation_match_keys(part):
+                by_code.setdefault(key, []).append(part)
 
     for code, spec in wanted.items():
         targets = by_code.get(bare_code(code)) or []
@@ -461,6 +552,7 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
         rank_source = _BASIS_SOURCE.get(basis, SOURCE)
         for part in targets:
             changed: List[str] = []
+            agreed: List[str] = []
             for file_key, part_field in _FIELD_MAP.items():
                 if file_key not in spec:
                     continue
@@ -468,16 +560,25 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
                 if sp.apply_field(part, part_field, spec[file_key], rank_source):
                     changed.append(f"{file_key} {spec[file_key]}"
                                    + (f" (was {before})" if before not in (None, "") else ""))
+                elif _same_figure(part.get(part_field), spec[file_key]):
+                    # apply_field returns False for agreement as well as refusal, and the
+                    # two must not look alike here: a person confirming what the files
+                    # already said has ANSWERED a question (the agreement is recorded in
+                    # _agreed and closes the open decision), and a confirmation that
+                    # vanishes from the log is how a working file comes to look broken.
+                    agreed.append(f"{file_key} {spec[file_key]}")
             if spec.get("layers"):
                 # Direct-write, not through apply_field: this is not a competing reading of
                 # a datum some other source also supplies — nothing else in the engine
                 # describes a lamination at all, so there is nothing to arbitrate against.
                 part["material_layers"] = [dict(_l) for _l in spec["layers"]]
                 changed.append(f"{len(spec['layers'])} material layers")
-            if not changed:
+            if not changed and not agreed:
                 continue
-            report["stamped"] += 1
-            report["fields"] += len(changed)
+            if changed:
+                report["stamped"] += 1
+                report["fields"] += len(changed)
+            report["agreed"] += len(agreed)
             report["matched"].append(code)
             part["estimator_confirmed"] = {
                 "by": who,
@@ -489,6 +590,13 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
                 "file": corrections.get("path"),
             }
             _stamp = f" on {when}" if when else ""
+            if agreed:
+                part.setdefault("review_flags", []).append(
+                    f"{code}: {', '.join(agreed)} — CONFIRMED by {who}{_stamp}, agreeing "
+                    f"with what the files already said. Nothing changed; the open question "
+                    f"on this figure is answered and is not re-asked")
+            if not changed:
+                continue
             if basis == "inferred":
                 # Worded as an ASSUMPTION, because that is what it is, and priced anyway.
                 part.setdefault("review_flags", []).append(

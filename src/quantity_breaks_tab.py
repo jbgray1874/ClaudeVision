@@ -55,8 +55,14 @@ def _rows_of(swept: Any) -> List[Dict[str, Any]]:
 
 
 def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
-                              requested: Optional[List[int]] = None) -> Optional[str]:
+                              requested: Optional[List[int]] = None,
+                              warning: Optional[str] = None) -> Optional[str]:
     """Add (or replace) the one-sheet break table. Returns the sheet name, or None.
+
+    `warning` is printed in red above the figures when the run knows the comparison is
+    compromised — the 19:02 book measured every quantity against an EMPTY Material Price
+    Break table and produced four confidently flat columns, which is the one thing this
+    sheet must never do silently again.
 
     Never raises into a run: this reports on an estimate and may not damage it.
     """
@@ -98,6 +104,10 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                                 + ", ".join(str(q) for q in _extra))
                 ws["A3"] = " · ".join(bits)
                 ws["A3"].font = Font(bold=True, color="B3261E", size=10)
+
+        if warning:
+            ws["A4"] = f"⚠ {warning}"
+            ws["A4"].font = Font(bold=True, color="B3261E", size=10)
 
         head = 5
         ws.cell(row=head, column=1, value="Quantity").font = bold

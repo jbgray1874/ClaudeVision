@@ -3430,6 +3430,13 @@ def _finalize_scan_summary(
                       f"{_ec_rep['fields']} field(s) taken from {_ec_path.name} — confirmed "
                       f"by {_ec_data.get('confirmed_by') or 'an estimator'} "
                       f"(estimator_confirmed rank; nothing outranks it)", flush=True)
+            if _ec_rep.get("agreed"):
+                # An agreement writes nothing, and a working file that logs nothing looks
+                # broken — say that the answer arrived and what it did: closed the question.
+                print(f"   [confirmed] {_ec_rep['agreed']} figure(s) in {_ec_path.name} "
+                      f"AGREE with what the files already said — "
+                      f"{_ec_data.get('confirmed_by') or 'an estimator'}'s confirmation is "
+                      f"recorded and the open question it answers is closed", flush=True)
             for _code in _ec_rep["unmatched"]:
                 print(f"   [confirmed] {_code} is in {_ec_path.name} but NO part of this job "
                       f"carries that number — the line did nothing. Check the code",

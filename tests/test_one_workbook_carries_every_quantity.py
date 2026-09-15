@@ -110,3 +110,96 @@ def test_the_break_table_is_filled_before_the_sweep_measures_it():
     sweep = src.index("_swept = _sweep(")
     tab = src.index("write_quantity_breaks_tab(")
     assert fill < sweep < tab, "fill the table, then recalc against it, then compare"
+
+
+# ── the mechanism itself, exercised on real cells rather than on source text ─────────────
+# The ordering pin above proves the calls stand in the right order; nothing in it proves a
+# single cell gets a value. These do — the 19:02 packing line, written and read back.
+
+def _a_book_like_the_template():
+    import openpyxl
+    wb = openpyxl.Workbook()
+    est = wb.active
+    est.title = "Estimate"
+    wb.create_sheet("Material Price Break")
+    return wb
+
+
+_PACKING_LINE = {
+    "code": "PACKAGING", "description": "Bagged and boxed, Howard's stated method",
+    "sheet_row": 14,                                        # J14 -> break row 8
+    "order_gbp": 1.92,
+    "order_gbp_at": {1: 1.92, 10: 2.19, 50: 3.37, 250: 13.09, 1000: 46.69},
+}
+
+
+def test_the_break_row_carries_the_stepped_values_cell_by_cell():
+    """Exactly the figures the 19:02 sheet proved right: 1.92 / 0.219 / 0.0674 /
+    0.05236 / 0.04669 per unit, read back off the written cells."""
+    import material_price_break as MPB
+    wb = _a_book_like_the_template()
+    res = MPB.write_price_breaks(wb, [dict(_PACKING_LINE)], [10, 50, 250, 1000],
+                                 dict(config.MATERIAL_PRICE_BREAK))
+    assert res["rows"] == 1, res
+    ws = wb["Material Price Break"]
+    target = 14 + int(config.MATERIAL_PRICE_BREAK.get("row_offset", -6))
+    got = [ws.cell(row=target, column=c).value for c in range(4, 9)]      # D..H
+    assert got == [1.92, 0.219, 0.0674, 0.05236, 0.04669], got
+    # and padded to the table's full width so LOOKUP's last column is never empty
+    assert ws.cell(row=target, column=14).value == 0.04669                # N
+
+
+def test_the_quantity_vector_lands_on_the_estimate_and_never_descends():
+    import material_price_break as MPB
+    wb = _a_book_like_the_template()
+    MPB.write_price_breaks(wb, [dict(_PACKING_LINE)], [10, 50, 250, 1000],
+                           dict(config.MATERIAL_PRICE_BREAK))
+    est = wb["Estimate"]
+    import re as _re
+    _m = _re.match(r"([A-Z]+)(\d+)",
+                   str(config.MATERIAL_PRICE_BREAK.get("qty_vector_first_cell", "F180")))
+    col, row0 = _m.group(1), int(_m.group(2))
+    vec = [est[f"{col}{row0 + i}"].value for i in range(11)]
+    assert vec[:5] == [1, 10, 50, 250, 1000], vec
+    assert vec == sorted(vec), "LOOKUP requires a non-descending vector"
+    assert vec[-1] == 1000, "padded with the last break, not left as formula zeros"
+
+
+def test_an_empty_fill_puts_the_warning_on_the_tab_itself(tmp_path):
+    """The OTHER way the 19:02 book happens: the fill fails or writes nothing and the
+    sweep measures an empty table. The comparison still prints — its figures are honest
+    reads of the sheet as it stands — but the caution is on the sheet's own face, not
+    only in a run log nobody re-opens."""
+    import openpyxl
+    from quantity_breaks_tab import write_quantity_breaks_tab, SHEET_NAME
+    p = tmp_path / "book.xlsx"
+    _a_book_like_the_template().save(p)
+    swept = {"rows": [{"quantity": 1, "material": 4.09, "labour": 2.0, "unit": 9.57},
+                      {"quantity": 10, "material": 4.09, "labour": 1.0, "unit": 6.79}]}
+    warning = "The Material Price Break table did NOT fill on this run"
+    out = write_quantity_breaks_tab(p, swept, requested=[10], warning=warning)
+    assert out == SHEET_NAME
+    ws = openpyxl.load_workbook(p)[SHEET_NAME]
+    assert warning in str(ws["A4"].value), ws["A4"].value
+
+
+def test_a_healthy_run_carries_no_warning(tmp_path):
+    import openpyxl
+    from quantity_breaks_tab import write_quantity_breaks_tab, SHEET_NAME
+    p = tmp_path / "book.xlsx"
+    _a_book_like_the_template().save(p)
+    swept = {"rows": [{"quantity": 1, "material": 2.39, "labour": 2.0, "unit": 7.74}]}
+    write_quantity_breaks_tab(p, swept, requested=[1])
+    ws = openpyxl.load_workbook(p)[SHEET_NAME]
+    assert ws["A4"].value in (None, ""), ws["A4"].value
+
+
+def test_the_run_log_and_the_tab_warning_come_from_one_place():
+    """main computes the warning once, prints it, and hands THE SAME OBJECT to the tab —
+    two separately-worded warnings would drift into contradiction."""
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "_mpb_warning = (" in src
+    assert "warning=_mpb_warning" in src
+    guard = src.index("_mpb_warning = None")
+    sweep = src.index("_swept = _sweep(")
+    assert guard < sweep, "the health of the table is judged before the sweep measures it"

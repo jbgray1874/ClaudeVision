@@ -1377,6 +1377,21 @@ def thickness_conflict(part: Mapping[str, Any],
     # scroll past all of it.
     if "estimator_confirmed" in str(kept_src).lower():
         return None
+    # A PERSON AGREEING WITH THE KEPT VALUE IS ALSO A RULING, whatever rank their reading
+    # carried. A confirmations file with no stated basis enters at "read" — a transcription,
+    # rank 72 — and for gauge the cut file holds 95, so the person's 2 mm never displaces
+    # the DXF's 2 mm and the source stamp stays the machine's. The agreement is still on
+    # the record (_agreed, via support_for): the question this flag asks is "confirm the
+    # gauge", and a recorded confirmation of the kept figure is that answer. A person
+    # naming a DIFFERENT figure closes nothing here — that disagreement must stay visible.
+    try:
+        from source_precedence import support_for
+        _backing = {str(s).lower() for s in
+                    support_for(part, "normalized_thickness_mm", kept)}  # type: ignore[arg-type]
+    except Exception:                                            # noqa: BLE001
+        _backing = set()
+    if _backing & {"estimator_confirmed", "estimator_read_drawing"}:
+        return None
     others = "; ".join(f"{v:g} mm from {s}" for v, s in
                        sorted(set(rivals), key=lambda t: t[0]))
     return {

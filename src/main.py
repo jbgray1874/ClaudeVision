@@ -1691,6 +1691,30 @@ def main() -> None:
                     except Exception as _exc:                       # noqa: BLE001
                         print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
                               f"estimate is unchanged.", flush=True)
+                    # THE SWEEP MUST NOT MEASURE AN EMPTY TABLE IN SILENCE. Filling first
+                    # (above) fixed the 19:02 ordering; this is the OTHER way the same book
+                    # happens — the fill raises, or writes nothing, and the sweep then
+                    # measures a sheet whose per-order lines all fall to their 1-off
+                    # literals: four confidently flat columns, wrong at exactly the
+                    # quantities the table exists to answer. The comparison still runs (its
+                    # figures are honest reads of the sheet as it stands) but it carries the
+                    # caution on its face and in the run log.
+                    _mpb_warning = None
+                    if dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {}).get(
+                            "enabled") and xlsx_path and not (
+                            (summary.get("material_price_break") or {}).get("rows")):
+                        _mpb_warning = (
+                            "The Material Price Break table did NOT fill on this run, so "
+                            "every column below was measured with each line at its 1-off "
+                            "figure — per-order costs (packing, boxes, minimum charges) "
+                            "are not spread across the quantity, and the differences "
+                            "between columns understate the volume effect. Do not quote "
+                            "quantity pricing from this sheet; the run log names the "
+                            "cause, fix it and re-run.")
+                        print("   [price-break] WARNING — the break table is EMPTY going "
+                              "into the quantity sweep: the Quantity Breaks comparison "
+                              "will read flatter than the truth. The tab says so on its "
+                              "face.", flush=True)
                     _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
                                     order_freight=_order_freight or None)
                     if _swept:
@@ -1708,7 +1732,8 @@ def main() -> None:
                             from quantity_breaks_tab import (write_quantity_breaks_tab,
                                                              select_show_formulas)
                             _tab = write_quantity_breaks_tab(xlsx_path, _swept,
-                                                             requested=_breaks)
+                                                             requested=_breaks,
+                                                             warning=_mpb_warning)
                             if _tab:
                                 summary["quantity_breaks_tab"] = _tab
                             # The same request's other half. A view, not a change to a cell:
