@@ -580,6 +580,23 @@ def apply_estimator_confirmed(parts: Any, corrections: Mapping[str, Any]) -> Dic
                 report["fields"] += len(changed)
             report["agreed"] += len(agreed)
             report["matched"].append(code)
+            # AN ANSWERED QUESTION COMES OFF THE LIST. The gauge flag minted before the
+            # confirmation arrived — "…confirm which is right" — stayed on the record and
+            # the Outstanding list kept asking a question a person had answered in the
+            # very file this run just read. Only flags that ASK about a now-settled field
+            # are dropped; statements of fact stay. Done BEFORE this run's own flags are
+            # appended, so the confirmation's record of itself is never pruned.
+            _settled = {_FIELD_MAP[k] for k in _FIELD_MAP
+                        if k in spec and (any(k in c for c in changed)
+                                          or any(k in a for a in agreed))}
+            if _settled and isinstance(part.get("review_flags"), list):
+                part["review_flags"] = [
+                    f for f in part["review_flags"]
+                    if not (any(pf in str(f) for pf in _settled)
+                            and "confirm" in str(f).lower())]
+            if _settled and isinstance(part.get("_corroboration"), dict):
+                for _pf in _settled:
+                    part["_corroboration"].pop(_pf, None)
             part["estimator_confirmed"] = {
                 "by": who,
                 "on": when,

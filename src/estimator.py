@@ -3600,6 +3600,18 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         f"= £{_cost:.2f} for the line — priced by the length used, not by the piece. "
         f"Roll length: {_entry.get('source') or 'config'}. "
         f"Roll price: {_px.get('label') or 'source not named'}")
+    # THE OLD ANSWER COMES OFF THE MONEY BEFORE THE NEW ONE GOES ON. 10975's tape record
+    # still carried an abandoned LLM answer from an earlier pricing pass, stamped as
+    # applied — so price_not_reproducible BLOCKED the job for a £13.63 that never reached
+    # the total, while the £0.28 that did was the roll arithmetic below. Every stamp
+    # already on the part is a rival this price has just displaced; say so on each.
+    try:
+        from price_provenance import mark_withheld as _mark_withheld
+        _mark_withheld(part, reason="superseded — this line is priced by the roll-goods "
+                                    "length arithmetic; this earlier figure does not "
+                                    "reach the total")
+    except Exception:                                                # noqa: BLE001
+        pass
     return {"material": part.get("normalized_material"), "thickness_mm": None,
             "blank_length_mm": _piece_mm, "blank_width_mm": None, "blank_area_m2": None,
             "unit_material_mass_kg": None,

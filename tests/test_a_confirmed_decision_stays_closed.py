@@ -88,6 +88,110 @@ def test_an_ordinary_unpriced_line_still_asks():
     assert "MATERIAL UNPRICED" in note
 
 
+def test_the_one_classifier_calls_the_free_issue_nil_deliberate():
+    """The 19:02 AI Explanation demanded "a rate. Nothing we can query holds a price" for
+    the graphic the engine had recognised as free-issue — the classifier the tab defers to
+    now says which correct nothing it is."""
+    from costed_facts import _price_origin
+    g01 = {"part_number": "10975-02-G01", "description": "GRAPHIC",
+           "risk_flags": ["customer_supplied_zero_cost"]}
+    origin = _price_origin(g01, "bought_in", None, None, 0.0, None, False)
+    assert origin["firmness"] == "nil", origin
+    assert origin["owner"] == "nobody"
+    assert "FREE-ISSUE" in origin["label"], origin["label"]
+
+
+def test_the_explanation_tab_does_not_count_a_deliberate_nil_as_a_gap():
+    from estimator_inputs import unpriced_reason_for_row
+    g01 = {"part_number": "10975-02-G01",
+           "risk_flags": ["customer_supplied_zero_cost"]}
+    reason = unpriced_reason_for_row(g01)
+    assert reason["owner"] == "nobody"
+    assert "FREE-ISSUE" in reason["detail"]
+
+
+def test_the_stated_method_line_is_not_a_market_indication():
+    """The same review: packaging — a person's method, the system's prices, reproducible —
+    called an AI market indication and non-reproducible on estimator-facing tabs. The one
+    classifier now names it a house figure to verify, never one to replace."""
+    from costed_facts import _price_origin, INDICATIVE_HOUSE
+    pkg = {"part_number": "PACKAGING", "_commercial_placeholder": True,
+           "cost_source": "stated_method_system_priced",
+           "description": "Packaging — bagged (PACK13) + boxed (BOX481)"}
+    origin = _price_origin(pkg, "commercial", None, 1.92, 1.92, None, False)
+    assert origin["class"] == "stated_method", origin
+    assert origin["firmness"] == INDICATIVE_HOUSE
+    assert "stated method" in origin["label"]
+    assert "replace" not in origin["label"].lower()
+
+
+def test_a_held_commercial_line_still_reads_unpriced():
+    from costed_facts import _price_origin, UNPRICED
+    pkg = {"part_number": "DELIVERY", "_commercial_placeholder": True}
+    origin = _price_origin(pkg, "commercial", None, None, 0.0, None, False)
+    assert origin["firmness"] == UNPRICED
+
+
+def test_the_outstanding_list_asks_each_question_once():
+    """The 19:02 book's ten items were seven questions: DELIVERY twice (two wordings of
+    'price this line'), the A01 extent twice (two checks, same figures), G01's material
+    twice (two rivals, one question)."""
+    from wb_populate import _question_fingerprint as fp
+    the_ten = [
+        ("10975-02-G01", "FREE-ISSUE assumed — costed at nil on purpose; the part is in "
+                         "the build and the money for it is not ours. Confirm with the "
+                         "customer, and if SDI is buying it, enter the rate"),
+        ("DELIVERY", "NOT YET PRICED: enter the per-unit figure for this line"),
+        ("MARGIN", "MARGIN NOT SET — Sell Price currently equals cost; set the margin or "
+                   "confirm 0% is intended"),
+        ("PACKAGING", "PACKED BY THE STATED METHOD (Howard Thurley (SDI estimating), "
+                      "stated for 0355255 on 9 Sep 2026): 1 x PACK13 at £0.03"),
+        ("DELIVERY", "Commercial line — not derivable from drawings; estimator to price "
+                     "(order-specific: packaging size / pallet count / destination)."),
+        ("10975-02-A01", "blank check: DXF flat 792 x 760.3mm is 377% of the model flat "
+                         "759.81 x 210mm — larger than the model develops"),
+        ("10975-02-A01", "Blank UNRECONCILED: DXF flat 792 x 760.3mm is 377% of the model "
+                         "flat 759.81 x 210mm — larger than the model develops"),
+        ("10975-02-A01", "normalized_thickness_mm: '3.0' from solidworks_api was NOT "
+                         "applied although it outranks what is held"),
+        ("10975-02-G01", "normalized_material: 'BOUGHT_IN' from inference NOT applied — "
+                         "'PAPER' from drawing_deterministic is the stronger source"),
+        ("10975-02-G01", "normalized_material: 'Corrugated Paper' from "
+                         "solidworks_applied_material NOT applied — 'PAPER' from "
+                         "drawing_deterministic is the stronger source"),
+    ]
+    assert len({fp(p, w) for p, w in the_ten}) == 7
+
+
+def test_different_parts_asking_the_same_kind_of_question_are_not_merged():
+    from wb_populate import _question_fingerprint as fp
+    assert fp("PACKAGING", "NOT YET PRICED: enter the per-unit figure") \
+        != fp("DELIVERY", "NOT YET PRICED: enter the per-unit figure")
+
+
+def test_a_confirmation_takes_the_stale_ask_off_the_record():
+    """Item 8 of the ten: the corroboration flag minted before Howard answered kept
+    asking "confirm which is right" after the very file this run read had answered it."""
+    import estimator_confirmed as ec
+    part = {"part_number": "10975-02-A01", "normalized_thickness_mm": 2.0,
+            "thickness_source": "dxf",
+            "review_flags": [
+                "normalized_thickness_mm: '3.0' from solidworks_api was NOT applied "
+                "although it outranks what is held — 2 independent sources say '2.0' "
+                "against it; confirm which is right",
+                "NESTED TURNED — the blank is written across the sheet"],
+            "_corroboration": {"normalized_thickness_mm": {"value": 2.0}}}
+    ec.apply_estimator_confirmed(
+        [part], {"parts": {"10975-02-A01": {"thickness_mm": 2.0,
+                                            "read_from": "the title block"}},
+                 "confirmed_by": "Howard Thurley", "path": "x"})
+    flags = part.get("review_flags", [])
+    assert not any("confirm which is right" in f for f in flags), flags
+    assert any("NESTED TURNED" in f for f in flags), "statements of fact stay"
+    assert any("CONFIRMED by Howard Thurley" in f for f in flags)
+    assert "normalized_thickness_mm" not in part.get("_corroboration", {})
+
+
 # ── F2: a person's answer closes the question ────────────────────────────────────────────
 
 def test_a_confirmed_gauge_is_not_re_asked():
@@ -264,6 +368,34 @@ def test_howards_answer_file_end_to_end(tmp_path):
     assert report["unmatched"] == [], report
     assert thickness_conflict(body) is None
     assert tape.get("confirmed_piece_length_mm") == 200.0
+
+
+def test_a_priced_roll_withdraws_the_abandoned_llm_stamp(monkeypatch):
+    """F3: the 19:02 book blocked on price_not_reproducible naming 10975EPDMCLOSEDCELL —
+    an abandoned LLM answer still stamped `applied` beside the roll arithmetic that
+    actually reached the total. When the roll prices, every rival stamp is withheld."""
+    import estimator
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "resolve",
+                        lambda code, desc=None: {"gbp": 4.50, "basis": "udef_sqlserver",
+                                                 "source": "udef_sqlserver",
+                                                 "label": "SDI Live UDEF",
+                                                 "disagreement": None})
+    part = {"part_number": "10975",
+            "description": "Tape^ EPDM TAPE 25X1MM - TAPE 113C LENGTH: 220.00",
+            "normalized_material": "ACRYLIC", "quantity": 3,
+            "cost_breakdown": {"system_cost": {
+                "schema": "price_source.v1", "source_name": "xai_grok_llm",
+                "applied": True, "affects_total": True, "unit_price_gbp": 13.63}}}
+    out = estimator.roll_goods_material(part)
+    assert out is not None and out.get("cost_method") == "roll_goods_by_length", out
+    from price_provenance import iter_price_stamps
+    stale = [b for _p, b in iter_price_stamps(part)
+             if b.get("source_name") == "xai_grok_llm"]
+    assert stale, "the abandoned stamp is still on the record — history is kept"
+    assert all(b.get("affects_total") is False for b in stale)
+    assert all("superseded" in str(b.get("withheld_reason") or "") for b in stale)
+    assert out["price_source"]["affects_total"] is True, "the roll price IS the money"
 
 
 def test_the_roll_branch_prefers_the_confirmed_length():

@@ -267,6 +267,17 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
         return price_provenance.unpriced_reason(
             price_provenance.NOT_APPLICABLE,
             "an assembly has no material of its own; its material is its children's")
+    # A FREE-ISSUE ITEM'S ZERO IS ON PURPOSE. The engine recognised the graphic as
+    # customer-supplied and costed it nil deliberately — and the sheet row still asked
+    # for "a rate. Nothing we can query holds a price", which sent an estimator hunting
+    # for a price the estimate must not contain. One story, everywhere: this is the
+    # same decision material_input_note words as FREE-ISSUE on the sheet.
+    if any("customer_supplied_zero_cost" in str(f)
+           for f in (part.get("risk_flags") or [])):
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_APPLICABLE,
+            "FREE-ISSUE: the customer supplies this item, so the nil is on purpose. "
+            "Confirm free issue with the customer; do not price it")
     # A REPRODUCIBLE GUESS IS KEPT OFF THE COLUMN ON PURPOSE. A figure exists and we have
     # decided not to stand behind it, which is the one category where the blank is a policy.
     if part.get("_ai_indicative_gbp"):

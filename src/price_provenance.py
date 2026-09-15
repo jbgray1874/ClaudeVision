@@ -715,8 +715,11 @@ def stamp_affects_total(block: Dict[str, Any]) -> bool:
     return bool(block.get("applied"))
 
 
-def mark_withheld(record: Any) -> int:
+def mark_withheld(record: Any, reason: Any = None) -> int:
     """Record that this line's price did NOT reach the total. Returns how many stamps changed.
+
+    `reason` fills the withheld_reason of stamps that carry none — a stamp's own stated
+    reason is never overwritten.
 
     THE WRITER KNEW AND NEVER SAID SO. stamp_affects_total already asks the right question —
     a price can be resolved and then not added — but it can only read what somebody wrote,
@@ -735,7 +738,7 @@ def mark_withheld(record: Any) -> int:
     for _path, block in iter_price_stamps(record):
         if block.get("affects_total") is not False:
             block["affects_total"] = False
-            block["withheld_reason"] = str(block.get("withheld_reason")
+            block["withheld_reason"] = str(block.get("withheld_reason") or reason
                                            or "kept off the price column by the engine")
             changed += 1
     return changed

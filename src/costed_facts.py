@@ -1583,6 +1583,22 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                 "label": ("priced by the length used — "
                           + (", ".join(_bits) if _bits else "SDI roll-goods catalogue")
                           + "; verify the roll price, not the arithmetic")}
+    # A STATED METHOD PRICED FROM THE LIVE SYSTEM IS NEITHER A GUESS NOR A HOLD.
+    #
+    # The 19:02 book carried the packing calculation green — Howard's bag-and-box method,
+    # consumable prices live from UDEF, the break row stepping exactly as his own sheet
+    # steps — while the estimator-facing tabs called the same line unpriced in one place,
+    # an AI market indication in another and not reproducible in a third. Every part of
+    # that is the opposite of the truth: the method is a person's, the prices are the
+    # system's, and the same run reproduces the same figure. INDICATIVE_HOUSE, for the
+    # same reason as the plater freight and the roll: a real figure to verify or accept,
+    # never one to "replace with a quote".
+    if "stated_method_system_priced" in tokens or "packing_method" in tokens:
+        return {"class": "stated_method", "firmness": INDICATIVE_HOUSE,
+                "owner": "estimator",
+                "label": ("priced by the estimator's stated method, consumables live "
+                          "from SDI Live — reproducible between runs; verify the "
+                          "method's steps, not the arithmetic")}
     if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
@@ -1615,16 +1631,22 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                 "label": "priced — the line records no source; see AI Provenance"}
     # No money and not nil by design: somebody owes a figure. Ask the shared reason
     # vocabulary who, rather than inventing a fourth opinion here.
-    owner, why = "estimator", "no catalogue row, price file or quote holds a rate for this"
+    owner, why, detail = "estimator", \
+        "no catalogue row, price file or quote holds a rate for this", ""
     try:
         from estimator_inputs import unpriced_reason_for_row
         reason = unpriced_reason_for_row(part) or {}
         owner = str(reason.get("owner") or owner)
         why = str(reason.get("why") or reason.get("detail") or why)
+        detail = str(reason.get("detail") or "")
     except Exception:                                                # noqa: BLE001
         pass
     if owner == "nobody":
-        return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody", "label": why}
+        # The detail is the sentence a person can act on — "FREE-ISSUE: the customer
+        # supplies this" says which correct nothing this is, where the category's own
+        # wording only says that it is one.
+        return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
+                "label": (f"{why} — {detail}" if detail else why)}
     return {"class": "unpriced", "firmness": UNPRICED, "owner": owner,
             "label": f"NOT PRICED — {why}"}
 

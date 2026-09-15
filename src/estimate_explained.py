@@ -1074,6 +1074,15 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
                     "If the item has an SDI code, put it in and the price follows; if it "
                     "genuinely has none, price it by hand. Where the engine resolved a real "
                     "code and this class word displaced it, that is ours")
+        # A NIL THE RECORD PUT THERE ON PURPOSE IS NOT A MISSING RATE. G01's free-issue
+        # graphic was recognised, costed nil deliberately, worded FREE-ISSUE on the sheet
+        # — and this branch, which never asked the record, still demanded "a rate" for it
+        # in the one document that opens with "the questions, answered first".
+        _line0 = _record_line(record, bom_row)
+        if _line0 is not None:
+            _og0 = _line0.get("price_origin") or {}
+            if str(_og0.get("class") or "") == "nil_by_design" and _og0.get("label"):
+                return str(_og0["label"])
         return "**NOT PRICED — needs a rate**"
     # PACKAGING AND DELIVERY ARE ORDER-LEVEL, AND THE DIVISOR IS THE POINT.
     #
@@ -1458,9 +1467,18 @@ def build(workbook: Path, scan_json: Optional[Path],
     # knows better twice over (_price_source, and the covering note's _reads_as_free, which is
     # why the email correctly said "2 lines carry no price" on the very same run). _money
     # returns None for a blank and 0.0 for a zero — both falsy, both unpriced.
+    # AND A DELIBERATE NIL IS NOT A GAP. The free-issue graphic is costed nothing ON
+    # PURPOSE — the record classes it nil_by_design — and counting it here put it in
+    # "what must be replaced before this is a quote", asking for the one price the
+    # estimate must not contain.
+    def _nil_on_purpose(r: Dict[str, Any]) -> bool:
+        _l = _record_line(record_lines, r)
+        return bool(_l is not None and str(((_l.get("price_origin") or {})
+                                            ).get("firmness") or "") == "nil")
     _unpriced = [r for r in bom
                  if not _money(r.get("price"))
-                 and not _is_costed_in_a_block(r.get("text"))]
+                 and not _is_costed_in_a_block(r.get("text"))
+                 and not _nil_on_purpose(r)]
     # HOUSE RATE OR MARKET GUESS — THE RECORD SAYS WHICH, ONCE. This tested the supplier
     # cell for the word "indicative" and called every hit an AI market indication; the
     # e-mail tested a different string and summed a different column. Same two lines,

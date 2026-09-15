@@ -3088,6 +3088,35 @@ def _write_undrawn_bom_lines(ws, summary: Dict[str, Any], flags: List[str]) -> N
               f"the job report still names the missing drawings.", flags)
 
 
+def _question_fingerprint(part: Any, what: Any) -> tuple:
+    """What question this input actually asks, so the same one is never listed twice.
+
+    The 19:02 book's Outstanding list carried ten items and only seven questions:
+    DELIVERY twice (the unpriced-line entry and a review-flag ask, worded differently),
+    the A01 blank-extent question twice (two checks measured the same 792 x 760.3
+    against the same 759.81 x 210), and G01's material twice (two rivals to one kept
+    value — one question: what is it made of). A list a person works down earns its
+    length; a padded one teaches them to skim.
+
+    Three keys, tried in order: "price this line" asks collapse per part whatever their
+    wording; a flag that opens with its field name ("normalized_material: …") collapses
+    per part+field; otherwise the numbers in the text are the question's own signature.
+    """
+    pn = str(part or "").strip().upper()
+    t = re.sub(r"\s+", " ", str(what or "")).strip().lower()
+    if "price" in t and any(w in t for w in ("enter the per-unit", "estimator to price",
+                                             "not yet priced", "not priced",
+                                             "enter a unit rate")):
+        return (pn, "price-this-line")
+    m = re.match(r"([a-z_]{4,40}):", t)
+    if m:
+        return (pn, m.group(1))
+    nums = frozenset(re.findall(r"\d+(?:\.\d+)?", t)[:10])
+    if nums:
+        return (pn, nums)
+    return (pn, t[:120])
+
+
 def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
@@ -3100,6 +3129,17 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
     downstream of it. What changes is that nothing here can be mistaken for finished."""
     if openpyxl is None or not inputs:
         return
+    # ONE QUESTION, ONE ROW — judged here, the single door every input passes through,
+    # so the banner's count and the checklist's length agree by construction.
+    _seen_q = set()
+    _unique: List[Dict[str, Any]] = []
+    for _it in inputs:
+        _fp = _question_fingerprint((_it or {}).get("part"), (_it or {}).get("what"))
+        if _fp in _seen_q:
+            continue
+        _seen_q.add(_fp)
+        _unique.append(_it)
+    inputs = _unique
     try:
         from estimator_inputs import banner_text
         _banner = banner_text(inputs)
