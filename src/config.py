@@ -1435,7 +1435,22 @@ HOURLY_RATES_GBP = {
     "assembly_acrylic": 25.43,       # PACP
     "welding": 41.77,                # WELD (CO2)
     "tube": 31.98,                   # TUBE
-    "tube_bend": 32.84,              # TBEN
+    # TWO SPELLINGS, ONE LETTER, AND THE TUBE-BENDER WORKED FOR NOTHING.
+    #
+    # The estimator emits the operation "tube_bending". This table held only "tube_bend", so
+    # the rate lookup missed, the op landed in missing_rate_operations, and NO hours were
+    # written for it at all — after which wb_populate had nothing to derive from and fell
+    # back to its UNMEASURED 30/hr department default. 7332-01 has carried that default on
+    # every book ever produced for it.
+    #
+    # The template prices Tubebend at £32.84/hr with a 45-minute set-up (TBEN) and always
+    # has. Nothing was missing but the spelling.
+    #
+    # Both keys are kept: "tube_bend" is referenced elsewhere and removing it would be the
+    # same defect in the other direction. test_every_operation_has_an_hourly_rate now fails
+    # the suite if any op the estimator can time is missing from this table.
+    "tube_bending": 32.84,           # TBEN — the name the engine actually emits
+    "tube_bend": 32.84,              # TBEN — kept as an alias
     "wire_forming": 39.84,           # engine default (no single Tim wire-labour dept)
     "spot_welding": 32.90,           # SPOT
     "resistance_welding": 32.90,     # SPOT (resistance = spot)
