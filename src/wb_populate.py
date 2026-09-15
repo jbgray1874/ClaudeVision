@@ -198,12 +198,28 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     except ImportError:
         return "", False
     best = None
+    # THE LABEL FOLLOWS THE MONEY, and the record says which branch put the money on.
+    #
+    # The 16:07 10975-02 book charged the tape at £0.09 a piece — 200 mm of the £4.50
+    # 10 m roll UDEF holds, to the penny — and the supplier column said
+    # "xAI Grok LLM - INDICATIVE" with NOT A QUOTE stamped on the description. Two stamps
+    # were on the record: an LLM answer from the bought-in chain, and the roll-goods stamp
+    # whose figure is the one on the sheet. The preference below picks the system_cost path
+    # first because ordinarily the bought-in unit cost IS the line's price — but when the
+    # material branch superseded it, that preference labels the line with the price that
+    # LOST. A warning tag on a catalogue-priced figure is not caution, it is a wrong answer:
+    # it tells the estimator to distrust the one number on the job that came off UDEF.
+    _mat_charged = str(((pe.get("material_estimate") or {}).get("cost_method")) or "")\
+        .startswith("roll_goods")
     for _path, block in price_provenance.iter_price_stamps(pe):
         if not price_provenance.stamp_affects_total(block):
             continue
+        if _mat_charged and "material_estimate" in _path:
+            best = block
+            break
         # The bought-in unit cost is the line's price; a material rate on the same record is
         # not what the BOM row is charging for.
-        if "system_cost" in _path:
+        if "system_cost" in _path and not _mat_charged:
             best = block
             break
         if best is None:

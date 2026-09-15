@@ -3480,7 +3480,10 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "stock_estimate": None, "stock_form": "roll",
                 "requires_flat_blank": False,
                 "cost_method": "roll_goods_withheld_estimator_to_price",
-                "price_source": {"source": "roll_goods_withheld", "applied": False}}
+                "price_source": {"schema": "price_source.v1",
+                                 "source": "roll_goods_withheld",
+                                 "source_name": "roll_goods_withheld",
+                                 "applied": False, "affects_total": False}}
 
     # THE LENGTH IS A PACKAGING FACT; THE PRICE IS MONEY AND IS ASKED FOR.
     #
@@ -3513,7 +3516,10 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "cost_per_part_gbp": None, "extended_material_cost_gbp": None,
                 "stock_estimate": None, "stock_form": "roll", "requires_flat_blank": False,
                 "cost_method": "roll_goods_withheld_estimator_to_price",
-                "price_source": {"source": "roll_goods_withheld", "applied": False}}
+                "price_source": {"schema": "price_source.v1",
+                                 "source": "roll_goods_withheld",
+                                 "source_name": "roll_goods_withheld",
+                                 "applied": False, "affects_total": False}}
     if _px.get("disagreement"):
         part.setdefault("review_flags", []).append(
             f"PRICE DISAGREEMENT — {_px['disagreement']}. Priced on the system figure; "
@@ -3554,18 +3560,31 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             # stated GBP 4.50 classified as `catalogue` and rendered on the sheet exactly
             # like a row purchasing buys against. The basis resolve() returned is the fact;
             # the label is the sentence an estimator reads beside it.
-            "price_source": {"source": ("estimator_stated"
-                                        if _px.get("basis") == "estimator_stated"
-                                        else str(_px.get("source") or "roll_goods_priced")),
-                             "applied": True,
-                             # NOT source_name — stamp_source_name reads that key FIRST and
-                             # classify_price_source then classifies on whatever it finds
-                             # there. A sentence in that field is a source name nobody can
-                             # recognise, which classifies as `catalogue` by default: the
-                             # exact mislabelling this change exists to end.
+            # A STAMP THE WALKER CAN SEE. iter_price_stamps recognises a block by the
+            # schema marker or by carrying `source_name` — this one had only `source`, so
+            # every consumer that walks the record for its prices (the supplier column, the
+            # reproducibility check, the provenance listing) walked straight past the stamp
+            # that put the money on, and labelled the line from whatever OTHER stamp was
+            # lying around. On 10975 that was an abandoned LLM answer: £0.09 of UDEF roll
+            # arithmetic wearing "xAI Grok LLM - INDICATIVE, NOT A QUOTE".
+            #
+            # source_name carries the MACHINE name, never the label sentence:
+            # classify_price_source classifies on it, and a sentence classifies as
+            # `catalogue` by default — the exact mislabelling this stamp exists to end.
+            "price_source": {"schema": "price_source.v1",
+                             "source": _roll_source_name(_px),
+                             "source_name": _roll_source_name(_px),
+                             "applied": True, "affects_total": True,
                              "price_label": _px.get("label") or None,
                              "roll_length_source": _entry.get("source"),
                              "provenance": _entry.get("source")}}
+
+
+def _roll_source_name(px: Dict[str, Any]) -> str:
+    """The machine name of whatever priced the roll, for the stamp."""
+    if px.get("basis") == "estimator_stated":
+        return "estimator_stated"
+    return str(px.get("source") or "roll_goods_priced")
 
 
 def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:

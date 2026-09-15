@@ -110,7 +110,12 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
         base_unit = _money(rows[0].get("unit"))
         ws.cell(row=head + 6, column=1,
                 value=f"Against {rows[0]['quantity']} off").font = bold
-        ws.cell(row=head + 7, column=1, value="Workbook").font = bold
+        # ONLY WHEN THERE ARE FILES TO NAME. Since the one sheet took over, no per-quantity
+        # copies are filed — a row headed "Workbook" over four empty cells reads as four
+        # files that failed to save, and the closing sentence recommended sending them.
+        _any_wbk = any(str(r.get("workbook") or "") for r in rows)
+        if _any_wbk:
+            ws.cell(row=head + 7, column=1, value="Workbook").font = bold
 
         for col, r in enumerate(rows, start=2):
             q = int(r["quantity"])
@@ -142,7 +147,15 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
         _n = ws.max_row + 2
         ws.cell(row=_n, column=1, value=(
             "Each column is this estimate recalculated at that quantity. The per-quantity "
-            "workbooks named above are the ones to send; this sheet is the comparison."))
+            "workbooks named above are the ones to send; this sheet is the comparison."
+            if _any_wbk else
+            # THE SENTENCE MUST MATCH WHAT THE RUN DID. The 16:07 book carried the old
+            # wording over an empty Workbook row — advising the reader to send files that
+            # were deliberately not filed.
+            "Each column is this estimate recalculated at that quantity. There are no "
+            "per-quantity copies: set the order quantity in Estimate D6 and the sheet "
+            "prices itself — the Material Price Break tab carries each line across the "
+            "breaks. This sheet is the comparison."))
         ws.cell(row=_n, column=1).font = Font(italic=True, size=9)
 
         wb.save(str(xlsx_path))

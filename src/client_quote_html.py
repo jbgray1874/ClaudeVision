@@ -1250,7 +1250,8 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     if rev:
         meta_bits += f" &nbsp;·&nbsp; {_esc(rev)}"
     if qty:
-        meta_bits += f" &nbsp;·&nbsp; {_num(qty)} units"
+        # "1 units" on a client page reads as nobody having looked at it.
+        meta_bits += f" &nbsp;·&nbsp; {_num(qty)} unit{'' if _num(qty) == '1' else 's'}"
     meta_bits += f" &nbsp;·&nbsp; {_esc(today)}"
 
     # When the drawing states no title we fall back to its number, and repeating it either
