@@ -23,6 +23,7 @@ import os
 import logging
 import mimetypes
 import re
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Query
@@ -456,6 +457,33 @@ def estimating_guide():
         return FileResponse(str(_GUIDE), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,
                         content={"detail": "sdi-estimating-guide.html is not next to app.py"})
+
+
+@app.get("/api/knowledge-map")
+def knowledge_map(x_sdi_key: str | None = Header(default=None)):
+    """docs/KNOWLEDGE_SOURCES.md, served from the repo so the architecture page cannot
+    drift from the code.
+
+    "these files need to be in the SDI Estimating Intelligence architecture page so that
+    data / knowledge is not lost" — James, 15 Sep 2026. The page renders this on the
+    laptop and the server alike, and both update on git pull rather than by hand-editing
+    two HTML files. The repo side is held honest by test_the_knowledge_map_is_not_stale:
+    a register that leaves the code fails the suite until the map says where it went.
+    """
+    check_key(x_sdi_key)
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        _p = _where / "docs" / "KNOWLEDGE_SOURCES.md"
+        if _p.is_file():
+            try:
+                return {"exists": True, "path": str(_p),
+                        "modified": datetime.fromtimestamp(_p.stat().st_mtime)
+                        .strftime("%d %b %Y %H:%M"),
+                        "markdown": _p.read_text(encoding="utf-8")}
+            except OSError as exc:
+                return {"exists": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"exists": False,
+            "error": "docs/KNOWLEDGE_SOURCES.md is not in the repo this backend runs from "
+                     "— git pull, or the map was moved without this endpoint learning it"}
 
 
 _LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")

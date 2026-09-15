@@ -2206,6 +2206,16 @@
         </svg>
       </div>
 
+      <!-- ── WHERE THE KNOWLEDGE LIVES — rendered live from the repo ─────────────────────
+           docs/KNOWLEDGE_SOURCES.md, served by /api/knowledge-map. One source: the laptop
+           and the server both show whatever the repo holds after git pull, and the repo
+           side is pinned to the code by test_the_knowledge_map_is_not_stale. Nothing here
+           is typed into this page, so this page cannot go stale on its own. -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Where the prices and the logic live</h3>
+      <div class="panel reveal" id="knowledge-map" style="overflow-x:auto;line-height:1.7">
+        <span class="muted">Loading docs/KNOWLEDGE_SOURCES.md from the repo…</span>
+      </div>
+
       <!-- ── THE SOURCE WATERFALL ───────────────────────────────────────────────────────── -->
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">What each file is asked for — and what it cannot answer</h3>
       <div class="panel reveal" style="overflow-x:auto">
@@ -4285,6 +4295,47 @@
     document.querySelectorAll('#'+id+' .reveal').forEach(el=>{el.style.animation='none';el.offsetHeight;el.style.animation='';});
     window.scrollTo(0,0);
     if(updateHash!==false&&window.location.hash.replace('#','')!==id)window.location.hash=id;
+    if(id==='architecture')loadKnowledgeMap();
+  }
+  // ---- knowledge map: docs/KNOWLEDGE_SOURCES.md rendered from the repo ----
+  let _kmLoaded=false;
+  async function loadKnowledgeMap(){
+    if(_kmLoaded)return; const el=document.getElementById('knowledge-map'); if(!el)return;
+    try{
+      const d=await _get('/api/knowledge-map');
+      if(!d.exists){el.innerHTML='<span class="muted">'+_esc(d.error||'not found')+'</span>';return;}
+      el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:10px">docs/KNOWLEDGE_SOURCES.md · updated '+_esc(d.modified||'')+' · held in step with the code by the test suite</div>'+_mdToHtml(d.markdown);
+      _kmLoaded=true;
+    }catch(e){el.innerHTML='<span class="muted">Could not load the knowledge map: '+_esc(String(e.message||e))+'</span>';}
+  }
+  function _esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  // Deliberately small: headings, tables, lists, bold/italic/code, rules, paragraphs.
+  // Everything is escaped FIRST — the file is ours, but a renderer that trusts its input
+  // is a habit this page does not need.
+  function _mdToHtml(md){
+    const inline=t=>t.replace(/`([^`]+)`/g,'<code>$1</code>')
+                    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+                    .replace(/\*([^*]+)\*/g,'<i>$1</i>');
+    const lines=_esc(md).split(/\r?\n/); const out=[]; let list=null,tbl=null,para=[];
+    const flushP=()=>{if(para.length){out.push('<p style="margin:8px 0">'+inline(para.join(' '))+'</p>');para=[];}};
+    const flushL=()=>{if(list){out.push('<ul style="margin:6px 0 6px 20px">'+list.join('')+'</ul>');list=null;}};
+    const flushT=()=>{if(tbl){out.push('<table style="margin:10px 0">'+tbl.join('')+'</table>');tbl=null;}};
+    for(const raw of lines){const l=raw.trim();
+      if(l.startsWith('|')){flushP();flushL();
+        if(/^\|[\s\-:|]+\|$/.test(l))continue;                       // separator row
+        const cells=l.split('|').slice(1,-1).map(c=>inline(c.trim()));
+        const tag=tbl?'td':'th'; tbl=tbl||[];
+        tbl.push('<tr>'+cells.map(c=>'<'+tag+'>'+c+'</'+tag+'>').join('')+'</tr>'); continue;}
+      flushT();
+      if(l.startsWith('###')){flushP();flushL();out.push('<h4 style="margin:16px 0 4px">'+inline(l.replace(/^#+\s*/,''))+'</h4>');continue;}
+      if(l.startsWith('##')){flushP();flushL();out.push('<h3 style="font-family:var(--disp);font-weight:700;font-size:15px;margin:20px 0 6px">'+inline(l.replace(/^#+\s*/,''))+'</h3>');continue;}
+      if(l.startsWith('#')){flushP();flushL();continue;}             // the page has its own title
+      if(l.startsWith('---')){flushP();flushL();continue;}
+      if(/^[-*]\s+/.test(l)){flushP();list=list||[];list.push('<li style="margin:3px 0">'+inline(l.replace(/^[-*]\s+/,''))+'</li>');continue;}
+      if(/^\d+\.\s+/.test(l)){flushP();list=list||[];list.push('<li style="margin:3px 0">'+inline(l.replace(/^\d+\.\s+/,''))+'</li>');continue;}
+      if(!l){flushP();flushL();continue;}
+      para.push(l);}
+    flushP();flushL();flushT();return out.join('');
   }
   links.forEach(l=>l.addEventListener('click',()=>{const v=l.dataset.view;if(v&&v!=='undefined')go(v);}));
   // Hash-based deep linking — e.g. http://10.0.0.5:8071/#servers or #rnd
