@@ -8336,6 +8336,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                                         "Howard's stated method, priced from SDI Live")
             if _cline:
                 _stub["commercial_line"] = _cline
+                if _cline.get("method_status"):
+                    # SAID ON THE RUN. The 18:21 book's packing zero was undiagnosable
+                    # from the deliverables — the reason lived in one JSON field.
+                    print(f"   [packing] {_cline['method_status']}", flush=True)
             # No operations — these are pure commercial placeholders, not fabricated/handled
             # parts, so they must not accrue handling labour. Keep them genuinely £0.
             _stub["textual_operations"] = []
@@ -8350,6 +8354,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                  f"{(_cline or {}).get('packing_working')} — counts stated, prices live "
                  f"from the system this run; confirm the method fits this job before "
                  f"quoting.") if _from_method and _unit else
+                (f"Commercial line — estimator to price. Packing method: "
+                 f"{(_cline or {}).get('method_status')}.")
+                if (_cline or {}).get("method_status") else
                 "Commercial line — not derivable from drawings; estimator to price "
                 "(order-specific: packaging size / pallet count / destination)."
             ]

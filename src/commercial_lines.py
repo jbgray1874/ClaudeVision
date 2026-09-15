@@ -435,6 +435,24 @@ def _line(code: str, order: Dict[str, Any], description: str,
     _held = _held_rate(held_key)
     _method = _method_price(order) if code == "PACKAGING" else None
     _method_gap = ""
+    # THE METHOD'S DECISION IS A FIELD, NOT A SENTENCE BURIED IN A NOTE. The 18:21 book
+    # showed packaging at £0 with the old placeholder text and nothing anywhere said
+    # whether the gate declined, a consumable failed to price, or the method never ran —
+    # diagnosing it needed a grep of the JSON on the box. One structured status, printed
+    # on the run log and carried to the sheet flag, so the next silent zero explains
+    # itself in the two places people actually look.
+    if code == "PACKAGING":
+        if _method is None:
+            out["method_status"] = ("method disabled in config.PACKING_METHOD"
+                                    if not (getattr(config, "PACKING_METHOD", {}) or {})
+                                    .get("enabled") else "method returned nothing")
+        elif _method.get("not_applicable"):
+            out["method_status"] = f"declined — {_method['not_applicable']}"
+        elif _method.get("unpriced_consumable"):
+            out["method_status"] = (f"missing rate — {_method['unpriced_consumable']} "
+                                    f"has no price in SDI's own sources this run")
+        else:
+            out["method_status"] = "priced by the stated method"
     if _method and _method.get("not_applicable"):
         # THE METHOD KNOWS ITS OWN LIMITS. The reason it declined this job goes on the
         # line, so "£0 and silent" becomes "£0 and here is why the stated method did not

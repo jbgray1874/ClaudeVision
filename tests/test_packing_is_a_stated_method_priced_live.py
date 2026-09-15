@@ -433,3 +433,19 @@ def test_the_sheet_writes_a_lookup_with_the_runs_figure_as_fallback():
                encoding="utf-8").read()
     assert "order_gbp_at_breaks" in src
     assert 'value=(f"=IF(' in src and "LOOKUP($D$6," in src
+
+
+def test_every_outcome_carries_a_method_status(monkeypatch):
+    """The 18:21 book: packaging at £0, old placeholder text, and NOTHING said whether the
+    gate declined, a rate was missing, or the method never ran — diagnosing it needed a
+    grep of the JSON on the box. Every outcome now states itself, and the run log prints
+    it, so the next silent zero explains itself where people actually look."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    assert CL.packaging_line(_parts(), 50)["method_status"] == "priced by the stated method"
+    assert "declined" in CL.packaging_line(_steel_parts(), 50)["method_status"]
+    monkeypatch.setattr(CL, "_consumable_price", lambda c: None)
+    assert "missing rate" in CL.packaging_line(_parts(), 50)["method_status"]
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
+               encoding="utf-8").read()
+    assert '[packing] {_cline[' in src.replace("'", "["),         "and the run log prints it"
