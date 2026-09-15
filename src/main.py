@@ -1622,6 +1622,32 @@ def main() -> None:
                         (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \
                             list(_swept.get("variants") or [])
                         summary["quantity_sweep"] = _swept
+                        # AND ALL OF THEM ON ONE SHEET, BESIDE THE ESTIMATE.
+                        #
+                        # "For ease of process / check can all quantity breaks be on one
+                        # sheet / show formulas selected" — Howard Thurley, 0355255, 9 Sep.
+                        # The sweep saves a workbook per quantity, which is right for sending
+                        # one out and wrong for the job he is doing: comparing four breaks
+                        # meant four files open and reading the unit cost out of each by eye.
+                        # The variants stay — they are what gets sent; this is what gets read.
+                        try:
+                            from quantity_breaks_tab import (write_quantity_breaks_tab,
+                                                             select_show_formulas)
+                            _tab = write_quantity_breaks_tab(xlsx_path, _swept,
+                                                             requested=_breaks)
+                            if _tab:
+                                summary["quantity_breaks_tab"] = _tab
+                            # The same request's other half. A view, not a change to a cell:
+                            # Ctrl+` puts the numbers back for whoever wants them.
+                            if getattr(config, "SHOW_FORMULAS_ON_ESTIMATE", False):
+                                _shown = select_show_formulas(
+                                    xlsx_path,
+                                    getattr(config, "SHOW_FORMULAS_SHEETS", ("Estimate",)))
+                                if _shown:
+                                    summary["show_formulas_selected"] = _shown
+                        except Exception as _exc:                       # noqa: BLE001
+                            print(f"   [qty-breaks] {type(_exc).__name__}: {_exc}",
+                                  flush=True)
                         # EACH VARIANT EXPLAINS ITS OWN QUANTITY. The AI Explanation tab
                         # reads the workbook's calculated cells, so rewriting it on each
                         # saved variant makes the tab's totals the variant's totals — the

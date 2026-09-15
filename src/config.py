@@ -345,6 +345,26 @@ PACKAGING_CONFIG = {
 COMMERCIAL_LINE_GBP_PER_ORDER = {
 }
 
+# --- The estimator's two requests about the sheet itself --------------------------
+#
+# "For ease of process / check can all quantity breaks be on one sheet / show formulas
+# selected."                          — Howard Thurley, 0355255 review, 9 Sep 2026
+# "Could you show formulas on estimate sheet please"     — Tim Wilkes, 12349-02, 12 Sep 2026
+#
+# Two estimators, two jobs, the same ask — so it is a way of working rather than a
+# preference. The sheet has held live formulas all along (every computed column is a
+# formula; only the inputs are values), and what neither of them could do was SEE them
+# without knowing Ctrl+` exists.
+#
+# SHIPPED OFF, AND THIS IS WHY. Show Formulas is a VIEW: with it selected the sheet opens
+# showing =IF(H96=0,... in every cell instead of the money, which is exactly right for
+# checking the working and useless for reading the price. The person who wants to check
+# presses Ctrl+` and gets there in a second; the person who just wants the unit cost should
+# not have to. Turn it on for an estimator who asks, per the line below — it changes nothing
+# but which face the sheet opens on, and they can toggle it back.
+SHOW_FORMULAS_ON_ESTIMATE = False
+SHOW_FORMULAS_SHEETS = ("Estimate",)
+
 # --- Goods sold off a roll, priced by the length actually used ---------------------
 #
 # 0355255's tape line is the whole gap between our sheet and the estimator's: £19.50 a unit
