@@ -277,3 +277,26 @@ def test_the_source_job_itself_still_prices(monkeypatch):
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_parts(), 50)
     assert line["order_gbp"] == 3.37
+
+
+def test_the_sheet_row_says_what_the_number_is_made_of(monkeypatch):
+    """"when we explain the packaging and delivery on s/sheet we need to try to provide as
+    much clarity as possible on the number" — James, 15 Sep. The ROW names the method and
+    the codes; the full arithmetic is the review flag one click away; the Supplier column
+    names both facts in one label."""
+    import price_provenance as P
+    assert P.source_system_label("stated_method_system_priced") == "Stated method + SDI Live"
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
+               encoding="utf-8").read()
+    assert "bagged (PACK13) + boxed (BOX481)" in src, "the row's own description"
+    assert "PACKED BY THE STATED METHOD" in src, "and the working in the flag"
+
+
+def test_the_method_stamp_is_visible_to_the_walker(monkeypatch):
+    """The roll-goods lesson: a stamp without `applied` is invisible to iter_price_stamps,
+    and the supplier column labels the line from whatever else is lying around."""
+    import stated_prices, price_provenance
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_parts(), 50)
+    stamps = list(price_provenance.iter_price_stamps({"commercial_line": line}))
+    assert any(b.get("source_name") == "stated_method_system_priced" for _p, b in stamps)

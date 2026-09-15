@@ -373,6 +373,10 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "inferred_step_note": _inferred_note or None,
             "source_class": "packing_method",
             "source_name": "stated_method_system_priced",
+            # A STAMP THE WALKER CAN SEE — the roll-goods lesson, applied on the day it
+            # was learned rather than rediscovered: without `applied`, iter_price_stamps
+            # skips this block and the supplier column labels the line from nothing.
+            "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": (f"{_m.get('stated_by')}, stated for {_m.get('source_job')} "
                               f"on {_m.get('stated_on')}"),
@@ -425,7 +429,7 @@ def _line(code: str, order: Dict[str, Any], description: str,
         # confirming it is reading, not reverse-engineering.
         _order_gbp = _method["order_gbp"]
         _src = {k: _method[k] for k in ("source_class", "source_name", "reproducible",
-                                        "indicative")}
+                                        "indicative", "applied", "affects_total")}
         out["order_gbp_at_breaks"] = _method.get("order_gbp_at_breaks") or {}
         out["packing_working"] = (_method.get("working") or "") +             (_method.get("inferred_step_note") or "")
         out["method_source"] = _method.get("method_source")

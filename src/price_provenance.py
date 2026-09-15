@@ -104,6 +104,9 @@ _SOURCE_SYSTEM_NAMES = {
     "roll_goods_stated":  "Estimator stated",
     "stated_price":       "Estimator stated",
     "historical_quote":   "Historical quote",
+    # The packing (and any future) stated-method lines: counts an estimator stated,
+    # prices from SDI's own system this run. Both facts, one label.
+    "stated_method_system_priced": "Stated method + SDI Live",
     "historical_quote_material_line": "Historical quote",
 }
 
