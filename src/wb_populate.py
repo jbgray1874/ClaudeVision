@@ -4623,6 +4623,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # on a single diffuser. (Metal DPOL is already gated out upstream.)
         "Diamond Polish":            90,    # UNMEASURED — acrylic edge polish, config-tunable
     }
+    # THE REGISTER GOVERNS THE STATED ENTRIES. The literal above keeps this table auditable
+    # as a table (the rate inventory parses it statically, and the floor-coverage tests read
+    # it the same way), but a figure the shop STATED is config.SHOP_STATED's to own — one
+    # central place, names and dates on — so the register's value overwrites the literal
+    # here. Change it there; changing it here changes nothing, which is the point.
+    _THROUGHPUT_DEFAULTS["Laser (Acrylic)"] = float(
+        (getattr(config, "SHOP_STATED", None) or {}).get("laser_acrylic_parts_per_hour")
+        or _THROUGHPUT_DEFAULTS["Laser (Acrylic)"])
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which

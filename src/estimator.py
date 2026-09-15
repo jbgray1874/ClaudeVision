@@ -2852,7 +2852,23 @@ def estimate_blank_size(dimensions: Dict[str, Optional[float]]) -> Tuple[Optiona
     return round(length, 2), round(width, 2)
 
 
-def select_sheet_size(material: Optional[str], blank_length: Optional[float], blank_width: Optional[float]) -> Dict[str, Any]:
+def _blank_has_a_direction(part: Optional[Dict[str, Any]]) -> bool:
+    """Does anything about this part run one way across the sheet?
+
+    A brushed panel nested sideways is a panel the customer rejects, and no yield pays for
+    that. Judged on tokens from the material, finish and description — never a part number —
+    so a job nobody has seen yet is judged by the same rule.
+    """
+    if not isinstance(part, dict):
+        return False
+    _blob = " ".join(str(part.get(k) or "") for k in
+                     ("normalized_material", "material", "finish", "normalized_finish",
+                      "description", "part_number")).upper()
+    return any(t in _blob for t in getattr(config, "DIRECTIONAL_FINISH_TOKENS", ()))
+
+
+def select_sheet_size(material: Optional[str], blank_length: Optional[float], blank_width: Optional[float],
+                      part: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """
     EXACT template nesting formula — Estimate sheet, Sheet Steel section, cell K38:
         nx (length axis) = INT(  sheet_length        / (part_length + 20) )   <- no edge margin, +20 gap
@@ -2876,24 +2892,55 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     sizes = STANDARD_SHEET_SIZES_MM.get(material or "", STANDARD_SHEET_SIZES_MM["DEFAULT"])
 
     best: Optional[Dict[str, Any]] = None
+    # THE TEMPLATE NEVER ROTATES, SO THE ENGINE TURNS THE BLANK BEFORE THE TEMPLATE SEES IT.
+    #
+    #   "Line 84 – AI Yield 24 Per Sheet – if Component, Exchange Length for Width and Vice
+    #    Versa   Yield is 26 Per Sheet"      — Howard Thurley, 0355255, 9 Sep 2026
+    #
+    # He is right, and the fix cannot live in the nest formula: the workbook recomputes the
+    # yield itself from the dims we write, by the same fixed-orientation rule. So both
+    # orientations are tried HERE, and when the turned one nests better the caller writes
+    # the blank turned — the sheet then reaches 26 by its own arithmetic, and the JSON and
+    # the workbook still agree, which is the invariant this function exists to keep.
+    #
+    # Never for a blank with a direction: a brushed or grained panel nested sideways is a
+    # reject, and no yield pays for that.
+    # ONLY WHEN THE CALLER HANDS THE PART OVER. Turning the blank is only honest when the
+    # caller also WRITES it turned — a call site that takes parts_per_sheet without owning
+    # the written dims would put a rotated yield beside unrotated dimensions, and the
+    # workbook would recompute the old 24 against a JSON saying 26: the exact disagreement
+    # this function exists to prevent. No part, no rotation.
+    # AND ONLY FOR THE SHEET PLASTICS, for now. A steel blank turned changes which way the
+    # bends run against the rolling direction, and a faced board turned runs its oak the
+    # wrong way across the panel — both are questions for the shop, not yields to bank.
+    # Acrylic and its siblings have no grain, which is Howard's case and the one banked.
+    _orientations = [(blank_length, blank_width, False)]
+    _sheet_plastic = str(material or "").upper() in getattr(
+        config, "PLASTIC_SHEET_PRICED_MATERIALS", frozenset())
+    if (part is not None and _sheet_plastic and blank_length != blank_width
+            and not _blank_has_a_direction(part)):
+        _orientations.append((blank_width, blank_length, True))
     for sheet_length, sheet_width in sizes:
-        # FIXED orientation — no rotation, and no separate "bigger than the sheet" guard: a part
-        # that does not fit comes back as no nest at all, because the gap and the margin are
-        # subtracted before the division.
-        nest = _costed_facts.nest_on_sheet(material, blank_length, blank_width,
-                                           sheet_length, sheet_width)
-        if not nest:
-            continue
-        qty = nest["parts_per_sheet"]
-        utilisation = (qty * blank_length * blank_width) / (sheet_length * sheet_width) * 100.0
-        candidate = {
-            "candidate_sheet_size_mm": [sheet_length, sheet_width],
-            "utilisation_pct": round(utilisation, 2),
-            **nest,
-        }
-        # Keep the first sheet size that yields parts (sizes are ordered); template uses one sheet size.
-        if best is None or qty > best["parts_per_sheet"]:
-            best = candidate
+        for _bl, _bw, _turned in _orientations:
+            # No separate "bigger than the sheet" guard: a part that does not fit comes back
+            # as no nest at all, because the gap and the margin are subtracted before the
+            # division.
+            nest = _costed_facts.nest_on_sheet(material, _bl, _bw,
+                                               sheet_length, sheet_width)
+            if not nest:
+                continue
+            qty = nest["parts_per_sheet"]
+            utilisation = (qty * _bl * _bw) / (sheet_length * sheet_width) * 100.0
+            candidate = {
+                "candidate_sheet_size_mm": [sheet_length, sheet_width],
+                "utilisation_pct": round(utilisation, 2),
+                "rotated": _turned,
+                **nest,
+            }
+            # The better yield wins; on a tie the unturned blank stands, because turning is
+            # a change somebody may have to explain and a tie buys nothing for it.
+            if best is None or qty > best["parts_per_sheet"]:
+                best = candidate
 
     return best or {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None}
 
@@ -3851,7 +3898,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # The sheet price is the RATE across a whole sheet -- the same arithmetic the
             # acrylic branch does -- and the nest comes from the one function that answers
             # "how many parts per sheet", so this cannot drift from the block it feeds.
-            _hips_sheet_est = select_sheet_size(material, blank_length, blank_width)
+            _hips_sheet_est = select_sheet_size(material, blank_length, blank_width, part=part)
+            if (_hips_sheet_est or {}).get("rotated"):
+                # THE BLANK IS WRITTEN TURNED, so the workbook's own fixed-orientation nest
+                # reaches the better yield by its own arithmetic. Howard's 0355255 line 84:
+                # 24/sheet as drawn, 26 with length and width exchanged.
+                blank_length, blank_width = blank_width, blank_length
+                part.setdefault("review_flags", []).append(
+                    f"NESTED TURNED: {_hips_sheet_est.get('parts_per_sheet')}/sheet with the blank at "
+                    f"{blank_length:g} x {blank_width:g} beats the drawn orientation — the "
+                    f"sheet is written with the blank turned. Never done where the material or "
+                    f"finish has a direction.")
             _hips_dims = _hips_sheet_est.get("candidate_sheet_size_mm") or [3050.0, 2050.0]
             _hips_sheet_area_m2 = (float(_hips_dims[0]) * float(_hips_dims[1])) / 1_000_000.0
             _hips_pps = _hips_sheet_est.get("parts_per_sheet")
@@ -3918,7 +3975,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _acr_rate_m2 = _llm_rate_m2
         _acr_rate_m2 = float(_acr_rate_m2)
 
-        _acr_sheet_est = select_sheet_size(material, blank_length, blank_width)
+        _acr_sheet_est = select_sheet_size(material, blank_length, blank_width, part=part)
+        if (_acr_sheet_est or {}).get("rotated"):
+            # THE BLANK IS WRITTEN TURNED, so the workbook's own fixed-orientation nest
+            # reaches the better yield by its own arithmetic. Howard's 0355255 line 84:
+            # 24/sheet as drawn, 26 with length and width exchanged.
+            blank_length, blank_width = blank_width, blank_length
+            part.setdefault("review_flags", []).append(
+                f"NESTED TURNED: {_acr_sheet_est.get('parts_per_sheet')}/sheet with the blank at "
+                f"{blank_length:g} x {blank_width:g} beats the drawn orientation — the "
+                f"sheet is written with the blank turned. Never done where the material or "
+                f"finish has a direction.")
         # full-sheet area from the standard sheet the nester picked (falls back to 3050×2050)
         _acr_sheet_dims = _acr_sheet_est.get("candidate_sheet_size_mm") or [3050.0, 2050.0]
         try:

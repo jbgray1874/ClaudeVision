@@ -777,6 +777,18 @@ SHOP_STATED = {
     "plater_pack_min": 4.0,                # packing to send
     "plater_final_pack_min": 8.0,          # packing again on the way back
     "plater_freight_gbp_per_order": 120.0,  # pallet network, round trip
+    # Acrylic Dept via Howard Thurley — 0355255 (A4 table-top graphic holder), same date.
+    # 60 parts/hour on the two-bend A01: one minute a part, half a minute a bend. Lived in
+    # ACRYLIC_OP_DRIVERS with its own attribution comment, which was a second home for
+    # exactly the kind of figure this register was built to hold in ONE — "can we put these
+    # into a central area that is easy to identify and change if needed". ACRYLIC_OP_DRIVERS
+    # now reads it from here, the way BRUSH_BEFORE_PLATE reads brush_before_plate_min.
+    "linebend_min_per_bend": 0.5,
+    # "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95 p/hour."
+    # The 252 was measured off THIRTEEN corpus lines — the thinnest sample in the
+    # throughput table — against the estimator who runs the department. Third home found
+    # for a stated shop figure (wb_populate._THROUGHPUT_DEFAULTS), now read from here.
+    "laser_acrylic_parts_per_hour": 95.0,
     "stated_by": "Howard Thurley (SDI estimating)",
     "stated_on": "9 Sep 2026",
     "stated_for_job": "7332-01",
@@ -1253,6 +1265,21 @@ PLASTIC_SHEET_PRICED_MATERIALS = frozenset({
     "ACRYLIC", "HIGH IMPACT ACRYLIC", "HIPS", "PERSPEX", "PMMA", "POLYCARBONATE",
 })
 
+# A BLANK MAY BE TURNED ON THE SHEET — unless something about it has a direction.
+#
+#   "Line 84 – AI Yield 24 Per Sheet – if Component, Exchange Length for Width and Vice
+#    Versa   Yield is 26 Per Sheet"        — Howard Thurley, 0355255, 9 Sep 2026
+#
+# The workbook's own nesting formulas never rotate (K38 and J51 both nest length along
+# length), so the ONLY way the sheet charges the better yield is for the blank to be
+# WRITTEN turned. The engine tries both orientations and writes the better one — except
+# where the material or finish runs one way, because a brushed panel nested sideways is a
+# panel the customer rejects, and no yield pays for that. Tokens, not part numbers: a job
+# nobody has seen yet is judged by the same rule, and estimating can extend the list.
+DIRECTIONAL_FINISH_TOKENS = (
+    "BRUSH", "GRAIN", "VENEER", "REEDED", "FLUTED", "RIBBED", "WOODGRAIN", "DIRECTIONAL",
+)
+
 
 # ── READING A MATERIAL CELL THAT CARRIES MORE THAN THE MATERIAL ──────────────────────
 #
@@ -1441,8 +1468,9 @@ ACRYLIC_OP_DRIVERS = {
     # part, so half a minute a bend — which is what scales honestly to a part with three. If
     # the department meant 60/hr whatever the bend count, that is a different rule and the
     # line's flag is where it gets corrected.
-    "min_per_linebend": 0.5,                  # Acrylic Dept via Howard Thurley, 0355255,
-                                              # 9 Sep 2026: 60 parts/hr on a 2-bend part
+    # HELD IN SHOP_STATED, read here. One register for every figure the shop has stated,
+    # so the next estimator to disagree finds them all in one place with the names on.
+    "min_per_linebend": SHOP_STATED["linebend_min_per_bend"],
     "linebend_setup_min": 30.0,
     "glue_min_per_assembly": 2.4,             # GLUE: one op per bonded assembly (25 parts/hr)
     "glue_setup_min": 30.0,
