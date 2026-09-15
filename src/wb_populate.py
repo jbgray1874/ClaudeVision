@@ -5422,8 +5422,49 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"the estimators' cutting speeds, the blank size, the hole count and the "
                   f"internal cut distance — all of which we already write into it. On 1310 "
                   f"it computes 311/hr where our model said 80 (Tim books 300).", flags)
-        elif (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp:
+        elif ((wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp
+              and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn)):
             ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+        elif (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp \
+                and not _safe(g.get("run_hours_per_unit")) and not _safe(g.get("bh")):
+            # Stated, but nothing actually arrived to state. The default stands rather than
+            # a division by nothing.
+            ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
+        elif wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS:
+            # ── THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE ─────────────────
+            #
+            # The branch above is right about derived values and wrong about stated ones,
+            # and its own comment says which: "Assembly, packing and welding time is NOT in
+            # the DXF ... the engine's derived value for those ops is fiction dressed as
+            # measurement (1310's weld derived at 14.85/hr against a corpus average of 29)."
+            #
+            # True, and it does not describe 7332-01. Nothing was derived from geometry
+            # there: the welding department said half an hour, the figure sat in
+            # config.WELD_TIME_MODEL with their name on it, and the estimator applied it.
+            # That is the opposite of fiction dressed as measurement — it is measurement,
+            # and this branch handed it to a corpus median anyway.
+            #
+            # Three rules stood between Howard Thurley's 9 September note and the sheet, and
+            # each one was individually defensible: assembly-scope skips the grouping, the
+            # floor guard replaces outliers, and one-row-per-job ops take the default. Every
+            # one of them exists to stop the engine inventing a time. None of them could
+            # tell an invention from a figure a department wrote down.
+            #
+            # So the exception is the same one, a third time: a STATED time wins. Where the
+            # group carries none, the default stands exactly as before.
+            _rhpu_s = _safe(g.get("run_hours_per_unit"))
+            _bh_s = _safe(g.get("bh"))
+            if _rhpu_s and _rhpu_s > 0:
+                _stated_tp = float(_qty) / _rhpu_s
+            else:
+                _stated_tp = (order_qty * _qty) / float(_bh_s)
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_stated_tp, 4))
+            _rate_basis = "stated_shop_time"
+            _flag(f"throughput for '{wb_op}' is {_stated_tp:.2f}/hr from "
+                  f"{_stated_shop_time_source(g, _stated_time_by_pn)} — NOT the "
+                  f"{default_tp}/hr department median. This operation normally takes the "
+                  f"median because a time derived from geometry would be fiction; this one "
+                  f"was not derived, it was stated.", flags)
         else:
             bh = g["bh"]
             # THE RATE FIRST, THE BATCH ONLY AS A FALLBACK.

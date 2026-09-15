@@ -116,3 +116,52 @@ def test_the_money_this_was_hiding_is_recorded():
     assert "About £28 a unit on a £63 stand" in SRC or "£28 a unit" in (
         ROOT / "tests" / "test_an_assemblys_own_time_is_not_a_sum_of_its_parts.py"
     ).read_text(encoding="utf-8")
+
+
+# ── THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE ───────────────────────────────
+#
+# Landing the hours in the group changed nothing, because Weld (CO2), Dress Welds and
+# Assemble/pack (Metal) are all in _ONE_ROW_PER_JOB — and that branch writes the department
+# default and never reaches the derived value at all. Its own comment says why, and the
+# reasoning is sound for what it describes:
+#
+#     "Assembly, packing and welding time is NOT in the DXF. There is no geometry from which
+#      to derive 'how long does it take to pack this' — the engine's derived value for those
+#      ops is fiction dressed as measurement."
+#
+# True, and it does not describe 7332-01. Nothing was derived from geometry there: the
+# welding department said half an hour, it sat in config with their name on it, and the
+# estimator applied it. This branch handed it to a corpus median anyway.
+#
+# THREE RULES STOOD BETWEEN HOWARD THURLEY'S NOTE AND THE SHEET, each individually
+# defensible — assembly-scope skips the grouping, the floor guard replaces outliers, and
+# one-row-per-job ops take the default. Every one exists to stop the engine inventing a
+# time. Not one of them could tell an invention from a figure a department wrote down.
+
+def test_a_one_row_per_job_op_with_a_stated_time_does_not_take_the_median():
+    assert "THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE" in SRC
+    assert "not _group_carries_a_stated_shop_time(g, _stated_time_by_pn)" in SRC
+
+
+def test_weld_dress_and_pack_are_the_ops_this_covers():
+    """All three of Howard's failing lines are in that set — which is why all three failed
+    together and why fixing the grouping alone changed nothing."""
+    block = SRC.split("_ONE_ROW_PER_JOB = {")[1].split("}")[0]
+    for op in ("Weld (CO2)", "Dress Welds", "Assemble/pack (Metal)"):
+        assert op in block, op
+
+
+def test_without_a_stated_time_the_median_still_stands():
+    """The rule is right for every job that has not been told a time, which is most of
+    them. This is an exception, not a replacement."""
+    assert 'ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))' in SRC
+
+
+def test_a_stated_group_with_no_hours_falls_back_rather_than_dividing_by_nothing():
+    block = SRC.split("THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE")[0][-900:]
+    assert "Stated, but nothing actually arrived to state" in block
+
+
+def test_the_row_says_the_time_was_stated_not_derived():
+    assert '_rate_basis = "stated_shop_time"' in SRC
+    assert "was not derived, it was stated" in SRC
