@@ -201,16 +201,24 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
         _qcol, _qrow = _m.group(1), int(_m.group(2))
         for i in range(last_col - first_col + 1):
             _cell = est[f"{_qcol}{_qrow + i}"]
-            # TRAILING BLANKS, NOT A REPEATED LAST BREAK — and the first cut of this had it
-            # the other way round, reasoning that "the vector must not go blank or LOOKUP
-            # returns the wrong column". That confuses a gap in the MIDDLE, which does break
-            # the ascending order LOOKUP needs, with cells AFTER the end, which it ignores.
+            # PAD WITH THE LAST BREAK. This has now been wrong in BOTH directions and the
+            # run settled it.
             #
-            # Howard's own sheet settles it: his row reads 1, 10, 50, 250, 1000, 1250, 1500
-            # and stops, and it resolves correctly for him. Repeating 1000 across the six
-            # spare columns would have put six identical headings on a tab an estimator
-            # reads, which is a worse answer than a blank for the same arithmetic.
-            _cell.value = vector[i] if i < len(vector) else None
+            # It first padded; that was changed to blanks, reasoning from Howard's own sheet
+            # — his row reads 1, 10, 50, 250, 1000, 1250, 1500 and then stops, and LOOKUP
+            # ignores cells after the end. True of HIS sheet, where row 4 holds literal
+            # numbers. Ours does not: the break tab's row 4 is =Estimate!F180..F190, and a
+            # formula pointing at an empty cell returns 0. The 14:23 book came out
+            #
+            #     1, 10, 50, 250, 1000, 0, 0, 0, 0, 0, 0
+            #
+            # which DESCENDS, and LOOKUP over a descending vector does not error — it
+            # returns the wrong column. Six columns headed 0 were the visible half of it.
+            #
+            # So the padding stays, and the reason is that our header is computed where his
+            # is typed. Repeated 1000s read as "the table ends at 1000", which is true, and
+            # they keep the vector non-descending, which is what LOOKUP requires.
+            _cell.value = vector[i] if i < len(vector) else vector[-1]
         done["quantities"] = list(vector)
 
         _by_row: Dict[int, Dict[str, Any]] = {}

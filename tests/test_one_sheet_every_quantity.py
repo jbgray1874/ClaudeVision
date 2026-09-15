@@ -89,32 +89,46 @@ def test_the_quantities_are_written_on_the_estimate_not_the_structural_sheet():
     assert [est[f"F{180 + i}"].value for i in range(5)] == [1, 10, 50, 250, 1000]
 
 
-def test_the_spare_columns_are_left_blank_not_filled_with_a_repeat():
-    """THIS ASSERTED THE OPPOSITE FIRST, on the reasoning that "the vector must not go blank
-    or LOOKUP returns the wrong column". That confuses a gap in the MIDDLE — which does
-    break the ascending order LOOKUP needs — with cells AFTER the end, which it ignores.
+def test_the_spare_columns_repeat_the_last_break_and_never_descend():
+    """WRONG IN BOTH DIRECTIONS BEFORE THE RUN SETTLED IT.
 
-    Howard's own sheet settles it: 1, 10, 50, 250, 1000, 1250, 1500 and then nothing, and it
-    resolves correctly for him. Repeating the last break across six spare columns would put
-    six identical headings on a tab an estimator reads."""
+    This first asserted padding, was changed to assert blanks on the strength of Howard's
+    own sheet — his row reads 1, 10, 50, 250, 1000, 1250, 1500 and stops, and LOOKUP ignores
+    cells after the end — and the 14:23 book then came out with a header of
+
+        1, 10, 50, 250, 1000, 0, 0, 0, 0, 0, 0
+
+    His row holds literal numbers. OURS IS COMPUTED: the break tab's row 4 is
+    =Estimate!F180..F190, and a formula pointing at an empty cell returns 0. That vector
+    DESCENDS, and LOOKUP over a descending vector does not error — it returns the wrong
+    column. Six columns headed 0 were only the visible half of it."""
     wb = _wb()
     write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [10, 50], CFG)
     est = wb["Estimate"]
     got = [est[f"F{180 + i}"].value for i in range(11)]
     assert got[:3] == [1, 10, 50]
-    assert all(v is None for v in got[3:])
+    assert all(v == 50 for v in got[3:])
+    assert got == sorted(got), "a descending vector makes LOOKUP return the wrong column"
 
 
-def test_the_quantities_that_are_written_still_ascend():
-    """The property LOOKUP actually needs, asserted on the cells that carry a value."""
+def test_no_cell_in_the_vector_is_ever_left_empty():
+    """The property that failed on the real sheet: an empty cell here becomes a zero there,
+    because the header is a formula rather than a number."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [10, 50, 250, 1000], CFG)
+    est = wb["Estimate"]
+    assert all(est[f"F{180 + i}"].value is not None for i in range(11))
+
+
+def test_the_breaks_are_sorted_however_they_are_entered():
+    """The portal takes them in whatever order somebody types. LOOKUP over an unsorted
+    vector does not error — it returns the wrong column."""
     wb = _wb()
     write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [1000, 10, 250, 50], CFG)
     est = wb["Estimate"]
     got = [est[f"F{180 + i}"].value for i in range(11)]
-    filled = [v for v in got if v is not None]
-    assert filled == sorted(filled) == [1, 10, 50, 250, 1000]
-    # and no gap between them, which is the failure that would matter
-    assert got[:len(filled)] == filled
+    assert got[:5] == [1, 10, 50, 250, 1000]
+    assert got == sorted(got)
 
 
 def test_more_quantities_than_columns_is_refused_not_truncated():
