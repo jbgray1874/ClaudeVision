@@ -3303,18 +3303,47 @@ def build_workbook_labour(
 #
 # The costing stage stamps a part when its time is a stated shop figure rather than a
 # derivation. Corpus medians describe jobs in general; a stated time describes this one.
+# A CLAIM IS ABOUT AN OPERATION, NOT ABOUT A PART.
+#
+# The first cut of this recorded "7332-01-008 has a stated time" and then let that vouch for
+# ANY operation on 008 — so the part's geometry-derived LASER time was read as stated, and
+# the row stopped using the template's own Laser Rate Calculator, which is the strongest
+# basis on the sheet. A fix that improves three rows and quietly degrades a fourth is not a
+# fix.
+#
+# 008 is plated, so the plater pack time IS stated for it. Its laser time is not, and
+# nothing about being plated says otherwise. Each marker therefore names the operations it
+# actually vouches for, and a claim reaches those and no others.
 _STATED_SHOP_TIME_MARKERS = (
-    ("weld_time_is_an_allowance",
+    ("weld_time_is_an_allowance", ("welding", "dress_welds"),
      "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
-    ("weld_time_is_per_joint",
+    ("weld_time_is_per_joint", ("welding", "dress_welds"),
      "the welding department's stated per-joint weld time (config.WELD_TIME_MODEL)"),
-    ("plater_pack_applied",
+    ("plater_pack_applied", ("handling", "assembly"),
      "the stated pack times for a part that goes out to a plater "
      "(config.PLATING_LOGISTICS)"),
+    ("_brush_before_plate_applied", ("manual_labour_metal",),
+     "the shop's stated brushing time before plating (config.BRUSH_BEFORE_PLATE)"),
 )
 
 
-def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str]) -> bool:
+def _claim_covers(stated_ops: Any, operation: Any) -> bool:
+    """Does this claim vouch for THIS operation — under either of the shop's names for it?"""
+    _op = str(operation or "").strip().lower()
+    if not _op:
+        return False
+    if _op in {str(o).strip().lower() for o in (stated_ops or ())}:
+        return True
+    try:
+        from department_codes import code_for
+        _want = code_for(_op)
+        return bool(_want) and any(code_for(o) == _want for o in (stated_ops or ()))
+    except Exception:                                                # noqa: BLE001
+        return False
+
+
+def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str],
+                                      stated_ops: Any = None) -> bool:
     """True when any part on this labour row was timed from a figure a department gave us.
 
     assembly_own_time is the same claim from the grouping side: the row's hours came from
@@ -3322,7 +3351,20 @@ def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str]) -> boo
     for one thing and the corpus median has nothing better to offer."""
     if (group or {}).get("assembly_own_time"):
         return True
-    return any(str(_p).strip().upper() in stated for _p in ((group or {}).get("parts") or []))
+    _ops = [o for o in ((group or {}).get("engine_ops") or [])]
+    for _p in ((group or {}).get("parts") or []):
+        _k = str(_p).strip().upper()
+        if _k not in stated:
+            continue
+        if stated_ops is None:
+            return True
+        # AND THE CLAIM HAS TO COVER THIS ROW'S OPERATION. A plated part's pack time is
+        # stated; its fold is not, and a part-wide reading would exempt the fold from the
+        # floor guard that exists to catch a garbage derivation.
+        _cov = (stated_ops or {}).get(_k) or ()
+        if not _ops or any(_claim_covers(_cov, _o) for _o in _ops):
+            return True
+    return False
 
 
 def _stated_shop_time_source(group: Any, stated: Dict[str, str]) -> str:
@@ -4543,6 +4585,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # them down for us.
     _stated_time_by_pn: Dict[str, str] = {}
     _stated_hours_by_pn: Dict[str, Dict[str, float]] = {}
+    _stated_ops_by_pn: Dict[str, set] = {}
     _stamped_records = list(bom_parts or [])
     for _srcname in ("parts",):
         _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
@@ -4554,9 +4597,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _spn = str(_sp.get("part_number") or "").strip().upper()
         if not _spn:
             continue
-        for _marker, _why in _STATED_SHOP_TIME_MARKERS:
+        for _marker, _ops, _why in _STATED_SHOP_TIME_MARKERS:
             if _sp.get(_marker):
                 _stated_time_by_pn.setdefault(_spn, _why)
+                _stated_ops_by_pn.setdefault(_spn, set()).update(_ops)
                 # AND THE HOURS THEMSELVES, not only the fact that some exist.
                 #
                 # Five separate branches in the emit loop below can each discard a computed
@@ -5397,7 +5441,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _hrs = _stated_hours_by_pn.get(_gk)
             if not _hrs:
                 continue
+            _covered = _stated_ops_by_pn.get(_gk) or ()
             for _eop in (g.get("engine_ops") or []):
+                # 008 is plated, so its PACK time is stated. Its laser time is not.
+                if not _claim_covers(_covered, _eop):
+                    continue
                 _v = _safe(_hrs.get(str(_eop).strip().lower()))
                 if not _v:
                     # The same operation under the department's other name — "assembly" on
@@ -5538,7 +5586,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"internal cut distance — all of which we already write into it. On 1310 "
                   f"it computes 311/hr where our model said 80 (Tim books 300).", flags)
         elif ((wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp
-              and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn)):
+              and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, _stated_ops_by_pn)):
             ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))
         elif (wb_op in _ONE_ROW_PER_JOB or wb_op in _PER_PART_OPS) and default_tp \
                 and not _safe(g.get("run_hours_per_unit")) and not _safe(g.get("bh")):
@@ -5668,7 +5716,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                         _flag(f"throughput CEILING hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {_derived/default_tp:.1f}x the default {default_tp}/hr "
                               f"— using default (was UNDER-charging).", flags)
-                    elif _derived < _floor and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn):
+                    elif _derived < _floor and not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, _stated_ops_by_pn):
                         throughput = float(default_tp)
                         _flag(f"throughput FLOOR hit on '{wb_op}': derived {_derived:.2f}/hr "
                               f"is {default_tp/_derived:.1f}x SLOWER than the default "

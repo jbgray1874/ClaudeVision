@@ -140,7 +140,7 @@ def test_the_money_this_was_hiding_is_recorded():
 
 def test_a_one_row_per_job_op_with_a_stated_time_does_not_take_the_median():
     assert "THE THIRD RULE, AND THE ONE THAT WAS ACTUALLY IN FORCE" in SRC
-    assert "not _group_carries_a_stated_shop_time(g, _stated_time_by_pn)" in SRC
+    assert "not _group_carries_a_stated_shop_time(g, _stated_time_by_pn, " in SRC
 
 
 def test_weld_dress_and_pack_are_the_ops_this_covers():
@@ -204,3 +204,63 @@ def test_an_unresolvable_operation_costs_the_run_nothing():
     behaviour rather than raise inside a costing pass."""
     block = SRC.split("ASKED BY DEPARTMENT, NOT BY SPELLING")[1][:1600]
     assert "except Exception:" in block
+
+
+# ── a claim is about an OPERATION, not about a part ──────────────────────────────────────
+#
+# The first cut of the one-decision-before-the-chain recorded "7332-01-008 has a stated
+# time" and let that vouch for ANY operation on 008 — so the part's geometry-derived LASER
+# time was read as stated and the row came off the template's own Laser Rate Calculator,
+# which is the strongest basis on the sheet. The dry run showed it in the same output that
+# proved weld, dress and pack had landed:
+#
+#     Laser (Metal)  7332-01-008  0.0128  —  STATED SHOP TIME -> 77.92/hr
+#
+# A fix that improves three rows and quietly degrades a fourth is not a fix. 008 is plated,
+# so its PACK time is stated; nothing about being plated says anything about its laser.
+
+def test_each_marker_names_the_operations_it_vouches_for():
+    for entry in wb._STATED_SHOP_TIME_MARKERS:
+        assert len(entry) == 3, entry
+        _flag, ops, why = entry
+        assert ops and all(isinstance(o, str) for o in ops), entry
+        assert str(why).strip(), entry
+
+
+def test_the_plater_pack_claim_does_not_cover_a_laser():
+    covered = {e[0]: e[1] for e in wb._STATED_SHOP_TIME_MARKERS}["plater_pack_applied"]
+    assert wb._claim_covers(covered, "handling")
+    assert wb._claim_covers(covered, "assembly")      # the department's other name
+    assert not wb._claim_covers(covered, "laser_cutting")
+    assert not wb._claim_covers(covered, "folding")
+
+
+def test_the_weld_claim_covers_dressing_and_nothing_else():
+    covered = {e[0]: e[1] for e in wb._STATED_SHOP_TIME_MARKERS}["weld_time_is_per_joint"]
+    assert wb._claim_covers(covered, "welding") and wb._claim_covers(covered, "dress_welds")
+    assert not wb._claim_covers(covered, "handling")
+
+
+def test_brushing_has_its_own_claim():
+    """It was landing on the right number for the wrong reason — the plater-pack claim
+    happened to vouch for it. Scoping the claims would have silently dropped it."""
+    covered = {e[0]: e[1] for e in wb._STATED_SHOP_TIME_MARKERS}["_brush_before_plate_applied"]
+    assert wb._claim_covers(covered, "manual_labour_metal")
+
+
+def test_the_floor_guard_is_scoped_too():
+    """A plated part's pack time is stated; its fold is not, and a part-wide reading would
+    exempt the fold from the guard that exists to catch a garbage derivation."""
+    stated = {"7332-01-008": "pack"}
+    ops = {"7332-01-008": {"handling", "assembly"}}
+    assert wb._group_carries_a_stated_shop_time(
+        {"parts": ["7332-01-008"], "engine_ops": ["assembly"]}, stated, ops) is True
+    assert wb._group_carries_a_stated_shop_time(
+        {"parts": ["7332-01-008"], "engine_ops": ["laser_cutting"]}, stated, ops) is False
+
+
+def test_the_two_argument_form_still_answers():
+    """Called without the ops map it behaves as it did — no caller is broken by the
+    tightening, they are upgraded one at a time."""
+    assert wb._group_carries_a_stated_shop_time(
+        {"parts": ["X"], "engine_ops": ["anything"]}, {"X": "why"}) is True

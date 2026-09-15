@@ -76,10 +76,12 @@ def _stated_hours_for(summary: dict, group: dict):
         pn = str(rec.get("part_number") or "").strip().upper()
         if not pn:
             continue
-        for marker, why in wb._STATED_SHOP_TIME_MARKERS:
+        # A CLAIM IS ABOUT AN OPERATION, NOT ABOUT A PART. 7332-01-008 is plated, so its
+        # pack time is stated; its laser time is geometry and is not, and reading the claim
+        # as part-wide took a laser row off the template's own calculator.
+        for marker, ops, _why in wb._STATED_SHOP_TIME_MARKERS:
             if rec.get(marker):
-                claims.setdefault(pn, why)
-                break
+                claims.setdefault(pn, set()).update(ops)
         le = rec.get("labour_estimate")
         if isinstance(le, dict) and isinstance(le.get("run_hours_per_unit"), dict):
             hours.setdefault(pn, {}).update(
@@ -90,6 +92,8 @@ def _stated_hours_for(summary: dict, group: dict):
             continue
         for eop in (group.get("engine_ops") or []):
             key = str(eop).strip().lower()
+            if not wb._claim_covers(claims.get(pn) or (), key):
+                continue
             val = hours[pn].get(key)
             if not val:
                 want = code_for(key)
