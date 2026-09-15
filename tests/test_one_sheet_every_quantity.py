@@ -192,6 +192,44 @@ def test_rubbish_lines_do_not_stop_the_good_ones():
     assert out["rows"] == 1
 
 
+# ── which lines move, read off the record ────────────────────────────────────────────────
+
+def test_a_commercial_line_is_carried_as_per_order_money(monkeypatch):
+    """THE ONLY KIND THAT MOVES. A commercial line's ORDER figure is what the division has
+    to be done on at each break — carrying its per-unit figure instead would give five
+    identical columns and hide the one thing the table exists to show."""
+    import material_price_break as mpb
+    import costed_facts
+    monkeypatch.setattr(costed_facts, "costed_job", lambda s: {"lines": [
+        {"part_number": "PACKAGING", "sheet_row": 22, "charged_unit_gbp": 0.0},
+        {"part_number": "10975", "sheet_row": 13, "charged_unit_gbp": 0.8424}]})
+    out = mpb.lines_from_record({"commercial_lines": [
+        {"code": "PACKAGING", "order_gbp": 1.89}]})
+    got = {l["code"]: l for l in out}
+    assert got["PACKAGING"]["order_gbp"] == 1.89
+    assert "unit_gbp" not in got["PACKAGING"]
+    assert got["10975"]["unit_gbp"] == 0.8424
+
+
+def test_a_line_with_no_sheet_row_is_not_guessed_at(monkeypatch):
+    """Every row comes from the workbook READ-BACK. A price cannot be placed on a row
+    nobody has read, and inventing one would write a figure into another line's row."""
+    import material_price_break as mpb
+    import costed_facts
+    monkeypatch.setattr(costed_facts, "costed_job", lambda s: {"lines": [
+        {"part_number": "X", "sheet_row": None, "charged_unit_gbp": 1.0}]})
+    assert mpb.lines_from_record({}) == []
+
+
+def test_the_three_ways_a_line_can_move_are_written_down():
+    """Measured on 10975-02 at 1 off against the same estimate at 50: every material line
+    identical, every labour line moved. A future reader should not have to re-derive it."""
+    src = (ROOT / "src" / "material_price_break.py").read_text(encoding="utf-8")
+    assert "setup, on labour" in src
+    assert "bought PER ORDER" in src
+    assert "a supplier price break" in src
+
+
 # ── and it is off until the template is repaired ─────────────────────────────────────────
 
 def test_it_ships_off_and_says_why():

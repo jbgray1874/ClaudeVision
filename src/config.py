@@ -382,6 +382,24 @@ SHOW_FORMULAS_SHEETS = ("Estimate",)
 # Turning this on against the template as it stands would fill a table that mis-routes six
 # rows. `row_offset` is the one number that moves when the template is repaired: break row =
 # BOM row + row_offset, uniformly -6 for rows 11-44 today.
+# HOW MANY YOU BUY FOR AN ORDER OF N — the only thing that makes a break table move.
+#
+# "1 Box Suits 10 or 50 Components, 3 Boxes to Suit 250 Components 9 Boxes Suit 1000
+# Components."                          — Howard Thurley, 0355255 packing note, 9 Sep 2026
+#
+# It is a STEP, not a rate: you cannot buy 1.4 boxes. His own sheet shows the consequence —
+# at GBP 1.89 a box that is 0.189 / 0.0378 / 0.02268 / 0.01701 a unit across 10 / 50 / 250 /
+# 1000, the one line on his entire estimate that moves with the order.
+#
+# EMPTY UNTIL THE PRICES ARE CONFIRMED, for the same reason COMMERCIAL_LINE_GBP_PER_ORDER is:
+# his sheet implies GBP 1.89 for the box and we have not been told it, and a figure inferred
+# from somebody else's arithmetic carries no "check me" flag. The RULE is recorded here
+# because that is his and it is not in doubt; the money is not.
+#
+#   {"PACKAGING": {"10": 1, "50": 1, "250": 3, "1000": 9}}
+PER_ORDER_UNIT_COUNTS = {
+}
+
 MATERIAL_PRICE_BREAK = {
     "enabled": False,
     "sheet": "Material Price Break",

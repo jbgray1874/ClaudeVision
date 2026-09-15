@@ -90,6 +90,69 @@ def _price_at(line: Dict[str, Any], qty: int) -> Optional[float]:
         return None
 
 
+def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The costed lines, shaped for the break table — per-unit money and per-ORDER money.
+
+    WHICH LINES ACTUALLY MOVE WITH THE QUANTITY, which is the question this table exists to
+    answer and the one nobody could answer from the sheet. Measured on 10975-02 at 1 off
+    against the same estimate at 50: EVERY material line was identical and every labour line
+    moved. There are only three ways a line can move:
+
+        setup, on labour        always — and it is the Estimate's own arithmetic, on the
+                                main sheet, already right. Not this table's business.
+        bought PER ORDER        a box, a pallet, freight, a minimum charge. Per unit is
+                                count x price / quantity, and it moves in STEPS because the
+                                count is a whole number.
+        a supplier price break  a per-unit material whose purchase price drops at volume.
+
+    Everything else is flat by nature: one unit's worth per unit at a fixed price. Howard's
+    own sheet is four flat rows and one that moves — and the four are not padding, they are
+    the record of somebody having checked that they do not move.
+
+    So a commercial line's ORDER figure is carried here rather than its per-unit one, because
+    that is the number the division has to be done on at each break.
+    """
+    out: List[Dict[str, Any]] = []
+    try:
+        from costed_facts import costed_job                            # noqa: PLC0415
+        job = costed_job(summary) or {}
+    except Exception:                                                  # noqa: BLE001
+        return out
+
+    _by_code: Dict[str, Dict[str, Any]] = {}
+    for _cl in (summary.get("commercial_lines") or []):
+        if isinstance(_cl, dict) and _cl.get("code"):
+            _by_code[str(_cl["code"]).strip().upper()] = _cl
+    try:
+        _counts = dict(getattr(__import__("config"), "PER_ORDER_UNIT_COUNTS", {}) or {})
+    except Exception:                                                  # noqa: BLE001
+        _counts = {}
+
+    for ln in (job.get("lines") or []):
+        if not isinstance(ln, dict):
+            continue
+        _row = ln.get("sheet_row")
+        if not _row:
+            continue
+        _code = str(ln.get("part_number") or "").strip().upper()
+        rec: Dict[str, Any] = {"sheet_row": _row, "code": _code,
+                               "description": ln.get("description")}
+        _com = _by_code.get(_code)
+        if _com and _com.get("order_gbp") not in (None, ""):
+            rec["order_gbp"] = _com["order_gbp"]
+            if _code in _counts:
+                rec["units_per_order"] = _counts[_code]
+        else:
+            _u = ln.get("charged_unit_gbp")
+            if _u in (None, ""):
+                _u = ln.get("engine_unit_gbp")
+            if _u not in (None, ""):
+                rec["unit_gbp"] = _u
+        if "order_gbp" in rec or "unit_gbp" in rec:
+            out.append(rec)
+    return out
+
+
 def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequence[int],
                        cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fill the quantity row and every line's price at every break. Returns what it did.

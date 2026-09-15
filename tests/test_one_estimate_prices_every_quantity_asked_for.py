@@ -129,11 +129,19 @@ def test_the_engine_accepts_the_flag_and_files_the_variants():
 def test_the_variants_cannot_cost_a_run_that_already_took_an_hour():
     src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     i = src.index("from quantity_sweep import sweep as _sweep")
-    assert "except Exception" in src[i - 200:i + 3400]
-    # The per-variant refresh block (explanation, provenance, re-cache) sits between the
-    # sweep call and its catch-all, so the window is generous — the assertion is that the
-    # catch-all EXISTS downstream of the import, not that it is nearby.
-    assert "variants not written" in src[i:i + 12000]
+    # NAMED, NOT COUNTED IN CHARACTERS. This measured a fixed 3400-character window, and
+    # every block added inside the sweep's try pushes the catch-all further from the import
+    # — the price-break writer moved it past the edge and turned a working guard into a red
+    # test. The guard has a name; asking for the name says what is meant and does not
+    # decay every time something legitimate is added between the two.
+    _after = src[i:]
+    assert "except Exception as _sw_exc" in _after, (
+        "the quantity sweep is no longer wrapped — a variant that fails would take down a "
+        "run that has already spent an hour on extraction and costing")
+    assert "variants not written" in _after[:12000]
+    # And it really is the OUTER guard: at the indent of the `try:` that opens the block,
+    # not one of the inner ones each writer carries for itself.
+    assert "\n                except Exception as _sw_exc" in _after
 
 
 # ── the freight, which is the one thing a recalculated sheet gets plainly wrong ─

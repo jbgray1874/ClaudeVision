@@ -1630,6 +1630,40 @@ def main() -> None:
                         # one out and wrong for the job he is doing: comparing four breaks
                         # meant four files open and reading the unit cost out of each by eye.
                         # The variants stay — they are what gets sent; this is what gets read.
+                        # AND THE SHEET'S OWN BREAK TABLE, which is the version that makes
+                        # ONE workbook serve every quantity rather than four workbooks
+                        # serving one each. Off until the template is repaired — see
+                        # config.MATERIAL_PRICE_BREAK for the six rows that currently
+                        # mis-route.
+                        try:
+                            _mpb = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
+                            if _mpb.get("enabled") and xlsx_path:
+                                import openpyxl as _oxl
+                                from material_price_break import (lines_from_record,
+                                                                  write_price_breaks)
+                                _bk = _oxl.load_workbook(str(xlsx_path))
+                                _mpb_lines = lines_from_record(summary)
+                                if not _mpb_lines:
+                                    # SAY WHY AN EMPTY TABLE IS EMPTY. Every line's row
+                                    # comes from the workbook READ-BACK — a price cannot be
+                                    # placed on a row nobody has read — so no read-back
+                                    # means no table, and that must not look like "this job
+                                    # has nothing that moves with quantity".
+                                    print("   [price-break] no read-back rows on this run, "
+                                          "so no line can be placed against a sheet row.",
+                                          flush=True)
+                                _res = write_price_breaks(
+                                    _bk, _mpb_lines, _breaks, _mpb)
+                                if _res.get("rows"):
+                                    _bk.save(str(xlsx_path))
+                                summary["material_price_break"] = _res
+                                print(f"   [price-break] {_res.get('rows', 0)} line(s) at "
+                                      f"{len(_res.get('quantities') or [])} quantities"
+                                      + (f" — refused: {'; '.join(_res['refused'])}"
+                                         if _res.get("refused") else ""), flush=True)
+                        except Exception as _exc:                       # noqa: BLE001
+                            print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
+                                  f"estimate is unchanged.", flush=True)
                         try:
                             from quantity_breaks_tab import (write_quantity_breaks_tab,
                                                              select_show_formulas)
