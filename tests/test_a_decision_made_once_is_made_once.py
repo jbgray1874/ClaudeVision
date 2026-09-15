@@ -180,3 +180,53 @@ def test_the_acrylic_laser_rate_is_the_departments_not_the_corpus():
     assert '"Laser (Acrylic)":           95,' in src
     assert "Howard Thurley (SDI estimating), 9 Sep 2026" in src
     assert "was 252 from 13 corpus lines" in src
+
+
+# ── and the customer is the one the SHEET says, not a narrower reading ───────────────────
+#
+# THE DEFECT THIS PINS WAS MINE, ONE HOUR AFTER WRITING THE REGISTER. The header prints the
+# customer from four sources; the register read two. On 7332-01 the name comes from the
+# fourth — the pack sits in a Harrods folder and nothing on any drawing says Harrods — so the
+# sheet said Harrods, the register looked for Harrods and found "", and £250 did not reach a
+# job that plainly qualified. A second reader that agrees with the first until the one case
+# that matters is the defect class this whole session has been about.
+
+def test_the_customer_is_found_in_the_job_folder_too():
+    """client_from_job_folder exists for exactly this — it was written when the header cell
+    was falling back to the job number."""
+    assert job_customer({"job_folder": r"D:\Enquiries\Harrods\7332-01"}) == "Harrods"
+    assert job_customer({"job_folder": r"C:\SDI\Production\Harrods\7332-01"}) == "Harrods"
+
+
+def test_a_stated_customer_still_wins_over_the_folder():
+    assert job_customer({"customer": "Selfridges",
+                         "job_folder": r"D:\Enquiries\Harrods\7332-01"}) == "Selfridges"
+
+
+def test_a_folder_that_names_no_customer_yields_nothing():
+    """Conservative by design: a wrong customer name on a sheet is worse than a blank, and
+    an inherited PRICE keyed on a wrong name is worse again."""
+    assert job_customer({"job_folder": r"C:\jobs\7332-01"}) == ""
+    assert job_customer({"job_folder": ""}) == ""
+
+
+def test_the_plate_decision_now_reaches_a_folder_named_job():
+    """The end-to-end case the 22:26 book missed: no customer field anywhere, Harrods only in
+    the path, and the £250 must apply."""
+    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
+              "normalized_finish": "PLATED", "is_assembly_parent": True, "quantity": 1,
+              "material_estimate": {"unit_material_mass_kg": 0.9}},
+             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
+              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
+              "quantity": 1, "description": "plating"}]
+    apply_subcontract_plating(
+        parts, {"job_folder": r"D:\Enquiries\Harrods\9001-01"}, 6, parts)
+    assert parts[1]["unit_cost_gbp"] == 250.00
+    assert parts[1]["cost_source"] == "inherited_estimator_decision"
+
+
+def test_it_delegates_rather_than_copying_the_rule():
+    """If the header's rule changes this must change with it — a third copy is how the two
+    disagreed in the first place."""
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert "from wb_populate import client_from_job_folder" in src

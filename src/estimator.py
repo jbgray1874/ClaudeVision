@@ -1420,10 +1420,32 @@ def inherited_decision(kind: str, facts: Dict[str, Any]) -> Optional[Dict[str, A
 
 
 def job_customer(summary: Any) -> str:
-    """The customer this job is for, as the workbook header reads it."""
+    """The customer this job is for — the SAME answer the workbook header prints.
+
+    TWO READERS, ONE FACT, AND I WROTE THE SECOND ONE AN HOUR AGO. The inherited-decision
+    register keyed on `customer` and read two fields. The workbook header reads four, and on
+    7332-01 the name comes from the FOURTH: the pack sits in a Harrods folder, nothing on any
+    drawing says Harrods, and client_from_job_folder is what recovers it — a function written
+    for this exact estimator request ("can Client / Job Description / Date be populated for
+    header").
+
+    So the sheet said Harrods, the register looked for Harrods and found "", and the £250 did
+    not apply to a job that plainly qualified. Exactly the defect class this session has spent
+    the evening on: a second reader that agrees with the first until the one case where it
+    matters.
+
+    Delegated rather than copied. If the header's rule changes, this changes with it.
+    """
     if not isinstance(summary, dict):
         return ""
-    return str(summary.get("customer") or summary.get("client") or "").strip()
+    _direct = str(summary.get("customer") or summary.get("client") or "").strip()
+    if _direct:
+        return _direct
+    try:
+        from wb_populate import client_from_job_folder as _cjf
+        return str(_cjf(summary) or "").strip()
+    except Exception:                                                # noqa: BLE001
+        return ""
 
 
 def named_plate_spec_anywhere_on_the_pack(
