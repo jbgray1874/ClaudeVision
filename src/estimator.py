@@ -3549,7 +3549,22 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "cost_method": "roll_goods_by_length",
             "roll_length_mm": _roll_mm, "roll_price_gbp": _roll_gbp,
             "length_used_mm": _used_mm,
-            "price_source": {"source": "roll_goods_catalogue", "applied": True,
+            # THE STAMP CARRIES WHICH SOURCE ANSWERED, not the shape of the calculation.
+            # It said "roll_goods_catalogue" whichever way the price arrived, so Howard's
+            # stated GBP 4.50 classified as `catalogue` and rendered on the sheet exactly
+            # like a row purchasing buys against. The basis resolve() returned is the fact;
+            # the label is the sentence an estimator reads beside it.
+            "price_source": {"source": ("estimator_stated"
+                                        if _px.get("basis") == "estimator_stated"
+                                        else str(_px.get("source") or "roll_goods_priced")),
+                             "applied": True,
+                             # NOT source_name — stamp_source_name reads that key FIRST and
+                             # classify_price_source then classifies on whatever it finds
+                             # there. A sentence in that field is a source name nobody can
+                             # recognise, which classifies as `catalogue` by default: the
+                             # exact mislabelling this change exists to end.
+                             "price_label": _px.get("label") or None,
+                             "roll_length_source": _entry.get("source"),
                              "provenance": _entry.get("source")}}
 
 

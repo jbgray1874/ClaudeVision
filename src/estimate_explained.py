@@ -2472,7 +2472,14 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             f"to produce the same geometry. "
             + (f"{_plural(len(_saved), 'workbook')} filed alongside this one, one per "
                f"quantity, each opening on a page that says what it is. "
-               if _saved else "")
+               if _saved else
+               # NOT SILENCE WHEN NO COPIES WERE FILED. The sentence used to vanish, and an
+               # absent sentence about other quantities reads as "there are none" — which is
+               # the opposite of what one workbook carrying all of them means. Say where
+               # they are instead.
+               "Every quantity is in THIS workbook: the Material Price Break tab prices each "
+               "line across the breaks, and the Estimate sheet follows whatever order "
+               "quantity is in D6. No separate copies are filed. ")
             # SAY ONLY WHAT THE SHEET ACTUALLY CARRIES. With freight at £0 this claimed
             # the larger quantities were "overstated by the freight", and with every
             # bought-in unpriced it promised discounts that exist nowhere — two caveats

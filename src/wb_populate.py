@@ -116,8 +116,20 @@ def _llm_engine_name(block: Dict[str, Any]) -> str:
 _ORIGIN_LABELS = {
     "ai_estimate": "AI ESTIMATE - INDICATIVE",
     "web_catalog": "Web listing - verify",
-    "catalogue": "",          # a real catalogue row needs no warning; its supplier name stands
-    "config": "",
+    # CATALOGUE AND CONFIG NO LONGER RENDER BLANK, and the reason the earlier rule gave for
+    # the blank was sound as far as it went: a real catalogue row needs no warning beside it,
+    # and a warning on every line is a warning on none.
+    #
+    # What it missed is that `catalogue` is four systems wearing one word — SDI Live UDEF,
+    # a supplier's file, estimating history harvested out of old workbooks, and a figure in
+    # this repository — and they carry very different weight. Naming which one answered adds
+    # no warning; it answers a different question, the one an estimator actually asks about
+    # a number before standing behind it. The INDICATIVE and verify tags are untouched.
+    #
+    # None means "ask price_provenance.source_system_label for the system's own name", which
+    # is how a connector added next week names itself with no edit here.
+    "catalogue": None,
+    "config": None,
     "unpriced": "NO PRICE FOUND - estimator to price",
     # A DESCRIPTION MATCH AGAINST OLD QUOTES IS NOT A CATALOGUE ROW. It is the best price
     # available and it is a resemblance, not an account: the line it matched may be a pack
@@ -128,11 +140,36 @@ _ORIGIN_LABELS = {
     "historical_quote": "Historical quote match - verify",
 }
 
-# ONLY THESE RENDER SILENTLY. Blank in the supplier column reads as "firm" — it is what a
-# real catalogue row looks like — so a class that reaches this table without an entry must
-# never inherit that silence by falling through. Naming the class is worse-looking and
-# better: an estimator can ask what it means, and cannot mistake it for an account price.
-_SILENT_ORIGIN_CLASSES = {"catalogue", "config"}
+# NOTHING RENDERS SILENTLY ANY MORE, and this set is kept empty rather than deleted so the
+# emptiness is a decision somebody made and not an omission.
+#
+# The old rule let `catalogue` and `config` render blank on the reasoning that a real
+# catalogue row needs no warning. True — but blank was doing two jobs: "no warning" and
+# "no answer to where this came from". A price with no supplier name then rendered exactly
+# like a UDEF row, which is how a fuzzy description match against a five-year-old quote came
+# to sit on 12422-24 at GBP 1.06 for a wood screw beside a real supplier line at GBP 0.05.
+# Every price now names its system; only the warning words vary.
+_SILENT_ORIGIN_CLASSES: set = set()
+
+
+def _supplier_cell(supplier: Any, origin: Any) -> str:
+    """WHO sells it and WHICH system priced it, in one narrow column.
+
+    The old rule was `if origin and not supplier` — a supplier name suppressed the origin
+    entirely. That is backwards for the question this column is being asked to answer: a
+    name like "Elite Sourcing" tells an estimator who supplies the part and nothing at all
+    about whether the figure beside it came off UDEF, out of a supplier file, or off an old
+    estimating sheet. Both facts, or whichever one we have.
+    """
+    _s = str(supplier or "").strip()
+    _o = str(origin or "").strip()
+    if not _o:
+        return _s
+    if not _s:
+        return _o
+    if _o.lower() in _s.lower():
+        return _s
+    return f"{_s} ({_o})"
 
 
 def _price_is_reproducible(pe: Dict[str, Any]) -> bool:
@@ -193,13 +230,17 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         # off the total; a stored one prices the line, tagged.
         return (f"{_llm_engine_name(best)} - INDICATIVE",
                 not price_provenance.stamp_is_reproducible(best))
-    label = _ORIGIN_LABELS.get(cls)
+    label = _ORIGIN_LABELS.get(cls, "")
     if label is None:
+        # A LOOKED-UP PRICE NAMES ITS SYSTEM. No warning word — there is nothing wrong with
+        # the line — just which of the four things called "catalogue" answered it.
+        label = price_provenance.source_system_label(
+            price_provenance.stamp_source_name(best))
+    if not label:
         # An unrecognised class is not a silent one. Prefer the source's own name where it
         # has one; otherwise say what the class was, so the cell is never blank by accident.
-        label = str(best.get("source_name") or "").strip() or f"{cls} - verify"
-    if not label and cls not in _SILENT_ORIGIN_CLASSES:
-        label = f"{cls or 'unknown source'} - verify"
+        label = (price_provenance.source_system_label(best.get("source_name"))
+                 or f"{cls or 'unknown source'} - verify")
     return label, False
 
 try:
@@ -4046,8 +4087,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # the same inputs. A figure nobody can reproduce must not sit in a price column
         # looking like a quote.
         _origin, _indicative = _price_origin(pe)
-        if _origin and not supplier:
-            supplier = _origin
+        supplier = _supplier_cell(supplier, _origin)
         if _indicative:
             # Also on the description, because the supplier column is narrow and this is the
             # one thing a reader must not miss. The cell is truncated to 120 characters on

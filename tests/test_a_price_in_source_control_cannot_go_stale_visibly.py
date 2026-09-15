@@ -81,7 +81,10 @@ def test_the_system_is_asked_before_the_stated_figure(monkeypatch):
     out = sp.resolve("TAPE113C", "EPDM tape")
     assert out["gbp"] == 5.25
     assert out["basis"] == "system"
-    assert "access_supply_chain" in out["label"]
+    # THE SYSTEM IS NAMED — in the estimator's words, not the connector's key. The rung
+    # itself is handed back separately for callers that must stamp it.
+    assert out["source"] == "access_supply_chain"
+    assert "Access supply chain" in out["label"]
 
 
 def test_the_stated_figure_answers_only_when_the_system_cannot(monkeypatch):

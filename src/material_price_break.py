@@ -221,6 +221,37 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
             _cell.value = vector[i] if i < len(vector) else vector[-1]
         done["quantities"] = list(vector)
 
+        # A BROKEN REFERENCE IS NOT A PRICE, AND IT SPREADS.
+        #
+        # The 15:40 book carried, on two empty BOM rows:
+        #
+        #     J19  =LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,'Material Price Break'!#REF!)
+        #
+        # — the template's own formulas, left pointing at nothing after the break tab was
+        # widened by hand. Rows 17 and 18 survived the same edit pointing at break rows 43
+        # and 44 instead of 11 and 12. Nothing the engine wrote; everything the estimator
+        # opens. #REF! propagates through =(J19*K19)*(100%+L19) into M, and M is what the
+        # block totals sum, so two untouched empty rows can take the Total Material cell out.
+        #
+        # ONLY ON A ROW WITH NOTHING ON IT. A row carrying a part is the estimator's line and
+        # a broken formula there is a fact to report, not to tidy away — it is named in
+        # `refused` and left exactly as it is.
+        _jcol = int(cfg.get("price_col", 10))
+        _codecols = (int(cfg.get("code_col", 8)), int(cfg.get("desc_col", 3)))
+        for _r in range(first_bom, last_bom + 1):
+            _c = est.cell(row=_r, column=_jcol)
+            if not (isinstance(_c.value, str) and "#REF!" in _c.value):
+                continue
+            _occupied = any(str(est.cell(row=_r, column=_cc).value or "").strip()
+                            for _cc in _codecols)
+            if _occupied:
+                done["refused"].append(
+                    f"{est.title}!{_c.coordinate} is #REF! on a row that carries a part — "
+                    f"left alone; the template's break-tab reference needs repairing")
+                continue
+            _c.value = None
+            done.setdefault("cleared_broken_refs", []).append(_c.coordinate)
+
         _by_row: Dict[int, Dict[str, Any]] = {}
         for ln in (lines or []):
             try:
@@ -242,7 +273,24 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
             if target < 1:
                 continue
             wrote = False
-            for i, qty in enumerate(vector):
+            # PAD THE PRICES THE SAME WAY THE HEADER IS PADDED, and for the same reason.
+            #
+            # THE 15:40 BOOK PRICED EVERY BREAK-DRIVEN LINE AT ZERO AT ITS TOP QUANTITY.
+            # The header runs the full width of the table — 1, 10, 50, 250, 1000, then 1000
+            # repeated to column N, so the vector never descends. The prices stopped at the
+            # fifth column. LOOKUP resolves to the LAST cell holding the largest value not
+            # above $D$6, so an order of 1000 landed on column N, and column N was empty:
+            #
+            #     header   1   10   50   250   1000   1000   1000   1000   1000   1000   1000
+            #     prices  .09  .09  .09   .09    .09      -      -      -      -      -      -
+            #                                                                        ^ £0.00
+            #
+            # It was invisible at 250 and correct at 1 — the two quantities anyone checks.
+            # Padding one row and not the other is what made a table that looked right and
+            # answered wrong at exactly the quantity it exists to answer.
+            _cols = last_col - first_col + 1
+            for i in range(_cols):
+                qty = vector[i] if i < len(vector) else vector[-1]
                 cell = ws.cell(row=target, column=first_col + i)
                 # ONLY INTO AN EMPTY CELL. An estimator's own figure outranks anything the
                 # engine derived, and on this tab a typed number is the estimator working.

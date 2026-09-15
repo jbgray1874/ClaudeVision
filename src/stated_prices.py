@@ -98,12 +98,18 @@ def system_price(code: Any, description: Any = None) -> Optional[Dict[str, Any]]
 def resolve(code: Any, description: Any = None) -> Dict[str, Any]:
     """The price to use, where it came from, and whether the two sources disagree.
 
-    Returns {gbp, basis, label, disagreement} — gbp None when nothing can answer, which is a
-    withheld line and not a zero. `basis` is 'system' or 'estimator_stated'.
+    Returns {gbp, basis, source, label, disagreement} — gbp None when nothing can answer,
+    which is a withheld line and not a zero. `basis` is 'system' or 'estimator_stated'.
+
+    `source` is the RUNG that answered — `udef_sqlserver`, `spreadsheet`, `estimator_stated`
+    — as a machine name a caller can stamp and classify. It used to exist only inside the
+    prose of `label`, so the one caller that needed to record which system priced the line
+    had nothing to record but a sentence, and stamped a constant instead.
     """
     _sys = system_price(code, description)
     _sta = stated(code)
-    out: Dict[str, Any] = {"gbp": None, "basis": None, "label": "", "disagreement": None}
+    out: Dict[str, Any] = {"gbp": None, "basis": None, "source": None, "label": "",
+                           "disagreement": None}
 
     if _sys and _sta:
         _s, _e = float(_sys["gbp"]), float(_sta.get("gbp") or 0)
@@ -122,10 +128,17 @@ def resolve(code: Any, description: Any = None) -> Dict[str, Any]:
         # THE SYSTEM WINS WHERE IT ANSWERS. It is the thing that gets updated when a price
         # moves; a figure in config is only ever as new as the last person who edited it.
         out.update(gbp=round(float(_sys["gbp"]), 4), basis="system",
-                   label=f"SDI system cost via {_sys['source']}")
+                   source=_sys["source"],
+                   # THE SYSTEM'S OWN NAME FOR ITSELF IS NOT THE ESTIMATOR'S. This read
+                   # "SDI system cost via udef_sqlserver" — a connector key, written for the
+                   # code, put in front of the person who has to decide whether to trust the
+                   # number. One module owns the translation so the sheet, the report and
+                   # this sentence cannot call the same source three different things.
+                   label=f"SDI system cost via {_system_name(_sys['source'])}")
         return out
     if _sta and _sta.get("gbp"):
         out.update(gbp=round(float(_sta["gbp"]), 4), basis="estimator_stated",
+                   source="estimator_stated",
                    label=(f"stated by {_sta.get('by') or 'an estimator'} on "
                           f"{_sta.get('on') or 'an unrecorded date'}"
                           + (f" for {_sta['job']}" if _sta.get("job") else "")
@@ -135,3 +148,12 @@ def resolve(code: Any, description: Any = None) -> Dict[str, Any]:
 
 def _fmt(code: Any) -> str:
     return str(code or "").strip().upper() or "this code"
+
+
+def _system_name(source: Any) -> str:
+    """The connector's name as an estimator would say it. Never raises, never blank."""
+    try:
+        from price_provenance import source_system_label                # noqa: PLC0415
+        return source_system_label(source) or str(source or "the system")
+    except Exception:                                                   # noqa: BLE001
+        return str(source or "the system")

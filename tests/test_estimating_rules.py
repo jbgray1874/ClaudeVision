@@ -2713,7 +2713,8 @@ def test_a_guessed_price_says_so_on_the_estimating_sheet():
 
     label, indicative = _price_origin(_line("udef_sqlserver"))
     eq(indicative, False, "a catalogue line is not")
-    eq(label, "", "and needs no warning next to it")
+    eq(label, "SDI Live UDEF",
+       "and carries no warning — just which of the four things called a catalogue answered")
 
     # A price that was resolved but never added cannot mislead anyone about the total.
     _, indicative = _price_origin(_line("llm_market_estimate", applied=False))
@@ -13515,10 +13516,14 @@ def test_a_price_with_no_supplier_does_not_read_as_a_catalogue_row():
     Blank means firm in this column. Only classes explicitly declared silent may use it."""
     import wb_populate as W
 
-    eq(W._ORIGIN_LABELS.get("catalogue"), "",
-       "a real catalogue row still needs no warning")
-    ok("catalogue" in W._SILENT_ORIGIN_CLASSES and "config" in W._SILENT_ORIGIN_CLASSES,
-       "and the classes allowed to be silent are named, not inferred")
+    # UPDATED 15 Sep 2026. The blank was doing two jobs — "no warning needed" and "no answer
+    # about where this came from" — and only the first was intended. A catalogue row still
+    # carries no warning word; it now says WHICH catalogue.
+    eq(W._ORIGIN_LABELS.get("catalogue"), None,
+       "a catalogue row defers to the system's own name rather than rendering blank")
+    eq(W._ORIGIN_LABELS.get("config"), None, "and so does a figure held in this repository")
+    eq(W._SILENT_ORIGIN_CLASSES, set(),
+       "nothing renders silently: every price names the system that answered it")
 
     for _cls in ("historical_quote_material_line", "historical_quote"):
         _label = W._ORIGIN_LABELS.get(_cls)
@@ -13532,9 +13537,10 @@ def test_a_price_with_no_supplier_does_not_read_as_a_catalogue_row():
     from pathlib import Path as _P9
     _src = (_P9(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
         encoding="utf-8")
-    ok("_SILENT_ORIGIN_CLASSES" in _src, "the silent set exists")
-    ok("if not label and cls not in _SILENT_ORIGIN_CLASSES:" in _src,
-       "and an unlabelled, non-silent class is given a visible label rather than blank")
+    ok("_SILENT_ORIGIN_CLASSES" in _src,
+       "the silent set is kept, empty, so the emptiness is a decision and not an omission")
+    ok("if not label:" in _src,
+       "and any class arriving without a label is given a visible one rather than blank")
 
 
 def test_a_successful_extract_says_so_in_the_same_word_a_refusal_uses():

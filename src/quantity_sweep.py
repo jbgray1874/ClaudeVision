@@ -84,6 +84,27 @@ def _freight_on_sheet(ws, max_row: int) -> Dict[str, Optional[float]]:
     return found
 
 
+def file_a_workbook_per_quantity() -> bool:
+    """Does this run write a separate workbook for each quantity, or one sheet for all?
+
+    ONE DECISION, ASKED IN ONE PLACE. The sweep computes the figures either way — that is
+    what the Quantity Breaks tab and the report read — and this governs only whether extra
+    FILES are written beside the estimate.
+
+    The default is derived rather than declared: variants are filed only where the one sheet
+    cannot carry the breaks. A machine whose template has not been widened yet still gets its
+    other quantities, which is the case that makes a flat False wrong.
+    """
+    try:
+        import config                                              # noqa: PLC0415
+    except Exception:                                              # noqa: BLE001
+        return True                                # no config to consult: change nothing
+    declared = getattr(config, "QUANTITY_VARIANT_WORKBOOKS", None)
+    if declared is not None:
+        return bool(declared)
+    return not bool((getattr(config, "MATERIAL_PRICE_BREAK", {}) or {}).get("enabled"))
+
+
 def sweep(xlsx_path: Any, quantities: List[int],
           sheet_name: str = "Estimate",
           save_variants: bool = False,

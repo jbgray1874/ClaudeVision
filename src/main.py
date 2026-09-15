@@ -1611,12 +1611,25 @@ def main() -> None:
             if _breaks and xlsx_path:
                 try:
                     from quantity_sweep import sweep as _sweep
+                    from quantity_sweep import file_a_workbook_per_quantity as _per_qty
+                    # ONE SHEET, EVERY QUANTITY — where the sheet can carry them.
+                    #
+                    # "Still generating multiple s/sheets" — James, 15 Sep, on a run that
+                    # produced the estimate AND a _qty10 beside it. The break tab was doing
+                    # its job in the first workbook; the second was the old mechanism still
+                    # running underneath it. The sweep still runs — its figures are what the
+                    # Quantity Breaks tab and the report read — it just stops filing copies.
+                    _save = _per_qty()
+                    if not _save:
+                        print("   [qty-sweep] one workbook: the Material Price Break tab "
+                              "carries every quantity, so no per-quantity copies are filed.",
+                              flush=True)
                     _order_freight: Dict[str, float] = {}
                     for _cl in (summary.get("commercial_lines") or []):
                         if isinstance(_cl, dict) and _cl.get("order_gbp"):
                             _order_freight[str(_cl.get("code") or "").upper()] = float(
                                 _cl["order_gbp"])
-                    _swept = _sweep(xlsx_path, _breaks, save_variants=True,
+                    _swept = _sweep(xlsx_path, _breaks, save_variants=_save,
                                     order_freight=_order_freight or None)
                     if _swept:
                         (summary.setdefault("saved_output_paths", {}))["quantity_variants"] = \

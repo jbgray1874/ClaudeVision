@@ -400,6 +400,32 @@ SHOW_FORMULAS_SHEETS = ("Estimate",)
 PER_ORDER_UNIT_COUNTS = {
 }
 
+# ONE WORKBOOK, OR ONE PER QUANTITY.
+#
+#   "Let's look at collapsing all the s/sheets into one when we have multiple unit
+#    quantities."                                            — James Gray, SDI, 15 Sep 2026
+#   "For ease of process / check can all quantity breaks be on one sheet"
+#                                                        — Howard Thurley, 0355255, 9 Sep
+#
+# The quantity sweep predates both. It recalculates the estimate at each quantity and SAVES
+# EACH ONE AS ITS OWN FILE, which was the only way to see 10 off before the Material Price
+# Break tab existed. Four quantities meant four workbooks open and the unit cost read out of
+# each by eye — and each of those files looks exactly like a finished estimate, so the first
+# thing that happens to one is somebody forwards it. That is why every variant opens on a
+# READ THIS FIRST page disclaiming itself.
+#
+# The break tab answers the same question inside one workbook, on the estimators' own
+# template, with the sheet's own LOOKUP against $D$6 — no disclaimer needed, because nothing
+# has been recalculated behind anyone's back.
+#
+# None (the default) means: file the variants only where the one sheet CANNOT carry the
+# breaks — a machine whose template has not been widened yet still gets its other quantities
+# rather than silently getting none. True or False forces it either way.
+#
+# THE SWEEP ITSELF STILL RUNS EITHER WAY. It is what computes the figures the Quantity Breaks
+# tab and the report both read; this setting governs only whether extra FILES are written.
+QUANTITY_VARIANT_WORKBOOKS = None       # None | True | False
+
 MATERIAL_PRICE_BREAK = {
     "enabled": True,
     "sheet": "Material Price Break",

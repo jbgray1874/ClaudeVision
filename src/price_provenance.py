@@ -72,6 +72,66 @@ _UNPRICED_SOURCES = frozenset({"fallback", "system_cost_not_found", "no_price_fo
 # `source_name`. One accessor, so every reader gets the same answer.
 _SOURCE_NAME_KEYS = ("source_name", "source", "source_type")
 
+# ── WHICH SYSTEM ANSWERED ────────────────────────────────────────────────────────────
+#
+#   "we just need to ensure that in the estimating s/sheet that the source of the price is
+#    clear. - estimating, or SDILive UDEF, llm etc"          — James Gray, SDI, 15 Sep 2026
+#
+# CLASS AND SYSTEM ARE TWO DIFFERENT QUESTIONS and this module only answered the first.
+# `catalogue` means "a row somebody can look up again" — and it is FOUR systems wearing one
+# word: SDI Live's UDEF table, a supplier's own file, the estimating history harvested out of
+# old workbooks, and a figure written into this repository. They carry very different weight.
+# UDEF is what purchasing pays against. A description match against a five-year-old estimate
+# is a resemblance. Both reached the sheet as the same blank cell, so an estimator deciding
+# whether to trust a number could not see which one he was looking at.
+#
+# The rung names are the connectors' own — `udef_sqlserver`, `spreadsheet` — and they are
+# written for the code, not for the person reading the workbook. This maps them to what an
+# estimator calls the thing. Keyed on the SOURCE, never on a part or a job, so a connector
+# added next week is named by the same rule.
+_SOURCE_SYSTEM_NAMES = {
+    "udef_sqlserver":     "SDI Live UDEF",
+    "sqlserver":          "SDI Live",
+    "spreadsheet":        "Estimating spreadsheet",
+    # THE .mdb FILE, NOT THE ERP. `access` here is the AccessPriceConnector reading a local
+    # Access database; Access Supply Chain is the system behind SDILive and is a different
+    # thing entirely. Two systems wearing one word, so neither is allowed to answer for the
+    # other — which is why nothing below matches on fragments.
+    "access":             "Access price file",
+    "web":                "Web listing",
+    "web_catalog":        "Web listing",
+    "estimator_stated":   "Estimator stated",
+    "roll_goods_stated":  "Estimator stated",
+    "stated_price":       "Estimator stated",
+    "historical_quote":   "Historical quote",
+    "historical_quote_material_line": "Historical quote",
+}
+
+# A figure a named estimator gave us, held here only until a priced source carries it. It is
+# reproducible — it is a constant — and it is never firm, which is what `config` already
+# means. Without this, `estimator_stated` fell through to `catalogue` and Howard's tape price
+# rendered on the sheet as though purchasing had an account behind it.
+_STATED_SOURCES = frozenset({"estimator_stated", "roll_goods_stated", "stated_price"})
+
+
+def source_system_label(name: Any) -> str:
+    """What to call the thing that answered, in words an estimator uses.
+
+    NEVER EMPTY for a name that was given. An unmapped connector renders as its own name
+    tidied up rather than as a blank cell, because blank in the supplier column reads as
+    "firm, from purchasing" — the one thing an unknown source has not earned.
+    """
+    n = _norm(name)
+    if not n:
+        return ""
+    if n in _SOURCE_SYSTEM_NAMES:
+        return _SOURCE_SYSTEM_NAMES[n]
+    # EXACT ONLY. A fragment match read `access_supply_chain` — the ERP behind SDILive — as
+    # the `access` connector's local .mdb file, and would have printed the wrong system's
+    # name on the sheet with complete confidence. A source this map has not met is rendered
+    # as its own name tidied up: uglier, and it cannot be wrong.
+    return n.replace("_", " ").strip().capitalize()
+
 
 def stamp_source_name(block: Any) -> str:
     """The name of whatever produced this price, from wherever the stamp recorded it."""
@@ -138,6 +198,11 @@ def classify_price_source(
     if n in _UNPRICED_SOURCES:
         return "unpriced"
     if not n:
+        return "config"
+    # A NAMED ESTIMATOR'S FIGURE IS NOT A CATALOGUE ROW. It lives in this repository, which
+    # is what `config` means; falling through to `catalogue` put Howard's stated tape price
+    # on the sheet looking like a row purchasing buys against.
+    if n in _STATED_SOURCES:
         return "config"
     return "catalogue"
 
