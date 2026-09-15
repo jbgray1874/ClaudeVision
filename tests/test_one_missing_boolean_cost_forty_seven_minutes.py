@@ -134,9 +134,21 @@ def test_a_stated_weld_length_still_wins():
 
 
 def test_a_counted_joint_still_wins_over_the_flat_allowance():
+    """AND IT NOW AGREES WITH THE MAN WHO TIMED IT, which it did not before.
+
+    This is 7332-01-101's real member list — six members, so five joints — and it asserted
+    50 minutes and 33.5. That is precisely the pair James found on the sheet, against
+    Howard's stated 30 and 20, and this test was holding it in place: the per-joint rate had
+    been set by dividing his 30 by an ASSUMED three joints (config's own comment: "a frame
+    of four members - three joints") while the engine multiplied it by the five it counts
+    here. An assumption in prose and a measurement in code, never compared.
+
+    Counting still beats the flat allowance — that rule is untouched, and it is what keeps a
+    frame's time off a two-part holder. It just no longer arrives at a different answer from
+    the shop for the very part the shop measured."""
     t = _times(_101(child_parts=["001", "002", "003", "004", "005", "008"]))
-    assert t["welding"] == 50.0                       # 5 joints x 10 min
-    assert t["dress_welds"] == 33.5                   # 5 joints x 6.7 min
+    assert t["welding"] == 30.0                       # 5 joints x 6 min = Howard's 30
+    assert t["dress_welds"] == 20.0                   # 5 joints x 4 min = Howard's 20
 
 
 def test_the_line_says_which_of_the_three_it_used():

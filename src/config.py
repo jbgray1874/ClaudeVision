@@ -605,6 +605,59 @@ INHERITED_ESTIMATOR_DECISIONS = [
     },
 ]
 
+# ══ WHAT THE SHOP TOLD US, IN ONE PLACE ═════════════════════════════════════════════════
+#
+# James: "can we put these into a central area that is easy to identify and change if
+# needed."
+#
+# Every figure below came out of a named person's mouth on a dated job. They were already
+# in this file and they were in three places — brushing at one constant, the plater pack and
+# freight at another, the weld and dress times at a third, each with its own `source` string
+# in its own words. An estimator asked "what did Howard actually say" had to know which three
+# constants to open, and a figure that needs correcting had to be found before it could be
+# changed.
+#
+# THIS IS THE ONE HOME. The constants below READ from it rather than repeating it, so there
+# is one number per fact and changing it here changes it everywhere. Adding a second copy
+# anywhere else is the defect this whole file has been chasing: two readers of one fact,
+# agreeing until the day they do not.
+#
+# ── AND THE WELD TIMES WERE DIVIDED BY A JOINT COUNT NOTHING MEASURED ────────────────────
+#
+# Howard stated 30 minutes to weld 7332-01-101 and 20 to dress it. That was turned into a
+# per-joint rate by hand, against an ASSUMED three joints — the old comment says so: "a
+# frame of four members — three joints — so it reads as 10 minutes a joint". The engine
+# counts the joints itself, and for that part it counts FIVE. So it multiplied a rate
+# derived from three by a count of five and printed 50 minutes where Howard said 30, and 33.5
+# where he said 20 — about £28 a unit on every weldment job, from an arithmetic disagreement
+# that nothing in the system could see, because the assumed count was in prose and the
+# measured one was in code.
+#
+# So the count is stated HERE, beside the minutes it divides, and the per-joint rates are
+# DERIVED. If the joint count for that frame is ever re-measured, one number changes and both
+# rates follow. Nobody divides by hand again.
+SHOP_STATED = {
+    # Howard Thurley, SDI estimating — 7332-01 (Harrods A3 stand), 9 September 2026
+    "weld_min_per_weldment": 30.0,
+    "dress_min_per_weldment": 20.0,
+    "weld_joints_measured_on": 5,          # joints the engine counts on 7332-01-101
+    "weld_calibrated_on_part": "7332-01-101",
+    "brush_before_plate_min": 40.0,        # per consignment, before it goes to the platers
+    "plater_pack_min": 4.0,                # packing to send
+    "plater_final_pack_min": 8.0,          # packing again on the way back
+    "plater_freight_gbp_per_order": 120.0,  # pallet network, round trip
+    "stated_by": "Howard Thurley (SDI estimating)",
+    "stated_on": "9 Sep 2026",
+    "stated_for_job": "7332-01",
+}
+
+# One observation each, from one job. That is not a weakness to hide — it is the reason
+# every consumer below names Howard and the date, so the next estimator to disagree knows
+# exactly whose figure they are disagreeing with and on what evidence.
+SHOP_STATED_SOURCE = (f"{SHOP_STATED['stated_by']}, stated for "
+                      f"{SHOP_STATED['stated_for_job']} on {SHOP_STATED['stated_on']}")
+
+
 # BRUSHED BEFORE IT GOES TO THE PLATERS — work the drawing never mentions.
 #
 # "Line 85 – Drawing doesn't annotate – material is brushed prior to sending to platers, op.
@@ -623,10 +676,10 @@ INHERITED_ESTIMATOR_DECISIONS = [
 # Set enabled False to go back to naming it without costing it.
 BRUSH_BEFORE_PLATE = {
     "enabled": True,
-    "minutes_per_consignment": 40.0,
+    "minutes_per_consignment": SHOP_STATED["brush_before_plate_min"],
     "setup_min": 0.0,
     "operation": "manual_labour_metal",
-    "source": "SDI shop practice via Howard Thurley (SDI estimating), 7332-01, 9 Sep 2026",
+    "source": f"SDI shop practice via {SHOP_STATED_SOURCE}",
 }
 
 PLATE_SUBCONTRACT_POLICY = {
@@ -675,12 +728,16 @@ NAMED_PLATE_SPECS = {
 # EVERY FIGURE HERE IS KEYED ON PLATING BEING PRESENT, which is what makes it safe: a job
 # with no plated part reaches none of it. 12349-02 has no plating and cannot be touched.
 PLATING_LOGISTICS = {
-    "pack_for_plater_min": float(os.getenv("PLATER_PACK_MIN", "4.0")),
-    "final_pack_min": float(os.getenv("PLATER_FINAL_PACK_MIN", "8.0")),
-    "freight_gbp_per_order": float(os.getenv("PLATER_FREIGHT_GBP", "120.0")),
+    "pack_for_plater_min": float(os.getenv(
+        "PLATER_PACK_MIN", SHOP_STATED["plater_pack_min"])),
+    "final_pack_min": float(os.getenv(
+        "PLATER_FINAL_PACK_MIN", SHOP_STATED["plater_final_pack_min"])),
+    "freight_gbp_per_order": float(os.getenv(
+        "PLATER_FREIGHT_GBP", SHOP_STATED["plater_freight_gbp_per_order"])),
     "freight_is_round_trip": True,
-    "source": ("SDI transport department, stated for 7332-01 (Howard Thurley, 9 Sep 2026) — "
-               "£120 pallet network, quoted as £20 a unit"),
+    "source": (f"SDI transport department, via {SHOP_STATED_SOURCE} — £"
+               f"{SHOP_STATED['plater_freight_gbp_per_order']:.0f} pallet network, "
+               f"quoted as £20 a unit"),
 }
 
 # ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────
@@ -967,20 +1024,31 @@ WELD_TIME_MODEL = {
     "handling_min_per_joint": float(os.getenv("WELD_HANDLING_MIN_PER_JOINT", "2.0")),
     "setup_min_per_weldment": float(os.getenv("WELD_SETUP_MIN", "3.0")),
     # PER JOINT, BECAUSE ONE NUMBER FOR EVERY WELDMENT IS NOT A RULE, IT IS A BLANKET.
-    # The stated 30 minutes is for 7332-01-101, a frame of four members — three joints — so
-    # it reads as 10 minutes a joint, and the 20 minutes of dressing as 6.7. Scaled that way
-    # it reproduces the shop's own figure on the part the shop measured, and it does not put
-    # a Harrods frame's time onto 12349-02-69-03M, which is two laser-cut parts welded once.
-    # A weldment of N members has at least N-1 joints; where the members can be counted, the
-    # count is used, and where they cannot the flat allowance below stands and says so.
-    "weld_min_per_joint": float(os.getenv("WELD_MIN_PER_JOINT", "10.0")),
-    "dress_min_per_joint": float(os.getenv("WELD_DRESS_MIN_PER_JOINT", "6.7")),
+    # Scaling by joints reproduces the shop's own figure on the part the shop measured, and
+    # it does not put a Harrods frame's time onto 12349-02-69-03M, which is two laser-cut
+    # parts welded once. A weldment of N members has at least N-1 joints; where the members
+    # can be counted, the count is used, and where they cannot the flat allowance stands.
+    #
+    # DERIVED, NOT DIVIDED BY HAND. These were 10.0 and 6.7 — Howard's 30 and 20 over an
+    # ASSUMED three joints, while the engine counts five on the very part he timed. It then
+    # multiplied a three-joint rate by a five-joint count and printed 50 minutes where he
+    # said 30. The assumption lived in a comment and the measurement lived in code, so
+    # nothing could compare them. Now the count sits in SHOP_STATED beside the minutes it
+    # divides: correct the count and both rates follow.
+    "weld_min_per_joint": float(os.getenv(
+        "WELD_MIN_PER_JOINT",
+        SHOP_STATED["weld_min_per_weldment"] / SHOP_STATED["weld_joints_measured_on"])),
+    "dress_min_per_joint": float(os.getenv(
+        "WELD_DRESS_MIN_PER_JOINT",
+        SHOP_STATED["dress_min_per_weldment"] / SHOP_STATED["weld_joints_measured_on"])),
     # Used when the pack states no weld length, no joint count, and the members cannot even
     # be counted — 7332-01-101, whose members are siblings rather than children.
-    "allowance_min_per_weldment": float(os.getenv("WELD_ALLOWANCE_MIN", "30.0")),
-    "dress_allowance_min_per_weldment": float(os.getenv("WELD_DRESS_ALLOWANCE_MIN", "20.0")),
-    "allowance_source": ("SDI welding department, stated for 7332-01 (9 Sep 2026) — one "
-                         "observation, pending confirmation that it generalises"),
+    "allowance_min_per_weldment": float(os.getenv(
+        "WELD_ALLOWANCE_MIN", SHOP_STATED["weld_min_per_weldment"])),
+    "dress_allowance_min_per_weldment": float(os.getenv(
+        "WELD_DRESS_ALLOWANCE_MIN", SHOP_STATED["dress_min_per_weldment"])),
+    "allowance_source": (f"SDI welding department, via {SHOP_STATED_SOURCE} — one "
+                         f"observation, pending confirmation that it generalises"),
     "method_source": ("arc time / operating factor, MIG ~35% (Miller Electric); fillet hour-"
                       "rates per metre (Australian Steel Institute)"),
 }
