@@ -436,12 +436,43 @@ MATERIAL_PRICE_BREAK = {
 #
 # A code NOT in this table is not guessed at: the line is withheld and says so, the same as a
 # consumable with no quantity. Nothing here was inferred from a drawing.
+# HOW IT IS SUPPLIED — NOT WHAT IT COSTS.
+#
+# James, 15 Sep: "we can't hard code prices. we can log hourly throughput rates but we need
+# to start understanding if these change and why." He is right, and roll_price_gbp used to
+# sit in this table. A price in source control cannot go stale visibly: nobody is told when
+# it moves and the first person to notice is a customer.
+#
+# The roll LENGTH stays, because it is a packaging fact rather than money — TAPE113C comes on
+# a 10 metre roll, which changes when the supplier changes the product and not before. The
+# price is asked of SDI's own priced sources at run time (stated_prices.resolve), and where
+# they cannot answer it falls to ESTIMATOR_STATED_PRICES below, dated and attributed.
 ROLL_GOODS_CATALOGUE = {
     "TAPE113C": {
         "roll_length_mm": 10000.0,
-        "roll_price_gbp": 4.50,
         "label": "EPDM closed-cell tape 25 x 1 mm — 10 m roll",
         "source": "Howard Thurley (SDI estimating/buying), 0355255 review, 9 Sep 2026",
+    },
+}
+
+# --- What an estimator told us a thing costs, with the date on it -----------------
+#
+# SECOND TO THE SYSTEM, ALWAYS. price_sources.get_best_price is asked first — the part system
+# cost off Access Supply Chain, UDEF, historical quotes, the supplier catalogue. This is what
+# answers when none of them can, and a line priced from here SAYS so on the sheet, with the
+# name and the date, so an estimator can see he is reading his own six-week-old figure.
+#
+# WHY THE DATE IS THE POINT. PLAS534 already has three answers — £45.19 the supplier's current
+# price per Howard, £47.21 what our sheet charged, £49.55 the material cost on Access Supply
+# Chain which Howard reckons was migrated from the old system. Nothing in the engine can say
+# which is right, and picking one silently is how the question stops being asked. Where this
+# register and the system disagree by more than a penny in a pound, BOTH are reported.
+ESTIMATOR_STATED_PRICES = {
+    "TAPE113C": {
+        "gbp": 4.50, "unit": "roll",
+        "by": "Howard Thurley (SDI estimating/buying)",
+        "on": "2026-09-09", "job": "0355255",
+        "note": "10 m roll of EPDM closed-cell tape 25 x 1 mm",
     },
 }
 

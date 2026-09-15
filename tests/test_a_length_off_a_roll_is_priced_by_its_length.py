@@ -166,10 +166,16 @@ def test_estimate_material_asks_before_any_other_basis():
     assert out["unit_material_cost_gbp"] == 0.09          # per piece; the line is 0.27
 
 
-def test_the_catalogue_entry_names_who_gave_us_the_roll():
+def test_the_catalogue_names_who_gave_us_the_roll_and_holds_no_money():
+    """THE PRICE MOVED OUT. "we can't hard code prices" — James, 15 Sep. The LENGTH is a
+    packaging fact and stays; the price is asked of SDI's own sources at run time, and a
+    dated estimator figure answers only where they cannot."""
     entry = config.ROLL_GOODS_CATALOGUE["TAPE113C"]
-    assert entry["roll_length_mm"] == 10000.0 and entry["roll_price_gbp"] == 4.50
+    assert entry["roll_length_mm"] == 10000.0
+    assert "roll_price_gbp" not in entry
     assert "Howard Thurley" in entry["source"] and "0355255" in entry["source"]
+    stated = config.ESTIMATOR_STATED_PRICES["TAPE113C"]
+    assert stated["gbp"] == 4.50 and stated["on"] == "2026-09-09"
 
 
 # ── and the label must not ask him to replace his own figure ─────────────────────────────

@@ -3482,10 +3482,42 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 "cost_method": "roll_goods_withheld_estimator_to_price",
                 "price_source": {"source": "roll_goods_withheld", "applied": False}}
 
+    # THE LENGTH IS A PACKAGING FACT; THE PRICE IS MONEY AND IS ASKED FOR.
+    #
+    # James: "we can't hard code prices. we can log hourly throughput rates but we need to
+    # start understanding if these change and why." roll_price_gbp used to sit in the
+    # catalogue beside the length — a price in source control, which cannot go stale visibly
+    # and tells nobody when it moves.
+    #
+    # So SDI's own priced sources are asked first (part system cost, UDEF, historical
+    # quotes, supplier catalogue), and the estimator's stated figure answers only where they
+    # cannot. Where both answer and disagree, the line carries BOTH — because which of them
+    # is right is not a question this engine can settle, and choosing silently is how it
+    # stops being asked.
     _roll_mm = _safe_float(_entry.get("roll_length_mm")) or 0.0
-    _roll_gbp = _safe_float(_entry.get("roll_price_gbp")) or 0.0
+    try:
+        from stated_prices import resolve as _resolve_price
+        _px = _resolve_price(_code, part.get("description"))
+    except Exception:                                                # noqa: BLE001
+        _px = {"gbp": None, "basis": None, "label": "", "disagreement": None}
+    _roll_gbp = _safe_float(_px.get("gbp")) or 0.0
     if _roll_mm <= 0 or _roll_gbp <= 0:
-        return None
+        part.setdefault("review_flags", []).append(
+            f"ROLL GOODS {_code}: NOT PRICED. The roll is {_roll_mm:g} mm, which we hold, "
+            f"but nothing priced it — neither SDI's own system cost nor a figure an "
+            f"estimator has stated. Give the roll price and it costs as length used ÷ roll "
+            f"length × roll price.")
+        return {"material": part.get("normalized_material"), "thickness_mm": None,
+                "blank_length_mm": None, "blank_width_mm": None, "blank_area_m2": None,
+                "unit_material_mass_kg": None, "unit_material_cost_gbp": None,
+                "cost_per_part_gbp": None, "extended_material_cost_gbp": None,
+                "stock_estimate": None, "stock_form": "roll", "requires_flat_blank": False,
+                "cost_method": "roll_goods_withheld_estimator_to_price",
+                "price_source": {"source": "roll_goods_withheld", "applied": False}}
+    if _px.get("disagreement"):
+        part.setdefault("review_flags", []).append(
+            f"PRICE DISAGREEMENT — {_px['disagreement']}. Priced on the system figure; "
+            f"confirm which stands.")
     # PER PIECE AND PER LINE ARE DIFFERENT NUMBERS, AND THE SHEET MULTIPLIES ONE OF THEM.
     #
     # This returned the LINE cost in the per-part field, and the Estimate's own BOM formula
@@ -3503,7 +3535,8 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         f"ROLL GOODS {_code}: {_piece_mm:g} mm a piece at £{_piece_cost:.2f}; {_qty} x "
         f"{_piece_mm:g} mm = {_used_mm:g} mm of a {_roll_mm:g} mm roll at £{_roll_gbp:.2f} "
         f"= £{_cost:.2f} for the line — priced by the length used, not by the piece. "
-        f"Roll data: {_entry.get('source') or 'config'}")
+        f"Roll length: {_entry.get('source') or 'config'}. "
+        f"Roll price: {_px.get('label') or 'source not named'}")
     return {"material": part.get("normalized_material"), "thickness_mm": None,
             "blank_length_mm": _piece_mm, "blank_width_mm": None, "blank_area_m2": None,
             "unit_material_mass_kg": None,
