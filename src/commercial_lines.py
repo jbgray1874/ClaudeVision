@@ -206,14 +206,39 @@ def _ask_market(description: str, tag: str) -> Optional[Dict[str, Any]]:
             "confidence": result.get("confidence")}
 
 
+import re as _re
+
+# "PACK OF 1000", "PK OF 50", "BOX OF 250" — the catalogue's own way of saying the price
+# is for a multiple. Nothing else is treated as a pack: a size like "18 x 24 x 100G" is a
+# dimension, and reading dimensions as quantities is how a bag becomes a thousand bags.
+_PACK_OF = _re.compile(r"\b(?:PACK|PK|BOX|BAG|ROLL)\s+OF\s+(\d{2,6})\b", _re.IGNORECASE)
+
+
 def _consumable_price(code: str) -> Optional[Dict[str, Any]]:
-    """What SDI's own priced sources say a packing consumable costs. Never raises, never
-    invents — None is an honest answer and the caller says which code it was."""
+    """What ONE of this consumable costs, from SDI's own priced sources. Never raises,
+    never invents — None is an honest answer and the caller says which code it was.
+
+    THE CATALOGUE SELLS PACKS AND THE METHOD COUNTS EACHES. PACK13 is on UDEF at £29.68 —
+    "POLY BAG 18 x 24 x 100G (PACK OF 1000)". Read as a per-bag price, a 50-off order
+    carries £1,484 of poly bags: exactly the crazy number this whole area exists to stop,
+    and it would have shipped wearing a real supplier's name. The pack size is stated in
+    the catalogue row's own description, so it is divided out HERE, once, and the working
+    says so — the caller only ever sees the price of one.
+    """
     try:
         from stated_prices import system_price                        # noqa: PLC0415
-        return system_price(code)
+        _px = system_price(code)
     except Exception:                                                 # noqa: BLE001
         return None
+    if not _px or not _px.get("gbp"):
+        return _px
+    _m = _PACK_OF.search(str(_px.get("description") or ""))
+    if _m:
+        _n = int(_m.group(1))
+        if _n > 1:
+            _each = round(float(_px["gbp"]) / _n, 5)
+            _px = dict(_px, gbp=_each, pack_of=_n, pack_gbp=float(_px["gbp"]))
+    return _px
 
 
 def _boxes_for(steps: Dict[Any, Any], qty: int) -> Optional[int]:
@@ -269,7 +294,10 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                                 f"{qty} — how it packs beyond the last stated point is "
                                 f"Howard's to say, not ours to extrapolate"}
             _breaks_needed = sorted(int(k) for k in (c.get("per_order_steps") or {}))
-        _parts.append((_code, c.get("what"), _n, _gbp, str(_px.get("source") or "system")))
+        _pk = (f", £{_px['pack_gbp']:.2f} a pack of {_px['pack_of']}"
+               if _px.get("pack_of") else "")
+        _parts.append((_code, c.get("what"), _n, _gbp,
+                       str(_px.get("source") or "system") + _pk))
         _total += _n * _gbp
     if not _parts:
         return None

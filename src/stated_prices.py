@@ -89,7 +89,13 @@ def system_price(code: Any, description: Any = None) -> Optional[Dict[str, Any]]
         gbp = sel.get("price")
         if gbp is None or float(gbp) <= 0:
             return None
+        # THE MATCHED ROW'S OWN DESCRIPTION TRAVELS WITH THE PRICE. It is where the
+        # catalogue states what the price is FOR — "POLY BAG 18 x 24 x 100G (PACK OF
+        # 1000)" — and a caller who cannot see it prices a thousand bags as one.
+        _md = sel.get("metadata") or {}
         return {"gbp": float(gbp), "source": str(sel.get("source") or "system"),
+                "description": str(_md.get("description")
+                                   or (sel.get("evidence") or {}).get("description") or ""),
                 "evidence": sel.get("evidence") or {}}
     except Exception:                                              # noqa: BLE001
         return None

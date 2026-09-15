@@ -137,3 +137,57 @@ def test_delivery_is_untouched_by_the_packing_method(monkeypatch):
     line = CL.delivery_line(_parts(), 50)
     assert line.get("order_gbp") is None, \
         "no stated method exists for haulage yet — the honest zero stands there"
+
+
+# ── the catalogue sells packs and the method counts eaches ───────────────────────────────
+#
+# James ran the UDEF query, 15 Sep 2026:
+#
+#   BOX481   H266266 - 610 x 455 x 455mm (Large stock box) ...   COMPLETE PACKAGING   1.89
+#   PACK13   POLY BAG 18 x 24 x 100G (PACK OF 1000)   The Packaging Company   29.68
+#
+# £29.68 is a THOUSAND bags. Read per-bag, a 50-off order carries £1,484 of poly bags —
+# the crazy number, wearing a real supplier's name.
+
+def _udef(code):
+    rows = {"PACK13": {"gbp": 29.68, "source": "udef_sqlserver",
+                       "description": "POLY BAG 18 x 24 x 100G (PACK OF 1000)"},
+            "BOX481": {"gbp": 1.89, "source": "udef_sqlserver",
+                       "description": "H266266 - 610 x 455 x 455mm (Large stock box)"}}
+    return rows.get(code)
+
+
+def test_a_pack_of_1000_is_divided_to_the_price_of_one(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    px = CL._consumable_price("PACK13")
+    assert px["gbp"] == round(29.68 / 1000, 5)
+    assert px["pack_of"] == 1000 and px["pack_gbp"] == 29.68
+
+
+def test_a_dimension_is_never_read_as_a_pack_size(monkeypatch):
+    """"18 x 24 x 100G" contains numbers and none of them is a quantity. Only the
+    catalogue's own "PACK OF N" wording converts."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    px = CL._consumable_price("BOX481")
+    assert px["gbp"] == 1.89
+    assert "pack_of" not in px
+
+
+def test_the_real_catalogue_rows_price_howards_break_line(monkeypatch):
+    """End to end on the actual UDEF rows: the box step at £1.89 reproduces Howard's own
+    sheet — 0.189 / 0.0378 / 0.02268 / 0.01701 a unit across the four breaks — plus a
+    bag at just under 3p each."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_parts(), 50)
+    _bag = round(29.68 / 1000, 5)
+    assert line["order_gbp"] == round(50 * _bag + 1 * 1.89, 2)     # £3.37, not £1,485.89
+    at = line["order_gbp_at_breaks"]
+    for q, boxes in ((10, 1), (50, 1), (250, 3), (1000, 9)):
+        assert at[q] == round(q * _bag + boxes * 1.89, 2)
+        # the box component per unit is exactly Howard's figure at every break
+        assert round((boxes * 1.89) / q, 5) == round({10: .189, 50: .0378, 250: .02268,
+                                                      1000: .01701}[q], 5)
+    assert "pack of 1000" in line["packing_working"]
