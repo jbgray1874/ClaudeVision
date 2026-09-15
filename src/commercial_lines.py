@@ -88,8 +88,23 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     left_out: List[Dict[str, Any]] = []
 
     def _leave_out(part: Dict[str, Any], why: str) -> None:
+        # ENOUGH TO JUDGE THE JOB BY, not just to name the gap. The packing gate has to
+        # know whether a part it could not weigh is something SDI MAKES (unassessed
+        # evidence about what kind of job this is) or something bought that rides along —
+        # a record holding only name and reason forced that call to be a guess.
+        try:
+            from bought_in_policy import is_bought_in as _bi        # noqa: PLC0415
+            _bought = bool(_bi(part))
+        except Exception:                                            # noqa: BLE001
+            _bought = False
         left_out.append({"part_number": part.get("part_number"),
-                         "description": part.get("description"), "reason": why})
+                         "description": part.get("description"), "reason": why,
+                         "material": part.get("normalized_material"),
+                         "bought_in": _bought,
+                         "is_assembly": bool(part.get("is_assembly_parent")
+                                             or (part.get("route_context") or {}).get(
+                                                 "is_assembly_parent")
+                                             or part.get("is_sub_assembly"))})
 
     for part in parts or ():
         if not isinstance(part, dict) or part.get("_commercial_placeholder"):
@@ -292,6 +307,21 @@ def _method_applies(order: Dict[str, Any]) -> Any:
                         f"was stated for {', '.join(_fams[:3]).title()}-family display "
                         f"goods, and a job with other materials in it is not bagged and "
                         f"boxed on its say-so")
+    # AND THE PARTS NOBODY COULD MEASURE STILL COUNT AS EVIDENCE. One measured acrylic
+    # part beside an unmeasured fabricated leaf used to pass the gate on the strength of
+    # the half that happened to have a blank — partial evidence bypassing the check, per
+    # James's review. A FABRICATED leaf we could not assess means we cannot say the job
+    # fits the stated basis, so the method declines and names the part. Bought-in items
+    # ride along in the same bag; assembly parents are counted through their children.
+    for p in (order.get("left_out_parts") or []):
+        if not isinstance(p, dict) or p.get("is_assembly") or p.get("bought_in"):
+            continue
+        _m = str(p.get("material") or "").upper().replace("_", " ")
+        if _m and _fams and not any(f in _m for f in _fams):
+            return (f"{p.get('part_number')} is {p.get('material')!r} (unmeasured) — a "
+                    f"non-plastic fabricated part is on the job, whatever its blank")
+        return (f"{p.get('part_number')} could not be assessed ({p.get('reason')}) — a "
+                f"fabricated leaf nobody measured leaves the stated basis unproven")
     _max_kg = _gate.get("max_unit_weight_kg")
     _kg = order.get("unit_weight_kg")
     if _max_kg and _kg and float(_kg) > float(_max_kg):

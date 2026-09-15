@@ -300,3 +300,60 @@ def test_the_method_stamp_is_visible_to_the_walker(monkeypatch):
     line = CL.packaging_line(_parts(), 50)
     stamps = list(price_provenance.iter_price_stamps({"commercial_line": line}))
     assert any(b.get("source_name") == "stated_method_system_priced" for _p, b in stamps)
+
+
+# ── partial evidence cannot bypass the gate ──────────────────────────────────────────────
+#
+# "A job containing one measured acrylic part and another unmeasured non-plastic leaf could
+#  still receive Howard's packing method. The gate should reject unassessed fabricated
+#  leaves while continuing to ignore legitimate assembly parents." — James review, 15 Sep
+
+def test_an_unmeasured_fabricated_leaf_blocks_the_method(monkeypatch):
+    """One measured acrylic part used to carry the whole job through the gate on the
+    strength of the half that happened to have a blank."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [{"part_number": "10975-02-B01", "description": "BRACKET",
+                         "normalized_material": "MILD STEEL", "quantity": 1,
+                         "flat_pattern_detected": True}]        # fabricated, no blank dims
+    line = CL.packaging_line(parts, 50)
+    assert line.get("order_gbp") is None
+    assert "10975-02-B01" in line["note"]
+
+
+def test_an_unmeasured_fabricated_leaf_with_no_material_blocks_it_too(monkeypatch):
+    """Unknown is not plastic. A leaf nobody measured and nobody materialed leaves the
+    stated basis unproven, and unproven does not price."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [{"part_number": "10975-02-C01", "description": "STIFFENER",
+                         "quantity": 1, "flat_pattern_detected": True}]
+    line = CL.packaging_line(parts, 50)
+    assert line.get("order_gbp") is None
+    assert "could not be assessed" in line["note"]
+
+
+def test_an_unmeasured_bought_in_rides_along(monkeypatch):
+    """The source job's own shape: the tape and the graphic have no blanks and never will —
+    they are bought items that go in the same bag. A gate that rejected them would exclude
+    0355255 itself, which is the false alarm that gets a gate switched off."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [
+        {"part_number": "10975", "description": "EPDM TAPE 25X1MM - TAPE 113C",
+         "quantity": 3, "page_roles": ["bought_in"], "source": "bom_table"},
+    ]
+    # only count it as riding along if the policy actually calls it bought-in
+    from bought_in_policy import is_bought_in
+    assert is_bought_in(parts[-1]), "fixture must be a real bought-in by the one predicate"
+    line = CL.packaging_line(parts, 50)
+    assert line["order_gbp"] == 3.37
+
+
+def test_an_assembly_parent_is_still_ignored(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [{"part_number": "10975-02-GA", "description": "ASSEMBLY",
+                         "is_assembly_parent": True, "quantity": 1}]
+    line = CL.packaging_line(parts, 50)
+    assert line["order_gbp"] == 3.37, "counted through its children, exactly as the weight is"
