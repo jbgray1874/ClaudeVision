@@ -206,6 +206,95 @@ def _ask_market(description: str, tag: str) -> Optional[Dict[str, Any]]:
             "confidence": result.get("confidence")}
 
 
+def _consumable_price(code: str) -> Optional[Dict[str, Any]]:
+    """What SDI's own priced sources say a packing consumable costs. Never raises, never
+    invents — None is an honest answer and the caller says which code it was."""
+    try:
+        from stated_prices import system_price                        # noqa: PLC0415
+        return system_price(code)
+    except Exception:                                                 # noqa: BLE001
+        return None
+
+
+def _boxes_for(steps: Dict[Any, Any], qty: int) -> Optional[int]:
+    """Howard's step rule, used exactly as stated: the count at the smallest stated
+    threshold >= the order. Beyond the last stated point, None — nothing he said tells us
+    how 2,000 pack, and a straight line past the last real point is invention."""
+    try:
+        _pts = sorted((int(k), int(v)) for k, v in (steps or {}).items())
+    except (TypeError, ValueError):
+        return None
+    if not _pts:
+        return None
+    for _t, _n in _pts:
+        if qty <= _t:
+            return _n
+    return None
+
+
+def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Price the order's packing from the STATED METHOD and LIVE consumable prices.
+
+    "put it into config and start to build it in... Better than 0 or crazy numbers" —
+    James, 15 Sep 2026. The method (bag each, box in steps) is Howard's, held in
+    config.PACKING_METHOD with his name on; the bag and box PRICES are asked of SDI's own
+    priced sources at run time, so nothing is typed and nothing goes stale invisibly.
+
+    ALL OR NOTHING. A half-priced method (bag found, box missing) would put a number on
+    the sheet that is confidently short — worse than the honest zero, because nothing
+    about it says "short". The failure names the code that would not price, so the fix is
+    one catalogue row, not a diagnosis.
+    """
+    _m = getattr(config, "PACKING_METHOD", {}) or {}
+    if not _m.get("enabled"):
+        return None
+    qty = int(order.get("order_quantity") or 1)
+    _parts, _total, _breaks_needed = [], 0.0, []
+    for c in (_m.get("consumables") or []):
+        _code = str(c.get("code") or "").strip()
+        _px = _consumable_price(_code)
+        if not _px or not _px.get("gbp"):
+            return {"unpriced_consumable": _code,
+                    "note": f"{_code} ({c.get('what')}) has no price in SDI's own sources — "
+                            f"the packing method is counted and waiting on that one rate"}
+        _gbp = float(_px["gbp"])
+        if c.get("per_unit"):
+            _n = int(c["per_unit"]) * qty
+        else:
+            _n = _boxes_for(c.get("per_order_steps") or {}, qty)
+            if _n is None:
+                return {"unpriced_consumable": _code,
+                        "note": f"the stated box steps stop at "
+                                f"{max(c.get('per_order_steps') or [0])} and this order is "
+                                f"{qty} — how it packs beyond the last stated point is "
+                                f"Howard's to say, not ours to extrapolate"}
+            _breaks_needed = sorted(int(k) for k in (c.get("per_order_steps") or {}))
+        _parts.append((_code, c.get("what"), _n, _gbp, str(_px.get("source") or "system")))
+        _total += _n * _gbp
+    if not _parts:
+        return None
+    # THE SAME METHOD AT EVERY STATED BREAK, so the break table divides real order costs
+    # rather than scaling this order's linearly — the boxes are a step, not a rate.
+    _at: Dict[int, float] = {}
+    for _q in _breaks_needed:
+        _t = 0.0
+        for c in (_m.get("consumables") or []):
+            _code = str(c.get("code") or "").strip()
+            _gbp = next((g for cd, _w, _nn, g, _s in _parts if cd == _code), 0.0)
+            _t += (_gbp * int(c["per_unit"]) * _q if c.get("per_unit")
+                   else _gbp * (_boxes_for(c.get("per_order_steps") or {}, _q) or 0))
+        _at[_q] = round(_t, 2)
+    _working = " + ".join(f"{n} x {code} ({what}) at £{g:.2f} [{src}]"
+                          for code, what, n, g, src in _parts)
+    return {"order_gbp": round(_total, 2), "order_gbp_at_breaks": _at,
+            "source_class": "packing_method",
+            "source_name": "stated_method_system_priced",
+            "reproducible": True, "indicative": True,
+            "method_source": (f"{_m.get('stated_by')}, stated for {_m.get('source_job')} "
+                              f"on {_m.get('stated_on')}"),
+            "working": _working}
+
+
 def _held_rate(key: str) -> Optional[float]:
     """A figure the business has entered, which beats any lookup. One config line closes
     either of these for good, on every job, exactly as the finish rates do."""
@@ -223,6 +312,13 @@ def _line(code: str, order: Dict[str, Any], description: str,
     out: Dict[str, Any] = {"code": code, "order_quantity": qty,
                            "described_as": description, "basis": dict(order)}
     _held = _held_rate(held_key)
+    _method = _method_price(order) if code == "PACKAGING" else None
+    _method_gap = ""
+    if _method and _method.get("unpriced_consumable"):
+        # The method exists and one rate is missing — the withheld line below says WHICH,
+        # so the fix is one catalogue row rather than a diagnosis.
+        _method_gap = " " + str(_method.get("note") or "")
+        _method = None
     if _held is not None:
         # A HOUSE HOLD, NOT A CONFIRMED CATALOGUE PRICE. The figure is reproducible (same every
         # run, so it does not trip price_not_reproducible) but it is an INDICATIVE hold an
@@ -231,6 +327,17 @@ def _line(code: str, order: Dict[str, Any], description: str,
         _order_gbp, _src = _held, {
             "source_class": "config_house_rate", "reproducible": True, "indicative": True,
             "source_name": "config.COMMERCIAL_LINE_GBP_PER_ORDER"}
+    elif _method:
+        # THE STATED METHOD, PRICED LIVE. Counts are Howard's, in config with his name on;
+        # each consumable's price came from SDI's own sources this run. Indicative until an
+        # estimator confirms the method fits this job, and the working is ON the line so
+        # confirming it is reading, not reverse-engineering.
+        _order_gbp = _method["order_gbp"]
+        _src = {k: _method[k] for k in ("source_class", "source_name", "reproducible",
+                                        "indicative")}
+        out["order_gbp_at_breaks"] = _method.get("order_gbp_at_breaks") or {}
+        out["packing_working"] = _method.get("working")
+        out["method_source"] = _method.get("method_source")
     else:
         # THE COUNT IS KEPT; THE PRICE IS WITHHELD. Asking a model to price the sentence gave
         # 12349-02 three different answers for one unchanged pack at one quantity — £424.97,
@@ -255,9 +362,9 @@ def _line(code: str, order: Dict[str, Any], description: str,
                         # is on the line whether or not anybody has priced it yet.
                         "shipment_counted": bool((order.get("shipment") or {}).get("pallet_count")
                                                  or (order.get("shipment") or {}).get("carton_count")),
-                        "note": (f"{code.title()} {_why}. The shipment was still measured and "
-                                 f"counted: {description}. Price it from that, or put a "
-                                 f"per-order figure in "
+                        "note": (f"{code.title()} {_why}.{_method_gap} The shipment was still "
+                                 f"measured and counted: {description}. Price it from that, or "
+                                 f"put a per-order figure in "
                                  f"config.COMMERCIAL_LINE_GBP_PER_ORDER['{held_key}'] and "
                                  f"every job carries it.")})
             return out
@@ -269,7 +376,11 @@ def _line(code: str, order: Dict[str, Any], description: str,
         "unit_gbp": round(_order_gbp / qty, 2),
         "price_source": _src, "estimator_input_required": False,
         "note": (f"{code.title()} for the whole order of {qty}, divided per unit. "
-                 f"Described as: {description}."),
+                 + (f"Packed by the stated method ({out.get('method_source')}): "
+                    f"{out.get('packing_working')} = £{_order_gbp:,.2f} the order — counts "
+                    f"stated, prices live from the system this run; confirm the method "
+                    f"fits this job. " if out.get('packing_working') else "")
+                 + f"Described as: {description}."),
     })
     return out
 

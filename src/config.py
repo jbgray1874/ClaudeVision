@@ -397,7 +397,44 @@ SHOW_FORMULAS_SHEETS = ("Estimate",)
 # because that is his and it is not in doubt; the money is not.
 #
 #   {"PACKAGING": {"10": 1, "50": 1, "250": 3, "1000": 9}}
+#
+# SUPERSEDED FOR PACKAGING by PACKING_METHOD below, which carries the same counts INSIDE
+# the method that uses them. Kept for any other per-order code an estimator states counts
+# for; the break table still reads it.
 PER_ORDER_UNIT_COUNTS = {
+}
+
+# ── HOW AN ORDER IS PACKED — the method, never the money ───────────────────────────
+#
+#   "put it into config and start to build it in. if we're working it out and it's
+#    scaleable and using more sensible calculations and numbers they will be accepted.
+#    Better than 0 or crazy numbers."                        — James Gray, 15 Sep 2026
+#
+# The same split as the tape roll. HOW a job is packed is a stated fact — Howard gave the
+# method in writing: every unit individually bagged (PACK13), then bulk-packed in stock
+# boxes (BOX481) at 1 box for 10 or 50, 3 for 250, 9 for 1000. WHAT the bag and the box
+# COST is money, and money comes live from SDI's own priced sources (UDEF first) at run
+# time — nothing here holds a price, so nothing here can go stale invisibly.
+#
+# The box counts are a STEP FUNCTION and are used exactly as stated: the count at the
+# smallest stated threshold >= the order quantity. BEYOND THE LAST STATED POINT, NOTHING —
+# nothing Howard said tells us how 2,000 pack, and a straight line past the last real
+# point is invention wearing derivation's clothes (the board-price rule, applied here).
+#
+# OPEN QUESTION, ASKED OF HOWARD 15 Sep: are those carton counts fixed for this job, or a
+# capacity rule (a box holds roughly N units) we should generalise? Until he answers, the
+# method applies to jobs whose parts match the basis it was stated for — small flat-packed
+# acrylic display goods — and the line's note says which method priced it.
+PACKING_METHOD = {
+    "enabled": True,
+    "stated_by": "Howard Thurley (SDI estimating)",
+    "stated_on": "9 Sep 2026",
+    "source_job": "0355255",
+    "consumables": [
+        {"code": "PACK13", "what": "individual bag 12 x 18, 100 gauge", "per_unit": 1},
+        {"code": "BOX481", "what": "bulk stock box",
+         "per_order_steps": {10: 1, 50: 1, 250: 3, 1000: 9}},
+    ],
 }
 
 # ONE WORKBOOK, OR ONE PER QUANTITY.
@@ -789,16 +826,47 @@ SHOP_STATED = {
     # throughput table — against the estimator who runs the department. Third home found
     # for a stated shop figure (wb_populate._THROUGHPUT_DEFAULTS), now read from here.
     "laser_acrylic_parts_per_hour": 95.0,
-    "stated_by": "Howard Thurley (SDI estimating)",
-    "stated_on": "9 Sep 2026",
-    "stated_for_job": "7332-01",
 }
 
-# One observation each, from one job. That is not a weakness to hide — it is the reason
-# every consumer below names Howard and the date, so the next estimator to disagree knows
-# exactly whose figure they are disagreeing with and on what evidence.
-SHOP_STATED_SOURCE = (f"{SHOP_STATED['stated_by']}, stated for "
-                      f"{SHOP_STATED['stated_for_job']} on {SHOP_STATED['stated_on']}")
+# EVERY FIGURE CARRIES ITS OWN PROVENANCE. The register used to close with one shared
+# stated_by / stated_on / stated_for_job header, and the header lied the day the second
+# job's figures arrived: linebend and the acrylic laser rate are 0355255's, and anything
+# printing the shared source attributed them to 7332-01. James caught it in review.
+#
+# Values above stay plain numbers — every consumer and test reads them as numbers — and
+# the who/when/which-job/what-unit lives here, one entry per figure, held complete by
+# test_nobody_divides_by_hand_twice: a figure without provenance fails the suite.
+_HOWARD_7332 = {"stated_by": "Howard Thurley (SDI estimating)", "stated_on": "9 Sep 2026",
+                "source_job": "7332-01", "evidence": "estimator review of the 7332-01 book"}
+_ACRYLIC_0355255 = {"stated_by": "Acrylic Dept via Howard Thurley (SDI estimating)",
+                    "stated_on": "9 Sep 2026", "source_job": "0355255",
+                    "evidence": "estimator review of the 0355255 book"}
+SHOP_STATED_PROVENANCE = {
+    "weld_min_per_weldment":        dict(_HOWARD_7332, unit="minutes/weldment"),
+    "dress_min_per_weldment":       dict(_HOWARD_7332, unit="minutes/weldment"),
+    "weld_joints_measured_on":      dict(_HOWARD_7332, unit="joints",
+                                         evidence="joints the engine counts on 7332-01-101"),
+    "weld_calibrated_on_part":      dict(_HOWARD_7332, unit="part number"),
+    "brush_before_plate_min":       dict(_HOWARD_7332, unit="minutes/consignment"),
+    "plater_pack_min":              dict(_HOWARD_7332, unit="minutes/consignment"),
+    "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/consignment"),
+    "plater_freight_gbp_per_order": dict(_HOWARD_7332, unit="GBP/order",
+                                         evidence="pallet network, round trip"),
+    "linebend_min_per_bend":        dict(_ACRYLIC_0355255, unit="minutes/bend",
+                                         evidence="60 parts/hour on the two-bend A01"),
+    "laser_acrylic_parts_per_hour": dict(_ACRYLIC_0355255, unit="parts/hour",
+                                         evidence="his manual estimate's own laser rate, "
+                                                  "against 252 from 13 corpus lines"),
+}
+
+
+def shop_stated_source(key: str) -> str:
+    """Who stated this figure, when, and for which job — for THIS figure, never a shared
+    header. The sentence every consumer prints beside the number."""
+    p = SHOP_STATED_PROVENANCE.get(key) or {}
+    if not p:
+        return "an unrecorded source — add SHOP_STATED_PROVENANCE for this figure"
+    return f"{p['stated_by']}, stated for {p['source_job']} on {p['stated_on']}"
 
 
 # BRUSHED BEFORE IT GOES TO THE PLATERS — work the drawing never mentions.
@@ -822,7 +890,7 @@ BRUSH_BEFORE_PLATE = {
     "minutes_per_consignment": SHOP_STATED["brush_before_plate_min"],
     "setup_min": 0.0,
     "operation": "manual_labour_metal",
-    "source": f"SDI shop practice via {SHOP_STATED_SOURCE}",
+    "source": f"SDI shop practice via {shop_stated_source('brush_before_plate_min')}",
 }
 
 PLATE_SUBCONTRACT_POLICY = {
@@ -878,7 +946,8 @@ PLATING_LOGISTICS = {
     "freight_gbp_per_order": float(os.getenv(
         "PLATER_FREIGHT_GBP", SHOP_STATED["plater_freight_gbp_per_order"])),
     "freight_is_round_trip": True,
-    "source": (f"SDI transport department, via {SHOP_STATED_SOURCE} — £"
+    "source": (f"SDI transport department, via "
+               f"{shop_stated_source('plater_freight_gbp_per_order')} — £"
                f"{SHOP_STATED['plater_freight_gbp_per_order']:.0f} pallet network, "
                f"quoted as £20 a unit"),
 }
@@ -1190,7 +1259,7 @@ WELD_TIME_MODEL = {
         "WELD_ALLOWANCE_MIN", SHOP_STATED["weld_min_per_weldment"])),
     "dress_allowance_min_per_weldment": float(os.getenv(
         "WELD_DRESS_ALLOWANCE_MIN", SHOP_STATED["dress_min_per_weldment"])),
-    "allowance_source": (f"SDI welding department, via {SHOP_STATED_SOURCE} — one "
+    "allowance_source": (f"SDI welding department, via {shop_stated_source('weld_min_per_weldment')} — one "
                          f"observation, pending confirmation that it generalises"),
     "method_source": ("arc time / operating factor, MIG ~35% (Miller Electric); fillet hour-"
                       "rates per metre (Australian Steel Institute)"),

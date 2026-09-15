@@ -5,9 +5,11 @@ Three tiers, in the order the engine asks them. Every figure on an estimate trac
 exactly one of these, and the Supplier column on the sheet now names which
 (SDI Live UDEF · Estimating spreadsheet · Estimator stated · Web listing · AI ESTIMATE).
 
-*This file is the index the SDI Estimating Intelligence architecture page should carry.
-If a register is added anywhere, it is added here in the same commit — the test
-`test_the_knowledge_map_is_not_stale.py` holds the two in step.*
+*This file is rendered on the SDI Estimating Intelligence architecture page (laptop and
+server) straight from the repo. Key register names are test-pinned —
+`test_the_knowledge_map_is_not_stale.py` fails the suite if a listed register leaves the
+code — which keeps the NAMES honest; the prose and the counts age like any document and
+carry their dates. Decisions and changes are logged in `docs/CHANGE_REGISTER.md`.*
 
 ---
 
@@ -16,8 +18,8 @@ If a register is added anywhere, it is added here in the same commit — the tes
 | Source | What it holds | Access |
 |---|---|---|
 | `SDILive.dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING` | Part codes, descriptions, supplier names, system cost — what purchasing pays against | read-only (the ERP's own table) |
-| `SDILive.dbo.bought_in_parts` | 44 rows, **0 active** — the engine's UDEF query still unions it; effectively retired | read-only |
-| `SDILive.AIEstimating.BoughtInCatalogue` | Our catalogue: 84 live rows (migrated dbo.bip, workbook harvest, web-indicative, seeds) with `source` tags and effective dates | ours, written by `catalogue_loader.py` |
+| `SDILive.dbo.bought_in_parts` | 44 rows, **0 active** (as at 15 Sep 2026) — the engine's UDEF query still unions it; effectively retired | read-only |
+| `SDILive.AIEstimating.BoughtInCatalogue` | Our catalogue: 84 live rows (as at 15 Sep 2026) (migrated dbo.bip, workbook harvest, web-indicative, seeds) with `source` tags and effective dates | ours, written by `catalogue_loader.py` |
 | `SDILive.AIEstimating.JobBoughtInMaterials` | Raw per-job provenance from harvested workbooks — one row per bought-in line per drawing | ours, written by `batch_ingest_historical.py` |
 | `SDILive.AIEstimating.Supplier` / `CommercialRate` | Supplier identities; commercial per-order rates | ours |
 
@@ -30,7 +32,7 @@ lines on every run, which is why the acrylic sheet priced £48.89 on 8 Sep and �
 
 | Source | What it holds | State |
 |---|---|---|
-| Historical estimating workbooks (the estimates share) | Priced BOM lines, sheet prices, labour lines from jobs quoted and won | Harvested into `AIEstimating.*` by `batch_ingest_historical.py`. **Only 32 rows / 2 workbooks landed so far — the re-ingest over the share is the open action.** |
+| Historical estimating workbooks (the estimates share) | Priced BOM lines, sheet prices, labour lines from jobs quoted and won | Harvested into `AIEstimating.*` by `batch_ingest_historical.py`. **Only 32 rows / 2 workbooks landed as at 15 Sep 2026 — the re-ingest over the share is the open action.** |
 | The live `spreadsheet` price connector | — | Points at the **blank** template, so it contributes nothing on any job. The corpus road above is the real one. |
 | `src/tim_rate_card.json` | Department hourly £ rates, from Tim's own sheet | The card wins; the config table is only the fallback when it is absent |
 | Per-job answers files (`docs/7332-01_confirmed.example.json` pattern) | Job-scoped confirmed facts an estimator has ruled on | Governs that job only — a rate correction is never left here (see Laser (Acrylic), which moved to the register because "a rate correction is how the department runs, not a decision about one stand") |
@@ -43,10 +45,11 @@ the tests police the boundary.
 
 | Register | What it holds | Rule |
 |---|---|---|
-| `SHOP_STATED` | **The central register.** Every figure the shop has stated: weld 30 / dress 20 min per weldment, brush-before-plate 40 min, plater pack + £120 freight, linebend 0.5 min/bend, acrylic laser 95 parts/hr — each with who, when, which job | Other tables read from it; changing a stated figure anywhere else changes nothing |
+| `SHOP_STATED` | **Source-controlled shop-stated operating figures.** Every figure the shop has stated: weld 30 / dress 20 min per weldment, brush-before-plate 40 min, plater pack + £120 freight, linebend 0.5 min/bend, acrylic laser 95 parts/hr — values as plain numbers, with who/when/which-job/what-unit per figure in `SHOP_STATED_PROVENANCE` (one shared header mis-attributed the 0355255 figures to 7332-01 — caught in review, 15 Sep) | Other tables read from it; changing a stated figure anywhere else changes nothing |
 | `ESTIMATOR_STATED_PRICES` | Prices an estimator gave us (dated, attributed) | Always **second to the system** — used only where no priced source answers, rendered "Estimator stated", disagreement reported when both answer |
 | `ROLL_GOODS_CATALOGUE` | Packaging facts only (roll lengths). **No money** — the price comes from Tier 1 or the stated register | |
-| `PER_ORDER_UNIT_COUNTS` | Howard's 1/1/3/9 boxes-per-order rule, recorded | Not priced — boxing/delivery are not priced by policy |
+| `PACKING_METHOD` | How an order packs — PACK13 bag per unit, BOX481 boxes at Howard's 1/1/3/9 steps, his name and date on it | Holds NO money: consumable prices come live from UDEF each run; a missing rate keeps the honest zero and names the code; no extrapolation past the last stated step |
+| `PER_ORDER_UNIT_COUNTS` | Per-order counts for any other code an estimator states | The break table reads it |
 | `ACRYLIC_PRICE_GBP_PER_M2`, `ACRYLIC_SHEET_PRICE_GBP` | Offline fallback snapshot of the UDEF-derived rates | The live Tier-1 derivation wins when the database answers |
 | `BOARD_SHEET_PRICE_GBP` | Board sheet prices at thicknesses SDI has actually bought | Interpolated between purchases, never extrapolated beyond them |
 | `MATERIAL_PRICE_GBP_PER_KG`, `MATERIAL_DENSITY_KG_M3`, `SHEET_SIZES_MM` | Material physics and stock facts | |

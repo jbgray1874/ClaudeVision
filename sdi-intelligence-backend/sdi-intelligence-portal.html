@@ -4298,15 +4298,18 @@
     if(id==='architecture')loadKnowledgeMap();
   }
   // ---- knowledge map: docs/KNOWLEDGE_SOURCES.md rendered from the repo ----
-  let _kmLoaded=false;
+  // Re-fetched on every visit to the view, not cached for the session — the document can
+  // change under a running browser (a git pull on the box), and a map that needs a full
+  // refresh to tell the truth is the drift it exists to remove. It is one small file.
+  let _kmBusy=false;
   async function loadKnowledgeMap(){
-    if(_kmLoaded)return; const el=document.getElementById('knowledge-map'); if(!el)return;
+    if(_kmBusy)return; const el=document.getElementById('knowledge-map'); if(!el)return;
+    _kmBusy=true;
     try{
       const d=await _get('/api/knowledge-map');
-      if(!d.exists){el.innerHTML='<span class="muted">'+_esc(d.error||'not found')+'</span>';return;}
-      el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:10px">docs/KNOWLEDGE_SOURCES.md · updated '+_esc(d.modified||'')+' · held in step with the code by the test suite</div>'+_mdToHtml(d.markdown);
-      _kmLoaded=true;
+      el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:10px">'+_esc(d.path||'docs/KNOWLEDGE_SOURCES.md')+' · updated '+_esc(d.modified||'')+' · key register names are test-pinned</div>'+_mdToHtml(d.markdown);
     }catch(e){el.innerHTML='<span class="muted">Could not load the knowledge map: '+_esc(String(e.message||e))+'</span>';}
+    finally{_kmBusy=false;}
   }
   function _esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   // Deliberately small: headings, tables, lists, bold/italic/code, rules, paragraphs.

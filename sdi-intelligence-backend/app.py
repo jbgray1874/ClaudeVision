@@ -475,15 +475,20 @@ def knowledge_map(x_sdi_key: str | None = Header(default=None)):
         _p = _where / "docs" / "KNOWLEDGE_SOURCES.md"
         if _p.is_file():
             try:
-                return {"exists": True, "path": str(_p),
+                # The LOGICAL path, not the server's filesystem — a browser page has no
+                # business learning where the checkout lives on disk.
+                return {"exists": True, "path": "docs/KNOWLEDGE_SOURCES.md",
                         "modified": datetime.fromtimestamp(_p.stat().st_mtime)
                         .strftime("%d %b %Y %H:%M"),
                         "markdown": _p.read_text(encoding="utf-8")}
             except OSError as exc:
-                return {"exists": False, "error": f"{type(exc).__name__}: {exc}"}
-    return {"exists": False,
-            "error": "docs/KNOWLEDGE_SOURCES.md is not in the repo this backend runs from "
-                     "— git pull, or the map was moved without this endpoint learning it"}
+                raise HTTPException(status_code=500,
+                                    detail=f"docs/KNOWLEDGE_SOURCES.md exists and could "
+                                           f"not be read: {type(exc).__name__}")
+    raise HTTPException(status_code=404,
+                        detail="docs/KNOWLEDGE_SOURCES.md is not in the repo this backend "
+                               "runs from — git pull, or the map was moved without this "
+                               "endpoint learning it")
 
 
 _LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")

@@ -93,12 +93,36 @@ def test_every_figure_howard_stated_is_in_the_register():
         assert key in config.SHOP_STATED, key
 
 
-def test_the_register_says_who_and_when():
+def test_every_figure_carries_its_own_who_and_when():
     """A figure with no name on it cannot be disagreed with, which is how a guess becomes a
-    rate."""
-    assert "Howard Thurley" in config.SHOP_STATED["stated_by"]
-    assert config.SHOP_STATED["stated_on"] == "9 Sep 2026"
-    assert config.SHOP_STATED["stated_for_job"] == "7332-01"
+    rate. AND THE NAME MUST BE THE RIGHT ONE: the register used to close with one shared
+    stated_for_job header, and the header lied the day the second job's figures arrived —
+    linebend and the acrylic laser are 0355255's, and anything printing the shared source
+    attributed them to 7332-01. James caught it in review. One provenance entry per figure,
+    and a figure without one fails here."""
+    for key, value in config.SHOP_STATED.items():
+        p = config.SHOP_STATED_PROVENANCE.get(key)
+        assert p, f"{key} has a value and no provenance — who stated it, when, for what?"
+        for field in ("stated_by", "stated_on", "source_job", "unit", "evidence"):
+            assert p.get(field), f"{key} provenance is missing {field}"
+    # and no orphaned provenance describing a figure that has gone
+    for key in config.SHOP_STATED_PROVENANCE:
+        assert key in config.SHOP_STATED, f"provenance for {key} but no figure"
+
+
+def test_the_two_jobs_figures_are_attributed_to_their_own_jobs():
+    """The exact mis-attribution, pinned."""
+    assert config.SHOP_STATED_PROVENANCE["weld_min_per_weldment"]["source_job"] == "7332-01"
+    assert config.SHOP_STATED_PROVENANCE["linebend_min_per_bend"]["source_job"] == "0355255"
+    assert config.SHOP_STATED_PROVENANCE["laser_acrylic_parts_per_hour"]["source_job"] == "0355255"
+    assert "0355255" in config.shop_stated_source("linebend_min_per_bend")
+    assert "7332-01" not in config.shop_stated_source("linebend_min_per_bend")
+
+
+def test_a_consumer_prints_the_right_jobs_source():
+    assert "7332-01" in config.BRUSH_BEFORE_PLATE["source"]
+    assert "7332-01" in config.PLATING_LOGISTICS["source"]
+    assert "7332-01" in config.WELD_TIME_MODEL["allowance_source"]
 
 
 def test_the_consumers_read_the_register_rather_than_repeating_it():

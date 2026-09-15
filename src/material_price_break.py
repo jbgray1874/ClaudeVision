@@ -66,6 +66,17 @@ def _price_at(line: Dict[str, Any], qty: int) -> Optional[float]:
     breaks; the stock box falls 0.189 -> 0.017 because one box serves ten units and nine
     serve a thousand. A table of five identical columns would be decoration.
     """
+    # A METHOD-PRICED LINE KNOWS ITS ORDER COST AT EACH STATED BREAK — the boxes are a
+    # step, not a rate, so dividing THIS order's cost by another quantity would smear the
+    # step into a slope. Exact breaks only; between them the per-order path below divides
+    # what it knows, which is the same behaviour as before this map existed.
+    _at = line.get("order_gbp_at") or {}
+    _hit = _at.get(qty, _at.get(str(qty)))
+    if _hit not in (None, ""):
+        try:
+            return round(float(_hit) / float(qty), 5) if qty else None
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
     _order = line.get("order_gbp")
     if _order not in (None, ""):
         try:
@@ -140,6 +151,9 @@ def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         _com = _by_code.get(_code)
         if _com and _com.get("order_gbp") not in (None, ""):
             rec["order_gbp"] = _com["order_gbp"]
+            if _com.get("order_gbp_at_breaks"):
+                # the packing method computed the order cost at each stated break itself
+                rec["order_gbp_at"] = _com["order_gbp_at_breaks"]
             if _code in _counts:
                 rec["units_per_order"] = _counts[_code]
         else:
