@@ -4542,6 +4542,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # numbers were replaced by corpus medians on the one job where an estimator had written
     # them down for us.
     _stated_time_by_pn: Dict[str, str] = {}
+    _stated_hours_by_pn: Dict[str, Dict[str, float]] = {}
     _stamped_records = list(bom_parts or [])
     for _srcname in ("parts",):
         _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
@@ -4556,7 +4557,32 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         for _marker, _why in _STATED_SHOP_TIME_MARKERS:
             if _sp.get(_marker):
                 _stated_time_by_pn.setdefault(_spn, _why)
+                # AND THE HOURS THEMSELVES, not only the fact that some exist.
+                #
+                # Five separate branches in the emit loop below can each discard a computed
+                # time, and four of them have now been caught doing it one at a time:
+                # assembly scope skipped the grouping, the floor guard replaced outliers,
+                # one-row-per-job took the median, and the department alias meant the hours
+                # were filed under a name nobody asked for. Each fix was an exception added
+                # to one branch, and the next run found the next branch.
+                #
+                # That is the wrong shape. A figure a department stated is not a candidate
+                # to be weighed against five defaults — it is the answer, and the decision
+                # belongs in ONE place before the chain rather than as an exception inside
+                # each link of it. So the hours travel with the claim, and the loop asks
+                # once, at the top, whether this row has one.
                 break
+        # THE MARKER AND THE HOURS MAY NOT BE ON THE SAME DICT. The costing stage stamps
+        # the part it is working on; the labour record is attached to the part ESTIMATE, and
+        # whether those are one object or two has already cost this session one fix that
+        # found nothing and passed. So the hours are collected from every record that has
+        # them, and the claim is checked separately at the point of use.
+        _le = _sp.get("labour_estimate")
+        if isinstance(_le, dict):
+            _rh = _le.get("run_hours_per_unit")
+            if isinstance(_rh, dict) and _rh:
+                _stated_hours_by_pn.setdefault(_spn, {}).update(
+                    {str(k).strip().lower(): v for k, v in _rh.items()})
     lb = cm["labour"]
     row = lb["first_row"]
     labour_overflow = False
@@ -5341,6 +5367,69 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
         ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])
         ws.cell(row=row, column=lb["col_qty"],       value=_qty)
+
+        # ── ONE DECISION, BEFORE THE CHAIN ────────────────────────────────────────────
+        #
+        # "A later writer can throw away a correct shop figure and print a plausible
+        # default." — James Gray, 15 Sep 2026, and he is describing the shape rather than
+        # any one bug.
+        #
+        # Five branches below can each discard a computed time, and FOUR have now been
+        # caught doing it, one run apiece: assembly scope skipped the grouping, the floor
+        # guard replaced an outlier, one-row-per-job took the median, and the department
+        # alias filed the hours under a name nobody asked for. Each fix was an exception
+        # added inside one link, and the next run found the next link. Weld took four runs
+        # that way; pack is on its fifth.
+        #
+        # A time a department stated is not a candidate to be weighed against five defaults.
+        # It is the answer. So it is decided ONCE, here, above the chain — and a row that
+        # has one never enters the chain at all. There is no sixth branch to find, because
+        # there is no longer a path from a stated time to a default.
+        #
+        # Everything else is untouched: a group with no stated time walks the chain exactly
+        # as before, and the medians keep doing the job they are good at.
+        _stated_hours = None
+        _stated_from = ""
+        for _gp in (g.get("parts") or []):
+            _gk = str(_gp).strip().upper()
+            if _gk not in _stated_time_by_pn:
+                continue                 # hours exist for most parts; a CLAIM does not
+            _hrs = _stated_hours_by_pn.get(_gk)
+            if not _hrs:
+                continue
+            for _eop in (g.get("engine_ops") or []):
+                _v = _safe(_hrs.get(str(_eop).strip().lower()))
+                if not _v:
+                    # The same operation under the department's other name — "assembly" on
+                    # the route, "handling" in the costing, one PACM row on the sheet.
+                    try:
+                        from department_codes import code_for as _dept_of2
+                        _want2 = _dept_of2(_eop)
+                        if _want2:
+                            for _ak, _av in _hrs.items():
+                                if _dept_of2(_ak) == _want2 and _safe(_av):
+                                    _v = _safe(_av)
+                                    break
+                    except Exception:                                # noqa: BLE001
+                        pass
+                if _v and _v > 0:
+                    _stated_hours, _stated_from = float(_v), _gk
+                    break
+            if _stated_hours:
+                break
+
+        if _stated_hours and _stated_hours > 0:
+            _tp_stated = float(_qty) / _stated_hours
+            ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_stated, 4))
+            g["rate_basis"] = "stated_shop_time"
+            g["workbook_row"] = row
+            _flag(f"throughput for '{wb_op}' is {_tp_stated:.2f}/hr — "
+                  f"{_stated_shop_time_source(g, _stated_time_by_pn)}, read from "
+                  f"{_stated_from}'s own record ({_stated_hours * 60:.1f} min a unit). A "
+                  f"stated time does not compete with a department median; it replaces it.",
+                  flags)
+            row += 1
+            continue
 
         default_tp = _THROUGHPUT_DEFAULTS.get(wb_op or "")
         # AND THE ESTIMATOR'S OWN THROUGHPUT OUTRANKS THE CORPUS.

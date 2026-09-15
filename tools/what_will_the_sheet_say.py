@@ -58,6 +58,54 @@ def _order_qty(summary: dict) -> int:
         return 1
 
 
+def _stated_hours_for(summary: dict, group: dict):
+    """(part, run hours per unit) where a department stated this row's time, else None.
+
+    THE SAME QUESTION THE EMIT LOOP ASKS FIRST, asked the same way. A tool that walked the
+    branch chain when the sheet no longer does would report a branch that is not taken —
+    which is the failure it exists to prevent, wearing the tool's own badge."""
+    import wb_populate as wb                                            # noqa: PLC0415
+    from department_codes import code_for                               # noqa: PLC0415
+
+    claims, hours = {}, {}
+    records = []
+    records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]
+    records += [r for r in ((summary.get("estimate_summary") or {}).get("part_estimates")
+                            or []) if isinstance(r, dict)]
+    for rec in records:
+        pn = str(rec.get("part_number") or "").strip().upper()
+        if not pn:
+            continue
+        for marker, why in wb._STATED_SHOP_TIME_MARKERS:
+            if rec.get(marker):
+                claims.setdefault(pn, why)
+                break
+        le = rec.get("labour_estimate")
+        if isinstance(le, dict) and isinstance(le.get("run_hours_per_unit"), dict):
+            hours.setdefault(pn, {}).update(
+                {str(k).strip().lower(): v for k, v in le["run_hours_per_unit"].items()})
+
+    for pn in (str(p).strip().upper() for p in (group.get("parts") or [])):
+        if pn not in claims or pn not in hours:
+            continue
+        for eop in (group.get("engine_ops") or []):
+            key = str(eop).strip().lower()
+            val = hours[pn].get(key)
+            if not val:
+                want = code_for(key)
+                if want:
+                    for alt, alt_v in hours[pn].items():
+                        if code_for(alt) == want and alt_v:
+                            val = alt_v
+                            break
+            try:
+                if val and float(val) > 0:
+                    return pn, float(val)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
 def labour_rows(summary: dict) -> None:
     """Every labour group, its hours, and WHICH RULE would set its throughput."""
     import wb_populate as wb                                            # noqa: PLC0415
@@ -80,6 +128,17 @@ def labour_rows(summary: dict) -> None:
         rhpu = g.get("run_hours_per_unit")
         bh = g.get("bh")
         stated = wb._group_carries_a_stated_shop_time(g, {})
+        # ONE DECISION, BEFORE THE CHAIN — the same order the emit loop now uses. A row with
+        # a stated time never enters the branch chain at all, so this has to be asked first
+        # here too or the tool reports a branch the sheet will not take.
+        _claimed = _stated_hours_for(summary, g)
+        if _claimed:
+            _pn, _hrs = _claimed
+            print(f"  {op:24} {parts:34} "
+                  f"{_hrs:>9.4f} {'—':>8}  STATED SHOP TIME -> "
+                  f"{float(g.get('qty') or 1) / _hrs:.2f}/hr  (from {_pn}, "
+                  f"{_hrs * 60:.1f} min a unit)")
+            continue
         # The branch chain the emit loop walks, in its own order.
         if op == "Laser (Metal)":
             rule = "template_calculated — the sheet's own laser calculator"
