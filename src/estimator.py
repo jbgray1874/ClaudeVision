@@ -3508,6 +3508,16 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _qty = _safe_int(part.get("quantity")) or 1
     _m = _ROLL_LENGTH_RE.search(_blob)
     _piece_mm = _safe_float(_m.group(1)) if _m else _safe_float(part.get("overall_length_mm"))
+    # A PERSON'S CONFIRMED LENGTH OUTRANKS THE DESCRIPTION PARSE — the pack can state the
+    # length twice with different figures (10975: 200 against 220), and the estimator's
+    # pick is the answer, stamped once, not re-litigated per run.
+    _conf_mm = _safe_float(part.get("confirmed_piece_length_mm"))
+    if _conf_mm:
+        if _piece_mm and abs(_conf_mm - _piece_mm) > 0.5:
+            part.setdefault("review_flags", []).append(
+                f"ROLL GOODS: piece length {_conf_mm:g} mm confirmed by an estimator, "
+                f"over the description's {_piece_mm:g} mm")
+        _piece_mm = _conf_mm
     _used_mm = (_piece_mm or 0) * _qty
 
     if not _entry or not _used_mm:

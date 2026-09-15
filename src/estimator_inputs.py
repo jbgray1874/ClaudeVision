@@ -132,6 +132,16 @@ def material_input_note(part: Mapping[str, Any]) -> str:
             _acct = _s[_i:].rstrip(" .)")
             break
     _tail = f" ({_acct})" if _acct else ""
+    # A FREE-ISSUE ITEM IS NOT AN UNPRICED ONE, AND THE TWO SENTENCES CONTRADICTED. The
+    # engine recognised G01 as customer-supplied and costed it at nil ON PURPOSE — and
+    # this row still said "MATERIAL UNPRICED: enter a unit rate", so one document told
+    # the estimator the price is missing and another told him it is deliberately nothing.
+    # One vocabulary (plain_english owns the code's meaning); the row uses its words.
+    if "customer_supplied_zero_cost" in " ".join(
+            str(f) for f in (part.get("risk_flags") or [])):
+        return ("FREE-ISSUE assumed — costed at nil on purpose; the part is in the build "
+                "and the money for it is not ours. Confirm with the customer, and if SDI "
+                "is buying it, enter the rate")
     section = section_summary(part)
     length = section_length_mm(part)
     if section or length:

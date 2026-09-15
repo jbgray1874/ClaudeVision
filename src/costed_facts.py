@@ -1371,6 +1371,12 @@ def thickness_conflict(part: Mapping[str, Any],
         rivals.append((v, src))
     if not rivals:
         return None
+    # "NEITHER OUTRANKS A PERSON" — so when a person HAS ruled, the question is answered.
+    # An estimator_confirmed gauge is rank 100, entered off the drawing by somebody who
+    # looked; re-asking them to confirm it is how a decision list teaches people to
+    # scroll past all of it.
+    if "estimator_confirmed" in str(kept_src).lower():
+        return None
     others = "; ".join(f"{v:g} mm from {s}" for v, s in
                        sorted(set(rivals), key=lambda t: t[0]))
     return {
@@ -1453,6 +1459,15 @@ def _material_label(part: Mapping[str, Any], kind: str) -> str:
         return "— (commercial line)"
     if kind == "service":
         return "— (subcontract service)"
+    # ROLL GOODS ARE NOT THE SHEET MATERIAL THEY INHERITED. The tape carried ACRYLIC —
+    # the job's sheet material, copied onto every BOM line — onto three tabs, beside a
+    # description that says EPDM. The record knows it was priced off a roll; the column
+    # says that, and what the roll IS stays in the description where the drawing put it.
+    _me = part.get("material_estimate") if isinstance(part.get("material_estimate"),
+                                                      dict) else {}
+    if (str(_me.get("stock_form") or "").lower() == "roll"
+            or str(_me.get("cost_method") or "").startswith("roll_goods")):
+        return "Roll goods (priced by length)"
     mat = str(part.get("normalized_material") or part.get("material") or "").strip()
     if kind == "bought_in":
         return mat if mat and mat.upper() != "BOUGHT_IN" else "— (bought-in)"
@@ -1945,6 +1960,18 @@ def costed_job(source: Any) -> Dict[str, Any]:
         for _bc in (part.get("_bom_numeric_conflicts") or []):
             if not isinstance(_bc, Mapping):
                 continue
+            # A CONFLICT A PERSON HAS SETTLED IS NOT A DECISION TO RE-ASK. The tape's two
+            # BOM statements read LENGTH: 200.00 and 220.00; Howard picked 200 and the
+            # answers file stamped it. When the confirmed length matches the KEPT reading,
+            # the pick has been made — asking again on every run is how the list dies.
+            _conf = part.get("confirmed_piece_length_mm")
+            if _conf is not None:
+                _mk = re.search(r"LENGTH:\s*([0-9.]+)", str(_bc.get("kept") or ""))
+                try:
+                    if _mk and abs(float(_mk.group(1)) - float(_conf)) <= 0.5:
+                        continue
+                except (TypeError, ValueError):
+                    pass
             decisions.append({
                 "part": str(part.get("part_number") or ""),
                 "kind": "manufacturing_decision",

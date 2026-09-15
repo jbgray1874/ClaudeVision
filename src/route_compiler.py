@@ -2129,6 +2129,13 @@ def apply_canonical_evidence_to_parts(
                 f"BOM row '{member.get('part_number')}' "
                 f"({str(member.get('description') or '').strip()}) is this same purchased "
                 f"item stated again — folded into this line rather than priced twice")
+            # A DURABLE FIELD, NOT ONLY A SENTENCE. Three surfaces went on reporting
+            # 10975-02-00 as a drawing the pack is missing — including a BLOCKING check —
+            # after this fold had already judged it the same tape stated twice, because
+            # the verdict lived only in a review flag nobody parses. No underscore prefix:
+            # merges drop those, and a fact that must travel cannot be named _foo.
+            survivor.setdefault("folded_duplicate_identities", []).append(
+                str(member.get("part_number") or "").strip())
             _folded_ids.add(id(member))
             print(f"   [graph] folded duplicate bought-in record "
                   f"'{member.get('part_number')}' into '{survivor.get('part_number')}' — "

@@ -2499,6 +2499,16 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
             if isinstance(_iss, dict) and \
                     str(_iss.get("code") or "") == "bom_row_interleave_artifact":
                 _quarantined.add(str(_iss.get("identity") or "").strip().upper())
+    # A FOLDED ALIAS IS NOT A MISSING DRAWING. The graph judged 10975-02-00 the same
+    # purchased tape stated twice and folded it into the priced line — then this check
+    # blocked the job for the folded name's missing detail sheet. A record the graph has
+    # already accounted for cannot also be an absence.
+    for part in _parts(summary):
+        for _fid in (part.get("folded_duplicate_identities") or []):
+            _f = str(_fid).strip().upper()
+            if _f:
+                _quarantined.add(_f)
+                _quarantined.add(_bare(_f))
     _quarantined.discard("")
 
     missing = []

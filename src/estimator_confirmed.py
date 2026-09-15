@@ -68,6 +68,13 @@ _FIELD_MAP = {
     # the drawing; there was simply no audited way for a person to enter it.
     "wire_length_mm": "wire_length_mm",
     "wire_gauge_mm": "wire_gauge_mm",
+    # A ROLL-GOODS PIECE IS SIZED BY THE LENGTH CUT OFF THE ROLL. 10975's pack states the
+    # tape twice — LENGTH: 200.00 on one BOM row and 220.00 on its duplicate — and the
+    # engine prices on the kept reading while asking the estimator to pick. This is where
+    # the pick lands: Howard confirmed three 200 mm strips (his own sheet prices 0.06 of a
+    # 10 m roll), and a confirmed length closes that decision instead of re-asking it on
+    # every run. A length a drawing states and a person checked — squarely in scope.
+    "piece_length_mm": "confirmed_piece_length_mm",
 }
 
 # Fields that describe a FLAT BLANK, and fields that describe LINEAR STOCK. A part is one or
