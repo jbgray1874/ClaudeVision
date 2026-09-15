@@ -1528,6 +1528,31 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                 "label": (f"SDI transport department's stated figure — "
                           f"{_plog.get('source', 'transport rate from config')}; "
                           f"divided by the order quantity, so it moves with the order")}
+    # A LENGTH OFF A ROLL IS PRICED FROM A BUYING FACT, NOT A LOOKUP — and this is the
+    # plater-freight defect again, on the very line the estimator supplied the numbers for.
+    #
+    # 10975-02's tape is costed by roll_goods_material from config.ROLL_GOODS_CATALOGUE:
+    # TAPE113C, a 10 m roll at £4.50, sourced to "Howard Thurley (SDI estimating/buying),
+    # 0355255 review, 9 Sep 2026". It came out of the classifier as
+    #
+    #     AI market indication (AI/market lookup) — NOT A QUOTE, replace it
+    #
+    # asking him to replace his own roll price with a quote, on the one line of the job he
+    # had already priced by hand. The figure is right; the label is the thing that is wrong,
+    # and a wrong label on a right number costs an estimator the time he spends checking it.
+    if "roll_goods_by_length" in tokens or "roll_goods_catalogue" in tokens:
+        _roll_len = _num(me.get("roll_length_mm"))
+        _roll_gbp = _num(me.get("roll_price_gbp"))
+        _used = _num(me.get("length_used_mm"))
+        _bits = []
+        if _used and _roll_len:
+            _bits.append(f"{_used:g} mm of a {_roll_len:g} mm roll")
+        if _roll_gbp:
+            _bits.append(f"£{_roll_gbp:.2f} a roll")
+        return {"class": "roll_goods", "firmness": INDICATIVE_HOUSE, "owner": "estimator",
+                "label": ("priced by the length used — "
+                          + (", ".join(_bits) if _bits else "SDI roll-goods catalogue")
+                          + "; verify the roll price, not the arithmetic")}
     if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",

@@ -170,3 +170,57 @@ def test_the_catalogue_entry_names_who_gave_us_the_roll():
     entry = config.ROLL_GOODS_CATALOGUE["TAPE113C"]
     assert entry["roll_length_mm"] == 10000.0 and entry["roll_price_gbp"] == 4.50
     assert "Howard Thurley" in entry["source"] and "0355255" in entry["source"]
+
+
+# ── and the label must not ask him to replace his own figure ─────────────────────────────
+
+def test_a_roll_line_is_a_house_rate_not_a_market_lookup():
+    """THE PLATER-FREIGHT DEFECT AGAIN, on the one line of the job the estimator had
+    already priced by hand.
+
+    10975-02's tape is costed from config.ROLL_GOODS_CATALOGUE — TAPE113C, a 10 m roll at
+    £4.50, sourced to "Howard Thurley (SDI estimating/buying), 0355255 review". The
+    classifier put it in the market bucket, so the decisions list read
+
+        AI market indication (AI/market lookup) — NOT A QUOTE, replace it
+
+    asking him to replace his own roll price with a quote. The figure was right; a wrong
+    label on a right number costs an estimator the time he spends checking it."""
+    import costed_facts as cf
+    origin = cf._price_origin(
+        {"part_number": "10975", "cost_source": "roll_goods_by_length",
+         "material_estimate": {"cost_method": "roll_goods_by_length",
+                               "roll_length_mm": 10000.0, "roll_price_gbp": 4.50,
+                               "length_used_mm": 600.0,
+                               "price_source": {"source": "roll_goods_catalogue"}}},
+        kind="bought_in", block="bom", charged_unit=0.09, engine_unit=0.09,
+        sheet_row=13, cross_ref=False, row_text="EPDM TAPE 25X1MM TAPE 113C")
+    assert origin["firmness"] == cf.INDICATIVE_HOUSE
+    assert origin["class"] == "roll_goods"
+    assert "NOT A QUOTE" not in origin["label"]
+
+
+def test_it_names_the_roll_so_the_arithmetic_can_be_checked():
+    """What an estimator verifies here is the ROLL PRICE, not the division."""
+    import costed_facts as cf
+    origin = cf._price_origin(
+        {"part_number": "10975", "cost_source": "roll_goods_by_length",
+         "material_estimate": {"cost_method": "roll_goods_by_length",
+                               "roll_length_mm": 10000.0, "roll_price_gbp": 4.50,
+                               "length_used_mm": 600.0}},
+        kind="bought_in", block="bom", charged_unit=0.09, engine_unit=0.09,
+        sheet_row=13, cross_ref=False, row_text="")
+    assert "600 mm of a 10000 mm roll" in origin["label"]
+    assert "£4.50 a roll" in origin["label"]
+    assert "verify the roll price" in origin["label"]
+
+
+def test_a_real_market_line_is_still_a_market_line():
+    """The branch must not swallow the lines the market bucket exists for."""
+    import costed_facts as cf
+    origin = cf._price_origin(
+        {"part_number": "P/P", "cost_source": "market_ai_indicative",
+         "material_estimate": {"cost_method": "market_ai_indicative"}},
+        kind="bought_in", block="bom", charged_unit=0.35, engine_unit=0.35,
+        sheet_row=22, cross_ref=False, row_text="")
+    assert origin["firmness"] == cf.INDICATIVE_MARKET
