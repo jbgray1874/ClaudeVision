@@ -201,10 +201,16 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
         _qcol, _qrow = _m.group(1), int(_m.group(2))
         for i in range(last_col - first_col + 1):
             _cell = est[f"{_qcol}{_qrow + i}"]
-            # Pad past the last break with the last break itself: the vector must not
-            # descend or go blank, or LOOKUP returns the wrong column rather than an error.
-            _v = vector[i] if i < len(vector) else vector[-1]
-            _cell.value = _v
+            # TRAILING BLANKS, NOT A REPEATED LAST BREAK — and the first cut of this had it
+            # the other way round, reasoning that "the vector must not go blank or LOOKUP
+            # returns the wrong column". That confuses a gap in the MIDDLE, which does break
+            # the ascending order LOOKUP needs, with cells AFTER the end, which it ignores.
+            #
+            # Howard's own sheet settles it: his row reads 1, 10, 50, 250, 1000, 1250, 1500
+            # and stops, and it resolves correctly for him. Repeating 1000 across the six
+            # spare columns would have put six identical headings on a tab an estimator
+            # reads, which is a worse answer than a blank for the same arithmetic.
+            _cell.value = vector[i] if i < len(vector) else None
         done["quantities"] = list(vector)
 
         _by_row: Dict[int, Dict[str, Any]] = {}

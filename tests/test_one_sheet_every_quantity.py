@@ -89,16 +89,32 @@ def test_the_quantities_are_written_on_the_estimate_not_the_structural_sheet():
     assert [est[f"F{180 + i}"].value for i in range(5)] == [1, 10, 50, 250, 1000]
 
 
-def test_the_vector_is_padded_rather_than_left_blank():
-    """Eleven cells feed the LOOKUP. A blank or a descent in the middle of them returns the
-    wrong column instead of an error, which is the failure this area keeps producing."""
+def test_the_spare_columns_are_left_blank_not_filled_with_a_repeat():
+    """THIS ASSERTED THE OPPOSITE FIRST, on the reasoning that "the vector must not go blank
+    or LOOKUP returns the wrong column". That confuses a gap in the MIDDLE — which does
+    break the ascending order LOOKUP needs — with cells AFTER the end, which it ignores.
+
+    Howard's own sheet settles it: 1, 10, 50, 250, 1000, 1250, 1500 and then nothing, and it
+    resolves correctly for him. Repeating the last break across six spare columns would put
+    six identical headings on a tab an estimator reads."""
     wb = _wb()
     write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [10, 50], CFG)
     est = wb["Estimate"]
     got = [est[f"F{180 + i}"].value for i in range(11)]
     assert got[:3] == [1, 10, 50]
-    assert all(v == 50 for v in got[3:])
-    assert got == sorted(got)
+    assert all(v is None for v in got[3:])
+
+
+def test_the_quantities_that_are_written_still_ascend():
+    """The property LOOKUP actually needs, asserted on the cells that carry a value."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [1000, 10, 250, 50], CFG)
+    est = wb["Estimate"]
+    got = [est[f"F{180 + i}"].value for i in range(11)]
+    filled = [v for v in got if v is not None]
+    assert filled == sorted(filled) == [1, 10, 50, 250, 1000]
+    # and no gap between them, which is the failure that would matter
+    assert got[:len(filled)] == filled
 
 
 def test_more_quantities_than_columns_is_refused_not_truncated():
@@ -239,10 +255,14 @@ def test_a_line_below_the_tables_last_row_is_named_not_dropped():
 
     A table simply MISSING a material reads as "this one does not move with quantity",
     which is the one thing it must never say by accident — so those lines are named."""
+    # A SHORT TABLE ON PURPOSE, so this tests the RULE and not whatever last_bom_row
+    # happens to be today. It was 25 for the hours the repaired tab was fifteen rows long
+    # and is 50 now; the next template will move it again.
+    cfg = dict(CFG, last_bom_row=25)
     wb = _wb()
     out = write_price_breaks(wb, [_line(11, unit_gbp=1.0, code="TAPE"),
                                   _line(28, unit_gbp=2.0, code="POWDER")],
-                             [10, 50], CFG)
+                             [10, 50], cfg)
     assert out["rows"] == 1
     assert any("POWDER" in s for s in out["outside_table"])
     assert not any("TAPE" in s for s in out["outside_table"])
@@ -250,8 +270,9 @@ def test_a_line_below_the_tables_last_row_is_named_not_dropped():
 
 def test_nothing_is_written_past_the_tables_last_row():
     """Numbers in cells no LOOKUP reads are invisible money, which is worse than none."""
+    cfg = dict(CFG, last_bom_row=25)
     wb = _wb()
-    write_price_breaks(wb, [_line(28, unit_gbp=2.0, code="POWDER")], [10, 50], CFG)
+    write_price_breaks(wb, [_line(28, unit_gbp=2.0, code="POWDER")], [10, 50], cfg)
     ws = wb["Material Price Break"]
     assert ws.cell(row=22, column=4).value is None      # 28 - 6, past the table
     assert ws.cell(row=22, column=5).value is None
@@ -260,21 +281,28 @@ def test_nothing_is_written_past_the_tables_last_row():
 def test_the_last_row_itself_is_still_written():
     """Off-by-one in the other direction would drop a line the table does hold."""
     wb = _wb()
-    out = write_price_breaks(wb, [_line(25, unit_gbp=3.0, code="EDGE")], [10], CFG)
+    out = write_price_breaks(wb, [_line(25, unit_gbp=3.0, code="EDGE")], [10],
+                             dict(CFG, last_bom_row=25))
     assert out["rows"] == 1 and not out["outside_table"]
     assert wb["Material Price Break"].cell(row=19, column=5).value == 3.0
 
 
 # ── on, against the repaired template ────────────────────────────────────────────────────
 
-def test_it_is_on_and_bounded_to_the_table_that_exists():
-    """Enabled once the template was repaired — and bounded to row 25, which is where the
-    break rows actually stop, rather than to the BOM block's own last row of 50."""
-    assert config.MATERIAL_PRICE_BREAK["enabled"] is True
-    assert config.MATERIAL_PRICE_BREAK["last_bom_row"] == 25
-    assert config.MATERIAL_PRICE_BREAK["row_offset"] == -6
-    src = (ROOT / "src" / "config.py").read_text(encoding="utf-8")
-    assert "THE TABLE STOPS AT BOM ROW 25" in src
+def test_it_is_on_and_reaches_the_whole_bom_block():
+    """James, 15 Sep: "we now have rows 5 to 49". At an offset of -6 that covers Estimate
+    rows 11 to 55, and the BOM block ends at 50 — so every slot has a break row.
+
+    The bound is asserted against the BOM block rather than against a number typed twice:
+    if the table were ever shortened again, the out-of-table report is what catches it, and
+    that is tested above with a short table of its own."""
+    mpb = config.MATERIAL_PRICE_BREAK
+    assert mpb["enabled"] is True
+    assert mpb["row_offset"] == -6
+    assert mpb["last_bom_row"] == 50
+    # break row of the last BOM slot must exist within the tab James built (5..49)
+    assert 5 <= mpb["last_bom_row"] + mpb["row_offset"] <= 49
+    assert mpb["first_bom_row"] + mpb["row_offset"] == 5
 
 
 def test_the_measurements_are_recorded_not_the_impression():
