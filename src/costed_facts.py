@@ -756,8 +756,15 @@ def costed_finish_label(source: Any, default: str = "As drawing") -> str:
     Plating is charged as a subcontract BOM LINE rather than an operation, so it is not in
     _FINISH_OPS and has to be recognised from the priced rows."""
     labels = [label for op, label in _FINISH_OPS if has_operation(source, op)]
-    if _subcontract_plating_is_costed(source) and "Plated" not in labels:
-        labels.append("Plated")
+    # AND IT NAMES WHICH PLATE, WHERE THE JOB KNOWS. "Plated" is true of zinc and true of a
+    # £250 decorative brass, and on a quote those are not the same sentence. 7332-01's
+    # headline read "Diamond polished" alone while £250 of Brass — Harrods 01 sat in the
+    # price: the plating paid for and unnamed, which is the exact failure the docstring
+    # above was written about, recurring because the recogniser knew one spelling.
+    _plate = _subcontract_plate_label(source)
+    if _plate and not any(_plate.lower() in l.lower() or l.lower() in _plate.lower()
+                          for l in labels):
+        labels.append(_plate)
     labels = list(dict.fromkeys(labels))
     if not labels:
         return default
@@ -766,28 +773,72 @@ def costed_finish_label(source: Any, default: str = "As drawing") -> str:
     return ", ".join(labels[:-1]) + " and " + labels[-1].lower()
 
 
-def _subcontract_plating_is_costed(source: Any) -> bool:
-    """True when a subcontract plating line carries money on this job.
+def _plating_row_is_costed(row: Mapping[str, Any]) -> bool:
+    """Is THIS row a subcontract plating line carrying money?
 
-    Plating does not appear as an operation — it is a bought-in/commercial row priced on the
-    plated mass — so the finish label cannot find it the way it finds powder or polish."""
+    RECOGNISED BY WHAT IT IS, NOT BY ONE SPELLING OF ONE FIELD. The first version tested
+    `"plating" in cost_method`, which was true of every method that existed when it was
+    written — and then the plating line learned to be priced from a named spec, from an
+    estimator's own figure and from an inherited decision, none of which contain the word.
+    7332-01's headline went to a customer reading "Diamond polished" with £250 of brass in
+    the price.
+
+    The placeholder flag and the -PLATE identity are what make the line a plating line. The
+    method is a detail of how it got its number."""
+    if not isinstance(row, Mapping):
+        return False
+    method = str((row.get("material_estimate") or {}).get("cost_method")
+                 or row.get("cost_source") or row.get("source") or "").lower()
+    _is_plate_line = bool(
+        row.get("_plating_placeholder")
+        or "plating" in method
+        or str(row.get("part_number") or "").strip().upper().endswith("-PLATE"))
+    if not _is_plate_line:
+        return False
+    try:
+        return float(row.get("unit_cost_gbp") or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _subcontract_plate_label(source: Any) -> str:
+    """"Brass — Harrods 01" where the job knows which plate, "Plated" where it does not.
+
+    A quote that says "Plated" of a £250 decorative brass is not wrong so much as useless:
+    it is equally true of £15.83 of trade zinc, and the reader cannot tell which he is
+    buying. Where a spec was named — read off the pack, stated by an estimator, or inherited
+    from a decision — that name is the finish, and it is the name the plater would use.
+    """
     try:
         rows = job_parts(source) or []
     except Exception:                                                # noqa: BLE001
         rows = []
+    _fallback = ""
     for row in rows:
-        if not isinstance(row, dict):
+        if not _plating_row_is_costed(row):
             continue
-        method = str((row.get("material_estimate") or {}).get("cost_method")
-                     or row.get("cost_source") or row.get("source") or "").lower()
-        if "plating" not in method:
-            continue
-        try:
-            if float(row.get("unit_cost_gbp") or 0) > 0:
-                return True
-        except (TypeError, ValueError):
-            continue
-    return False
+        _fallback = "Plated"
+        # The spec, as the plating pass wrote it onto the line's own description:
+        # "<part> plating — Brass — Harrods 01, INHERITED from …"
+        _desc = str(row.get("description") or "")
+        # The spec's own name CONTAINS an em-dash — "Brass — Harrods 01" — so the capture
+        # cannot stop at one. It stops at the comma that separates the spec from how the
+        # figure was arrived at ("…, INHERITED from", "…, Howard Thurley's stated price").
+        _m = re.search(r"plating\s*—\s*(.+?)\s*(?:,|$)", _desc)
+        if _m:
+            _spec = _m.group(1).strip()
+            if _spec and not _spec.upper().startswith(("SPEC NOT", "INDICATIVE")):
+                return _spec
+    return _fallback
+
+
+def _subcontract_plating_is_costed(source: Any) -> bool:
+    """True when a subcontract plating line carries money on this job."""
+    try:
+        rows = job_parts(source) or []
+    except Exception:                                                # noqa: BLE001
+        rows = []
+    return any(_plating_row_is_costed(r) for r in rows)
 
 
 # ── risk flags vs the route that was actually priced ─────────────────────────
@@ -1451,6 +1502,32 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
         return {"class": "unpriced_commercial", "firmness": UNPRICED, "owner": "estimator",
                 "label": "NOT PRICED — held at £0 until the estimators' own figure lands; "
                          "enter the per-unit amount"}
+    # A DEPARTMENT'S OWN FIGURE IS NOT A MARKET LOOKUP.
+    #
+    # "Mislabelled as an AI market indication — it is Transport Dept. Relabel; don't drop
+    # it." The plater-freight line is £120 the round trip, stated by SDI's own transport
+    # department through Howard Thurley, held in config and divided by the order quantity.
+    # Nothing about it moves between runs and there is no supplier to replace it with.
+    #
+    # It landed in the market bucket for a structural reason, not a textual one: the
+    # commercial-line branch above only recognises a commercial line with NO money, and this
+    # is the first commercial line that carries some. So it fell past every branch to the
+    # AI/market catch, and the headline asked an estimator to "replace a market figure" that
+    # his own transport department had given him.
+    #
+    # INDICATIVE_HOUSE is the right bucket and the reason is in its own definition — a
+    # configured, reproducible SDI rate, to verify or accept deliberately. Advisory, not
+    # blocking: the number is real, and whether this job pays it is a question, not a gap.
+    if "plater_freight" in tokens:
+        try:
+            import config as _cfg                                    # noqa: PLC0415
+            _plog = getattr(_cfg, "PLATING_LOGISTICS", {}) or {}
+        except Exception:                                            # noqa: BLE001
+            _plog = {}
+        return {"class": "plater_freight", "firmness": INDICATIVE_HOUSE, "owner": "estimator",
+                "label": (f"SDI transport department's stated figure — "
+                          f"{_plog.get('source', 'transport rate from config')}; "
+                          f"divided by the order quantity, so it moves with the order")}
     if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",

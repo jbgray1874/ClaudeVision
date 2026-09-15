@@ -1807,7 +1807,30 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             pe["description"] = (
                 f"{_pn_plate} plating — {_spec_lbl2 or 'as specified'}, "
                 f"{_dec.get('decided_by') or 'the estimator'}'s stated price").strip()
-        if _contrib or _deferred:
+        # ── WHEN THE PRICE IS PER STAND, THE MEMBER LIST IS THE WHOLE WELDMENT ──────────
+        #
+        # The exclusion exists because the mass decides the money on the £/kg card: a member
+        # whose own detail says RAW must not be swept into a weight nobody agreed. That is
+        # right, and on a QUOTED price it is answering a question nobody asked. £250 is per
+        # stand. The mass is not an input, so excluding a member changes no figure — it only
+        # leaves an audit list saying the plater is quoted for 7332-01-008 alone, when what
+        # goes in the tank is the welded frame.
+        #
+        # A list that is wrong in a direction that costs nothing is still wrong, and it is
+        # the list an estimator checks the £250 against.
+        _per_unit_price = method in ("subcontract_plating_named_spec",
+                                     "estimator_stated_price",
+                                     "inherited_estimator_decision")
+        if _per_unit_price and (_contrib or _deferred):
+            _all_members = sorted(set(_contrib) | set(_deferred))
+            _base = str(pe.get("description") or "").split(" — plated members:")[0]
+            pe["description"] = (
+                f"{_base} — plated members: {', '.join(_all_members)} "
+                f"(the whole weldment: this is a quoted price per stand, so the mass is not "
+                f"an input and no member is excluded from it)")
+            pe["_plating_members_costed"] = _all_members
+            pe["_plating_members_deferred"] = []
+        elif _contrib or _deferred:
             _base = str(pe.get("description") or "").split(" — plated members:")[0]
             _desc = f"{_base} — plated members: {', '.join(_contrib) or 'none'}"
             if _deferred:
