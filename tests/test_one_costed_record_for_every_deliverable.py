@@ -487,14 +487,21 @@ def test_the_operation_check_reads_the_hierarchy():
     assert out == [], out
 
 
-def test_the_quote_says_what_is_not_in_it_and_that_it_is_a_draft():
+def test_the_quote_says_what_is_not_in_it_and_never_that_it_is_a_draft():
+    """The SCOPE exclusion stays and the RELEASE status goes, and they are different facts.
+
+    "Packaging and delivery are not included in this price" is a commercial statement the
+    customer needs — a quotation silent about them promises them. "DRAFT — not for issue"
+    is the engine describing its own unfinished state to a customer, on a page that is
+    regenerated and sent after an estimator has finished it."""
     import client_quote_html as q
     html = q.build_quote_html(seventy_three_thirty_two(), job_stem="7332-01")
     assert "Boxed for transport" not in html
     assert "Individual packing for transport" not in html
-    assert "Packaging and delivery not included" in html
-    assert "DRAFT" in html and "not for issue" in html
-    assert "Valid for" not in html and "Valid 30 days" not in html
+    assert "not included in this price" in html.lower()
+    assert "DRAFT" not in html and "not for issue" not in html
+    # The offer window comes back with it: a draft that has been settled is a quotation.
+    assert "Valid for" in html
     assert "Diamond polished and plated" in html
 
 

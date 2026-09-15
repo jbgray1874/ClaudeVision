@@ -1088,8 +1088,9 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         _packing = _pack_status(summary)
     except Exception:                                            # noqa: BLE001
         _record, _packing = {}, "absent"
+    # THE RELEASE STATUS IS READ BUT NOT PRINTED HERE — see the draft block below.
     _release = _record.get("release") or {}
-    _draft = bool(_release.get("draft"))
+    _draft = bool(_release.get("draft"))  # retained: the fixtures assert it changes nothing
     ops = _collect_operations(parts, summary, packing_charged=(_packing != "unpriced"))
 
     # THE INVARIANT GATE, READ BY THE DOCUMENT THAT LEAVES THE BUILDING.
@@ -1149,27 +1150,43 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       <div class="inc">
         <h3>Not included in this price</h3>
         <ul>
-          <li>Packaging and delivery not included — to be priced before issue</li>
+          <li>Packaging and delivery are not included in this price</li>
         </ul>
       </div>"""
 
-    # DRAFT UNTIL THE DECISIONS ARE MADE. A visible status, in the sheet's own tone rather
-    # than a red disclaimer, while a price is outstanding, a market figure stands, a check
-    # blocks, or a manufacturing decision is open. Read from the record's release block.
-    draft_block = ""
-    if _draft:
-        # THE ONE TALLY — outstanding_summary's phrase, the same words the report banner
-        # and the explanation print, so no two documents count the open items differently.
-        from costed_facts import outstanding_summary
-        _out = outstanding_summary(_record or summary)
-        # NAMED, NOT COUNTED. "4 prices missing + 1 market figure to replace + 2
-        # manufacturing decisions" tells an estimator to go and hunt for which four. The
-        # rows know their own parts, so the banner lists them: an open item he can answer in
-        # a minute reads as a question, and a count reads as a warning to ignore.
-        draft_block = (
-            '\n    <div class="draft">DRAFT — not for issue'
-            + (" · " + _esc(_out.get("named_phrase") or _out["phrase"])
-               if _out["total"] else "") + "</div>")
+    # THE DRAFT BANNER IS NOT CUSTOMER-FACING EITHER, AND IS NO LONGER RENDERED HERE.
+    #
+    # It read, in full, across the top of a quotation:
+    #
+    #   DRAFT — not for issue · 2 prices missing + 1 market figure to replace + 3
+    #   manufacturing decisions + 1 indicative rate to verify: PACKAGING, DELIVERY,
+    #   7332-01-101, 7332-01-002, 7332-01-003, 7332-01-004, 7332-01-005, 7332-01-007,
+    #   7332-01-008, PLATERFREIGHT
+    #
+    # James: "we know that the estimator can make amendments to the s/sheet and regenerate
+    # the quote and it will be sent out on the back of their changes, so we don't want
+    # anything which makes it look like it's not a quote for a CLIENT, because after their
+    # changes, it will be."
+    #
+    # That is the whole argument, and it is about WHEN this page is true rather than about
+    # how frank to be. The banner describes the moment the engine finished, and the document
+    # is issued at a later moment — after an estimator has priced the two missing lines and
+    # settled the decisions on the sheet, and regenerated. Every word of it is then false,
+    # and it is false on the one document a customer reads. Worse, it names SDI's internal
+    # part numbers and its open questions to that customer.
+    #
+    # It is exactly the reasoning already applied twice on this page: to the invariant
+    # banner above, and to the "Not included in this price" gap list below it. The engine's
+    # findings are the estimator's to act on; what a customer is told is the estimator's
+    # decision and their wording.
+    #
+    # THE TALLY IS NOT LOST, which is the condition for removing it. outstanding_summary is
+    # printed by the covering e-mail subject, the job report banner, the AI Explanation and
+    # the Decision Report, and every open row is shaded on the Estimate sheet's OUTSTANDING
+    # ESTIMATOR INPUTS block — so the person who can settle these sees all of them, on the
+    # documents they work from, before the quote is sent. The customer is not shown the
+    # workings. A test holds all four of those surfaces, so this cannot become silence.
+    draft_block = ""  # retained for the fixture that asserts it stays empty
 
     ga_block = ""
     if ga_uri:
@@ -1209,20 +1226,31 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # another form: it is the removal of a claim the run cannot support.
     from run_readers import run_was_llm_only
     _llm = run_was_llm_only(summary)
-    # A DRAFT HAS NO OFFER WINDOW EITHER. The same reasoning as the LLM-only case: "valid
-    # for 30 days" is a promise with a date on it, and a page with prices outstanding
-    # cannot make it.
+    # AND A DRAFT NO LONGER DECLARES ITSELF ONE HERE. It used to take the same route as the
+    # LLM-only case and print "Basis: Draft — not for issue" in place of the offer window,
+    # in the Basis row and again in the footer.
+    #
+    # That is the banner's argument in two smaller places, and removing the banner alone
+    # would have left the quotation saying "not for issue" twice while looking otherwise
+    # finished — the worst of both. The offer window is the estimator's to make: they amend
+    # the sheet, regenerate, and send, and at that moment {VALID_DAYS} days is exactly what
+    # SDI is offering.
+    #
+    # THE LLM-ONLY CASE IS UNTOUCHED, and it is a different fact. "Indicative — for internal
+    # comparison" does not describe an unfinished estimate, it describes a pack read by one
+    # reader that cannot size a folded part — a measurement, not an offer, which is why
+    # James asked for the window to go and the word indicative to stay. No amount of
+    # estimator work on the sheet turns that run into a full one.
     _validity_row = ("<tr><td>Basis</td><td>Indicative — for internal comparison</td></tr>"
                      if _llm else
-                     "<tr><td>Basis</td><td>Draft — not for issue</td></tr>"
-                     if _draft else
                      f"<tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>")
     _validity_foot = ("Prices ex VAT, GBP. Indicative."
                       if _llm else
-                      "Prices ex VAT, GBP. Draft — not for issue."
-                      if _draft else
                       f"Prices ex VAT, GBP. Valid {VALID_DAYS} days from quotation date.")
-    _packing_row = ("Not included — packaging and delivery to be priced"
+    # "to be priced" is the estimator's instruction, not the customer's business — the same
+    # tell as the draft banner, in the packing row. What the customer needs is the scope:
+    # this price does not cover packaging and delivery.
+    _packing_row = ("Not included in this price"
                     if _packing == "unpriced" else "Boxed for transport")
     # The run's own identity, so "which engine run produced this quote" is checkable.
     _run_foot = ""
@@ -1252,8 +1280,6 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
           -webkit-print-color-adjust:exact; print-color-adjust:exact; }}
   .sheet {{ max-width:820px; margin:24px auto; background:var(--bg); border:1px solid var(--line);
             border-radius:4px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.04); }}
-  .draft {{ background:var(--soft); color:var(--muted); border-bottom:1px solid var(--line);
-           font-size:12px; letter-spacing:.06em; text-transform:uppercase; padding:8px 28px; }}
   .head {{ display:flex; align-items:center; justify-content:space-between; gap:16px;
            padding:26px 40px 22px; border-bottom:4px solid var(--sdi-yellow); }}
   /* The customer block is the logo, not a labelled field: a caption above the embedded

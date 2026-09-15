@@ -82,7 +82,20 @@ def test_the_same_part_twice_is_named_once():
     assert out["open_items"] == ["FIXING"]
 
 
-def test_the_quote_banner_prints_the_named_phrase():
-    """The surface this was built for."""
+def test_the_named_phrase_reaches_the_estimator_not_the_customer():
+    """THE SURFACE THIS WAS BUILT FOR TURNED OUT TO BE THE WRONG ONE.
+
+    The named list was added to the client quotation's banner, and that is where it did
+    the most harm: it put SDI's part numbers and open questions on the one document a
+    customer reads, and it described the moment the engine finished rather than the moment
+    the quote is issued — which is after an estimator has settled every item on it.
+
+    The names were the right idea on the wrong page. They now appear on the surfaces the
+    person who can answer them actually works from."""
     src = (ROOT / "src" / "client_quote_html.py").read_text(encoding="utf-8")
-    assert 'named_phrase' in src and 'DRAFT — not for issue' in src
+    assert 'draft_block = ""  # retained' in src
+    # And the names still reach the surfaces that can act on them. The rendered proof is in
+    # tests/test_a_draft_is_an_internal_word.py; this is the wiring.
+    for module in ("job_report_html.py", "estimate_explained.py", "job_decision_report.py"):
+        text = (ROOT / "src" / module).read_text(encoding="utf-8")
+        assert "outstanding_summary" in text, module

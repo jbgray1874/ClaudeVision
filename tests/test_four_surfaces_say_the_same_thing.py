@@ -109,7 +109,11 @@ def test_the_two_unpriced_lines_are_the_same_two_on_every_internal_surface(surfa
     assert surfaces["record"]["gaps"]["unpriced"] == ["PACKAGING", "DELIVERY"]
     for name in INTERNAL:
         assert "PACKAGING" in surfaces[name] and "DELIVERY" in surfaces[name], name
-    assert "Packaging and delivery not included" in surfaces["quote"]
+    # THE SCOPE EXCLUSION SURVIVED THE RELEASE STATUS, which is the distinction that whole
+    # change turns on. The customer is still told the price does not cover these; they are
+    # no longer told an estimator has yet to price them.
+    assert "Packaging and delivery are not included in this price" in surfaces["quote"]
+    assert "to be priced" not in surfaces["quote"]
 
 
 def test_the_indicative_money_is_one_number_and_one_class(surfaces):
@@ -174,8 +178,14 @@ def test_the_release_status_agrees(surfaces):
     assert "PROVISIONAL" in surfaces["subject"]
     assert f"To settle: {phrase}." in surfaces["subject"]
     assert f"Not for release — 6 to settle: {phrase}" in surfaces["report"]
-    assert f"DRAFT — not for issue · {phrase}" in surfaces["quote"]
     assert f"No — 6 to settle: {phrase}." in surfaces["explanation"]
+    # THE QUOTE IS NO LONGER ONE OF THE SURFACES, AND THAT IS THE POINT OF THE OTHER THREE.
+    # It is the only document here that leaves the building, and it is regenerated and sent
+    # after the estimator has settled these items — so the tally would be false exactly when
+    # it was read. The three INTERNAL surfaces still have to agree, which is what this test
+    # is for; dropping the quote from the set is not dropping the check.
+    assert phrase not in surfaces["quote"]
+    assert "not for issue" not in surfaces["quote"]
 
 
 # ── what must NOT be on any surface ───────────────────────────────────────────
