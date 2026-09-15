@@ -2216,6 +2216,12 @@
         <span class="muted">Loading docs/KNOWLEDGE_SOURCES.md from the repo…</span>
       </div>
 
+      <!-- ── ESTIMATOR DECISIONS AND CHANGES — the register, rendered from the repo ────── -->
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">Estimator decisions and changes</h3>
+      <div class="panel reveal" id="change-register" style="overflow-x:auto;line-height:1.7">
+        <span class="muted">Loading docs/CHANGE_REGISTER.md from the repo…</span>
+      </div>
+
       <!-- ── THE SOURCE WATERFALL ───────────────────────────────────────────────────────── -->
       <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:32px 0 8px">What each file is asked for — and what it cannot answer</h3>
       <div class="panel reveal" style="overflow-x:auto">
@@ -4302,14 +4308,19 @@
   // change under a running browser (a git pull on the box), and a map that needs a full
   // refresh to tell the truth is the drift it exists to remove. It is one small file.
   let _kmBusy=false;
-  async function loadKnowledgeMap(){
-    if(_kmBusy)return; const el=document.getElementById('knowledge-map'); if(!el)return;
-    _kmBusy=true;
+  async function _loadRepoDoc(api, elId, tagline){
+    const el=document.getElementById(elId); if(!el)return;
     try{
-      const d=await _get('/api/knowledge-map');
-      el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:10px">'+_esc(d.path||'docs/KNOWLEDGE_SOURCES.md')+' · updated '+_esc(d.modified||'')+' · key register names are test-pinned</div>'+_mdToHtml(d.markdown);
-    }catch(e){el.innerHTML='<span class="muted">Could not load the knowledge map: '+_esc(String(e.message||e))+'</span>';}
-    finally{_kmBusy=false;}
+      const d=await _get(api);
+      el.innerHTML='<div class="muted" style="font-size:11px;margin-bottom:10px">'+_esc(d.path||'')+' · updated '+_esc(d.modified||'')+' · '+tagline+'</div>'+_mdToHtml(d.markdown);
+    }catch(e){el.innerHTML='<span class="muted">Could not load '+_esc(api)+': '+_esc(String(e.message||e))+'</span>';}
+  }
+  async function loadKnowledgeMap(){
+    if(_kmBusy)return; _kmBusy=true;
+    try{
+      await _loadRepoDoc('/api/knowledge-map','knowledge-map','key register names are test-pinned');
+      await _loadRepoDoc('/api/change-register','change-register','adding a row is part of making a change');
+    }finally{_kmBusy=false;}
   }
   function _esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
   // Deliberately small: headings, tables, lists, bold/italic/code, rules, paragraphs.
@@ -4384,8 +4395,10 @@
   document.getElementById('aisvc-grid').addEventListener('click',e=>{
     const b=e.target.closest('[data-open]'); if(!b)return; openService(b.dataset.open);
   });
-  // Route any deep-link hash now that all handlers are defined
-  routeHash(window.location.hash.replace('#',''));
+  // The deep-link hash is routed AFTER API_BASE is declared — see below. Routing it here
+  // ran #architecture's loader before the const existed ("Cannot access 'API_BASE' before
+  // initialization"), so opening /#architecture directly rendered an error. James found it
+  // with the page open.
 
   // ---- go-live countdown ----
   (function(){
@@ -4422,6 +4435,10 @@
                             catch (e) { return ""; } })();
   function _hdr(){ return API_KEY ? {"X-SDI-Key": API_KEY} : {}; }
   async function _get(p){ const r=await fetch(API_BASE+p,{headers:_hdr()}); if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,160)); return r.json(); }
+
+  // Route any deep-link hash now that every handler AND the API constants exist — the one
+  // ordering that lets /#architecture load its repo documents on a direct open.
+  routeHash(window.location.hash.replace('#',''));
   function _sz(b){ if(b==null)return""; const u=["B","KB","MB","GB"];let i=0,n=b;while(n>=1024&&i<3){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+u[i]; }
   async function filesInit(){
     const list=document.getElementById('files-list'), crumb=document.getElementById('files-crumb');

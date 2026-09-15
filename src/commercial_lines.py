@@ -242,19 +242,63 @@ def _consumable_price(code: str) -> Optional[Dict[str, Any]]:
 
 
 def _boxes_for(steps: Dict[Any, Any], qty: int) -> Optional[int]:
-    """Howard's step rule, used exactly as stated: the count at the smallest stated
-    threshold >= the order. Beyond the last stated point, None — nothing he said tells us
-    how 2,000 pack, and a straight line past the last real point is invention."""
+    """Howard's step rule: the count at the smallest stated threshold >= the order.
+    Beyond the last stated point, None — nothing he said tells us how 2,000 pack, and a
+    straight line past the last real point is invention."""
+    _n, _inferred = _boxes_for_with_basis(steps, qty)
+    return _n
+
+
+def _boxes_for_with_basis(steps: Dict[Any, Any], qty: int):
+    """(count, inferred) — inferred is True when qty is not one of the STATED points.
+
+    Howard supplied 10, 50, 250 and 1,000 and nothing else. An order of 100 taking the
+    250 step's three boxes is our reading of his rule, not his figure — it is still
+    priced (a labelled inference beats a zero) and it says so, pending his answer on
+    whether the counts are job-fixed or a capacity rule."""
     try:
         _pts = sorted((int(k), int(v)) for k, v in (steps or {}).items())
     except (TypeError, ValueError):
-        return None
+        return None, False
     if not _pts:
-        return None
+        return None, False
+    _stated = {t for t, _ in _pts}
     for _t, _n in _pts:
         if qty <= _t:
-            return _n
-    return None
+            return _n, qty not in _stated
+    return None, False
+
+
+def _method_applies(order: Dict[str, Any]) -> Any:
+    """Does Howard's method fit THIS job? "" when it does; the reason when it does not.
+
+    "Every PACKAGING line invokes _method_price() without checking product type,
+    dimensions, material or source job" — James, 15 Sep review. The method was stated
+    for small flat-packed acrylic display goods; ungated it would bag a steel stand.
+    Judged on the counted parts' material families (fact) and the unit weight (our
+    declared "small" ceiling); a job with nothing measured cannot be judged, so it is
+    not priced by a method nobody can check it against.
+    """
+    _gate = (getattr(config, "PACKING_METHOD", {}) or {}).get("applies_to") or {}
+    _fams = tuple(str(f).upper() for f in (_gate.get("material_families") or ()))
+    _counted = [p for p in (order.get("counted_parts") or []) if isinstance(p, dict)]
+    if not _counted:
+        return "no part was measured, so nothing says this job fits the stated basis"
+    if _fams:
+        for p in _counted:
+            _m = str(p.get("material") or "").upper().replace("_", " ")
+            if not any(f in _m for f in _fams):
+                return (f"{p.get('part_number')} is {p.get('material')!r} — the method "
+                        f"was stated for {', '.join(_fams[:3]).title()}-family display "
+                        f"goods, and a job with other materials in it is not bagged and "
+                        f"boxed on its say-so")
+    _max_kg = _gate.get("max_unit_weight_kg")
+    _kg = order.get("unit_weight_kg")
+    if _max_kg and _kg and float(_kg) > float(_max_kg):
+        return (f"the unit weighs about {float(_kg):.1f} kg against the method's "
+                f"{float(_max_kg):g} kg 'small goods' ceiling (an SDI Intelligence "
+                f"assumption, declared in config.PACKING_METHOD)")
+    return ""
 
 
 def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -273,8 +317,12 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _m = getattr(config, "PACKING_METHOD", {}) or {}
     if not _m.get("enabled"):
         return None
+    _no_fit = _method_applies(order)
+    if _no_fit:
+        return {"not_applicable": _no_fit}
     qty = int(order.get("order_quantity") or 1)
     _parts, _total, _breaks_needed = [], 0.0, []
+    _inferred_note = ""
     for c in (_m.get("consumables") or []):
         _code = str(c.get("code") or "").strip()
         _px = _consumable_price(_code)
@@ -286,7 +334,7 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if c.get("per_unit"):
             _n = int(c["per_unit"]) * qty
         else:
-            _n = _boxes_for(c.get("per_order_steps") or {}, qty)
+            _n, _inferred_step = _boxes_for_with_basis(c.get("per_order_steps") or {}, qty)
             if _n is None:
                 return {"unpriced_consumable": _code,
                         "note": f"the stated box steps stop at "
@@ -299,6 +347,13 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _parts.append((_code, c.get("what"), _n, _gbp,
                        str(_px.get("source") or "system") + _pk))
         _total += _n * _gbp
+        if not c.get("per_unit") and _inferred_step:
+            _inferred_note = (
+                f" The {_code} count at {qty} off is INFERRED from the "
+                f"{ {int(k): int(v) for k, v in (c.get('per_order_steps') or {}).items()} } "
+                f"steps — Howard stated 10/50/250/1000 and nothing between; priced rather "
+                f"than zeroed, pending his answer on whether the counts are job-fixed or a "
+                f"capacity rule.")
     if not _parts:
         return None
     # THE SAME METHOD AT EVERY STATED BREAK, so the break table divides real order costs
@@ -315,6 +370,7 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _working = " + ".join(f"{n} x {code} ({what}) at £{g:.2f} [{src}]"
                           for code, what, n, g, src in _parts)
     return {"order_gbp": round(_total, 2), "order_gbp_at_breaks": _at,
+            "inferred_step_note": _inferred_note or None,
             "source_class": "packing_method",
             "source_name": "stated_method_system_priced",
             "reproducible": True, "indicative": True,
@@ -342,6 +398,13 @@ def _line(code: str, order: Dict[str, Any], description: str,
     _held = _held_rate(held_key)
     _method = _method_price(order) if code == "PACKAGING" else None
     _method_gap = ""
+    if _method and _method.get("not_applicable"):
+        # THE METHOD KNOWS ITS OWN LIMITS. The reason it declined this job goes on the
+        # line, so "£0 and silent" becomes "£0 and here is why the stated method did not
+        # answer for it".
+        _method_gap = (" Howard's bag-and-box method was not applied: "
+                       + str(_method["not_applicable"]) + ".")
+        _method = None
     if _method and _method.get("unpriced_consumable"):
         # The method exists and one rate is missing — the withheld line below says WHICH,
         # so the fix is one catalogue row rather than a diagnosis.
@@ -364,8 +427,10 @@ def _line(code: str, order: Dict[str, Any], description: str,
         _src = {k: _method[k] for k in ("source_class", "source_name", "reproducible",
                                         "indicative")}
         out["order_gbp_at_breaks"] = _method.get("order_gbp_at_breaks") or {}
-        out["packing_working"] = _method.get("working")
+        out["packing_working"] = (_method.get("working") or "") +             (_method.get("inferred_step_note") or "")
         out["method_source"] = _method.get("method_source")
+        if _method.get("inferred_step_note"):
+            out["inferred_step"] = True
     else:
         # THE COUNT IS KEPT; THE PRICE IS WITHHELD. Asking a model to price the sentence gave
         # 12349-02 three different answers for one unchanged pack at one quantity — £424.97,

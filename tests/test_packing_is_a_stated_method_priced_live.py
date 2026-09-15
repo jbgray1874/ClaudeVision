@@ -54,7 +54,13 @@ def test_the_steps_are_used_exactly_as_stated():
     assert CL._boxes_for(steps, 250) == 3
     assert CL._boxes_for(steps, 1000) == 9
     assert CL._boxes_for(steps, 3) == 1, "an order below the first step still needs a box"
-    assert CL._boxes_for(steps, 100) == 3, "between steps, the next stated point covers it"
+    # BETWEEN STATED POINTS IS AN INFERENCE AND SAYS SO. Howard supplied 10/50/250/1000
+    # and nothing else; 100 taking the 250 step's three boxes is our reading of his rule.
+    # Priced — a labelled inference beats a zero — and labelled, pending his answer on
+    # job-fixed counts versus a capacity rule.
+    assert CL._boxes_for_with_basis(steps, 100) == (3, True)
+    assert CL._boxes_for_with_basis(steps, 250) == (3, False)
+    assert CL._boxes_for_with_basis(steps, 3) == (1, True)
 
 
 def test_beyond_the_last_stated_point_nothing_is_invented():
@@ -191,3 +197,83 @@ def test_the_real_catalogue_rows_price_howards_break_line(monkeypatch):
         assert round((boxes * 1.89) / q, 5) == round({10: .189, 50: .0378, 250: .02268,
                                                       1000: .01701}[q], 5)
     assert "pack of 1000" in line["packing_working"]
+
+
+def test_an_in_between_quantity_is_priced_and_labelled_inferred(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_parts(), 100)
+    assert line["order_gbp"] == round(100 * round(29.68 / 1000, 5) + 3 * 1.89, 2)
+    assert line.get("inferred_step") is True
+    assert "INFERRED" in line["packing_working"]
+    line50 = CL.packaging_line(_parts(), 50)
+    assert not line50.get("inferred_step"), "a stated point carries no inference label"
+
+
+# ── the method knows which jobs it was stated for ────────────────────────────────────────
+#
+# "Every PACKAGING line invokes _method_price() without checking product type, dimensions,
+#  material or source job... Add an applicability predicate and a negative test proving
+#  that a steel, joinery or large display job does not inherit PACK13/BOX481."
+#                                                        — James Gray review, 15 Sep 2026
+
+def _steel_parts():
+    return [{"part_number": "7332-01-101", "description": "BACK PANEL", "quantity": 1,
+             "blank_length_mm": 400.0, "blank_width_mm": 300.0,
+             "normalized_thickness_mm": 2.0, "normalized_material": "MILD STEEL"}]
+
+
+def _joinery_parts():
+    return [{"part_number": "12422-24-01J", "description": "PANEL", "quantity": 1,
+             "blank_length_mm": 1200.0, "blank_width_mm": 600.0,
+             "normalized_thickness_mm": 18.0, "normalized_material": "MFC"}]
+
+
+def _large_acrylic_parts():
+    # all-acrylic and ~19 kg a unit: right family, plainly not a bagged table-top item
+    return [{"part_number": "BIG-01", "description": "COUNTER FRONT", "quantity": 2,
+             "blank_length_mm": 2000.0, "blank_width_mm": 2000.0,
+             "normalized_thickness_mm": 2.0, "normalized_material": "ACRYLIC"}]
+
+
+def test_a_steel_job_does_not_inherit_howards_bags(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_steel_parts(), 50)
+    assert line.get("order_gbp") is None
+    assert "MILD STEEL" in line["note"] and "not applied" in line["note"]
+
+
+def test_a_joinery_job_does_not_inherit_them_either(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_joinery_parts(), 50)
+    assert line.get("order_gbp") is None
+    assert "not applied" in line["note"]
+
+
+def test_a_large_display_fails_the_declared_small_goods_ceiling(monkeypatch):
+    """Right material family, wrong scale. The ceiling is OURS — declared in config as an
+    SDI Intelligence assumption, and the line says so when it bites."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_large_acrylic_parts(), 50)
+    assert line.get("order_gbp") is None
+    assert "ceiling" in line["note"] and "assumption" in line["note"]
+
+
+def test_a_job_with_nothing_measured_is_not_priced_by_a_method_nobody_can_check(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line([{"part_number": "X", "description": "?"}], 50)
+    assert line.get("order_gbp") is None
+
+
+def test_the_source_job_itself_still_prices(monkeypatch):
+    """The gate must not exclude the job the method was stated for — the 0355255 L-stand's
+    BLANK is 760 mm, which is exactly why blank dimensions are not gated (a line-bent part
+    packs far smaller than its flat blank)."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_parts(), 50)
+    assert line["order_gbp"] == 3.37

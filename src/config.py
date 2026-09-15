@@ -435,6 +435,20 @@ PACKING_METHOD = {
         {"code": "BOX481", "what": "bulk stock box",
          "per_order_steps": {10: 1, 50: 1, 250: 3, 1000: 9}},
     ],
+    # WHICH JOBS THE METHOD MAY PRICE. Howard stated it for small flat-packed acrylic
+    # display goods; without a gate it would price a steel stand or a joinery unit into
+    # poly bags. Material families are the hard fact. The weight ceiling is OURS — an
+    # assumption marking "small", declared here and said on the line when it excludes a
+    # job — because Howard stated no limit and a 30 kg all-acrylic counter is plainly not
+    # bagged-and-boxed. Blank dimensions are deliberately NOT gated: a line-bent part
+    # packs far smaller than its flat blank (the 0355255 L-stand's own blank is 760 mm
+    # and the finished holder is a table-top item), so gating blanks would exclude the
+    # exact job the method was stated for.
+    "applies_to": {
+        "material_families": ("ACRYLIC", "PERSPEX", "PMMA", "HIPS", "PETG",
+                              "POLYCARBONATE", "ABS", "PVC", "FOAMEX"),
+        "max_unit_weight_kg": 5.0,     # SDI Intelligence assumption, not Howard's figure
+    },
 }
 
 # ONE WORKBOOK, OR ONE PER QUANTITY.

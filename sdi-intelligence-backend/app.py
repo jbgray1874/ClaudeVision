@@ -459,6 +459,47 @@ def estimating_guide():
                         content={"detail": "sdi-estimating-guide.html is not next to app.py"})
 
 
+# The repo documents the portal may render. A WHITELIST, not a path parameter — the file
+# API already exists for browsing; this serves exactly the documents the architecture page
+# embeds, and nothing else becomes servable by being added to docs/.
+_REPO_DOCS = {
+    "knowledge-map": "KNOWLEDGE_SOURCES.md",
+    "change-register": "CHANGE_REGISTER.md",
+}
+
+
+def _serve_repo_doc(name: str):
+    fname = _REPO_DOCS[name]
+    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
+        _p = _where / "docs" / fname
+        if _p.is_file():
+            try:
+                # The LOGICAL path, not the server's filesystem — a browser page has no
+                # business learning where the checkout lives on disk.
+                return {"exists": True, "path": f"docs/{fname}",
+                        "modified": datetime.fromtimestamp(_p.stat().st_mtime)
+                        .strftime("%d %b %Y %H:%M"),
+                        "markdown": _p.read_text(encoding="utf-8")}
+            except OSError as exc:
+                raise HTTPException(status_code=500,
+                                    detail=f"docs/{fname} exists and could not be read: "
+                                           f"{type(exc).__name__}")
+    raise HTTPException(status_code=404,
+                        detail=f"docs/{fname} is not in the repo this backend runs from — "
+                               f"git pull, or the document was moved without this endpoint "
+                               f"learning it")
+
+
+@app.get("/api/change-register")
+def change_register(x_sdi_key: str | None = Header(default=None)):
+    """docs/CHANGE_REGISTER.md — every estimator finding and rule change, with who
+    decided it, where it is implemented, the commit and the proof. Rendered on the
+    architecture page beside the knowledge map, per James's review: a register the
+    estimators cannot see is a register only the repo knows about."""
+    check_key(x_sdi_key)
+    return _serve_repo_doc("change-register")
+
+
 @app.get("/api/knowledge-map")
 def knowledge_map(x_sdi_key: str | None = Header(default=None)):
     """docs/KNOWLEDGE_SOURCES.md, served from the repo so the architecture page cannot
@@ -471,24 +512,7 @@ def knowledge_map(x_sdi_key: str | None = Header(default=None)):
     a register that leaves the code fails the suite until the map says where it went.
     """
     check_key(x_sdi_key)
-    for _where in (Path(__file__).resolve().parent.parent, Path(__file__).resolve().parent):
-        _p = _where / "docs" / "KNOWLEDGE_SOURCES.md"
-        if _p.is_file():
-            try:
-                # The LOGICAL path, not the server's filesystem — a browser page has no
-                # business learning where the checkout lives on disk.
-                return {"exists": True, "path": "docs/KNOWLEDGE_SOURCES.md",
-                        "modified": datetime.fromtimestamp(_p.stat().st_mtime)
-                        .strftime("%d %b %Y %H:%M"),
-                        "markdown": _p.read_text(encoding="utf-8")}
-            except OSError as exc:
-                raise HTTPException(status_code=500,
-                                    detail=f"docs/KNOWLEDGE_SOURCES.md exists and could "
-                                           f"not be read: {type(exc).__name__}")
-    raise HTTPException(status_code=404,
-                        detail="docs/KNOWLEDGE_SOURCES.md is not in the repo this backend "
-                               "runs from — git pull, or the map was moved without this "
-                               "endpoint learning it")
+    return _serve_repo_doc("knowledge-map")
 
 
 _LOGO_EXTS = (".svg", ".png", ".jpg", ".jpeg", ".webp")
