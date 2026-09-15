@@ -389,7 +389,10 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     # THE SAME METHOD AT EVERY STATED BREAK, so the break table divides real order costs
     # rather than scaling this order's linearly — the boxes are a step, not a rate.
     _at: Dict[int, float] = {}
-    for _q in _breaks_needed:
+    # QTY 1 IS ALWAYS ON THE SHEET'S VECTOR (the break header opens at 1 as a sanity
+    # anchor), so the method answers for it too: one bag, and the below-first-step box
+    # count — otherwise the 1-off column would show the RUN's order cost divided by one.
+    for _q in sorted(set([1] + list(_breaks_needed))):
         _t = 0.0
         for c in (_m.get("consumables") or []):
             _code = str(c.get("code") or "").strip()
@@ -588,3 +591,35 @@ def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
          else f"Palletised haulage of {weight}{on} for {order['order_quantity']} display "
               f"assemblies, one UK mainland delivery, per order"),
         "DELIVERY")
+
+
+def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every commercial line on the job, harvested from wherever the parts live.
+
+    summary["commercial_lines"] was READ in two places — the sweep's freight repricing
+    and the break table — and WRITTEN nowhere: the line only ever existed on its part
+    stub. So the break table fell back to the flat per-unit figure (£31.57 in every
+    column of the 17:56 book) and the sweep's freight hand-down never once had data.
+    One harvester, called by both readers, so a line minted anywhere on the record is a
+    line everywhere the record is read.
+    """
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _scan(plist):
+        for p in plist or []:
+            if not isinstance(p, dict):
+                continue
+            cl = p.get("commercial_line")
+            if isinstance(cl, dict) and cl.get("code") and cl["code"] not in seen:
+                seen.add(cl["code"])
+                out.append(cl)
+
+    # anything already on the summary wins; the part records fill the gaps
+    for cl in ((summary or {}).get("commercial_lines") or []):
+        if isinstance(cl, dict) and cl.get("code") and cl["code"] not in seen:
+            seen.add(cl["code"])
+            out.append(cl)
+    _scan((summary or {}).get("parts"))
+    _scan(((summary or {}).get("estimate_summary") or {}).get("part_estimates"))
+    return out

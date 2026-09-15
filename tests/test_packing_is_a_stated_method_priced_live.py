@@ -357,3 +357,79 @@ def test_an_assembly_parent_is_still_ignored(monkeypatch):
                          "is_assembly_parent": True, "quantity": 1}]
     line = CL.packaging_line(parts, 50)
     assert line["order_gbp"] == 3.37, "counted through its children, exactly as the weight is"
+
+
+# ── the 17:56 book: right method, wrong money, frozen flat ───────────────────────────────
+#
+# PACKAGING charged £31.57 a unit at EVERY quantity: £29.68 + £1.89 — the full pack of a
+# thousand bags per unit, frozen as a literal so D6 changed nothing. Three plumbing
+# defects, each pinned here.
+
+def test_the_live_connector_shape_still_divides_the_pack(monkeypatch):
+    """The connector overwrites the candidate's description with the REQUESTED one (empty
+    when asked by code) and keeps the matched row under evidence.row — the test double
+    carried the description top-level, so the tests passed while the live path charged a
+    thousand bags. This fixture is the live shape."""
+    import stated_prices
+
+    def _live_shape(code, description=None):
+        rows = {"PACK13": ("POLY BAG 18 x 24 x 100G (PACK OF 1000)", 29.68),
+                "BOX481": ("H266266 - 610 x 455 x 455mm (Large stock box)", 1.89)}
+        if code not in rows:
+            return None
+        d, gbp = rows[code]
+        return {"request": {}, "selected": {
+            "source": "udef_sqlserver", "kind": "part_system_cost", "price": gbp,
+            "currency": "GBP", "unit": "each", "confidence": 0.98,
+            "evidence": {"row": {"part_code": code, "description": d, "price": gbp}},
+            "metadata": {"part_code": code, "description": ""},   # the REQUESTED one
+        }}
+    import price_sources
+    monkeypatch.setattr(price_sources, "get_best_price",
+                        lambda req, connectors=None, source_priority=None:
+                        _live_shape(req.part_code))
+    px = CL._consumable_price("PACK13")
+    assert px["gbp"] == round(29.68 / 1000, 5),         "the catalogue row's own words reach the divider on the live shape"
+    line = CL.packaging_line(_parts(), 50)
+    assert line["order_gbp"] == 3.37, "not £1,485.89"
+
+
+def test_the_commercial_line_is_harvested_from_the_part_records():
+    """summary['commercial_lines'] was read in two places and written nowhere — the line
+    only ever lived on its part stub, so the break table always saw nothing."""
+    cl = {"code": "PACKAGING", "order_gbp": 1.92,
+          "order_gbp_at_breaks": {1: 1.92, 10: 2.19, 50: 3.37, 250: 13.09, 1000: 46.69}}
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "PACKAGING", "commercial_line": cl}]}}
+    got = CL.collect_lines(summary)
+    assert got and got[0]["order_gbp_at_breaks"][1000] == 46.69
+
+
+def test_the_break_row_steps_and_the_one_off_column_is_one_bag_one_box():
+    """£46.69/1000 = £0.0467 a unit at the top break, £1.92 at the 1-off anchor — never the
+    run's own order cost divided by one."""
+    from material_price_break import _price_at
+    rec = {"order_gbp": 1.92,
+           "order_gbp_at": {1: 1.92, 10: 2.19, 50: 3.37, 250: 13.09, 1000: 46.69}}
+    assert _price_at(rec, 1) == 1.92
+    assert _price_at(rec, 10) == round(2.19 / 10, 5)
+    assert _price_at(rec, 1000) == round(46.69 / 1000, 5)
+
+
+def test_the_method_answers_for_quantity_one_as_well(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    line = CL.packaging_line(_parts(), 50)
+    at = line["order_gbp_at_breaks"]
+    assert at[1] == round(1 * round(29.68 / 1000, 5) + 1 * 1.89, 2),         "one bag and one box — the sheet's vector opens at 1 and the method must answer"
+
+
+def test_the_sheet_writes_a_lookup_with_the_runs_figure_as_fallback():
+    """A per-order line frozen as a literal cannot amortise — the 17:56 book carried the
+    whole order's boxes on every unit at 1000 off exactly as at 1. The row gets the
+    template's own LOOKUP, guarded so a run that never fills the break table keeps the
+    literal behaviour instead of reading £0 off an empty row."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "order_gbp_at_breaks" in src
+    assert 'value=(f"=IF(' in src and "LOOKUP($D$6," in src

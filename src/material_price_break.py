@@ -131,7 +131,15 @@ def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
         return out
 
     _by_code: Dict[str, Dict[str, Any]] = {}
-    for _cl in (summary.get("commercial_lines") or []):
+    try:
+        # HARVESTED, NOT HOPED FOR. summary["commercial_lines"] was read here and written
+        # nowhere — the line only ever lived on its part stub — so this lookup was always
+        # empty and PACKAGING fell to the flat per-unit figure in every break column.
+        from commercial_lines import collect_lines                    # noqa: PLC0415
+        _cls = collect_lines(summary)
+    except Exception:                                                  # noqa: BLE001
+        _cls = list(summary.get("commercial_lines") or [])
+    for _cl in _cls:
         if isinstance(_cl, dict) and _cl.get("code"):
             _by_code[str(_cl["code"]).strip().upper()] = _cl
     try:

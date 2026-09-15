@@ -4253,7 +4253,31 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
-        ws.cell(row=row, column=b["col_price"],    value=price if price is not None else None)
+        # A PER-ORDER LINE AMORTISES THROUGH THE SHEET'S OWN LOOKUP, NOT A FROZEN LITERAL.
+        # The 17:56 book wrote packaging as a literal £31.57 per unit: change D6 and every
+        # unit still carried the whole order's boxes, at 1000 off exactly as at 1 — the one
+        # failure the break mechanism exists to prevent, on the one line that moves. A line
+        # that knows its order cost at each break gets the template's own formula, and the
+        # break writer fills its row, so D6 drives it like every other break-priced line.
+        _at_breaks = ((pe.get("commercial_line") or {}).get("order_gbp_at_breaks")
+                      if isinstance(pe.get("commercial_line"), dict) else None)
+        _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
+        if _at_breaks and _mpb_cfg.get("enabled"):
+            _t = row + int(_mpb_cfg.get("row_offset", -6))
+            _sheet_name = str(_mpb_cfg.get("sheet") or "Material Price Break")
+            # WITH THE RUN'S OWN FIGURE AS THE FALLBACK. A run that never fills the break
+            # table (no quantities asked) would leave the LOOKUP reading an empty row —
+            # £0 packaging, worse than the literal this replaces. The IF asks the row's
+            # first cell: empty means this run kept the literal behaviour, filled means
+            # D6 drives the line like every other break-priced row.
+            _lit = price if price is not None else 0
+            ws.cell(row=row, column=b["col_price"],
+                    value=(f"=IF('{_sheet_name}'!D{_t}=\"\",{_lit},"
+                           f"LOOKUP($D$6,'{_sheet_name}'!$D$4:$N$4,"
+                           f"'{_sheet_name}'!D{_t}:N{_t}))"))
+        else:
+            ws.cell(row=row, column=b["col_price"],
+                    value=price if price is not None else None)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
         # 4% SCRAP IS AN ALLOWANCE FOR MATERIAL YOU CUT AND SPOIL. A pallet is not cut, and
         # a lorry is not spoiled.

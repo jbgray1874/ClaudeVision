@@ -1625,6 +1625,11 @@ def main() -> None:
                               "carries every quantity, so no per-quantity copies are filed.",
                               flush=True)
                     _order_freight: Dict[str, float] = {}
+                    try:
+                        from commercial_lines import collect_lines as _collect_cl
+                        summary["commercial_lines"] = _collect_cl(summary)
+                    except Exception:                               # noqa: BLE001
+                        pass
                     for _cl in (summary.get("commercial_lines") or []):
                         if isinstance(_cl, dict) and _cl.get("order_gbp"):
                             _order_freight[str(_cl.get("code") or "").upper()] = float(

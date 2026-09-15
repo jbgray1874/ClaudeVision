@@ -92,11 +92,19 @@ def system_price(code: Any, description: Any = None) -> Optional[Dict[str, Any]]
         # THE MATCHED ROW'S OWN DESCRIPTION TRAVELS WITH THE PRICE. It is where the
         # catalogue states what the price is FOR — "POLY BAG 18 x 24 x 100G (PACK OF
         # 1000)" — and a caller who cannot see it prices a thousand bags as one.
+        #
+        # FROM evidence.row, FIRST. The connector's candidate carries the REQUESTED
+        # description in its top-level field (empty when the caller asked by code alone)
+        # and keeps the matched catalogue row intact under evidence.row — reading the
+        # top-level one is how the 17:56 book charged £31.57 a unit: the pack wording
+        # never reached the divider, and every unit carried a thousand bags.
         _md = sel.get("metadata") or {}
+        _ev = sel.get("evidence") or {}
+        _row = _ev.get("row") if isinstance(_ev.get("row"), dict) else {}
         return {"gbp": float(gbp), "source": str(sel.get("source") or "system"),
-                "description": str(_md.get("description")
-                                   or (sel.get("evidence") or {}).get("description") or ""),
-                "evidence": sel.get("evidence") or {}}
+                "description": str(_row.get("description") or _md.get("description")
+                                   or _ev.get("description") or ""),
+                "evidence": _ev}
     except Exception:                                              # noqa: BLE001
         return None
 
