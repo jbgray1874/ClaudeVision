@@ -135,3 +135,61 @@ def test_a_healthy_formula_is_never_touched():
     est.cell(16, 10).value = _ok
     write_price_breaks(wb, [_line()], [1, 10], CFG)
     assert est.cell(16, 10).value == _ok
+
+
+# ── the mis-pointed survivors of the same edit ───────────────────────────────────────────
+
+_LK = ("=LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,"
+       "'Material Price Break'!D{r}:N{r})")
+
+
+def test_a_lookup_shifted_by_the_template_edit_is_repaired_on_an_empty_row():
+    """The 16:07 book: J17..J50 all pointed 32 rows low — valid formulas, silently reading
+    whatever sits 32 rows below their own break line. Same rule as #REF!: an empty row is
+    repaired to the row-offset pattern IN THIS BOOK, and the damage is named so the blank
+    template still gets fixed."""
+    wb = _book()
+    est = wb["Estimate"]
+    est.cell(17, 10).value = _LK.format(r=43)
+    res = write_price_breaks(wb, [_line()], [1, 10], CFG)
+    assert est.cell(17, 10).value == _LK.format(r=11)
+    assert any("J17" in x and "43 -> 11" in x for x in res["repaired_lookups"]), res
+
+
+def test_the_header_range_is_never_mistaken_for_the_price_row():
+    """The formula holds two ranges on the break sheet — $D$4:$N$4 is the header and must
+    survive every repair exactly as typed, dollars and all."""
+    wb = _book()
+    est = wb["Estimate"]
+    est.cell(17, 10).value = _LK.format(r=43)
+    write_price_breaks(wb, [_line()], [1, 10], CFG)
+    assert "$D$4:$N$4" in est.cell(17, 10).value
+
+
+def test_a_correct_lookup_is_not_touched_by_the_repair():
+    wb = _book()
+    est = wb["Estimate"]
+    est.cell(16, 10).value = _LK.format(r=10)
+    res = write_price_breaks(wb, [_line()], [1, 10], CFG)
+    assert est.cell(16, 10).value == _LK.format(r=10)
+    assert not res.get("repaired_lookups")
+
+
+def test_a_mispointed_lookup_on_a_row_with_a_part_is_reported_not_rewritten():
+    """The estimator's line, the estimator's formula. The book says what is wrong and where;
+    it does not edit under a part somebody owns."""
+    wb = _book()
+    est = wb["Estimate"]
+    est.cell(21, 8).value = "10975-02-A01"
+    est.cell(21, 10).value = _LK.format(r=43)
+    res = write_price_breaks(wb, [_line()], [1, 10], CFG)
+    assert est.cell(21, 10).value == _LK.format(r=43)
+    assert any("J21" in x and "43" in x and "15" in x for x in res["refused"]), res["refused"]
+
+
+def test_the_run_log_names_the_damage_every_time():
+    """Repaired in the book only — the blank template is the estimators' document, so every
+    run says out loud that it still needs fixing there."""
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert "TEMPLATE DAMAGE repaired in " in src
+    assert "the blank template still " in src

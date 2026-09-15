@@ -1674,6 +1674,18 @@ def main() -> None:
                                       f"{len(_res.get('quantities') or [])} quantities"
                                       + (f" — refused: {'; '.join(_res['refused'])}"
                                          if _res.get("refused") else ""), flush=True)
+                                if _res.get("repaired_lookups") or \
+                                        _res.get("cleared_broken_refs"):
+                                    # SAID ON EVERY RUN, because the repair is only in this
+                                    # book. The blank template is the estimators' document
+                                    # and it is still damaged until somebody fixes it there.
+                                    print("   [price-break] TEMPLATE DAMAGE repaired in "
+                                          "this workbook only — the blank template still "
+                                          "needs fixing: "
+                                          + "; ".join((_res.get("repaired_lookups") or [])
+                                                      + [f"{c} was #REF! (cleared)" for c in
+                                                         (_res.get("cleared_broken_refs")
+                                                          or [])]), flush=True)
                                 if _res.get("outside_table"):
                                     # SAID ON THE RUN, not left to be noticed. The break
                                     # table is shorter than the BOM block; a material past

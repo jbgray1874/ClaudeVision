@@ -238,19 +238,72 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
         # `refused` and left exactly as it is.
         _jcol = int(cfg.get("price_col", 10))
         _codecols = (int(cfg.get("code_col", 8)), int(cfg.get("desc_col", 3)))
+        # AND A REFERENCE THAT SURVIVED THE EDIT POINTING AT THE WRONG ROW IS WORSE.
+        #
+        # #REF! at least LOOKS broken. The 16:07 book also carried, from the same hand-edit,
+        #
+        #     J17  =LOOKUP(...,'Material Price Break'!D43:N43)     expected D11:N11
+        #     J50  =LOOKUP(...,'Material Price Break'!D74:N74)     expected D44:N44
+        #
+        # — every row from 17 down shifted 32 rows low, valid formulas all, silently reading
+        # whatever happens to be 32 rows below their own break line. The engine masks it on
+        # rows it prices (a literal overwrites the formula); the row it does NOT mask is the
+        # one an estimator adds by hand, whose typed break prices then feed somebody else's
+        # row. That is the estimator's own mechanism broken inside a delivered book.
+        #
+        # SAME RULE AS #REF!: an empty row is repaired to the row-offset pattern and named;
+        # a row carrying a part is reported and left exactly as it is. And repaired IN THIS
+        # BOOK only — the blank template is the estimators' document, so the run says out
+        # loud, every time, that the blank still needs fixing.
+        _range_pat = _re.compile(r"!(\$?)([A-Z]+)(\$?)(\d+):(\$?)([A-Z]+)(\$?)(\d+)")
         for _r in range(first_bom, last_bom + 1):
             _c = est.cell(row=_r, column=_jcol)
-            if not (isinstance(_c.value, str) and "#REF!" in _c.value):
+            _v = _c.value
+            if not isinstance(_v, str):
+                continue
+            # #REF! is judged on any formula — Excel can eat the sheet name along with the
+            # reference, so requiring the name here would skip exactly the broken ones. The
+            # misroute check below IS scoped to formulas naming the break sheet, because a
+            # reference into any other sheet is not this mechanism's to judge.
+            if "#REF!" not in _v and sheet not in _v:
                 continue
             _occupied = any(str(est.cell(row=_r, column=_cc).value or "").strip()
                             for _cc in _codecols)
+            _want = _r + row_offset
+            if "#REF!" in _v:
+                if _occupied:
+                    done["refused"].append(
+                        f"{est.title}!{_c.coordinate} is #REF! on a row that carries a "
+                        f"part — left alone; the template's break-tab reference needs "
+                        f"repairing")
+                    continue
+                _c.value = None
+                done.setdefault("cleared_broken_refs", []).append(_c.coordinate)
+                continue
+            # The formula holds two ranges on the break sheet: the header ($D$4:$N$4) and
+            # this row's prices. The header names the fixed header row; only a range whose
+            # BOTH rows should equal this row's break line is judged, so the header itself
+            # is never "repaired".
+            _ranges = list(_range_pat.finditer(_v))
+            if not _ranges:
+                continue
+            _last = _ranges[-1]
+            _r1, _r2 = int(_last.group(4)), int(_last.group(8))
+            if _want < 1 or (_r1 == _want and _r2 == _want):
+                continue
             if _occupied:
                 done["refused"].append(
-                    f"{est.title}!{_c.coordinate} is #REF! on a row that carries a part — "
-                    f"left alone; the template's break-tab reference needs repairing")
+                    f"{est.title}!{_c.coordinate} reads break row {_r1} and should read "
+                    f"{_want}, on a row that carries a part — left alone; the template's "
+                    f"break-tab reference needs repairing")
                 continue
-            _c.value = None
-            done.setdefault("cleared_broken_refs", []).append(_c.coordinate)
+            _fixed = (_v[:_last.start()]
+                      + f"!{_last.group(1)}{_last.group(2)}{_last.group(3)}{_want}"
+                        f":{_last.group(5)}{_last.group(6)}{_last.group(7)}{_want}"
+                      + _v[_last.end():])
+            _c.value = _fixed
+            done.setdefault("repaired_lookups", []).append(
+                f"{_c.coordinate}: break row {_r1} -> {_want}")
 
         _by_row: Dict[int, Dict[str, Any]] = {}
         for ln in (lines or []):
