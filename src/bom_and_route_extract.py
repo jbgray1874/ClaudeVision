@@ -1030,9 +1030,66 @@ def write_html(summary: Mapping[str, Any], out_dir: Any, job: str = "", want: st
     return path
 
 
+class WrongJobRecord(Exception):
+    """The record handed in is not the job the file would be named after."""
+
+
+def _job_key(text: Any) -> str:
+    """A job number with the punctuation taken out — 10975-02 and 10975_02 are one thing."""
+    import re                                                          # noqa: PLC0415
+    return re.sub(r"[^A-Z0-9]", "", str(text or "").upper())
+
+
+def record_mentions_job(summary: Mapping[str, Any], job: Any) -> bool:
+    """Does this record mention that job ANYWHERE — a part, a drawing, a file, a number?
+
+    DELIBERATELY THE WEAKEST TEST THAT STILL CATCHES IT, because the label is often the
+    FOLDER and the folder is often not the drawing number. 0355255 is the folder for a job
+    whose parts are all 10975-02-*, and refusing that would be a false alarm on a legitimate
+    pack — but 0355255 appears in the drawing FILENAMES, so a mention test passes it. A
+    record that never says the word at all is the case worth stopping.
+    """
+    import re                                                          # noqa: PLC0415
+    want = _job_key(job)
+    if not want:
+        return True                      # nothing asked for; nothing to contradict
+    try:
+        import json as _json                                           # noqa: PLC0415
+        blob = _json.dumps(summary, default=str)
+    except Exception:                                                  # noqa: BLE001
+        blob = str(summary)
+    if want in _job_key(blob):
+        return True
+    # NOTHING TO CONTRADICT IS NOT A CONTRADICTION. An empty record, a malformed one, or a
+    # pack that yielded nothing names no job at all — and this must never become a new way
+    # for the estimating page to error, which is a contract the extract already has and
+    # keeps. Only a record that names SOME OTHER JOB is the case worth stopping: that is
+    # what 10975-02's was, thirty rows of 10575 and not one mention of the job on the cover.
+    return not re.search(r"\d{4,}[-_ ]\d", blob)
+
+
 def write_both(summary: Mapping[str, Any], out_dir: Any, job: str = "",
                want: str = "both") -> Dict[str, Optional[str]]:
-    """One snapshot, both outputs — so the sheet and the page cannot disagree."""
+    """One snapshot, both outputs — so the sheet and the page cannot disagree.
+
+    AND BOTH ABOUT THE JOB ON THE COVER. 10975-02's extract came out titled "BOMs and routes
+    — 10975-02" and every one of its 30 BOM rows was 10575-01 or 10575-02 — a Dyson cordless
+    vacuum display, one digit away from the M&S table-top graphic holder it claimed to be.
+    314 mentions of 10575 against two of 10975, and both of those were the title we wrote.
+
+    Nothing here was fuzzy-matching: the endpoint reads json/<label>.json exactly. The RECORD
+    was another job's. So the file was correct about everything except which job it was, which
+    is the one error that cannot be spotted by reading it — every row is internally consistent
+    and every column cites its source.
+
+    A deliverable named for a job must contain that job. Where it does not, this refuses; a
+    file that is wrong about its own subject is worse than no file, because it is quoted.
+    """
+    if not record_mentions_job(summary, job):
+        raise WrongJobRecord(
+            f"this record never mentions {job}. It would produce a file named for "
+            f"{job} describing a different job — which is the one kind of wrong that "
+            f"cannot be seen by reading it. Nothing written.")
     tables = build_tables(summary, want)
     xlsx = write_workbook(summary, out_dir, job, want, tables=tables)
     html = write_html(summary, out_dir, job, want, tables=tables)
@@ -1042,7 +1099,8 @@ def write_both(summary: Mapping[str, Any], out_dir: Any, job: str = "",
             "routes": len(tables.get("Routes") or [])}
 
 
-__all__ = ["SHEETS", "READER_MEANING", "STATUS_MEANING", "route_payloads", "bom_sheet",
+__all__ = ["SHEETS", "READER_MEANING", "STATUS_MEANING", "WrongJobRecord",
+           "record_mentions_job", "route_payloads", "bom_sheet",
            "route_sheet", "derivation_sheet", "source_declaration",
            "bom_columns_not_recorded", "build_tables", "write_workbook", "write_html",
            "write_both"]
