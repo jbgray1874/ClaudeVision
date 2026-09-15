@@ -448,6 +448,13 @@ PACKING_METHOD = {
         "material_families": ("ACRYLIC", "PERSPEX", "PMMA", "HIPS", "PETG",
                               "POLYCARBONATE", "ABS", "PVC", "FOAMEX"),
         "max_unit_weight_kg": 5.0,     # SDI Intelligence assumption, not Howard's figure
+        # PACKED CONTENTS, NOT VETOES. The 18:21 run declined the whole method because
+        # G01 — the PRINTED GRAPHIC the holder exists to hold — read as "a non-plastic
+        # fabricated part". A graphic, a label, an insert goes INSIDE the bag; it cannot
+        # change how the job packs, so it never vetoes the method. Suitability is judged
+        # from the principal structural product; these tokens mark the contents.
+        "packed_content_tokens": ("GRAPHIC", "LABEL", "STICKER", "INSERT", "LEAFLET",
+                                  "PRINT", "PAPER", "CARD"),
     },
 }
 

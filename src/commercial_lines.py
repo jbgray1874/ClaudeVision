@@ -313,15 +313,25 @@ def _method_applies(order: Dict[str, Any]) -> Any:
     # James's review. A FABRICATED leaf we could not assess means we cannot say the job
     # fits the stated basis, so the method declines and names the part. Bought-in items
     # ride along in the same bag; assembly parents are counted through their children.
+    _content = tuple(str(t).upper() for t in (_gate.get("packed_content_tokens") or ()))
     for p in (order.get("left_out_parts") or []):
         if not isinstance(p, dict) or p.get("is_assembly") or p.get("bought_in"):
+            continue
+        # PACKED CONTENTS RIDE ALONG. The 18:21 run declined the whole method because
+        # G01 — the printed graphic the holder exists to HOLD — read as "a non-plastic
+        # fabricated part". A graphic, a label, an insert goes inside the bag; it cannot
+        # change how the job packs. Suitability is judged from the principal structural
+        # product, and only a STRUCTURAL fabricated component may veto.
+        _blob = " ".join(str(p.get(k) or "") for k in
+                         ("description", "part_number", "material")).upper()
+        if _content and any(t in _blob for t in _content):
             continue
         _m = str(p.get("material") or "").upper().replace("_", " ")
         if _m and _fams and not any(f in _m for f in _fams):
             return (f"{p.get('part_number')} is {p.get('material')!r} (unmeasured) — a "
-                    f"non-plastic fabricated part is on the job, whatever its blank")
+                    f"non-plastic structural part is on the job, whatever its blank")
         return (f"{p.get('part_number')} could not be assessed ({p.get('reason')}) — a "
-                f"fabricated leaf nobody measured leaves the stated basis unproven")
+                f"structural leaf nobody measured leaves the stated basis unproven")
     _max_kg = _gate.get("max_unit_weight_kg")
     _kg = order.get("unit_weight_kg")
     if _max_kg and _kg and float(_kg) > float(_max_kg):

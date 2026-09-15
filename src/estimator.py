@@ -7077,6 +7077,14 @@ def _page_text_for_bought_in_scan(page: Dict[str, Any]) -> str:
     return " ".join(chunks)
 
 
+def _announce_packing_status(cline: Dict[str, Any]) -> None:
+    """SAID ON THE RUN. The 18:21 book's packing zero was undiagnosable from the
+    deliverables — the reason lived in one JSON field. Module-level so a test can prove
+    the sentence is actually printed, not merely present in the source."""
+    if isinstance(cline, dict) and cline.get("method_status"):
+        print(f"   [packing] {cline['method_status']}", flush=True)
+
+
 def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> Dict[str, Any]:
     """Minimal shape compatible with document_builder + estimate_part.
 
@@ -8302,7 +8310,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _oq = _commercial_order_quantity(summary)
                 _cline = (_cl.packaging_line(parts, _oq) if _code == "PACKAGING"
                           else _cl.delivery_line(parts, _oq))
-            except Exception:                               # noqa: BLE001
+            except Exception as _cl_exc:                    # noqa: BLE001
+                # THE ONE PATH WITH NO VOICE. A crash here used to land as a bare £0
+                # wearing the ordinary estimator-to-price text — indistinguishable from a
+                # deliberate withhold, which is how the 18:21 zero took a JSON grep to
+                # diagnose. The line still fails soft; it just says so.
+                print(f"   [packing] {_code} line could not be built "
+                      f"({type(_cl_exc).__name__}: {_cl_exc}) — held at £0, estimator "
+                      f"to price", flush=True)
                 _cline = None
             _unit = (_cline or {}).get("unit_gbp")
             # A LINE AND A ZERO ON THE SHEET — NOT AN ESSAY. Packaging and delivery are the two
@@ -8336,10 +8351,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                                         "Howard's stated method, priced from SDI Live")
             if _cline:
                 _stub["commercial_line"] = _cline
-                if _cline.get("method_status"):
-                    # SAID ON THE RUN. The 18:21 book's packing zero was undiagnosable
-                    # from the deliverables — the reason lived in one JSON field.
-                    print(f"   [packing] {_cline['method_status']}", flush=True)
+                _announce_packing_status(_cline)
             # No operations — these are pure commercial placeholders, not fabricated/handled
             # parts, so they must not accrue handling labour. Keep them genuinely £0.
             _stub["textual_operations"] = []

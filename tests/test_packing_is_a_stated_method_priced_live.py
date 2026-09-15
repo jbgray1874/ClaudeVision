@@ -446,6 +446,53 @@ def test_every_outcome_carries_a_method_status(monkeypatch):
     assert "declined" in CL.packaging_line(_steel_parts(), 50)["method_status"]
     monkeypatch.setattr(CL, "_consumable_price", lambda c: None)
     assert "missing rate" in CL.packaging_line(_parts(), 50)["method_status"]
-    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
-               encoding="utf-8").read()
-    assert '[packing] {_cline[' in src.replace("'", "["),         "and the run log prints it"
+    # DELIVERY, NOT PRESENCE. "the string is in the source" proves an intention; this
+    # proves the sentence reaches the run log.
+    import estimator, io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        estimator._announce_packing_status({"method_status": "priced by the stated method"})
+    assert "[packing] priced by the stated method" in buf.getvalue()
+
+
+# ── packed contents are not vetoes ───────────────────────────────────────────────────────
+#
+# The 18:21 run: "Howard's bag-and-box method was not applied: 10975-02-G01 is 'PAPER'
+# (unmeasured) — a non-plastic fabricated part is on the job." The gate worked as built
+# and wrong as specified: G01 is the printed graphic the holder exists to HOLD. A graphic,
+# a label, an insert goes INSIDE the bag — it cannot change how the job packs. Suitability
+# is judged from the principal structural product; only a structural component may veto.
+
+def test_the_printed_graphic_rides_inside_the_bag(monkeypatch):
+    """The 18:21 decline, reproduced and fixed: the real job's own shape prices at £3.37."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [{"part_number": "10975-02-G01", "description": "GRAPHIC",
+                         "normalized_material": "PAPER", "quantity": 1,
+                         "flat_pattern_detected": True}]        # unmeasured, non-plastic
+    line = CL.packaging_line(parts, 50)
+    assert line["order_gbp"] == 3.37, line.get("method_status")
+
+
+def test_labels_inserts_and_stickers_ride_along_too(monkeypatch):
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    for desc, mat in (("UPC STICKER", "PAPER"), ("PRICE LABEL", None),
+                      ("INSTRUCTION LEAFLET", "CARD"), ("PRINTED INSERT", None)):
+        parts = _parts() + [{"part_number": "X1", "description": desc,
+                             "normalized_material": mat, "quantity": 1,
+                             "flat_pattern_detected": True}]
+        line = CL.packaging_line(parts, 50)
+        assert line["order_gbp"] == 3.37, (desc, line.get("method_status"))
+
+
+def test_a_structural_unknown_still_vetoes(monkeypatch):
+    """The rule is narrower, not gone: an unmeasured STIFFENER is structure nobody
+    assessed, and unproven still does not price."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
+    parts = _parts() + [{"part_number": "10975-02-C01", "description": "STIFFENER",
+                         "quantity": 1, "flat_pattern_detected": True}]
+    line = CL.packaging_line(parts, 50)
+    assert line.get("order_gbp") is None
+    assert "structural" in line["method_status"]
