@@ -1,0 +1,209 @@
+"""The table SDI has always had, and has never once had a number in it.
+
+    "Let's look at collapsing all the s/sheets into one when we have multiple unit
+     quantities. We have estimator example of how this was done."     — James Gray, 15 Sep
+
+Howard's own 0355255 workbook is the specification, and he filled it in BY HAND: one row per
+purchased material, one column per break, and the Estimate resolving the right column with
+LOOKUP($D$6, ...). Change the order quantity and the sheet moves. One workbook, every
+quantity — the thing we were producing four files to do.
+
+MEASURED ON A REAL BOOK, NOT ASSUMED. 12349-02, 14 Sep:
+
+    price cells on the break tab    0 non-empty — every row, every column
+    rows available                  15 (5-19) against a BOM of 40 (Estimate 11-50)
+    rows 14-19                      =_xlfn.SINGLE(Estimate!#REF!)
+    Estimate J45:J50                LOOKUP into break rows 14-19, ALREADY USED by BOM rows
+                                    20-25 — six lines would read six other lines' prices
+
+So the mechanism was not broken, it was never filled in: wb_populate lists the tab under
+`structural_sheets` with "NEVER overwrite these". That rule protects the estimators' layout
+and it is right. What it also did was leave the table permanently empty.
+
+Writing PRICES into a table built to hold prices is using it, not overwriting it — and only
+ever into a cell that is EMPTY, because a figure an estimator typed outranks anything the
+engine derived. That is the same rule the job-identity header already follows.
+
+AND IT IS OFF UNTIL THE TEMPLATE IS REPAIRED. Filling a table that mis-routes six of its rows
+would put six wrong prices on a sheet, which is worse than an empty table that puts none.
+"""
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+
+openpyxl = pytest.importorskip("openpyxl")
+
+import config                                                          # noqa: E402
+from material_price_break import (quantity_vector, write_price_breaks)  # noqa: E402
+
+CFG = dict(config.MATERIAL_PRICE_BREAK)
+
+
+def _wb():
+    wb = openpyxl.Workbook()
+    wb.active.title = "Estimate"
+    wb.create_sheet("Material Price Break")
+    return wb
+
+
+def _line(row, **kw):
+    d = {"sheet_row": row}
+    d.update(kw)
+    return d
+
+
+# ── the quantity row ─────────────────────────────────────────────────────────────────────
+
+def test_the_vector_always_starts_at_one():
+    """Howard's does, and for the reason somebody finds out the hard way: LOOKUP against a
+    vector starting at 10 returns #N/A for an order of 1, and somebody WILL open the sheet
+    at 1 to sanity-check a unit cost."""
+    assert quantity_vector([10, 50, 250, 1000]) == [1, 10, 50, 250, 1000]
+
+
+def test_it_is_ascending_and_deduplicated():
+    """LOOKUP over an unsorted vector does not error. It returns the wrong column."""
+    assert quantity_vector([250, 10, 1000, 10, 50]) == [1, 10, 50, 250, 1000]
+
+
+def test_no_quantities_writes_nothing():
+    assert quantity_vector([]) == []
+    wb = _wb()
+    out = write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [], CFG)
+    assert out["rows"] == 0 and out["refused"]
+
+
+def test_the_quantities_are_written_on_the_estimate_not_the_structural_sheet():
+    """The break tab's header reads =Estimate!F180..F190, so the numbers belong in the
+    Estimate's own Qty Breaks column — which the engine already owns. Nothing of the
+    estimators' layout is touched to change which quantities the sheet offers."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [10, 50, 250, 1000], CFG)
+    est = wb["Estimate"]
+    assert [est[f"F{180 + i}"].value for i in range(5)] == [1, 10, 50, 250, 1000]
+
+
+def test_the_vector_is_padded_rather_than_left_blank():
+    """Eleven cells feed the LOOKUP. A blank or a descent in the middle of them returns the
+    wrong column instead of an error, which is the failure this area keeps producing."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11, unit_gbp=4.5)], [10, 50], CFG)
+    est = wb["Estimate"]
+    got = [est[f"F{180 + i}"].value for i in range(11)]
+    assert got[:3] == [1, 10, 50]
+    assert all(v == 50 for v in got[3:])
+    assert got == sorted(got)
+
+
+def test_more_quantities_than_columns_is_refused_not_truncated():
+    """A break table quietly missing its last column is Howard's own complaint from the
+    other end."""
+    wb = _wb()
+    out = write_price_breaks(wb, [_line(11, unit_gbp=1.0)], list(range(1, 40)), CFG)
+    assert out["rows"] == 0
+    assert "widen it" in " ".join(out["refused"])
+
+
+# ── a price per line per break ───────────────────────────────────────────────────────────
+
+def test_a_flat_price_is_the_same_in_every_column():
+    """Tape, sheet and poly bag on Howard's sheet do not move with the order."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11, unit_gbp=4.50)], [10, 50, 250, 1000], CFG)
+    ws = wb["Material Price Break"]
+    assert [ws.cell(row=5, column=4 + i).value for i in range(5)] == [4.5] * 5
+
+
+def test_a_per_order_line_amortises_and_that_is_the_point():
+    """A table of five identical columns would be decoration. The stock box is why it
+    earns its place."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(12, order_gbp=1.89)], [10, 50, 250, 1000], CFG)
+    ws = wb["Material Price Break"]
+    got = [ws.cell(row=6, column=4 + i).value for i in range(5)]
+    assert got[1] == 0.189                       # 1.89 over 10
+    assert got[2] == 0.0378                      # over 50
+    assert got[-1] < got[1]
+
+
+def test_howards_own_box_figures_come_out():
+    """1 box for 10 or 50, 3 for 250, 9 for 1000 — his email, and the row at the foot of
+    his own sheet. At £1.89 a box that is 0.189 / 0.0378 / 0.02268 / 0.01701, which is
+    exactly what his workbook holds."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(13, order_gbp=1.89,
+                                  units_per_order={"10": 1, "50": 1, "250": 3, "1000": 9})],
+                       [10, 50, 250, 1000], CFG)
+    ws = wb["Material Price Break"]
+    got = [ws.cell(row=7, column=4 + i).value for i in range(1, 5)]
+    assert got == [0.189, 0.0378, 0.02268, 0.01701]
+
+
+def test_the_row_offset_is_a_number_not_an_assumption():
+    """The template is being widened and the mapping moves with it. One number."""
+    wb = _wb()
+    cfg = dict(CFG, row_offset=-2)
+    write_price_breaks(wb, [_line(11, unit_gbp=9.99)], [10], cfg)
+    assert wb["Material Price Break"].cell(row=9, column=5).value == 9.99
+
+
+def test_a_line_outside_the_bom_block_is_left_alone():
+    wb = _wb()
+    out = write_price_breaks(wb, [_line(999, unit_gbp=1.0)], [10, 50], CFG)
+    assert out["rows"] == 0
+
+
+def test_a_line_with_no_price_writes_no_cell():
+    """An empty cell is the honest answer where nothing was priced. A zero is a claim."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(11)], [10, 50], CFG)
+    assert wb["Material Price Break"].cell(row=5, column=4).value is None
+
+
+# ── it never displaces the estimator ─────────────────────────────────────────────────────
+
+def test_a_figure_an_estimator_typed_is_never_overwritten():
+    """The whole reason the tab was marked NEVER OVERWRITE. A typed number on this tab is
+    an estimator working, and it outranks anything the engine derived."""
+    wb = _wb()
+    ws = wb["Material Price Break"]
+    ws.cell(row=5, column=5, value=45.19)              # his supplier price, by hand
+    out = write_price_breaks(wb, [_line(11, unit_gbp=48.89)], [10, 50], CFG)
+    assert ws.cell(row=5, column=5).value == 45.19
+    assert out["skipped_occupied"] >= 1
+
+
+def test_it_refuses_rather_than_raises_on_a_workbook_that_is_not_one():
+    wb = openpyxl.Workbook()                            # no break tab at all
+    out = write_price_breaks(wb, [_line(11, unit_gbp=1.0)], [10], CFG)
+    assert out["rows"] == 0 and out["refused"]
+
+
+def test_rubbish_lines_do_not_stop_the_good_ones():
+    wb = _wb()
+    out = write_price_breaks(wb, [{"nonsense": True}, _line("x", unit_gbp=1),
+                                  _line(11, unit_gbp=2.0)], [10], CFG)
+    assert out["rows"] == 1
+
+
+# ── and it is off until the template is repaired ─────────────────────────────────────────
+
+def test_it_ships_off_and_says_why():
+    """Filling a table that mis-routes six of its rows puts six wrong prices on a sheet,
+    which is worse than an empty table that puts none."""
+    assert config.MATERIAL_PRICE_BREAK["enabled"] is False
+    src = (ROOT / "src" / "config.py").read_text(encoding="utf-8")
+    assert "OFF UNTIL THE TEMPLATE IS WIDENED" in src
+    assert "ALREADY USED by BOM rows" in src
+
+
+def test_the_measurements_are_recorded_not_the_impression():
+    src = (ROOT / "src" / "material_price_break.py").read_text(encoding="utf-8")
+    assert "0 non-empty" in src
+    assert "J45:J50" in src

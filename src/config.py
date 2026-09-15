@@ -365,6 +365,35 @@ COMMERCIAL_LINE_GBP_PER_ORDER = {
 SHOW_FORMULAS_ON_ESTIMATE = False
 SHOW_FORMULAS_SHEETS = ("Estimate",)
 
+# --- One sheet for every quantity: the Material Price Break table -----------------
+#
+# SDI has always had this table and it has always been empty — 0 non-empty price cells on
+# 12349-02's book, every row, every column. Howard fills his in by hand; that is why his
+# 0355255 estimate is one workbook covering 1/10/50/250/1000/1250/1500 and ours is a
+# workbook per quantity.
+#
+# OFF UNTIL THE TEMPLATE IS WIDENED, and these numbers are why. Measured on a real book:
+#
+#   break-tab rows available   15 (rows 5-19) against a BOM of 40 rows (Estimate 11-50)
+#   rows 14-19                 =_xlfn.SINGLE(Estimate!#REF!)
+#   Estimate J45:J50           LOOKUP into break rows 14-19 — ALREADY USED by BOM rows
+#                              20-25, so six lines would read six other lines' prices
+#
+# Turning this on against the template as it stands would fill a table that mis-routes six
+# rows. `row_offset` is the one number that moves when the template is repaired: break row =
+# BOM row + row_offset, uniformly -6 for rows 11-44 today.
+MATERIAL_PRICE_BREAK = {
+    "enabled": False,
+    "sheet": "Material Price Break",
+    "estimate_sheet": "Estimate",
+    "row_offset": -6,                 # break row = BOM row + this
+    "first_bom_row": 11,
+    "last_bom_row": 50,
+    "qty_vector_first_cell": "F180",  # Estimate's own Qty Breaks column, 11 cells down
+    "first_price_col": 4,             # D
+    "last_price_col": 14,             # N
+}
+
 # --- Goods sold off a roll, priced by the length actually used ---------------------
 #
 # 0355255's tape line is the whole gap between our sheet and the estimator's: £19.50 a unit
