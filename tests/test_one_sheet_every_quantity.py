@@ -230,15 +230,51 @@ def test_the_three_ways_a_line_can_move_are_written_down():
     assert "a supplier price break" in src
 
 
-# ── and it is off until the template is repaired ─────────────────────────────────────────
+# ── the table is shorter than the BOM, and says so ───────────────────────────────────────
 
-def test_it_ships_off_and_says_why():
-    """Filling a table that mis-routes six of its rows puts six wrong prices on a sheet,
-    which is worse than an empty table that puts none."""
-    assert config.MATERIAL_PRICE_BREAK["enabled"] is False
+def test_a_line_below_the_tables_last_row_is_named_not_dropped():
+    """NO SILENT CAP. James, on the repaired template: "break rows go to 19 from 5 —
+    referencing estimate C cells to G cells from 11 to 25". Fifteen rows against forty BOM
+    slots, so a material on rows 26-50 has nowhere to be priced.
+
+    A table simply MISSING a material reads as "this one does not move with quantity",
+    which is the one thing it must never say by accident — so those lines are named."""
+    wb = _wb()
+    out = write_price_breaks(wb, [_line(11, unit_gbp=1.0, code="TAPE"),
+                                  _line(28, unit_gbp=2.0, code="POWDER")],
+                             [10, 50], CFG)
+    assert out["rows"] == 1
+    assert any("POWDER" in s for s in out["outside_table"])
+    assert not any("TAPE" in s for s in out["outside_table"])
+
+
+def test_nothing_is_written_past_the_tables_last_row():
+    """Numbers in cells no LOOKUP reads are invisible money, which is worse than none."""
+    wb = _wb()
+    write_price_breaks(wb, [_line(28, unit_gbp=2.0, code="POWDER")], [10, 50], CFG)
+    ws = wb["Material Price Break"]
+    assert ws.cell(row=22, column=4).value is None      # 28 - 6, past the table
+    assert ws.cell(row=22, column=5).value is None
+
+
+def test_the_last_row_itself_is_still_written():
+    """Off-by-one in the other direction would drop a line the table does hold."""
+    wb = _wb()
+    out = write_price_breaks(wb, [_line(25, unit_gbp=3.0, code="EDGE")], [10], CFG)
+    assert out["rows"] == 1 and not out["outside_table"]
+    assert wb["Material Price Break"].cell(row=19, column=5).value == 3.0
+
+
+# ── on, against the repaired template ────────────────────────────────────────────────────
+
+def test_it_is_on_and_bounded_to_the_table_that_exists():
+    """Enabled once the template was repaired — and bounded to row 25, which is where the
+    break rows actually stop, rather than to the BOM block's own last row of 50."""
+    assert config.MATERIAL_PRICE_BREAK["enabled"] is True
+    assert config.MATERIAL_PRICE_BREAK["last_bom_row"] == 25
+    assert config.MATERIAL_PRICE_BREAK["row_offset"] == -6
     src = (ROOT / "src" / "config.py").read_text(encoding="utf-8")
-    assert "OFF UNTIL THE TEMPLATE IS WIDENED" in src
-    assert "ALREADY USED by BOM rows" in src
+    assert "THE TABLE STOPS AT BOM ROW 25" in src
 
 
 def test_the_measurements_are_recorded_not_the_impression():

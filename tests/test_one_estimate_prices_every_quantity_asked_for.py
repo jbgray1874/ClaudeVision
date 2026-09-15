@@ -138,7 +138,10 @@ def test_the_variants_cannot_cost_a_run_that_already_took_an_hour():
     assert "except Exception as _sw_exc" in _after, (
         "the quantity sweep is no longer wrapped — a variant that fails would take down a "
         "run that has already spent an hour on extraction and costing")
-    assert "variants not written" in _after[:12000]
+    # AND THE SAME LESSON TWICE IN ONE TEST. This kept its own 12,000-character window and
+    # went red the very next time something was added inside the block — 12,287. A distance
+    # in characters is not what is meant; "the failure is reported rather than swallowed" is.
+    assert "variants not written" in _after
     # And it really is the OUTER guard: at the indent of the `try:` that opens the block,
     # not one of the inner ones each writer carries for itself.
     assert "\n                except Exception as _sw_exc" in _after

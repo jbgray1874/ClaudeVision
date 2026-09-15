@@ -401,12 +401,23 @@ PER_ORDER_UNIT_COUNTS = {
 }
 
 MATERIAL_PRICE_BREAK = {
-    "enabled": False,
+    "enabled": True,
     "sheet": "Material Price Break",
     "estimate_sheet": "Estimate",
     "row_offset": -6,                 # break row = BOM row + this
     "first_bom_row": 11,
-    "last_bom_row": 50,
+    # THE TABLE STOPS AT BOM ROW 25 AND THE BOM BLOCK RUNS TO 50.
+    #
+    # James, 15 Sep, on the repaired template: "break rows go to 19 from 5 — referencing
+    # estimate C cells to G cells from 11 to 25". Fifteen rows against forty BOM slots, so a
+    # material on rows 26-50 has nowhere to be priced across the breaks.
+    #
+    # Set to 25 rather than 50 ON PURPOSE. Writing past the table's last row would put
+    # numbers into cells no LOOKUP reads — invisible money, which is worse than none — so
+    # lines below it are REPORTED instead, by part number, on the run and in the record.
+    # 10975-02 uses rows 11-15 and is unaffected; 12349-02 reached row 28 and would name
+    # three.
+    "last_bom_row": 25,
     "qty_vector_first_cell": "F180",  # Estimate's own Qty Breaks column, 11 cells down
     "first_price_col": 4,             # D
     "last_price_col": 14,             # N

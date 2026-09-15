@@ -1661,6 +1661,16 @@ def main() -> None:
                                       f"{len(_res.get('quantities') or [])} quantities"
                                       + (f" — refused: {'; '.join(_res['refused'])}"
                                          if _res.get("refused") else ""), flush=True)
+                                if _res.get("outside_table"):
+                                    # SAID ON THE RUN, not left to be noticed. The break
+                                    # table is shorter than the BOM block; a material past
+                                    # its last row is absent from the table, and an absent
+                                    # row reads as one that does not move with quantity.
+                                    print("   [price-break] BELOW THE TABLE, so not priced "
+                                          "across the breaks — the Material Price Break tab "
+                                          "stops at Estimate row "
+                                          f"{_mpb.get('last_bom_row')}: "
+                                          + ", ".join(_res["outside_table"]), flush=True)
                         except Exception as _exc:                       # noqa: BLE001
                             print(f"   [price-break] {type(_exc).__name__}: {_exc} — the "
                                   f"estimate is unchanged.", flush=True)

@@ -170,7 +170,7 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
     last_col = int(cfg.get("last_price_col", 14))           # N
 
     done: Dict[str, Any] = {"quantities": [], "rows": 0, "skipped_occupied": 0,
-                            "refused": []}
+                            "outside_table": [], "refused": []}
     vector = quantity_vector(breaks)
     if not vector:
         done["refused"].append("no quantities asked for")
@@ -215,6 +215,13 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
                 continue
             if first_bom <= _r <= last_bom:
                 _by_row[_r] = ln
+            elif _r > last_bom:
+                # NO SILENT CAP. The break table is shorter than the BOM block, so a line
+                # below its last row cannot be priced across the quantities — and a table
+                # that is simply missing a material reads as "this one does not move",
+                # which is the one thing it must never say by accident.
+                done["outside_table"].append(
+                    f"{ln.get('code') or ln.get('description') or '?'} (sheet row {_r})")
 
         for bom_row, line in sorted(_by_row.items()):
             target = bom_row + row_offset
