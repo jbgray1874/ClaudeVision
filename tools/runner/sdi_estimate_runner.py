@@ -692,6 +692,32 @@ def main() -> int:
     # STABLE ACROSS RESTARTS, per machine. A fresh id on every start would leave
     # the service listing a graveyard of runners that were all the same one.
     runner_id = a.runner_id or f"{platform.node()}-{uuid.getnode():x}"
+
+    # WHICH PROCESS, AND WHICH BUILD. Both are answers this runner could never give.
+    #
+    # Two runners ran on SDI-DESKTOP for three days — 3668 on the venv interpreter and
+    # 14796 on the user's own Python 3.10, same script, same engine root, same server —
+    # and NOTHING could see it. runner_id is deliberately stable per machine so a restart
+    # does not leave a graveyard of dead runners, so both processes register as the SAME
+    # runner and the page shows one green tick. The single-runner lock is what was supposed
+    # to make that safe, and it fails OPEN by design: when it cannot take the lock it says
+    # so and carries on, which is right (a lock bug must not stop estimating) and leaves
+    # the guard silently not guarding.
+    #
+    # So the runner now says which PROCESS it is, and the service reports when two answer
+    # to one id rather than showing a confident green tick. It is the same question the
+    # page already answers for the service with X-SDI-Commit — which build am I looking at
+    # — asked for the half of the system that does the work.
+    _process = f"pid {os.getpid()} {platform.node()} since {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    _build = ""
+    try:
+        sys.path.insert(0, str(engine_root / "src"))
+        from build_stamp import build_stamp_line           # noqa: PLC0415
+        _build = build_stamp_line()
+    except Exception as exc:                               # noqa: BLE001
+        # NEVER FATAL. A runner that will not start because it cannot name its own build is
+        # worse than one that cannot name it — say so and carry on.
+        _build = f"unknown ({exc.__class__.__name__})"
     base = a.server.rstrip("/") + "/api/estimate"
     headers = {"X-SDI-Key": a.api_key} if a.api_key else {}
 
@@ -700,6 +726,8 @@ def main() -> int:
     print(f"  engine   {engine_root}")
     print(f"  python   {engine_python}{'' if engine_python.is_file() else '   (NOT FOUND — will fall back to python on PATH)'}")
     print(f"  runner   {runner_id}  ({platform.node()})")
+    print(f"  process  {_process}")
+    print(f"  build    {_build}")
     print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop")
     print(f"  log      {log_path}\n")
 
@@ -720,7 +748,8 @@ def main() -> int:
       try:
         try:
             r = requests.post(f"{base}/runner/claim", json={
-                "runner_id": runner_id, "hostname": platform.node()},
+                "runner_id": runner_id, "hostname": platform.node(),
+                "process": _process, "build": _build},
                 headers=headers, timeout=20)
         except Exception as exc:                       # noqa: BLE001 — keep polling
             # SAY IT ONCE. A runner that cannot reach the server prints a line a

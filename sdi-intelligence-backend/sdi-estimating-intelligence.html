@@ -1268,6 +1268,27 @@ async function checkRunners(){
         state = d.queued ? `  ·  ${d.queued} queued` : "  ·  ready";
       }
       runnerText.textContent = who + state;
+      /* TWO RUNNERS ON ONE DESKTOP READ AS ONE GREEN TICK, FOR THREE DAYS.
+         3668 on the project venv and 14796 on a user-installed Python 3.10 — same script,
+         same engine root, same server — both polling and both claiming. runner_id is
+         deliberately stable per machine so a restart does not leave a graveyard of dead
+         runners, so the service saw ONE runner and this line said "ready".
+
+         Said in the words of the consequence, not of the mechanism: an estimator does not
+         need to know what a process is, they need to know the number on their sheet may
+         have come out of a fight over one SOLIDWORKS seat, and what to do about it. */
+      if((d.conflicts||[]).length){
+        runnerBox.style.borderLeftColor = "var(--bad)";
+        const procs = live.filter(x => x.conflict)
+                          .flatMap(x => x.processes || []);
+        runnerText.innerHTML = `<span style="color:var(--bad)">`
+          + `<b>Two runners are running on this machine.</b> `
+          + `They share one SOLIDWORKS seat and one Excel, so `
+          + `an estimate may be wrong. `
+          + `Stop one before running anything.</span>`
+          + `<div class="note" style="margin-top:4px">${procs.map(p =>
+               p.replace(/&/g,"&amp;").replace(/</g,"&lt;")).join("<br>")}</div>`;
+      }
     }else{
       runnerBox.style.borderLeftColor = "var(--bad)";
       runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '

@@ -281,15 +281,42 @@ class Runner:
     hostname: str = ""
     last_seen: float = field(default_factory=time.time)
     run_id: str = ""                       # what it is working on, if anything
+    # EVERY PROCESS THAT HAS ANSWERED TO THIS ID, and when it last did.
+    #
+    # runner_id is deliberately stable per machine, so a restart does not leave a graveyard
+    # of dead runners — which means two processes on one desktop register as ONE runner and
+    # the page shows a single green tick. That is what happened on SDI-DESKTOP: 3668 on the
+    # venv interpreter and 14796 on a user-installed Python 3.10, same script, same engine
+    # root, same server, both polling and both claiming, for three days, with nothing
+    # anywhere able to say so. The single-runner lock exists to make that impossible and
+    # fails OPEN by design, so when it does not hold, nothing else was watching.
+    processes: Dict[str, float] = field(default_factory=dict)
+    build: str = ""
 
     @property
     def online(self) -> bool:
         return (time.time() - self.last_seen) <= RUNNER_ONLINE_SECONDS
 
+    def live_processes(self) -> List[str]:
+        """Those that have answered inside the online window, newest first."""
+        now = time.time()
+        return [p for p, seen in sorted(self.processes.items(), key=lambda kv: -kv[1])
+                if (now - seen) <= RUNNER_ONLINE_SECONDS]
+
     def as_json(self) -> Dict[str, Any]:
+        live = self.live_processes()
         return {"runner_id": self.runner_id, "hostname": self.hostname,
                 "online": self.online, "run_id": self.run_id,
-                "seconds_since_seen": round(time.time() - self.last_seen, 1)}
+                "seconds_since_seen": round(time.time() - self.last_seen, 1),
+                "build": self.build,
+                "processes": live,
+                # NOT A COUNT WHEN NOBODY SAID. A runner too old to report its process
+                # leaves this empty, and empty means UNKNOWN — the page must not read it
+                # as "one", because "one" is exactly the reassurance that was wrong for
+                # three days. None says so; a number is only ever reported by runners
+                # that actually named themselves.
+                "process_count": len(live) or None,
+                "conflict": len(live) > 1}
 
 
 _RUNS: Dict[str, Run] = {}
@@ -471,6 +498,11 @@ class BatchRequest(BaseModel):
 class ClaimRequest(BaseModel):
     runner_id: str
     hostname: str = ""
+    # WHICH PROCESS IS ASKING, AND ON WHICH BUILD. Both default to "" because a runner
+    # that predates this says neither, and the service must then report that it does not
+    # know rather than inventing a confident answer about a machine it cannot see.
+    process: str = ""
+    build: str = ""
 
 
 class ProgressRequest(BaseModel):
@@ -515,8 +547,11 @@ def runners(x_sdi_key: Optional[str] = Header(default=None)):
             }
         online = [r for r in listed if r["online"]]
         queued = sum(1 for run in _RUNS.values() if run.status == "queued")
+    # NAMED AT THE TOP LEVEL, so the page does not have to walk the list to find out that
+    # its one green tick is two processes fighting over one SOLIDWORKS seat.
     return {"runners": listed, "online": len(online), "queued": queued,
-            "busy": sum(1 for r in online if r.get("running"))}
+            "busy": sum(1 for r in online if r.get("running")),
+            "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
 
 
 @router.post("/runner/claim")
@@ -529,6 +564,10 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
+        if req.process:
+            runner.processes[req.process] = now
+        if req.build:
+            runner.build = req.build
 
         if _busy_runner() is not None:
             return {"run": None, "reason": "another run is in progress"}
