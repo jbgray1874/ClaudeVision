@@ -174,4 +174,31 @@ Write-Host "SDI estimating runner" -ForegroundColor Cyan
 Write-Host "    serving $Server" -ForegroundColor Cyan
 Write-Host "Leave this window open. Ctrl+C to stop."
 Write-Host ""
-& $python $runner
+
+# THE RUNNER WAS KILLED BY ITS OWN FIRST LINE OF OUTPUT.
+#
+# In Windows PowerShell 5.1 a native command's stderr is written into the ERROR stream as a
+# NativeCommandError record, and under $ErrorActionPreference = "Stop" (set at the top of this
+# script) that record is TERMINATING. Python's logging writes to stderr by default, so the
+# runner died on the first line it logged:
+#
+#     python.exe : At C:\ClaudeVision\tools\start\start-runner.ps1:177 char:1
+#     + & $python $runner ...
+#         + CategoryInfo : NotSpecified: (...) [], RemoteException
+#         + FullyQualifiedErrorId : NativeCommandError
+#
+# The window had already said "found the service at http://localhost:8072" and "serving" in
+# green, so it read as a runner that had started and then crashed for its own reasons - when
+# what killed it was this script treating normal output as a fault.
+#
+# start-service.ps1 has carried the fix for this since the service hit it: stderr is NORMAL
+# OUTPUT from a Python process, not an error condition, so the preference is dropped for the
+# one statement that treats it as such and restored afterwards. The runner never got it. It is
+# the same bug, in the same shell, one file over.
+$prev = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    & $python $runner
+} finally {
+    $ErrorActionPreference = $prev
+}
