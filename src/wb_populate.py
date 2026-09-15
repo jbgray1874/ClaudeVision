@@ -3322,7 +3322,7 @@ _STATED_SHOP_TIME_MARKERS = (
     ("plater_pack_applied", ("handling", "assembly"),
      "the stated pack times for a part that goes out to a plater "
      "(config.PLATING_LOGISTICS)"),
-    ("_brush_before_plate_applied", ("manual_labour_metal",),
+    ("brush_before_plate_applied", ("manual_labour_metal",),
      "the shop's stated brushing time before plating (config.BRUSH_BEFORE_PLATE)"),
 )
 

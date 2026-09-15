@@ -2683,7 +2683,8 @@ def _render_decisions(record: Dict[str, Any]) -> str:
     n = len(decs)
     return f"""<h2>Decisions required</h2>
 <p>{n} item{'s' if n != 1 else ''}, worst first. Until these are answered the estimate is a
-draft and the quote says so.</p>
+draft — and the quote does NOT say so, because it is sent after you have answered them.
+Nothing on the customer's copy names an open item; this page is where they live.</p>
 <div class="scroll"><table class="dec">
   <thead><tr><th class="n">#</th><th>Kind</th><th>Issue</th><th>Part</th><th>Current assumption</th><th>Action required</th><th>Owner</th><th class="n">£ at stake</th></tr></thead>
   <tbody>{rows}</tbody>

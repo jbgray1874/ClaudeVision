@@ -244,7 +244,7 @@ def test_the_weld_claim_covers_dressing_and_nothing_else():
 def test_brushing_has_its_own_claim():
     """It was landing on the right number for the wrong reason — the plater-pack claim
     happened to vouch for it. Scoping the claims would have silently dropped it."""
-    covered = {e[0]: e[1] for e in wb._STATED_SHOP_TIME_MARKERS}["_brush_before_plate_applied"]
+    covered = {e[0]: e[1] for e in wb._STATED_SHOP_TIME_MARKERS}["brush_before_plate_applied"]
     assert wb._claim_covers(covered, "manual_labour_metal")
 
 

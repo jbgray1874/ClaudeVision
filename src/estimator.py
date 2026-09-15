@@ -5298,8 +5298,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _bb_min = _safe_float(_bb.get("minutes_per_consignment")) or 0.0
         _bb_op = str(_bb.get("operation") or "manual_labour_metal")
         if (_bb.get("enabled") and _bb_min > 0 and is_weldment_parent(part)
-                and not part.get("_brush_before_plate_applied")):
-            part["_brush_before_plate_applied"] = True
+                and not part.get("brush_before_plate_applied")):
+            part["brush_before_plate_applied"] = True
             ops = list(ops) + ([_bb_op] if _bb_op not in ops else [])
             run_times_min[_bb_op] = round(
                 float(run_times_min.get(_bb_op, 0.0)) + _bb_min, 2)
