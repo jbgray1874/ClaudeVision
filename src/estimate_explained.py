@@ -2384,6 +2384,31 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                              for r in material_rows if r.get("block") == "steel"), 2)
     _bought_total = round((totals.get("material") or 0) - _steel_total, 2)
 
+    # AN EMPTY PACK IS NOT A PROVISIONAL ESTIMATE. 11908-21's re-run went out headed
+    # "PROVISIONAL. not reported/unit at 1 off" — the triggering email carried NO
+    # ATTACHMENTS, so nothing was scanned, nothing was costed, and the note still walked
+    # its seven sections and dressed the nothing as a draft price. A reader on a phone
+    # cannot tell that from a broken estimate. When there is no BOM, no material, no
+    # labour and no unit figure, there is exactly one thing worth saying, in the subject.
+    if not bom and not material_rows and not labour_rows and not _money(totals.get("unit")):
+        _empty_subject = (f"{job} — SDI Intelligence: NOTHING WAS ESTIMATED — "
+                          f"the pack arrived empty")
+        _empty_html = (
+            f'<div style="{_EMAIL_CSS}">'
+            f"<p><b>{_e(job)}</b></p>"
+            f"<p><b>No estimate was produced.</b> The run received no drawings to work "
+            f"from: no BOM line, no material row, no labour row and no unit cost exist "
+            f"in the workbook. The usual cause is the triggering email being sent "
+            f"without its attachments, or an empty job folder.</p>"
+            f"<p>Nothing attached to this message is a price. Re-send the job with the "
+            f"drawing pack attached (PDF, DXF and CAD files) and it will run in full.</p>"
+            f"</div>")
+        _empty_text = (f"{job}: no estimate was produced — the run received no drawings "
+                       f"(no BOM, material, labour or unit cost). Usual cause: the "
+                       f"triggering email had no attachments. Re-send the job with the "
+                       f"drawing pack attached.")
+        return {"subject": _empty_subject, "html": _empty_html, "text": _empty_text}
+
     _mfg = [d for d in ((record or {}).get("decisions_required") or [])
             if isinstance(d, dict) and d.get("kind") == "manufacturing_decision"]
     _state = "PROVISIONAL. " if provisional else ""
