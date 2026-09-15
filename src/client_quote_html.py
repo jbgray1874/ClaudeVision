@@ -990,10 +990,55 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
         _m1 = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", stem or "")
         _pref2 = (_m1.group(1).strip(" -_") if _m1 else "") or str(_number or "").strip()
         if _pref2:
-            for _rec in sorted(_part_records(summary),
+            # A LEAF PART'S DESCRIPTION IS NEVER THE NAME OF THE PRODUCT.
+            #
+            # This took the shortest owned part number with a description, and on 7332-01
+            # that is 7332-01-001 — so a Harrods A3 signage stand went out with
+            #
+            #     Description    BASE
+            #
+            # in the header box an estimator asked for so he could trace a job back when
+            # requoting it. A back panel's name on the whole job is worse for that purpose
+            # than an empty box, because an empty box sends him to the drawing and a wrong
+            # one does not.
+            #
+            # So a record may only name the unit if things HANG OFF IT: flagged as an
+            # assembly, or its part number is the stem of other parts in this pack. That is
+            # structural rather than a list of words, so it holds on packs nobody has seen —
+            # 12349-02-69 owns -04M and -03M-01 and keeps "GRAVITY FEEDER MODULES", while
+            # 7332-01-001 owns nothing and is refused.
+            #
+            # Where no assembly can say what the unit is, nothing is written, which is the
+            # rule everywhere else in this function: the number, revision, client and date
+            # still identify the job, and none of them can be wrong.
+            # LIST, NOT THE GENERATOR. _part_records yields, so building the name set below
+            # exhausts it and the sort that follows would see nothing — blanking every
+            # description on every job, which is a worse fault than the one being fixed.
+            _recs = list(_part_records(summary))
+            _all_pns = {str(r.get("part_number") or "").strip().upper() for r in _recs}
+            _all_pns.discard("")
+
+            def _owns_other_parts(_pn: str) -> bool:
+                _u = _pn.upper()
+                return any(o != _u and o.startswith(_u) and o[len(_u):len(_u) + 1] in "-_"
+                           for o in _all_pns)
+
+            # WHERE THE JOB OWNS EXACTLY ONE RECORD, THAT RECORD IS THE UNIT. The refusal is
+            # about CHOOSING BETWEEN SIBLINGS: 7332-01 owns six flat parts, none of which
+            # hangs off another, and picking the shortest of six equals is arbitrary — it
+            # returned BASE, and STRAP or CAP were as good a guess. One candidate is not a
+            # guess, and a job whose graph gave no root still has to be able to name itself.
+            _owned = [r for r in _recs
+                      if str(r.get("part_number") or "").strip().upper()
+                      .startswith(_pref2.upper())]
+            _alone = len(_owned) == 1
+            for _rec in sorted(_owned,
                                key=lambda r: len(str(r.get("part_number") or "")) or 999):
                 _pn = str(_rec.get("part_number") or "").strip()
-                if not _pn or not _pn.upper().startswith(_pref2.upper()):
+                if not _pn:
+                    continue
+                if not (_alone or _rec.get("is_assembly_parent") or _rec.get("is_sub_assembly")
+                        or _owns_other_parts(_pn)):
                     continue
                 _d = str(_rec.get("description") or "").strip()
                 if _d and not _is_an_engine_note(_d):
