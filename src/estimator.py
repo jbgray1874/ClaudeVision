@@ -3486,15 +3486,31 @@ def roll_goods_material(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _roll_gbp = _safe_float(_entry.get("roll_price_gbp")) or 0.0
     if _roll_mm <= 0 or _roll_gbp <= 0:
         return None
+    # PER PIECE AND PER LINE ARE DIFFERENT NUMBERS, AND THE SHEET MULTIPLIES ONE OF THEM.
+    #
+    # This returned the LINE cost in the per-part field, and the Estimate's own BOM formula
+    # multiplies the price column by Qty Per Unit. So 0355255's tape went out as
+    #
+    #     price 0.27   qty 3   total 0.8424
+    #
+    # — three lots of the whole 600 mm, 1,800 mm of tape against Howard's 28p. The function's
+    # own docstring says a piece count must never multiply a pack price; it then handed the
+    # sheet a LINE price for the sheet to multiply by the piece count, which is the same
+    # error one level along.
+    _piece_cost = round((_piece_mm or 0) / _roll_mm * _roll_gbp, 4)
     _cost = round(_used_mm / _roll_mm * _roll_gbp, 4)
     part.setdefault("review_flags", []).append(
-        f"ROLL GOODS {_code}: {_qty} x {_piece_mm:g} mm = {_used_mm:g} mm of a "
-        f"{_roll_mm:g} mm roll at £{_roll_gbp:.2f} = £{_cost:.2f} for the line — priced by "
-        f"the length used, not by the piece. Roll data: {_entry.get('source') or 'config'}")
+        f"ROLL GOODS {_code}: {_piece_mm:g} mm a piece at £{_piece_cost:.2f}; {_qty} x "
+        f"{_piece_mm:g} mm = {_used_mm:g} mm of a {_roll_mm:g} mm roll at £{_roll_gbp:.2f} "
+        f"= £{_cost:.2f} for the line — priced by the length used, not by the piece. "
+        f"Roll data: {_entry.get('source') or 'config'}")
     return {"material": part.get("normalized_material"), "thickness_mm": None,
             "blank_length_mm": _piece_mm, "blank_width_mm": None, "blank_area_m2": None,
             "unit_material_mass_kg": None,
-            "unit_material_cost_gbp": _cost, "cost_per_part_gbp": _cost,
+            # PER PIECE in the per-part fields, the LINE total in the extended one — which is
+            # what those two field names have always meant everywhere else, and the sheet
+            # relies on: extended = per part x qty, and it does that multiplication itself.
+            "unit_material_cost_gbp": _piece_cost, "cost_per_part_gbp": _piece_cost,
             "extended_material_cost_gbp": _cost,
             "stock_estimate": None, "stock_form": "roll", "requires_flat_blank": False,
             "cost_method": "roll_goods_by_length",

@@ -56,20 +56,36 @@ def _flags(part):
 def test_three_strips_of_tape_cost_twenty_seven_pence():
     part = _tape()
     out = roll_goods_material(part)
-    assert out["unit_material_cost_gbp"] == 0.27          # 0.28 on the sheet with 4% waste
+    assert out["extended_material_cost_gbp"] == 0.27      # the LINE: 600 mm of the roll
+    assert out["cost_per_part_gbp"] == 0.09               # ONE piece: 200 mm
     assert out["cost_method"] == "roll_goods_by_length"
+
+
+def test_what_the_sheet_actually_charges_is_howards_figure():
+    """THE ASSERTION THAT WAS MISSING, and the run that proved it was missing.
+
+    These tests checked the function and never the number the Estimate prints. The per-part
+    field carried the LINE cost, and the sheet's BOM formula multiplies the price column by
+    Qty Per Unit — so 0355255's tape went out as price 0.27, qty 3, total 0.8424. Three lots
+    of the whole 600 mm: 1,800 mm of tape against Howard's 28p, on a book whose other
+    figures had all come right.
+
+    Per part x qty x 4% waste is what the cell does. That is the number to assert."""
+    out = roll_goods_material(_tape())
+    assert round(out["cost_per_part_gbp"] * 3 * 1.04, 4) == 0.2808
 
 
 def test_it_is_not_three_times_the_pack():
     """The failure in one line: 3 x £4.37 = £13.11, £13.63 with waste, against 28p."""
     out = roll_goods_material(_tape())
-    assert out["unit_material_cost_gbp"] < 1.00
+    assert out["extended_material_cost_gbp"] < 1.00
 
 
 def test_the_arithmetic_is_on_the_line():
     part = _tape()
     roll_goods_material(part)
     f = _flags(part)
+    assert "200 mm a piece at £0.09" in f
     assert "3 x 200 mm = 600 mm" in f
     assert "10000 mm roll at £4.50" in f
     assert "Howard Thurley" in f
@@ -85,17 +101,23 @@ def test_the_code_is_matched_however_it_is_written():
 
 
 def test_it_scales_with_the_pieces_and_the_length():
-    assert roll_goods_material(_tape(qty=6))["unit_material_cost_gbp"] == 0.54
+    """The LINE scales with the piece count; the PER PIECE figure does not, because a piece
+    is a piece however many of them the drawing asks for."""
+    six = roll_goods_material(_tape(qty=6))
+    assert six["extended_material_cost_gbp"] == 0.54
+    assert six["cost_per_part_gbp"] == 0.09
     # 3 x 100 mm = 300 mm -> 0.135. Kept to four places rather than rounded to the penny: a
     # consumable line is often worth less than 1p a unit and rounding it to zero is how a
     # material reads as free.
-    assert roll_goods_material(
-        _tape(desc="TAPE 113C LENGTH: 100.00"))["unit_material_cost_gbp"] == 0.135
+    short = roll_goods_material(_tape(desc="TAPE 113C LENGTH: 100.00"))
+    assert short["extended_material_cost_gbp"] == 0.135
+    assert short["cost_per_part_gbp"] == 0.045
 
 
 def test_a_whole_roll_costs_a_whole_roll():
     out = roll_goods_material(_tape(qty=1, desc="TAPE 113C LENGTH: 10000"))
-    assert out["unit_material_cost_gbp"] == 4.50
+    assert out["extended_material_cost_gbp"] == 4.50
+    assert out["cost_per_part_gbp"] == 4.50          # one piece IS the roll
 
 
 # ── what it will not guess ───────────────────────────────────────────────────────────────
@@ -141,7 +163,7 @@ def test_estimate_material_asks_before_any_other_basis():
     is the first question estimate_material asks."""
     out = estimate_material(_tape())
     assert out["cost_method"] == "roll_goods_by_length"
-    assert out["unit_material_cost_gbp"] == 0.27
+    assert out["unit_material_cost_gbp"] == 0.09          # per piece; the line is 0.27
 
 
 def test_the_catalogue_entry_names_who_gave_us_the_roll():
