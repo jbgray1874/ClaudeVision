@@ -85,7 +85,7 @@
 <div class="wrap">
   <div class="eyebrow">SDI Intelligence · Estimating Engine</div>
   <h1>Status Report — 16 September 2026</h1>
-  <p class="meta">Branch <code>main-2026</code> at <code>82f6480</code>, 16 Sep evening · 5,940 tests passing, 11 skipped
+  <p class="meta">Branch <code>main-2026</code> at <code>82f6480</code>, 16 Sep evening · 5,957 tests passing, 11 skipped
   · prepared for James Gray; shareable with Tony Ford and Howard Thurley</p>
   <p class="meta">This page is the engine-level detail for the estimators. <b>The company-wide picture — this workstream
   plus Yogesh Kumar's and Muhammad Yazir's — is the 16 September set:</b> the programme status report (issue 3), the
@@ -125,6 +125,15 @@
       board parent</b> is not given bench work merely for having child records. The five new jobs run as
       controlled learning passes, findings fed back per job.</p>
     </div>
+    <div class="job">
+      <div class="jt">Tim — 11350-02 / -01 <span class="pill p-pilot">answered, 2 figures out</span></div>
+      <p>Four points, two of them about where a figure came from and two about why a line carried none.
+      Both "where from" questions are answered by arithmetic that reproduces the booked row — pemming
+      at 15 s a pressed fastener (his own 12120 sheet), powder by weight and never by RAL. Both
+      "why none" cases are fixed generically (below). <b>Out to him:</b> the powder rate per kg, the
+      coverage figure, and whether 15 s still holds. 11350-01 is the same job at another size and
+      re-runs beside it.</p>
+    </div>
   </div>
 
   <h2>What is live and generic</h2>
@@ -138,6 +147,8 @@
     <tr><td class="k">Two packs, two rows</td><td>A plated part packs out (its own PACM row) and packs back. The total is unchanged; each figure is now checkable on its own line.</td><td>D-072/075</td></tr>
     <tr><td class="k">Board assembly bench line</td><td>Every multi-part board assembly gets a bench-fitting line — the BOM's own structure says so. The <i>rate</i> is scoped (below); the <i>rule</i> is generic.</td><td>D-067</td></tr>
     <tr><td class="k">Faced board keeps its facing</td><td>MFMDF stated on a title block survives the canonical collapse to MDF, is promotion evidence on its own, and prices by the purchased sheet — closing the 4× plain-core under-charge path.</td><td>D-067</td></tr>
+    <tr><td class="k">An unpriced line names whose gap it is</td><td>Three lines on Tim's comms bar said only "needs a rate". Two carried a code <b>the engine minted</b> from the description (BI-NUT, BI-PEMSTUD) because the pack gives none — nothing can be looked up against a code we wrote, and it sits in the code column looking like a part number. The third carried <b>DBR60, a real code</b> that was asked and found nothing. Each now says which, because one is closed by a code on the pack and the other by loading the catalogue.</td><td>D-079/080 · executed tests: a code we invented is not a code Tim can look up</td></tr>
+    <tr><td class="k">A figure states the sum that made it</td><td>Pemming is the MANM department rate × 15 s a pressed fastener (4 clinch at 60/hr and 2 PEM at 120/hr are both 240 inserts an hour). Powder is coated area × coverage × £/kg, with the colour never entering the sum. Both reproduce the booked row exactly — the test a figure passes before it stands.</td><td>D-081/082</td></tr>
     <tr><td class="k">An unpriced line clears the cell</td><td>A line awaiting a price writes an empty cell rather than leaving the template's own formula in place — which is what put <code>#REF!</code> on the Harrods book. No line can look priced because a template remembered a number.</td><td>Executed test on a real worksheet</td></tr>
   </table></div>
 
@@ -147,6 +158,7 @@
     <tr><td class="k num">Joinery 12 / 12 / 12 / 2 / 20 per hr</td><td>Tony, 11908-21 (one faced-board tray, 50 off)</td><td>CNCJ/EDGE/MC J/BENC/PACJ run rates. Bench 2/hr reaches <b>faced/laminated board only</b>; plain MDF, ply and timber take the labelled house allowance.</td></tr>
     <tr><td class="k num">Brushing 40 min/unit</td><td>Howard, 7332-01 (“similar size units”)</td><td>Pre-plating brush — method generic, timing size-sensitive, confirm outside similar size.</td></tr>
     <tr><td class="k num">Weld 30 / dress 20 min</td><td>Welding dept via Howard, 7332-01</td><td>Per-joint rates derived from the measured joint count; stated times always beat medians.</td></tr>
+    <tr><td class="k num">Pemming 15 s per pressed fastener</td><td>Tim, 12120 sheet (clinch ×4 @60/hr, pem ×2 @120/hr)</td><td>Both of his rows state 240 inserts an hour. Applied wherever the reconciled BOM holds self-clinch or PEM hardware; out to him to confirm, and to say whether a clinch nut and a PEM stud should differ.</td></tr>
     <tr><td class="k num">Set-up model (shop-wide)</td><td>Confirmed on Tony's joinery AND Howard's metal sheet</td><td>Hours = department set-up once per order + run × qty. The <i>model</i> is shop-wide; the rates above stay pilots.</td></tr>
   </table></div>
   <p class="note">Each row carries the job and the person it was measured on, which is what makes a change in it
@@ -167,6 +179,9 @@
   <div class="tblwrap"><table>
     <tr><th>Owner</th><th>Question</th></tr>
     <tr><td class="k">James Gray</td><td><b>Three configured rates have no live source</b> — the board sheet price, the zinc plating rate per kg and the section-stock rate per kg sit in configuration with no SDI Live, catalogue or quote behind them. Under D-078 they are either sourced or turned into awaiting-price lines with an owner.</td></tr>
+    <tr><td class="k">Tim</td><td><b>Powder, two figures.</b> Is £4.00/kg still right for standard powder? And the coverage — we hold 0.20 kg/m², the workbook template's own calculator holds 0.1667. They disagree by a fifth. His proposal to put the powder reference on the drawing is accepted in principle and retires both.</td></tr>
+    <tr><td class="k">Tim</td><td><b>Pemming, 15 s a pressed fastener</b> — still right, and the same for a clinch nut and a PEM stud?</td></tr>
+    <tr><td class="k">Tim</td><td><b>DBR60</b> a rate or the catalogue row it should read; and SDI codes for the M4 wing nut and M4×8 PEM stud if they have them.</td></tr>
     <tr><td class="k">Howard</td><td>Two PACM set-ups on the split pack rows (one per occasion) — or does the bench regard them as one? The rerun book flags it either way.</td></tr>
     <tr><td class="k">Howard</td><td>Acrylic laser throughput: the corpus figure against his own. Whose holds? His answer goes in the stated-rates register, not code.</td></tr>
     <tr><td class="k">Tony</td><td>Banded metres on 11908-21 (only visible edges band — his judgement, not a drawing number).</td></tr>
@@ -200,7 +215,7 @@
   <ul>
     <li><b>SDI Drawing Search Intelligence</b> is a menu item on the portal and both estimating pages, directly below its guide, opening the application in its own tab — one change, every deployment (8071 / 8072 / server). It is now described as live rather than in UAT everywhere the site states it.</li>
     <li>Tests across the batch <b>execute the engine</b> (<code>estimate_part()</code>, the group builder, the allocator on a real worksheet) rather than reading source text — which is how the facing-collapse defect was caught at all.</li>
-    <li>Change register rows <b>D-067 → D-078</b>; D-064's scope and D-066's presumption formally superseded, and D-077's register entry withdrawn by D-078 rather than reworded.</li>
+    <li>Change register rows <b>D-067 → D-082</b>; D-064's scope and D-066's presumption formally superseded, and D-077's register entry withdrawn by D-078 rather than reworded.</li>
   </ul>
 
   <div class="where">

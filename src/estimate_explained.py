@@ -1083,6 +1083,35 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
             _og0 = _line0.get("price_origin") or {}
             if str(_og0.get("class") or "") == "nil_by_design" and _og0.get("label"):
                 return str(_og0["label"])
+        # WHICH OF THE TWO REASONS, BECAUSE THEY HAVE DIFFERENT ANSWERS.
+        #
+        # "NOT PRICED — needs a rate" was the whole message on 11350-02 against a wing nut, a
+        # PEM stud and a ticket strip, and Tim's reply asked the question it had failed to
+        # answer: "can it not take of system or internet for cost or is spec missing on
+        # drawing". Those three lines are not one case. Two carried a code the ENGINE minted
+        # from their description because the pack gave none — nothing can be looked up against
+        # a code we wrote ourselves. The third carried DBR60, a real code that was asked and
+        # came back with nothing, which is the purchasing catalogue's gap and not the
+        # drawing's. An estimator can act on either sentence; neither is "needs a rate".
+        try:
+            from part_identity import is_engine_minted_code as _is_minted
+        except Exception:                                        # noqa: BLE001
+            _is_minted = None                                    # type: ignore[assignment]
+        if _is_minted is not None and code and _is_minted(code):
+            return ("**NOT PRICED — this line has no part code, and the one shown is ours.** "
+                    f"'{bom_row['code']}' was minted by the engine from the description so "
+                    "the line could be carried and counted; nothing can look a rate up "
+                    "against a code we wrote. The description was matched against the "
+                    "purchasing catalogue instead and no priced row carried its words and "
+                    "sizes. The drawing's spec is not the problem: put the SDI code on the "
+                    "pack and the price follows, or price this one by hand")
+        if code:
+            return ("**NOT PRICED — the code was asked and nothing holds a rate for it.** "
+                    f"'{bom_row['code']}' is a real code, so it was put to the purchasing "
+                    "catalogue and the price history by code, and neither carries a price "
+                    "for it. That is a gap on our side — either the catalogue has no row for "
+                    "it or its supplier price list has not been loaded — not a fault in the "
+                    "drawing")
         return "**NOT PRICED — needs a rate**"
     # PACKAGING AND DELIVERY ARE ORDER-LEVEL, AND THE DIVISOR IS THE POINT.
     #

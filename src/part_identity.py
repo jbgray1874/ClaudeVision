@@ -13,7 +13,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 __all__ = [
     "normalize_part_code", "is_placeholder_identity", "dxf_alias_target",
-    "resolve_estimate_code", "synthesise_bought_in_code",
+    "resolve_estimate_code", "synthesise_bought_in_code", "is_engine_minted_code",
 ]
 
 # DXF filename / legacy drawing numbers -> BOM detail part
@@ -233,6 +233,42 @@ def synthesise_bought_in_code(description: Any, fallback: Any = "") -> str:
         if re.search(pattern, description_upper):
             return code
     return ""
+
+
+# A CODE THIS MODULE WROTE IS NOT A CODE ANYBODY CAN LOOK UP.
+#
+# synthesise_bought_in_code above is the right thing to do and it has one bad consequence: the
+# placeholder it returns then sits in the code column of every document an estimator reads,
+# looking exactly like a part number off the pack.
+#
+# Tim asked it straight on 11350-02: "M4 Wing Nut / M4 x 8mm Pems -- can it not take of system or
+# internet for cost or is spec missing on drawing". Neither. The spec is on the drawing and is
+# enough to buy from; there is simply no code for it, so the code arms of the price chain have
+# nothing to ask, and the sheet said only "NOT PRICED -- needs a rate", which reads as a lookup we
+# forgot. Naming the placeholder as ours is the whole answer.
+#
+# THE RECOGNISER LIVES BESIDE THE MINTER, deliberately. Put it anywhere else and it becomes a
+# second private copy of this module's vocabulary, free to drift from the table above -- which is
+# the defect test_one_hardware_vocabulary_serves_every_reader exists to prevent. It is a SHAPE
+# test rather than a second list, so a new row added to _BOUGHT_IN_CODE_PATTERNS is recognised the
+# moment it is minted, with nothing here to update.
+#
+# Deliberately NARROW: the prefix followed by LETTERS only. The cost of a false positive is a real
+# purchased code called an invention, so a code carrying digits after the prefix keeps them and is
+# somebody's.
+_MINTED_CODE = re.compile(r"^BI-[A-Z]+$", re.IGNORECASE)
+
+
+def is_engine_minted_code(identity: Any) -> bool:
+    """True when this module wrote the code, rather than a drawing printing it.
+
+    The counterpart of part_code_conventions.is_category_not_a_code: that one says the drawing
+    printed a CLASS where a code belongs, this one says WE printed a placeholder where the drawing
+    printed nothing. Both mean the line cannot be priced by code, and an estimator is owed the
+    difference -- one is answered by putting a code on the pack, the other by loading the
+    catalogue or pricing the line by hand.
+    """
+    return bool(_MINTED_CODE.match(str(identity or "").strip()))
 
 
 def dxf_alias_target(part_number: str) -> Optional[str]:

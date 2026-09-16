@@ -23,9 +23,9 @@ Nine days on from the last report, here is where the three workstreams stand. Th
 
 ## 1 · SDI Estimating Intelligence — eleven jobs, and the loop closed
 
-Eleven jobs have run in the past two weeks against the estimators' own sheets, among them 12349-02 (Fanatics gravity feeder modules), 11762-17 (wire display), 11762-02 (steel shelf with vinyl graphic), 11908-21 (sunglasses tray), 12552 (Infinity drawer), 7332-01 (Harrods signage stand) and 0355255 / 10975-02 (M&S table-top graphic holder). Six more run this week, 11650-06 (Coffret hospital kit) among them.
+Eleven jobs have run in the past two weeks against the estimators' own sheets, among them 12349-02 (Fanatics gravity feeder modules), 11350-02 and 11350-01 (Boots comms bars), 11762-17 (wire display), 11762-02 (steel shelf with vinyl graphic), 11908-21 (sunglasses tray), 12552 (Infinity drawer), 7332-01 (Harrods signage stand) and 0355255 / 10975-02 (M&S table-top graphic holder). Six more run this week, 11650-06 (Coffret hospital kit) among them — Tim asked for it on Wednesday at quantities 2 and 18, with the route and the bill of materials as well as the cost.
 
-The feedback is in, from all three estimators. Tim has returned three jobs, 12349-02 line by line. Howard has returned two — the table-top graphic holder and the Harrods stand — with a full reply on each. Tony has returned the sunglasses tray. Between them that is roughly forty specific findings, and the discipline has been the same for every one: the engine learns the method, the route and the evidence; it never copies a figure off an estimator's sheet. A number from a manual estimate is not a price source, even as a reference — prices come from SDI Live, a supplier catalogue or an identified current quote, or the line says plainly that it is awaiting one and who owns it.
+The feedback is in, from all three estimators. Tim has returned three jobs: 12349-02 line by line with fourteen points, and 11350-02 with four that carry to 11350-01 as the same job at another size. Howard has returned two — the table-top graphic holder and the Harrods stand — with a full reply on each. Tony has returned the sunglasses tray. Between them that is roughly forty specific findings, and the discipline has been the same for every one: the engine learns the method, the route and the evidence; it never copies a figure off an estimator's sheet. A number from a manual estimate is not a price source, even as a reference — prices come from SDI Live, a supplier catalogue or an identified current quote, or the line says plainly that it is awaiting one and who owns it.
 
 What the three reviews changed in the engine, in plain terms:
 
@@ -34,7 +34,7 @@ What the three reviews changed in the engine, in plain terms:
 - **One laser row per component, one set-up per sheet.** Howard's own sheet has five laser rows where ours blended two parts into one rate. Each component now has its own row at its own rate, and components that the nesting proves share one sheet share one set-up — never one each.
 - **What the shop knows that the drawing does not say.** Production runs 1.0 mm steel where a drawing calls for 0.9 (a confirmed substitution rule, visible on the line, overridable by an estimator); a mitred square tube leg is sawn, not bent; the welds are dressed or not by the customer's own standard (M&S yes, TTI no); a plated part is packed out and packed back as two operations; brushing before plating is a named operation. Each is a rule with the estimator's name and date on it.
 - **The joinery route exists.** Tony's finding was that whole operations were missing — edge banding, saw and spindle, bench work, set-up amortised over quantity. The engine now mints saw and spindle work from the drawing's own words, gives a board assembly its bench-fitting line, holds the edging specification (rate from the supplier catalogue), and separates each department's set-up from its run time — a convention his sheet and Howard's both confirm, so it is shop-wide.
-- **A change register that is the operating contract.** Every rule above is a numbered decision (D-016 to D-078) recording who ruled it, on which job, whether it is generic or a scoped pilot from one job, where it is implemented and the test that proves it — so the estimators can see what the engine believes and why, and the same question is never asked twice. Test suite: 5,940 passing, and the tests now execute the engine rather than read its source.
+- **A change register that is the operating contract.** Every rule above is a numbered decision (D-016 to D-082) recording who ruled it, on which job, whether it is generic or a scoped pilot from one job, where it is implemented and the test that proves it — so the estimators can see what the engine believes and why, and the same question is never asked twice. Test suite: 5,940 passing, and the tests now execute the engine rather than read its source.
 
 Where the engine and the estimators still differ, it says so. On the Harrods stand, plating and freight to the plater are shown as awaiting current quotes rather than carrying a figure from anyone's sheet; on the graphic holder the remaining gap is one labour line Howard has been asked to rule on. Packaging and delivery are still held at £0 with a named owner until estimating provides the calculation, and the supplier price lists (Elite, Eagle, Thermaset) are still not loaded — both carried from the last report.
 
@@ -70,11 +70,11 @@ Six short demo videos with write-ups now cover the SolidWorks COM API, the file-
 | SDI Client Briefing Intelligence | http://10.0.0.5:8071/#aisvc-client-briefing |
 | AI Programme · AI Roadmap | http://10.0.0.5:8071/#programme · http://10.0.0.5:8071/#roadmap |
 
-Attached: SDI Programme Status, issue 3 (PDF) · SDI Estimating Intelligence — change register (decisions D-016 to D-078) · the estimators' reviews and replies for 0355255 / 10975-02, 7332-01 and 11908-21 · Yogesh Kumar status 11 Sep · Muhammad Yazir weekly update and project plan.
+Attached: SDI Programme Status, issue 3 (PDF) · SDI Estimating Intelligence — change register (decisions D-016 to D-082) · the estimators' reviews and replies for 0355255 / 10975-02, 7332-01 and 11908-21 · Yogesh Kumar status 11 Sep · Muhammad Yazir weekly update and project plan.
 
 Happy to walk either of you through any of it.
 
 Thanks,
 James
 
-James Gray · AI and Systems Controller · SDI Displays. Sources: SDI Intelligence commit history 7 – 16 Sep and change register D-016 to D-078; estimator reviews from Howard Thurley (10 and 15 Sep), Tony Ford (8 Sep) and Tim; Yogesh Kumar status 11 Sep; Muhammad Yazir weekly update.
+James Gray · AI and Systems Controller · SDI Displays. Sources: SDI Intelligence commit history 7 – 16 Sep and change register D-016 to D-082; estimator reviews from Howard Thurley (10 and 15 Sep), Tony Ford (8 Sep) and Tim; Yogesh Kumar status 11 Sep; Muhammad Yazir weekly update.
