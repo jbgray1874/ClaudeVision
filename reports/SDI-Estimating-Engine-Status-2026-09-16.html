@@ -80,12 +80,19 @@
   .btn:disabled{opacity:.6; cursor:default;}
   .btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
   .dlnote{font-size:13px; color:var(--dim);}
+  .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:20px 0 6px;}
+  .kpi{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:14px 16px;}
+  .kpi .n{font-family:"Archivo",sans-serif; font-weight:700; font-size:27px; line-height:1.05;
+          font-variant-numeric:tabular-nums; color:var(--accent-ink);}
+  .kpi .n.good{color:var(--live);} .kpi .n.gap{color:var(--hold);}
+  .kpi .l{font-size:12.5px; color:var(--dim); margin-top:5px; line-height:1.4;}
+  .kpi .l b{color:var(--ink); font-weight:600;}
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <div class="wrap">
   <div class="eyebrow">SDI Intelligence · Estimating Engine</div>
   <h1>Status Report — 16 September 2026</h1>
-  <p class="meta">Branch <code>main-2026</code> at <code>82f6480</code>, 16 Sep evening · 5,957 tests passing, 11 skipped
+  <p class="meta">Branch <code>main-2026</code> at <code>c92bf36</code>, 16 Sep evening · 5,957 tests passing, 11 skipped
   · prepared for James Gray; shareable with Tony Ford and Howard Thurley</p>
   <p class="meta">This page is the engine-level detail for the estimators. <b>The company-wide picture — this workstream
   plus Yogesh Kumar's and Muhammad Yazir's — is the 16 September set:</b> the programme status report (issue 3), the
@@ -136,6 +143,51 @@
     </div>
   </div>
 
+  <h2>The fortnight in numbers</h2>
+  <p>Counted rather than characterised. The last two are the honest ones: both are gaps, and both
+  have an owner.</p>
+  <div class="kpis">
+    <div class="kpi"><div class="n good">11</div><div class="l"><b>jobs run</b> in two weeks, against a minimum of five a week</div></div>
+    <div class="kpi"><div class="n good">3 / 3</div><div class="l"><b>estimators</b> have returned a review — six job-reviews between them</div></div>
+    <div class="kpi"><div class="n good">~40</div><div class="l"><b>points raised</b> by the estimators, and every one is now a rule, not a patch</div></div>
+    <div class="kpi"><div class="n">69</div><div class="l"><b>numbered decisions</b> on the register, D-016 to D-082, each with its source and its proof</div></div>
+    <div class="kpi"><div class="n">5,957</div><div class="l"><b>tests passing</b> across 381 files — they execute the engine, they do not read it</div></div>
+    <div class="kpi"><div class="n">272</div><div class="l"><b>commits</b> since the 7 September report</div></div>
+    <div class="kpi"><div class="n gap">0 / 3</div><div class="l"><b>supplier price lists loaded</b> — Elite, Eagle, Thermaset. Every unpriced bought line traces back here</div></div>
+    <div class="kpi"><div class="n gap">0 / 11</div><div class="l"><b>parity comparisons filed</b> for this fortnight's jobs — see below</div></div>
+  </div>
+
+  <h2>Parity — what we can prove, and what we cannot</h2>
+  <p><b>What it is.</b> The engine's workbook read against the estimator's own completed sheet, block
+  by block. Both sides are reconciled to their own totals before anything is compared, differences are
+  signed in both directions, and the inputs behind a money gap — a blank, a gauge, a quantity, a nest
+  — are reported beside it. It files a ledger row per job, so the picture builds rather than being
+  re-argued each time.</p>
+  <p><b>When it runs.</b> From the portal against a finished pair, or at run time where the estimator
+  attaches the manual sheet up front.</p>
+  <div class="rule"><b>Where it stands on the eleven: no cell-level comparison is filed for any of
+  them</b>, because no manual sheet has been attached to a run. The ledger in source control holds one
+  row, from a July job. Saying otherwise would be the one thing this programme does not do — the proof
+  is the log, not the theory.</div>
+  <p>So the parity evidence for this fortnight is the estimators' own verdicts rather than a computed
+  variance, and there are two of them:</p>
+  <ul>
+    <li><b>Tim on 11350-02:</b> <span class="quote">"Costs come out really close."</span> His words,
+    and the closest thing to a parity verdict on a current job.</li>
+    <li><b>12349-02:</b> the three defects his review found were fixed the same day and every line was
+    then reconciled to his sheet. It is held as a replay gate, so no later change can quietly move it.</li>
+    <li><b>The other nine:</b> no verdict either way. That is not a claim of accuracy and should not be
+    read as one.</li>
+  </ul>
+  <p><b>What turns this into a table.</b> One command a job on the laptop, against the manual sheet
+  wherever one exists:</p>
+  <p><code>python src/parity_run.py --ai output/json/&lt;job&gt;.json --manual &lt;manual sheet&gt;</code></p>
+  <p>Each run files a ledger row, and the eleven stop being an impression. Where a job was estimated by
+  the engine first, the comparison can be added when the manual sheet arrives.</p>
+  <p class="note"><b>Why no figure off a manual sheet appears here.</b> By rule, a number from a manual
+  estimate is not retained in our register, documentation or reports. Parity is therefore reported as a
+  variance and a direction, never by printing the estimator's own amount.</p>
+
   <h2>What is live and generic</h2>
   <div class="tblwrap"><table>
     <tr><th>Rule</th><th>What it does</th><th>Proof</th></tr>
@@ -147,6 +199,7 @@
     <tr><td class="k">Two packs, two rows</td><td>A plated part packs out (its own PACM row) and packs back. The total is unchanged; each figure is now checkable on its own line.</td><td>D-072/075</td></tr>
     <tr><td class="k">Board assembly bench line</td><td>Every multi-part board assembly gets a bench-fitting line — the BOM's own structure says so. The <i>rate</i> is scoped (below); the <i>rule</i> is generic.</td><td>D-067</td></tr>
     <tr><td class="k">Faced board keeps its facing</td><td>MFMDF stated on a title block survives the canonical collapse to MDF, is promotion evidence on its own, and prices by the purchased sheet — closing the 4× plain-core under-charge path.</td><td>D-067</td></tr>
+    <tr><td class="k">One workbook, every quantity</td><td>An enquiry asked at 10, 50, 250 and 1,000 produces <b>one spreadsheet</b>, not one per quantity. The estimators' own Material Price Break tab is filled by the engine and a Quantity Breaks tab recalculates the whole estimate at each quantity, with order-level freight divided by that quantity rather than landed on every unit. The base sheet is deliberately run at one unit, where each department's set-up is visible instead of hidden in a volume average.</td><td>"Still generating multiple s/sheets" — James, 15 Sep. The sweep still computes the figures; it no longer files copies</td></tr>
     <tr><td class="k">An unpriced line names whose gap it is</td><td>Three lines on Tim's comms bar said only "needs a rate". Two carried a code <b>the engine minted</b> from the description (BI-NUT, BI-PEMSTUD) because the pack gives none — nothing can be looked up against a code we wrote, and it sits in the code column looking like a part number. The third carried <b>DBR60, a real code</b> that was asked and found nothing. Each now says which, because one is closed by a code on the pack and the other by loading the catalogue.</td><td>D-079/080 · executed tests: a code we invented is not a code Tim can look up</td></tr>
     <tr><td class="k">A figure states the sum that made it</td><td>Pemming is the MANM department rate × 15 s a pressed fastener (4 clinch at 60/hr and 2 PEM at 120/hr are both 240 inserts an hour). Powder is coated area × coverage × £/kg, with the colour never entering the sum. Both reproduce the booked row exactly — the test a figure passes before it stands.</td><td>D-081/082</td></tr>
     <tr><td class="k">An unpriced line clears the cell</td><td>A line awaiting a price writes an empty cell rather than leaving the template's own formula in place — which is what put <code>#REF!</code> on the Harrods book. No line can look priced because a template remembered a number.</td><td>Executed test on a real worksheet</td></tr>

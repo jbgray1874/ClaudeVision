@@ -412,6 +412,10 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       <p><b>The workstation slipped.</b> It was needed by 10 September and is not ordered; the
       server and hardware quotes are still to be finalised. Yogesh's watch-point, and now the
       programme's.</p>
+      <p><b>The KTP presentation is in preparation</b>, Muhammad Yazir with James Gray. It carries the plan for each
+      workstream and live demonstrations of what is already running &mdash; the estimating engine on a real drawing pack, the
+      drawing library on 32,422 sheets, the Document Manager tools and the client briefing template. Every item in it is
+      working software rather than a proposal.</p>
     </div>
   </section>
 
@@ -443,6 +447,20 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
     kit</b> &mdash; asked for by Tim on 16 September at <b>quantities 2 and 18</b>, and with the
     <b>route and the bill of materials</b> wanted alongside the cost, which is the first time the
     route has been asked for as a deliverable in its own right.</p>
+
+    <div class="gantt-frame" style="padding:18px 22px 14px">
+      <div class="gantt-title">The fortnight, counted</div>
+      <div class="grid2">
+        <div class="item ok" style="margin-bottom:0"><h3>11 jobs run in two weeks <span class="dim">&middot; against a minimum of five a week</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>3 of 3 estimators returned a review <span class="dim">&middot; six job-reviews between them</span></h3></div>
+        <div class="item ok" style="margin-bottom:0"><h3>~40 points raised <span class="dim">&middot; every one now a rule, not a patch</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>69 numbered decisions <span class="dim">&middot; D-016 to D-082, each with its source and proof</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>5,957 tests passing <span class="dim">&middot; across 381 files, executing the engine</span></h3></div>
+        <div class="item" style="margin-bottom:0"><h3>272 commits <span class="dim">&middot; since the 7 September report</span></h3></div>
+        <div class="item" style="margin-bottom:0;border-left-color:var(--crit)"><h3>0 of 3 supplier price lists loaded <span class="dim">&middot; every unpriced bought line traces here</span></h3></div>
+        <div class="item" style="margin-bottom:0;border-left-color:var(--crit)"><h3>0 of 11 parity comparisons filed <span class="dim">&middot; see below</span></h3></div>
+      </div>
+    </div>
 
     <div class="tablewrap">
       <table class="rev">
@@ -561,7 +579,45 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       amount anywhere.</p>
     </div>
 
+    <h3 class="minihead">Parity &mdash; what we can prove, and what we cannot</h3>
+    <p class="subhead" style="margin-top:-4px">Parity is the engine's workbook read against the estimator's own completed
+    sheet, block by block, each side reconciled to its own totals before anything is compared, differences signed both ways,
+    filing a ledger row per job. It runs from the portal against a finished pair, or at run time where the manual sheet is
+    attached up front.</p>
+
+    <div class="callout warnbox">
+      <h3>No cell-level comparison is filed for any of the eleven</h3>
+      <p>Because no manual sheet has been attached to a run. The ledger in source control holds one row, from a job in July.
+      <b>Claiming parity on this fortnight would be the one thing this programme does not do</b> &mdash; the proof is the log,
+      not the theory &mdash; so what follows is the estimators' own verdicts rather than a computed variance.</p>
+      <ul class="plain">
+        <li><b>Tim on 11350-02:</b> <i>"Costs come out really close."</i> His words, and the closest thing to a parity verdict
+        on a current job.</li>
+        <li><b>12349-02:</b> the three defects his first review found were fixed the same day and every line was then
+        reconciled to his sheet. It is held as a replay gate, so no later change can quietly move it.</li>
+        <li><b>The other nine:</b> no verdict either way, and that is not a claim of accuracy.</li>
+      </ul>
+      <p style="margin-top:9px"><b>What turns this into a table:</b> one command a job on the laptop against the manual sheet
+      wherever one exists. Each run files a ledger row, and where the engine estimated first, the comparison is added when the
+      manual sheet arrives. <b>Ask: the manual sheets for the eleven.</b></p>
+      <p style="margin-top:9px"><b>Why no figure off a manual sheet appears in this report.</b> By rule a number from a manual
+      estimate is not retained in the register, the documentation or the reports, so parity is reported as a variance and a
+      direction and never by printing an estimator's own amount.</p>
+    </div>
+
     <h3 class="minihead">What landed in the engine</h3>
+
+    <div class="item hi">
+      <h3>One workbook, every quantity<span class="pill p-new">New &middot; James</span></h3>
+      <p>An enquiry asked at 10, 50, 250 and 1,000 now produces <b>one spreadsheet</b> rather than one per quantity. The
+      estimators' own Material Price Break tab is filled by the engine and a Quantity Breaks tab recalculates the whole
+      estimate at each quantity, with order-level freight divided by that quantity instead of a pallet landed on every unit.
+      The base sheet is deliberately run at one unit, where each department's set-up is visible rather than hidden inside a
+      volume average.</p>
+      <div class="why"><b>"Still generating multiple s/sheets" &mdash; 15 Sep.</b> The break tab was already doing its job in
+      the first workbook; the old per-quantity mechanism was still filing copies underneath it. The sweep still computes the
+      figures the tab and the report read &mdash; it simply stops filing the copies.</div>
+    </div>
 
     <div class="item hi">
       <h3>Every quantity on one workbook<span class="pill p-new">New · Howard</span></h3>
@@ -710,6 +766,16 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       </ul>
     </div>
 
+    <div class="item hi">
+      <h3>The drawing packs get prepared for manual estimating too<span class="pill p-new">Scope</span></h3>
+      <p>The same tool that collects the correct, current drawing pack for a job is to serve <b>both sets of estimating</b>
+      &mdash; the AI engine and the estimators working by hand. Dave's team stop assembling packs themselves whether or not a
+      job goes through the engine.</p>
+      <div class="why"><b>Why it is worth naming separately.</b> Every other benefit on this programme is gated on a go-live.
+      This one is not: it lands as soon as the tool does, for people who are not otherwise touched by the engine, and it is
+      the clearest answer to "what does this workstream do for the estimators today".</div>
+    </div>
+
     <div class="item ok">
       <h3>Six demo videos, for review without meetings<span class="pill p-fix">Done</span></h3>
       <p>Short recordings with write-ups covering the SolidWorks COM API, the file-extraction
@@ -837,6 +903,16 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       accept. The 7 September "no buffer on go-live" risk is closed by the go-live.</div>
     </div>
 
+    <div class="item">
+      <h3>It is not yet integrated with SDI Intelligence<span class="pill p-open">Next</span></h3>
+      <p>The search runs as its own web application. The portal <b>links</b> to it rather than containing it, and the two
+      systems do not yet share anything but a menu entry. Joining them is what turns a drawing found in the library into a
+      part code the price chain already understands &mdash; the point at which finding the fixture and costing it become one
+      action rather than two.</p>
+      <div class="why"><b>Stated as a gap rather than left implied</b>, because the menu entry makes it look joined up
+      already.</div>
+    </div>
+
     <div class="item hi">
       <h3>Client Briefing is back on the agenda<span class="pill p-new">Resumed · 16 Sep</span></h3>
       <p>The 7 September report had it on hold from 4 September, to be re-planned as agents by
@@ -849,6 +925,16 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       <p>Honestly early: two briefs through it, both Muhammad's own, none yet on live work. What it
       needs is time with Jonathan and real briefs. The tracker's dates &mdash; sign-off 21 Sep,
       build to 15 Oct, release ~Nov &mdash; are kept for the record and not re-claimed.</p>
+      <p><b>More exists than the status implied.</b> It is not restarting from a blank page:</p>
+      <ul class="plain">
+        <li><b>A web template, already developed</b> &mdash; being enhanced now rather than designed.</li>
+        <li><b>An e-mail AI agent analysing client communications</b>, which is what lets a brief arrive as an e-mail, a
+        recorded call or a voice note and still come back structured.</li>
+        <li><b>Design and account manager details collated</b> against the brief, so the right people and the account's own
+        history travel with it.</li>
+        <li><b>The purpose, stated plainly:</b> to promote communication and collaboration across the four teams &mdash; one
+        consistent brief, the gaps named, and nothing booked without Jonathan's approval.</li>
+      </ul>
     </div>
 
     <div class="item">
@@ -959,7 +1045,7 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       <p>Eleven jobs went out in the past two weeks against a minimum of five a week, and six more
       go out this week. Several of the eleven are still awaiting a reply. The go-live target is
       decided on what comes back, and the first full round has just shown what a returned review is
-      worth: roughly forty-five findings across eight reviews, every one now a rule.</p>
+      worth: about forty findings across six job-reviews from all three estimators, every one now a rule.</p>
       <div class="why"><b>Workstream 1.</b> Ask of Dave's team: six back for six out, and a reply on
       the ones still open.</div>
     </div>
