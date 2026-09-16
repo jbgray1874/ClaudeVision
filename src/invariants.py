@@ -2755,6 +2755,33 @@ def _looks_like_raw_drawing_text(text: str) -> bool:
     return len(re.findall(r"\b\d{2,4}\b", t)) >= 3
 
 
+def _laminate_is_in_the_board(part: Any, summary: Any) -> bool:
+    """True when the costing pass bought this part's laminate ON the board — promoted to
+    the faced family, priced by the purchased sheet (or asking for that sheet's price).
+    Checked on the part AND on its part_estimates record, because the finish census walks
+    manufacturing_writeup and the costing stamp may live on the estimate record."""
+    def _one(rec: Any) -> bool:
+        if not isinstance(rec, dict):
+            return False
+        if rec.get("_laminate_in_board"):
+            return True
+        _me = rec.get("material_estimate") if isinstance(rec.get("material_estimate"),
+                                                         dict) else {}
+        return str(_me.get("cost_method") or "") in ("board_sheet_yield",
+                                                     "faced_board_unpriced") \
+            and bool(_me.get("costing_material_family"))
+    if _one(part):
+        return True
+    _pn = str((part or {}).get("part_number") or "").strip().upper()
+    if not _pn or not isinstance(summary, dict):
+        return False
+    for rec in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if isinstance(rec, dict) and \
+                str(rec.get("part_number") or "").strip().upper() == _pn and _one(rec):
+            return True
+    return False
+
+
 def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     """A finish the drawing states and the sheet charges nothing for.
 
@@ -2839,6 +2866,16 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         # sufficient on its own and the job-level flag is not consulted.
         if named and _plating_costed and all(w in _PLATING_WORDS for w in named):
             continue        # the plate finish the sheet charges as a subcontract line
+        # LAMINATE BOUGHT ON THE BOARD IS CHARGED IN THE BOARD. A laminated-MDF part
+        # promoted to the faced family carries the facing INSIDE its sheet price — the
+        # merchant laminates, not the shop — so calling that finish "supplied free" on
+        # 11908-21 told the estimator to price work that was already in the material
+        # line. Only laminate words are excused, and only on a part the costing pass
+        # actually promoted; a laminate on plain-costed board still fires.
+        _LAMINATE_WORDS = ("LAMINATE", "LAMINATED", "LAMINATING", "LAMINATION")
+        if named and all(w in _LAMINATE_WORDS for w in named) and \
+                _laminate_is_in_the_board(part, summary):
+            continue
         if named:
             uncosted.append({"part_number": part.get("part_number"),
                              "finish": text[:80], "words": named[:3]})

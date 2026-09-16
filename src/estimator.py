@@ -2731,6 +2731,52 @@ def _powder_coated_area_m2(
     return total, detail
 
 
+def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
+    """(faced family, the evidence sentence) when a plain board core is LAMINATED — or
+    (None, "").
+
+    THE SHOP DOES NOT LAMINATE; THE MERCHANT DOES. 11908-21's trays are drawn as 9mm MDF
+    with a LAMINATED finish — the DXFs are named "9mm MDF+ LAM" and the route demanded a
+    `laminating` operation nothing could price, so the job costed plain MDF at £1.35/kg
+    (£43 a sheet) and flagged the laminate as supplied free. Tony's estimate shows the
+    actual transaction: a pre-laminated board bought by the sheet from Lawcris at four
+    times the raw-MDF money. The material IS the finish, so the promotion is to the faced
+    family — its stock sizes, its purchased sheet prices — and the laminating on the
+    route is satisfied by the purchase, not charged as shop labour.
+
+    Evidence is required, never inferred from the material name alone: the route's own
+    `laminating` op, a LAMINATE/MELAMINE finish field, a "LAM" token in the cut file's
+    name, or the word in the part's description. Plain MDF stays plain MDF.
+    """
+    mat = str(material or "").upper().replace("_", " ")
+    if any(t in mat for t in ("MFMDF", "MFC", "MELAMINE", "VENEER", "PRE LAM", "PRE-LAM")):
+        return None, ""            # already a faced family — nothing to promote
+    if "MDF" in mat:
+        family = "MFMDF"
+    elif "CHIPBOARD" in mat or mat == "OSB":
+        family = "MFC"
+    else:
+        return None, ""
+    evidence: List[str] = []
+    _ops = {str(o).lower() for o in ((part.get("operations") or [])
+                                     + (part.get("textual_operations") or []))}
+    if "laminating" in _ops or "laminate" in _ops:
+        evidence.append("the route's own `laminating` operation (a drawing note)")
+    _finish = " ".join(str(x) for x in (
+        part.get("normalized_finish"), part.get("surface_finish"),
+        " ".join(str(v) for v in (part.get("surface_finishes") or []))) if x).upper()
+    if any(w in _finish for w in ("LAMINAT", "MELAMINE")):
+        evidence.append(f"the stated finish ('{_finish[:40].strip()}')")
+    _dxf = str(part.get("dxf_source_file") or "").upper()
+    if re.search(r"(?:^|[\s_+-])LAM(?:INAT\w*)?(?:[\s_.+-]|$)", _dxf):
+        evidence.append(f"the cut file's own name ({part.get('dxf_source_file')})")
+    if "LAMINAT" in str(part.get("description") or "").upper():
+        evidence.append("the part's description")
+    if not evidence:
+        return None, ""
+    return family, " and ".join(evidence[:2])
+
+
 def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
     """(GBP per full sheet, how it was arrived at) for a faced board, or (None, "").
 
@@ -4675,14 +4721,52 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # parts-per-sheet × scrap, and the corpus rows carry cost_per_sheet_gbp for exactly that
     # reason. This runs BEFORE the mass path so a board with a known sheet rate never falls
     # through to per-kg — and a board WITHOUT one still falls through and stays unpriced.
-    _board_rate, _board_note = _board_sheet_rate(material, thickness)
+    #
+    # A LAMINATED CORE IS BOUGHT PRE-FACED. The drawing says "MDF" and "LAMINATED"
+    # separately; the purchase order says one thing: faced board. Promoted only on the
+    # drawing's own evidence (see _faced_board_promotion), and once promoted the part may
+    # NOT fall back to the bare core's £/kg — plain-MDF money on a laminated panel is the
+    # 4x under-charge 11908-21 shipped, wearing a real-looking price.
+    _faced_family, _faced_why = _faced_board_promotion(part, material)
+    _cost_family = _faced_family or material
+    _board_rate, _board_note = _board_sheet_rate(_cost_family, thickness)
+    if _faced_family:
+        part["_laminate_in_board"] = True
+        part.setdefault("review_flags", []).append(
+            f"{material} + LAMINATED is bought pre-faced as {_faced_family} — evidence: "
+            f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
+            f"shop operation.")
+        if not _board_rate:
+            part.setdefault("review_flags", []).append(
+                f"FACED BOARD UNPRICED: no purchased sheet price for {_faced_family} at "
+                f"{thickness:g}mm (config.BOARD_SHEET_PRICE_GBP). NOT costed as plain "
+                f"{material} — that would charge raw-core money for a laminated panel. "
+                f"Give the sheet price and size bought and every job on this board "
+                f"prices itself.")
+            return {
+                "material": material, "thickness_mm": thickness,
+                "blank_length_mm": blank_length, "blank_width_mm": blank_width,
+                "blank_area_m2": round((blank_length * blank_width) / 1_000_000.0, 4),
+                "unit_material_mass_kg": None,
+                "unit_material_cost_gbp": None, "cost_per_part_gbp": None,
+                "extended_material_cost_gbp": None,
+                "stock_estimate": select_sheet_size(_faced_family, blank_length,
+                                                    blank_width),
+                "cost_method": "faced_board_unpriced",
+                "costing_material_family": _faced_family,
+                "part_confidence_overall": _part_confidence_overall(part),
+                "part_geometry_reliability": _part_geometry_reliability(part),
+                "price_source": _build_price_source_metadata(
+                    {}, fallback_source="sdi_history_board_sheet_price",
+                    applied=False, applied_basis=None),
+            }
     if _board_rate and blank_length and blank_width:
-        _b_sheet = select_sheet_size(material, blank_length, blank_width)
+        _b_sheet = select_sheet_size(_cost_family, blank_length, blank_width)
         _b_pps = max(1, int(_b_sheet.get("parts_per_sheet") or 1))
         _b_scrap = 1.0 + float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
         _b_unit = (_board_rate / _b_pps) * _b_scrap
         part.setdefault("review_flags", []).append(
-            f"{material} sheet price {_board_note} £{_board_rate:.2f}/sheet ÷ {_b_pps} "
+            f"{_cost_family} sheet price {_board_note} £{_board_rate:.2f}/sheet ÷ {_b_pps} "
             f"parts per {_b_sheet.get('candidate_sheet_size_mm')} sheet × {_b_scrap:.2f} "
             f"scrap = £{_b_unit:.2f}/part. INDICATIVE, from SDI's own purchase history — "
             f"confirm the current rate before quoting.")
@@ -4708,6 +4792,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "extended_material_cost_gbp": round(_b_unit * quantity, 2),
             "stock_estimate": _b_sheet,
             "cost_method": "board_sheet_yield",
+            "costing_material_family": _cost_family,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
             "reliability_flags": ["board_sheet_priced", "indicative_price"],
@@ -7031,13 +7116,24 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     }
 
 
-def _build_workbook_equivalent_pricing(part_estimates: List[Dict[str, Any]], material_total: float, labour_total: float) -> Dict[str, Any]:
+def _build_workbook_equivalent_pricing(part_estimates: List[Dict[str, Any]],
+                                       material_total: float, labour_total: float,
+                                       customer: Any = None) -> Dict[str, Any]:
     cfg = WORKBOOK_EQUIVALENT_PRICING or {}
     # Exact workbook M105: =((M59+M103)/(1-M107))/0.92
     # overhead_absorption_factor = 0.92 hard-coded in the workbook cell (~8.7% overhead uplift).
     # M107 = rebate fraction (TTI default 0.066). M109 = sell margin (blank=0, estimator fills in).
     overhead_factor = float(cfg.get("overhead_absorption_factor", 0.92))
     m107 = float(cfg.get("default_m107", 0.066))
+    # THE CUSTOMER'S OWN TERMS BEAT THE CONFIG DEFAULT. The office books M&S at a 1.8%
+    # rebate over /0.92 and TTI at 6.6% over /0.93 (their own table, via Tony Ford's
+    # 0359967); a single default is right for at most one of them. The workbook cells are
+    # set by wb_populate from the same config table, so the two answers cannot diverge.
+    _terms_fn = getattr(config, "customer_commercial_terms", None)
+    _terms = _terms_fn(customer) if callable(_terms_fn) else None
+    if _terms:
+        m107 = float(_terms["rebate_fraction"])
+        overhead_factor = float(_terms["absorption_divisor"])
     m109 = float(cfg.get("default_m109", 0.0))
     m59 = round(material_total, 4)
     m103 = round(labour_total, 4)
@@ -7069,7 +7165,9 @@ def _build_workbook_equivalent_pricing(part_estimates: List[Dict[str, Any]], mat
             "overhead_absorption_factor": overhead_factor,
             "rebate_fraction": m107,
             "sell_margin_fraction": m109,
-            "source": "workbook_equivalent_pricing",
+            "source": ("customer_commercial_terms" if _terms
+                       else "workbook_equivalent_pricing"),
+            **({"customer_terms": _terms} if _terms else {}),
         },
     }
     if manufacturing_only:
@@ -8782,7 +8880,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         ],
     }
 
-    workbook_equivalent_pricing = _build_workbook_equivalent_pricing(part_estimates, material_total=material_total, labour_total=labour_total)
+    workbook_equivalent_pricing = _build_workbook_equivalent_pricing(
+        part_estimates, material_total=material_total, labour_total=labour_total,
+        customer=((summary or {}).get("customer") or (summary or {}).get("client")))
     estimate_source_extract = build_estimate_source_extract(part_estimates)
     historical_comparison_projection = {
         "schema": "estimate_projection_for_historical.v1",

@@ -1100,8 +1100,13 @@ STANDARD_SHEET_SIZES_MM = {
     # is the standard faced-board oversize sheet (Egger and equivalents); 2440x1220 is the
     # common trade size. Both are offered so the nester picks whichever yields more, exactly
     # as it does for MDF and ply. CONFIRM with the estimators which SDI actually buys.
-    "MFC": [(2800, 2070), (2440, 1220)],
-    "MFMDF": [(2800, 2070), (2440, 1220)],
+    # 3080x1220 is the laminated-MDF sheet SDI actually buys from Lawcris — Tony Ford's own
+    # estimate for 0359967 (11908-21, 16 Sep 2026) prices "3080 x 1220 x 9mm MDF laminated
+    # both sides" by that sheet. A stock size is a physical fact about what the trade sells,
+    # so it is recordable here; the PRICE of that sheet is not, and lives with its
+    # provenance in BOARD_SHEET_PRICE_GBP below.
+    "MFC": [(2800, 2070), (3080, 1220), (2440, 1220)],
+    "MFMDF": [(2800, 2070), (3080, 1220), (2440, 1220)],
     "CHIPBOARD": [(2800, 2070), (2440, 1220)],
     "VENEERED MDF": [(2440, 1220), (3050, 1525)],
     "OAK_VENEER_MDF": [(2440, 1220), (3050, 1525)],
@@ -2539,7 +2544,17 @@ SCRAP_PERCENTAGE = 0.04
 BOARD_SHEET_PRICE_GBP = {
     # material -> {thickness_mm: GBP per full sheet}
     "MFC":       {18.0: 58.55, 36.0: 84.54},
-    "MFMDF":     {18.0: 58.55, 36.0: 84.54},   # same substrate family until priced separately
+    # 9mm: £172.00 a 3080x1220 sheet of "MDF laminated both sides" (colour core), Lawcris,
+    # stated by Tony Ford in his own estimate for 0359967 (11908-21 Sunglasses Tray,
+    # 16 Sep 2026) at the 50-off rate. His sheet carries the supplier's own quantity breaks
+    # — 173 / 172 / 168 / 165 / 163 at 1 / 50 / 100 / 250 / 500 — which this table cannot
+    # yet hold; the register records them until a per-line supplier-break mechanism exists.
+    # CAUTION ON INTERPOLATION: the 9mm point is a PREMIUM colour-core laminate and the
+    # 18/36mm points are the Egger Davos Oak MFC — a thickness between 9 and 18 would
+    # interpolate DOWNWARD across two different products. The label _board_sheet_rate
+    # prints quotes both ends, so a falling curve is visible, INDICATIVE, and Tony's to
+    # overrule — but treat any 10-17mm faced-board price from this table with suspicion.
+    "MFMDF":     {9.0: 172.00, 18.0: 58.55, 36.0: 84.54},
     "CHIPBOARD": {18.0: 58.55, 36.0: 84.54},
     # DIBOND / ACM — PROVISIONAL, per full 3050x1500 (4.575 m2) sheet, ~£36/m2 at 3mm and
     # ~£46/m2 at 4mm (mid trade). CONFIRM against SDI's own Dibond buy price and replace these
@@ -2550,6 +2565,50 @@ BOARD_SHEET_PRICE_GBP = {
     "REYNOBOND":  {3.0: 165.0, 4.0: 210.0},
     "ETALBOND":  {3.0: 165.0, 4.0: 210.0},
 }
+
+# ── WHAT EACH CUSTOMER'S SHEET CHARGES ON TOP, BY NAME ───────────────────────────────
+#
+# The Estimate's own totals formula is  M170 = ((material + labour)/(100% − M172)) / 0.93
+# — M172 is the customer REBATE and the trailing divisor is the overhead ABSORPTION. The
+# blank template ships with rebate 0 and /0.93, and nothing ever set them, so every M&S
+# job went out missing the 1.8% uplift the office applies and using the wrong divisor.
+#
+# The table below is the office's own, read off Tony Ford's estimate for 0359967
+# (11908-21, 16 Sep 2026), whose Labour tab prints it verbatim:
+#
+#     "All Except M&S /0.93 · Tesco - 2.7% /0.93 · TTI - 6.6% /0.93
+#      · M&S - 1.8% /0.92 · Boots 2.7% /0.93"
+#
+# These are COMMERCIAL TERMS, not prices: which fraction a customer contract rebates and
+# which absorption the office books against it. They change when contracts change, so
+# they live here with their source, and an estimator's own typed rebate on the sheet is
+# never overwritten.
+CUSTOMER_COMMERCIAL_TERMS = {
+    "M&S":             {"rebate_fraction": 0.018, "absorption_divisor": 0.92},
+    "MARKS & SPENCER": {"rebate_fraction": 0.018, "absorption_divisor": 0.92},
+    "MARKS AND SPENCER": {"rebate_fraction": 0.018, "absorption_divisor": 0.92},
+    "TESCO":           {"rebate_fraction": 0.027, "absorption_divisor": 0.93},
+    "TTI":             {"rebate_fraction": 0.066, "absorption_divisor": 0.93},
+    "BOOTS":           {"rebate_fraction": 0.027, "absorption_divisor": 0.93},
+}
+
+
+def customer_commercial_terms(customer):
+    """The stated terms for this customer name, or None. Matched on the normalised name —
+    "M&S", "M and S Ltd" and "Marks & Spencer PLC" are one customer — and NEVER guessed:
+    an unlisted customer gets the template's own defaults, not the nearest neighbour's."""
+    import re as _re
+    text = str(customer or "").upper().replace(".", "").strip()
+    if not text:
+        return None
+    squashed = text.replace(" AND ", " & ")
+    for name, terms in CUSTOMER_COMMERCIAL_TERMS.items():
+        # Bounded, so TTI never matches inside another word — a rebate applied to the
+        # wrong customer is worse than the default it replaced.
+        if _re.search(rf"(?<![A-Z0-9]){_re.escape(name)}(?![A-Z0-9])", squashed):
+            return dict(terms, customer=name)
+    return None
+
 
 # A6: any "thickness" above this (mm) is treated as a dimension misparse and rejected.
 MAX_SHEET_THICKNESS_MM = 25.0

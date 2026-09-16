@@ -3407,6 +3407,38 @@ def compile_job_route(
                 route_id=insertion_route_id,
             ))
 
+    # ONE ASSEMBLY, ONE PACK — HOWEVER MANY SPELLINGS IT ARRIVED UNDER. 11908-21's graph
+    # carried the same shipping assembly twice: "11908-21" (the BOM's identity, children
+    # incl. the bumpers) and "11908-21 GA" (the GA sheet's own name, children the three
+    # boards) — and the loop below minted an assembly/pack event for EACH, so the sheet
+    # charged two Packing Joinery rows for one tray. Two roots whose names differ only by
+    # a trailing purely-alphabetic sheet-role token (GA, ASSY) are one assembly; the one
+    # with the fuller parts list keeps the event. "GA2" is NOT such a token — a second
+    # stand is a second stand (7332-01) — because a digit in the tail names a different
+    # drawing, not a role.
+    def _assembly_stem(name: Any) -> str:
+        text = str(name or "").strip()
+        _m = re.match(r"^(.*\d)[\s\-]+([A-Za-z]+)$", text)
+        if _m:
+            text = _m.group(1)
+        try:
+            from part_code_conventions import bare_code as _bare
+        except Exception:                                            # noqa: BLE001
+            return re.sub(r"[\s\-]+", "", text.upper())
+        return _bare(text)
+
+    _stem_groups: Dict[str, List[Any]] = {}
+    for node in graph["nodes"]:
+        if node.kind == "assembly" and node.children:
+            _stem_groups.setdefault(_assembly_stem(node.part_number), []).append(node)
+    _folded_assembly_dupes: set = set()
+    for _nodes in _stem_groups.values():
+        if len(_nodes) > 1:
+            _keep = max(_nodes, key=lambda n: len(n.children))
+            for _n in _nodes:
+                if _n is not _keep:
+                    _folded_assembly_dupes.add(_n.part_number)
+
     # Every non-welded assembly node is an actual assembly event. This replaces the old
     # blanket `handling` operation copied onto every leaf and bought-in line.
     current_decisions = [
@@ -3442,6 +3474,7 @@ def compile_job_route(
         if (
             node.kind != "assembly"
             or not node.children
+            or node.part_number in _folded_assembly_dupes
             or node.part_number in existing_assembly_targets
             or (node.part_number in welded_targets and not _is_top)
         ):

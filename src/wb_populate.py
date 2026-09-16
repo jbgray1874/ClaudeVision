@@ -3117,6 +3117,57 @@ def _question_fingerprint(part: Any, what: Any) -> tuple:
     return (pn, t[:120])
 
 
+def _apply_customer_terms(ws, customer_name: Any, flags: List[str]) -> None:
+    """The customer's own commercial terms, onto the sheet's own cells.
+
+    M170 divides by (100% − rebate) and then by the absorption divisor; the template
+    ships rebate 0 and /0.93 and nothing ever set them, so an M&S job went out missing
+    the office's 1.8% uplift and on the wrong divisor (their table books M&S at /0.92).
+    Terms come from config.CUSTOMER_COMMERCIAL_TERMS with their source; an estimator's
+    own typed rebate is never overwritten, and an unlisted customer is left exactly as
+    the template ships."""
+    try:
+        _terms = getattr(config, "customer_commercial_terms", lambda _x: None)(
+            customer_name)
+        if not _terms:
+            return
+        _reb_hit = _find_label_cell(ws, "rebate calculator")
+        if _reb_hit:
+            _rr, _rc = _reb_hit
+            for _step in (2, 1, 3, 4):
+                _cell = ws.cell(row=_rr, column=_rc + _step)
+                if _cell.value in (None, "", 0):
+                    _cell.value = float(_terms["rebate_fraction"])
+                    _flag(f"CUSTOMER TERMS: rebate {_terms['rebate_fraction']:.1%} for "
+                          f"{_terms['customer']} written to {_cell.coordinate} "
+                          f"(config.CUSTOMER_COMMERCIAL_TERMS, from the office's own "
+                          f"table). A typed rebate would not have been touched.", flags)
+                    break
+                if isinstance(_cell.value, (int, float)) and _cell.value:
+                    _flag(f"CUSTOMER TERMS: rebate cell {_cell.coordinate} already "
+                          f"holds {_cell.value} — the estimator's figure stands.", flags)
+                    break
+        _div = float(_terms.get("absorption_divisor") or 0)
+        _tuc_hit = _find_label_cell(ws, "total unit cost")
+        if _div and _tuc_hit:
+            _tr, _tc = _tuc_hit
+            for _step in (2, 1, 3, 4):
+                _fcell = ws.cell(row=_tr, column=_tc + _step)
+                _fv = _fcell.value
+                if isinstance(_fv, str) and _fv.startswith("="):
+                    _m_div = re.search(r"/(0\.9\d+)\s*$", _fv)
+                    if _m_div and abs(float(_m_div.group(1)) - _div) > 1e-9:
+                        _fcell.value = _fv[:_m_div.start()] + f"/{_div:g}"
+                        _flag(f"CUSTOMER TERMS: absorption divisor {_m_div.group(1)} -> "
+                              f"{_div:g} for {_terms['customer']} in "
+                              f"{_fcell.coordinate} — the office's own table books "
+                              f"this customer at /{_div:g}.", flags)
+                    break
+    except Exception as _ct_exc:                                 # noqa: BLE001
+        _flag(f"customer commercial terms not applied ({_ct_exc}) — the template's own "
+              f"defaults stand.", flags)
+
+
 def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
@@ -3556,11 +3607,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           or summary.get("order_quantity")
                           or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
                           or 180) or 180)
-    ws[hdr["customer"]]   = (summary.get("customer") or summary.get("client")
-                             or client_from_job_folder(summary) or job_folder_name)
+    _customer_name = (summary.get("customer") or summary.get("client")
+                      or client_from_job_folder(summary) or job_folder_name)
+    ws[hdr["customer"]]   = _customer_name
     ws[hdr["drawing_no"]] = full_drawing_number(summary, job_folder_name)
     ws[hdr["order_qty"]]  = order_qty
     write_job_identity_header(ws, summary, job_folder_name)
+
+    _apply_customer_terms(ws, _customer_name, flags)
 
     # THE REVISION IS READ AND THEN DROPPED ON THE FLOOR. 11350's run printed
     # "[revision] 11350-01 revision -> B" and the sheet's Rev box was blank — so an estimator
@@ -5926,6 +5980,44 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _mark_input_cell(ws, _m_hit[0], _m_hit[1] + 3)
     except Exception:
         pass
+    # EDGING ON A FACED BOARD THAT NOBODY HAS STATED. Tony's first finding on 11908-21:
+    # "Not all materials calculated no ABS edging Allowed" — the drawing pack nowhere
+    # states the edging spec (his own line quotes the Egger reference from the spec book,
+    # not the sheet), so the engine cannot mint the material without inventing it. What
+    # it CAN do is measure: the laminated parts' edges are drawn, and their metreage is
+    # the quantity the spec will be priced over, by length, like the tape. One ask for
+    # the job, with the measurement in it, instead of a silently absent line.
+    try:
+        _lam_parts = [p for p in (bom_parts or [])
+                      if isinstance(p, dict)
+                      and (p.get("_laminate_in_board")
+                           or (p.get("material_estimate") or {}).get(
+                               "costing_material_family"))]
+        _bom_says_edging = any("EDG" in str(r.get("description") or "").upper()
+                               for r in (summary.get("bom_rows")
+                                         or (summary.get("document_analysis") or {}).get(
+                                             "bom_rows") or []) if isinstance(r, dict))
+        if _lam_parts and not _bom_says_edging:
+            _edge_m = 0.0
+            for _p in _lam_parts:
+                _l = _safe(_p.get("blank_length_mm")) or 0
+                _w = _safe(_p.get("blank_width_mm")) or 0
+                _q = _safe(_p.get("quantity")) or 1
+                _edge_m += 2.0 * (float(_l) + float(_w)) / 1000.0 * float(_q)
+            if _edge_m > 0:
+                _inputs.append({
+                    "kind": "material_unstated", "part": "EDGING",
+                    "where": "faced-board parts",
+                    "what": (f"EDGING NOT STATED — the laminated parts have "
+                             f"{_edge_m:.1f} m of drawn edges per unit (every edge; "
+                             f"visible edges will be less). The pack does not name an "
+                             f"edging spec, so nothing is priced. State the spec and "
+                             f"the banded metres (e.g. 23 x 1mm ABS at £/m) and it "
+                             f"prices by length, like any roll goods."),
+                })
+    except Exception:                                            # noqa: BLE001
+        pass
+
     # POWDER COVERAGE. The rate in use is the template's 100%-transfer assumption, which
     # nothing achieves; the flag already says so at length, but it says it to a console.
     if _powder_kg_total and getattr(config, "POWDER_KG_PER_M2", None) is not None:
