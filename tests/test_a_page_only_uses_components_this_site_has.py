@@ -199,6 +199,44 @@ def test_the_guide_sits_directly_below_the_estimating_guide():
             f"{page_name} has other entries between the two guides")
 
 
+# ── and the application itself, below its guide ──────────────────────────────
+#
+# "integrate this link ... as a new menu item below #fixture-guide called SDI Drawing
+# Search Intelligence" — James Gray, 16 Sep 2026. The GUIDE is a page of this portal;
+# the APPLICATION is Muhammad's search, live on the UAT host, so its entry is a plain
+# external href (the portal nav's click handler only acts on data-view entries) that
+# opens in its own tab.
+_APP_NAME = "SDI Drawing Search Intelligence</a>"
+_APP_URL = "http://LC-328802:5000/"
+
+
+@pytest.mark.parametrize("page_name", _PAGES)
+def test_the_drawing_search_app_is_in_every_sidebar_below_its_guide(page_name):
+    page = (_BACKEND / page_name).read_text(encoding="utf-8")
+    nav = page[page.index(">Operate<"):]
+    guide_at = nav.index(_GUIDE_NAME)
+    app_at = nav.index(_APP_NAME)
+    assert guide_at < app_at, f"{page_name}: the app entry must sit BELOW its guide"
+    between = nav[guide_at:app_at]
+    assert between.count("</a>") == 1, (
+        f"{page_name} has other entries between the guide and the application")
+    assert _APP_URL in between + nav[app_at:app_at + 40] or _APP_URL in nav, (
+        f"{page_name}: the entry must open the application on the UAT host")
+
+
+@pytest.mark.parametrize("page_name", _PAGES)
+def test_the_app_link_opens_its_own_tab_and_is_not_a_portal_view(page_name):
+    """An external application must not be hijacked by the hash router or replace the
+    portal in the user's tab."""
+    import re as _re
+    page = (_BACKEND / page_name).read_text(encoding="utf-8")
+    m = _re.search(r'<a[^>]*href="http://LC-328802:5000/"[^>]*>', page)
+    assert m, page_name
+    tag = m.group(0)
+    assert 'target="_blank"' in tag and 'rel="noopener"' in tag, tag
+    assert "data-view" not in tag, "the app is not a view of this portal"
+
+
 @pytest.mark.parametrize("page_name", _PAGES)
 def test_the_estimating_tool_is_called_sdi_estimating_intelligence_in_operate(page_name):
     """The portal's own Operate group still said "Estimating Intelligence" while both copies,
