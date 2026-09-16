@@ -109,3 +109,43 @@ def test_cost_source_always_joins_the_witness_pool():
     origin = _price_origin(pkg, "commercial", None, 1.91, 1.91, None, False)
     assert origin["class"] == "stated_method", origin
     assert origin["firmness"] == INDICATIVE_HOUSE
+
+
+# ── the early quantity probe cannot cross-pollinate jobs ─────────────────────────────────
+
+def _folder(tmp_path, pdfs, answers):
+    for n in pdfs:
+        (tmp_path / n).write_text("x")
+    for n in answers:
+        (tmp_path / n).write_text("{}")
+    return tmp_path
+
+
+def test_one_job_one_file_is_consulted(tmp_path):
+    from file_scan import _answers_file_for_order_qty
+    d = _folder(tmp_path, ["0355255_GA_10975_REV_B.PDF"], ["10975-02_confirmed.json"])
+    f = _answers_file_for_order_qty(d, d / "0355255_GA_10975_REV_B.PDF")
+    assert f is not None and f.name == "10975-02_confirmed.json"
+
+
+def test_several_jobs_one_file_is_refused_without_a_name_match(tmp_path):
+    """The 16 Sep review's exact hazard: one file in a folder of several jobs would
+    apply its order quantity to every job before their drawing numbers are known."""
+    from file_scan import _answers_file_for_order_qty
+    d = _folder(tmp_path, ["11111-01_GA.pdf", "22222-01_GA.pdf"],
+                ["33333-01_confirmed.json"])
+    assert _answers_file_for_order_qty(d, d / "11111-01_GA.pdf") is None
+
+
+def test_a_positive_name_match_earns_trust_in_a_shared_folder(tmp_path):
+    from file_scan import _answers_file_for_order_qty
+    d = _folder(tmp_path, ["12349-02-69-GA_RevA.pdf", "99999-01_GA.pdf"],
+                ["12349-02_confirmed.json"])
+    f = _answers_file_for_order_qty(d, d / "12349-02-69-GA_RevA.pdf")
+    assert f is not None and f.name == "12349-02_confirmed.json"
+
+
+def test_two_answers_files_are_never_guessed_between(tmp_path):
+    from file_scan import _answers_file_for_order_qty
+    d = _folder(tmp_path, ["a.pdf"], ["one_confirmed.json", "two_confirmed.json"])
+    assert _answers_file_for_order_qty(d, d / "a.pdf") is None

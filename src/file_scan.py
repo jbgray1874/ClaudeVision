@@ -1933,6 +1933,62 @@ def scan_pdf_file(
     )
 
 
+def _answers_file_for_order_qty(job_folder: Any, pdf_path: Any):
+    """The answers file the order-quantity probe may consult BEFORE the drawing number is
+    known — or None, refusing loudly where consulting would risk cross-job pollution.
+
+    The name-matched lookup misses at this point of the run (10975-02's order_quantity
+    sat unread while its tape length, applied by the later name-matched pass, landed).
+    But "the only answers file in the folder" is NOT unambiguous by itself: a folder
+    holding several jobs and one file would apply that file's order quantity to every
+    job before their drawing numbers are known — exactly the pollution the
+    specific-name-first rule exists to prevent (review, 16 Sep). So the fallback demands
+    one of two proofs:
+
+      - the folder holds AT MOST ONE PDF — one job, so the one file can only be its; or
+      - the file's own name POSITIVELY matches the PDF or folder name we already have.
+    """
+    _cands = []
+    _roots = {p for p in (job_folder, (Path(pdf_path).parent if pdf_path else None)) if p}
+    for _root in _roots:
+        try:
+            _cands += list(Path(_root).glob("*_confirmed.json"))
+            _cands += list(Path(_root).glob("*_estimator_dimensions.json"))
+        except OSError:
+            pass
+    _cands = sorted(set(_cands))
+    if not _cands:
+        return None
+    if len(_cands) > 1:
+        print(f"   [order-qty] {len(_cands)} answers files in the job folder and no "
+              f"drawing number known yet — none consulted for the order quantity; the "
+              f"name-matched pass later picks the right one for its own fields.",
+              flush=True)
+        return None
+    _f = _cands[0]
+    _pdfs = []
+    for _root in _roots:
+        try:
+            _pdfs += list(Path(_root).glob("*.[pP][dD][fF]"))
+        except OSError:
+            pass
+    if len(set(_pdfs)) <= 1:
+        return _f
+    def _bare(t: Any) -> str:
+        return re.sub(r"[\s\-_]+", "", str(t or "").upper())
+    _stem = re.sub(r"_(confirmed|estimator_dimensions)\.json$", "", _f.name,
+                   flags=re.IGNORECASE)
+    _idents = [Path(pdf_path).stem if pdf_path else "",
+               Path(job_folder).name if job_folder else ""]
+    if _bare(_stem) and any(_bare(_stem) in _bare(_i) for _i in _idents if _i):
+        return _f
+    print(f"   [order-qty] {_f.name} is the folder's only answers file, but the folder "
+          f"holds {len(set(_pdfs))} PDFs and the file's name matches neither the PDF "
+          f"nor the folder — not consulted for the order quantity; the name-matched "
+          f"pass later picks it up for the job it actually names.", flush=True)
+    return None
+
+
 def _finalize_scan_summary(
     summary: Dict[str, Any],
     started: float,
@@ -2885,30 +2941,7 @@ def _finalize_scan_summary(
                 (summary.get("document_analysis") or {}).get("drawing_number")
                 or summary.get("drawing_number"))
             if not _ecq_path:
-                # THE DRAWING NUMBER IS NOT KNOWN YET AT THIS POINT of the run, so the
-                # name-matched lookup can miss a file the later confirmations pass will
-                # find — which is how 10975-02's order_quantity: 10 sat unread beside
-                # the drawings while its tape length applied. When exactly ONE answers
-                # file exists in the job folder, it is unambiguous whatever it is
-                # called; two or more stay untouched, because a folder holding several
-                # jobs must never have one file quietly govern them all.
-                _cands = []
-                for _root in {p for p in (job_folder,
-                                          (Path(pdf_path).parent if pdf_path else None))
-                              if p}:
-                    try:
-                        _cands += list(Path(_root).glob("*_confirmed.json"))
-                        _cands += list(Path(_root).glob("*_estimator_dimensions.json"))
-                    except OSError:
-                        pass
-                _cands = sorted(set(_cands))
-                if len(_cands) == 1:
-                    _ecq_path = _cands[0]
-                elif len(_cands) > 1:
-                    print(f"   [order-qty] {len(_cands)} answers files in the job folder "
-                          f"and no drawing number known yet — none consulted for the "
-                          f"order quantity; the name-matched pass later will pick the "
-                          f"right one for its own fields.", flush=True)
+                _ecq_path = _answers_file_for_order_qty(job_folder, pdf_path)
             if _ecq_path:
                 import json as _json_q
                 _raw_q = _json_q.loads(Path(_ecq_path).read_text(encoding="utf-8"))
