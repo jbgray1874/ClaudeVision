@@ -200,7 +200,7 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     best = None
     # THE LABEL FOLLOWS THE MONEY, and the record says which branch put the money on.
     #
-    # The 16:07 10975-02 book charged the tape at £0.09 a piece — 200 mm of the £4.50
+    # The 16:07 10975-02 book charged the tape at £0.09 a piece — 200 mm of the £—
     # 10 m roll UDEF holds, to the penny — and the supplier column said
     # "xAI Grok LLM - INDICATIVE" with NOT A QUOTE stamped on the description. Two stamps
     # were on the record: an LLM answer from the bought-in chain, and the roll-goods stamp

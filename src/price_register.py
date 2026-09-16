@@ -4,14 +4,14 @@
      and review/expiry date. A job-specific quote must never become an automatic shared
      rate."                                     — the change register's operating rules
 
-WHY THIS EXISTS. The figures were numeric literals in config.py — the tape's roll at £4.50,
-Tony's edging at £0.35/m, a plater's £250 — each attributed and dated, which made them honest
+WHY THIS EXISTS. The figures were numeric literals in config.py — the tape's roll at £—,
+Tony's edging at £—/m, a plater's £— — each attributed and dated, which made them honest
 and did not make them right. Three things follow from a price living in source:
 
   * changing a rate is a CODE change, so a commercial decision needs an engineer;
   * nothing carries an EXPIRY, so a figure is as loud on the day it goes stale as on the day
     it was given, and age becomes indistinguishable from agreement;
-  * a job's quote and a shop's standing rate look identical in the file, which is how £250
+  * a job's quote and a shop's standing rate look identical in the file, which is how £—
     for one stand came to be chargeable on every job whose drawing named the same finish.
 
 So the money moves to `data/price_register.json` and this module reads it. The engine keeps

@@ -111,6 +111,14 @@ def _walk(part: Dict[str, Any], path, create: bool = False) -> Optional[Dict[str
 SOURCE_RANK: Dict[str, int] = {
     "estimator_confirmed": 100,
     "knowledge_base": 100,
+    # A PRODUCTION RULE THE SHOP CONFIRMED (config.PRODUCTION_MATERIAL_SUBSTITUTIONS —
+    # "0.9mm steel: production use 1mm in lieu"). It sits ABOVE every reading of the
+    # drawing, because it is not a reading: the drawing says 0.9 and is right, the shop
+    # buys 1.0 and is also right. It sits BELOW a person, who can stand it down by
+    # confirming the drawn gauge. The first cut wrote the substitute straight into the
+    # field with no source recorded, so any later reader at the old source's rank could
+    # put the drawn figure back — and the 17:36 7332-01 book printed 0.9 everywhere.
+    "production_substitution": 95,
     # A PERSON'S REASONED INFERENCE, WHICH IS NOT THE SAME AS A PERSON'S READING.
     #
     # estimator_confirmed at 100 means "I read this off the sheet". Plenty of real facts are
@@ -386,6 +394,11 @@ _CUT_FILE_GAUGE_RANK: Dict[str, int] = {
     "dxf": 95,
     "dxf_flat_pattern": 95,
     "dxf_filename": 95,
+    # The confirmed production rule outranks every READING of the gauge here too — the
+    # cut file is right about what was drawn, the rule is about what is bought — and
+    # stays below a person (estimator_confirmed 100). Equal to the cut file it would only
+    # ever be refused, which is how the 17:36 7332-01 book kept 0.9 mm on every line.
+    "production_substitution": 97,
 }
 
 FIELD_RANK_OVERRIDE: Dict[str, Dict[str, int]] = {
@@ -443,6 +456,7 @@ def tiebreak_priority(source: Any, field: Any = None) -> int:
 # falls back to the raw key rather than to silence — an unfamiliar source is still a source,
 # and printing nothing is the failure this exists to prevent.
 SOURCE_DISPLAY_NAME: Dict[str, str] = {
+    "production_substitution": "a confirmed production rule (the gauge the shop buys)",
     "estimator_confirmed":    "an estimator, overruling the files",
     "estimator_read_drawing": "an estimator reading the drawing",
     "estimator_inferred":     "an estimator's stated inference from the drawing",
@@ -836,6 +850,15 @@ def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
     _cur = value_of(part, field)
     if _cur is MISSING or _same_value(_cur, new_value):
         return None
+    # A DECISION IS NOT OUTVOTED BY READERS. Readers agreeing answer "what does the drawing
+    # say"; a person's confirmation or a confirmed production rule answers a different
+    # question ("what is bought / what is true regardless"), so however many readings agree
+    # about the drawn value they are not evidence against it. Without this, the DXF and the
+    # model — both correctly reporting 0.9 mm — outvoted the shop's 1.0 mm substitution
+    # rule on 7332-01-008 the moment the model was read after the rule had applied.
+    _held_src = source_of(part, field)
+    if _held_src in _NOT_A_READING or field_rank(_held_src, field) >= _DECISION_RANK:
+        return None
     against = set(support_for(part, field, new_value)) | {str(new_source or "")}
     against.discard("")
     holding = support_for(part, field, _cur)
@@ -856,6 +879,9 @@ def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
 
 # A PERSON DECIDING IS NOT A READER, AND IS NEVER OUTVOTED BY READERS.
 _DECISION_RANK = 100
+# Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
+# bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
+_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution"})
 
 
 def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,

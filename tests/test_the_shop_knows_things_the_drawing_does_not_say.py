@@ -218,6 +218,27 @@ def test_the_substitution_reaches_the_gauge_the_money_is_derived_from():
     assert part["drawn_thickness_mm"] == 0.9
 
 
+def test_the_substituted_gauge_survives_a_later_reading_and_yields_to_a_person():
+    """THE 17:36 BOOK. It printed 0.9 mm on every line of 7332-01-008 with the rule in
+    the build: the first cut wrote 1.0 straight into the field and recorded no source, so
+    any later pass re-applying the drawing's own gauge could put 0.9 back. The rule is now
+    a SOURCE of its own — above every reading, below a person."""
+    import source_precedence as sp
+    from estimator import apply_production_substitutions
+    part = {"part_number": "7332-01-008", "normalized_material": "MILD_STEEL"}
+    sp.apply_field(part, "normalized_thickness_mm", 0.9, "dxf_flat_pattern")
+    apply_production_substitutions(part)
+    assert part["normalized_thickness_mm"] == 1.0
+    assert sp.source_of(part, "normalized_thickness_mm") == "production_substitution"
+    # a later DXF / model / BOM-tree pass cannot revert it
+    for later in ("dxf_flat_pattern", "solidworks_api", "bom_tree", "dxf_filename"):
+        sp.apply_field(part, "normalized_thickness_mm", 0.9, later)
+        assert part["normalized_thickness_mm"] == 1.0, later
+    # a person can
+    sp.apply_field(part, "normalized_thickness_mm", 0.9, "estimator_confirmed")
+    assert part["normalized_thickness_mm"] == 0.9
+
+
 def test_a_normal_gauge_says_nothing():
     from estimator import apply_production_substitutions
     for g in (0.7, 1.2, 1.5, 2.5):

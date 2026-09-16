@@ -76,9 +76,16 @@ NAV = [
     ("AI Services", [("Overview", "/#aisvc", None)]
                     + [(name, f"/#aisvc-{sid}", None) for sid, name in AI_SERVICES]),
     ("Operate", [
-        ("Estimating Intelligence", "/estimating", "estimating"),
+        ("SDI Estimating Intelligence", "/estimating", "estimating"),
         ("SDI Estimating Intelligence Guide", "/guide", "guide"),
-        ("AI Tools", "/#tools", None),
+        ("SDI Drawing Search Intelligence Guide", "/#fixture-guide", None),
+        # The APPLICATION itself — Muhammad's drawing search, live on the UAT host — as
+        # James asked for it: called exactly this, directly below its guide. An absolute
+        # href is emitted with target=_blank (see _markup), so it opens in its own tab and
+        # is never hijacked by the portal's hash router. Held HERE so that re-running this
+        # injector can never wipe it from the copied sidebars again.
+        ("SDI Drawing Search Intelligence", "http://LC-328802:5000/", None),
+        ("SDI Estimating Intelligence Tools", "/#tools", None),
         ("Files &amp; Directories", "/#files", None),
         ("Status Reports", "/#reports", None),
         ("Go-Live Guide", "/#golive", None),
@@ -155,6 +162,7 @@ CSS = """
     text-transform:uppercase; color:var(--dim,#6a6a72); padding:16px 16px 6px; }
   .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,#9b9ba3);
     text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
+  .sdinav .sdinav-ext{ opacity:.55; font-size:.9em; }
   .sdinav a.sdinav-item:hover{ color:var(--ink,#f0efec); background:#ffffff08; }
   .sdinav a.sdinav-item.is-here{ color:var(--ink,#f0efec); border-left-color:var(--brand,#e8a33d);
     background:#ffffff0a; font-weight:600; }
@@ -184,6 +192,15 @@ def _markup(current: str) -> str:
         out.append(f'  <div class="sdinav-grp">{group}</div>')
         for label, href, key in items:
             here = " is-here" if key and key == current else ""
+            if href.startswith("http"):
+                # An external application, not a page of this site: its own tab, and a
+                # muted launch mark so it cannot be mistaken for the guide above it.
+                out.append(
+                    f'  <a class="sdinav-item{here}" href="{href}" target="_blank" '
+                    f'rel="noopener" title="Open the drawing search application '
+                    f'(UAT host LC-328802:5000)">{label}'
+                    f'<span class="sdinav-ext" aria-hidden="true"> ↗</span></a>')
+                continue
             out.append(f'  <a class="sdinav-item{here}" href="{href}">{label}</a>')
     out += [
         '</div>',

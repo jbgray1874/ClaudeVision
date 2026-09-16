@@ -1161,12 +1161,12 @@ def _is_plate_metal(text: Any) -> bool:
 def _part_finish_text(part: Dict[str, Any]) -> str:
     """Every word this part carries about its finish, normalised AND as drawn.
 
-    THE `or` THAT COST HOWARD'S £250. This read the normalised fields and consulted the
+    THE `or` THAT COST HOWARD'S £—. This read the normalised fields and consulted the
     RAW list only when all of them were empty. A named spec is exactly the case where they
     are not: the finish classifier recognises "Harrods01" as a plate and writes its own word
     — "zinc plated" — into normalized_finish, and the drawing's actual callout stays in
     surface_finishes where nothing then looked. So 7332-01-101 priced on the indicative
-    zinc card, £15.83 of trade plating against a quoted £250 a stand: the largest single
+    zinc card, £15.83 of trade plating against a quoted £— a stand: the largest single
     error on that sheet, by an order of magnitude, caused by an `or`.
     #
     The engine's word for a finish and the drawing's word for it are different facts and
@@ -1346,7 +1346,7 @@ def inherited_decision(kind: str, facts: Dict[str, Any]) -> Optional[Dict[str, A
     A DECISION MADE ONCE SHOULD NOT HAVE TO BE MADE AGAIN. Brass Harrods 01 went into
     7332-01's own answers file, which governs 7332-01 and nothing else — so the next Harrods
     stand states the same bare "PLATED", blocks for the same reason, and somebody types the
-    same £250. Same characteristics, same manual work, every time.
+    same £—. Same characteristics, same manual work, every time.
 
     EVERY CONDITION MUST MATCH. An entry's `when` is a conjunction, and an entry with no
     conditions at all is refused rather than applied to everything — a rule that matches
@@ -1429,7 +1429,7 @@ def job_customer(summary: Any) -> str:
     for this exact estimator request ("can Client / Job Description / Date be populated for
     header").
 
-    So the sheet said Harrods, the register looked for Harrods and found "", and the £250 did
+    So the sheet said Harrods, the register looked for Harrods and found "", and the £— did
     not apply to a job that plainly qualified. Exactly the defect class this session has spent
     the evening on: a second reader that agrees with the first until the one case where it
     matters.
@@ -1451,8 +1451,8 @@ def job_customer(summary: Any) -> str:
 def plater_freight_for_job(job_codes: Any) -> Optional[Dict[str, Any]]:
     """THIS job's plater freight quote from the register, or None.
 
-    The £120/£20 was 7332-01's own transport quote, and holding it in config made it every
-    plated job's freight — the same fault as the £250, in a smaller coat. The register
+    The £— was 7332-01's own transport quote, and holding it in config made it every
+    plated job's freight — the same fault as the £—, in a smaller coat. The register
     holds it scoped job_only, so this returns a figure ONLY for the job it was quoted for;
     every other plated job gets None and the caller writes an owned gap naming SDI
     transport, never a borrowed number.
@@ -1557,7 +1557,7 @@ def job_identity_codes(summary: Any) -> Tuple[str, ...]:
 def _quote_belongs_to_this_job(spec: Dict[str, Any], job_codes_here: Any) -> bool:
     """Is this named spec's figure a price for the job in hand, or another job's quote?
 
-    Howard Thurley, 16 Sep 2026: "Plating would be as drawing specific, £250.00 is from
+    Howard Thurley, 16 Sep 2026: "Plating would be as drawing specific, £— is from
     supplier per unit and is independent of any other job. Plating jobs priced
     independently." A spec marked `priced_per_job` therefore prices ONLY the job it was
     quoted for; anywhere else the spec is still identified and the figure is still shown,
@@ -1588,7 +1588,7 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
 
     A NAMED SPEC IS A QUOTED PRICE AND COMES FIRST. The policy's own note says a decorative
     or named plate spec is not the per-kilo rate; 7332-01 is that case, its requirement is
-    Brass Harrods 01, and the plater charges £250 a stand against an indicative zinc line of
+    Brass Harrods 01, and the plater charges £— a stand against an indicative zinc line of
     a few pounds on mass. Keyed on the finish the drawing names, so a job calling up no such
     spec is priced exactly as it was."""
     _spec = named_plate_spec(finish_text)
@@ -1634,7 +1634,7 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             # A NEW ESTIMATE IS INDEPENDENT OF AN OLD ONE — NO COMPARATOR, NO FALLBACK.
             #
             # This priced from the last quote we held, labelled as a historical comparator.
-            # James Gray, 16 Sep 2026, on reading it: "we don't know about the 250 as our
+            # James Gray, 16 Sep 2026, on reading it: "we don't know about the [plater figure] as our
             # estimating process is as independent as it can be… it should not appear in a
             # new estimate at all — not as a charge, fallback, comparator, workbook note or
             # suggested value." He is right, and the label did not save it: a figure on the
@@ -1642,10 +1642,10 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             #
             # WHAT 7332-01 TAUGHT IS KEPT, AND IT IS NOT A NUMBER: that "Harrods 01" is
             # DECORATIVE plating, so the per-kilo zinc card cannot price it (the original
-            # sixteen-to-one defect), and that a requirement of this kind needs a fresh
-            # job-specific quote. The £250 itself sits in the register's
-            # historical_audit_record, which the resolver does not read and this branch
-            # cannot reach.
+            # order-of-magnitude defect), and that a requirement of this kind needs a
+            # fresh job-specific quote. The figure itself is retained NOWHERE — James
+            # Gray, 16 Sep 2026: a number copied from an estimator's sheet is not kept in
+            # the register, documentation, reports, prompts, tests or audit payloads.
             #
             # The rungs below a live price are, in order: a confirmed figure for THIS job
             # (the answers file, which outranks everything here); a labelled market estimate
@@ -1709,13 +1709,13 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
 
     # ---- AND THE CARD ONLY PRICES THE PLATING IT IS A CARD FOR --------------------
     #
-    # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£250.00 per each
+    # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£— per each
     # stand.)" The engine had not stated zinc because it read zinc. It stated zinc because
     # zinc is what this rate is, and it applied the rate to a drawing whose finish field says
     # only "PLATED" — a word that names a family and no process inside it.
     #
     # £2.50/kg is a trade zinc-and-passivate card. Against a decorative brass it is not an
-    # approximation, it is a different product: £15.83 against £250.00, sixteen to one, on a
+    # approximation, it is a different product: the engine's own zinc-card figure against the plater's quote, an order of magnitude apart, on a
     # line an estimator has no reason to look twice at because it carries a plausible number
     # and the word INDICATIVE. A wrong figure that reads as considered is worse than a blank,
     # and this is the shape of wrong that survives review.
@@ -1841,7 +1841,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # exists because of it.
         # ── THE ESTIMATOR'S OWN PRICE, IF HE HAS GIVEN ONE ─────────────────────────────
         #
-        # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£250.00 per
+        # "Line 20 – Plating stated as Zinc – Requirement is Brass Harrods 01 (£— per
         # each stand.)" The spec is not written on the drawing — every finish field in the
         # pack reads PLATED — so no amount of reading gets the engine there, and the line
         # correctly blocks. What it needed was somewhere for his answer to live that is not
@@ -1896,7 +1896,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             #
             # The pack could not identify the spec, so the line blocks — which is right, and
             # on the SECOND Harrods stand it is also useless: it blocks for exactly the
-            # reason it blocked the first time, and somebody types £250 again. A rule that
+            # reason it blocked the first time, and somebody types £— again. A rule that
             # produces the same manual work on every drawing with the same characteristics
             # is not a rule.
             #
@@ -1925,15 +1925,15 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                         f"{_prev_note}")
         # GETTING IT THERE AND BACK IS PART OF HAVING IT PLATED.
         #
-        # "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network -
-        # £20.00 per Unit." Freight the job would not incur if the part were finished in
+        # "Delivery to & from Platers from Transport Dept. For Ref. £— Pallet Network -
+        # £— per unit." Freight the job would not incur if the part were finished in
         # house, and it was on no line at all. It rides on the plating line rather than a new
         # commercial line of its own, because that is the cause of it and an estimator
         # reading "plating" should see what plating costs.
         #
         # Held per ORDER with the per-unit share derived, which is the form that survives a
-        # quantity change: £120 over the six stands the figure was quoted against is his £20
-        # a unit. Whether £120 is the round trip or each way the note does not settle, so the
+        # quantity change: £— over the six stands the figure was quoted against is his £20
+        # a unit. Whether £— is the round trip or each way the note does not settle, so the
         # line says which it assumed.
         # AND IT IS NOT ADDED TO THIS LINE, DELIBERATELY. Freight to and from the plater is
         # real money the job would not spend if the part were finished in house, but this
@@ -2013,7 +2013,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                 f"not which plate. NOT PRICED — confirm the process with the plater").strip()
         elif method == "subcontract_plating_historical_comparator":
             # THE LABEL IS THE WHOLE DIFFERENCE, SO IT HAS TO REACH THE SHEET. A comparator
-            # that prices £250 and reads "plating" in the description column is an unlabelled
+            # that prices £— and reads "plating" in the description column is an unlabelled
             # standing rate by the time an estimator sees it, whatever the note said upstream.
             _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
             pe["description"] = f"{_pn_plate} plating — {note}".strip()
@@ -2045,13 +2045,13 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         #
         # The exclusion exists because the mass decides the money on the £/kg card: a member
         # whose own detail says RAW must not be swept into a weight nobody agreed. That is
-        # right, and on a QUOTED price it is answering a question nobody asked. £250 is per
+        # right, and on a QUOTED price it is answering a question nobody asked. £— is per
         # stand. The mass is not an input, so excluding a member changes no figure — it only
         # leaves an audit list saying the plater is quoted for 7332-01-008 alone, when what
         # goes in the tank is the welded frame.
         #
         # A list that is wrong in a direction that costs nothing is still wrong, and it is
-        # the list an estimator checks the £250 against.
+        # the list an estimator checks the £— against.
         _per_unit_price = method in ("subcontract_plating_named_spec",
                                      "subcontract_plating_historical_comparator",
                                      "estimator_stated_price",
@@ -6335,7 +6335,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # — PLATED, ZINC — and "Harrods01" is neither: it is the customer's name for a brass
         # plate, which is exactly why the spec table exists. A finish that names a spec in
         # that table goes to a plater by definition, so it counts here too. Without this the
-        # part whose plating costs £250 was the one part not recognised as plated.
+        # part whose plating costs £— was the one part not recognised as plated.
         # TWO OPERATIONS, TWO ROWS — his answer to "say if you would rather see them
         # split": "Two separate Operations this job, items need to be packed to send to
         # platers before" the final pack. One combined 12-minute figure was the right
@@ -6722,8 +6722,13 @@ def apply_production_substitutions(part: Dict[str, Any]) -> None:
             "stated_by": rule.get("stated_by"), "stated_on": rule.get("stated_on"),
         }
         # The substitute is what the buyer orders and the laser cuts, so it is what every
-        # downstream figure (mass, speed table, the workbook's gauge column) must use.
-        part["normalized_thickness_mm"] = _sub   # precedence: direct-write ok — a production rule the flag names, not a competing reading of the drawing
+        # downstream figure (mass, speed table, the workbook's gauge column) must use —
+        # and it must SURVIVE. Written through the resolver as its own source
+        # (production_substitution, rank 95): above every reading, so a later DXF or model
+        # pass cannot quietly put the drawn gauge back; below a person, so an
+        # estimator-confirmed thickness still wins.
+        source_precedence.apply_field(
+            part, "normalized_thickness_mm", _sub, "production_substitution")
         part.setdefault("review_flags", []).append(
             f"drawn at {_gauge:g} mm, COSTED AT {_sub:g} mm: "
             f"{rule.get('reason')} ({_who}). A production rule, not a reading of the "
@@ -9165,8 +9170,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
 
                 # ---- AND GETTING IT THERE AND BACK IS A LINE, NOT A SENTENCE ----------
                 #
-                # "** Delivery to & from Platers from Transport Dept. For Ref. £120.00
-                # Pallet Network - £20.00 per Unit."   — Howard Thurley, 9 Sep 2026
+                # "** Delivery to & from Platers from Transport Dept. For Ref. £—
+                # Pallet Network - £— per unit."   — Howard Thurley, 9 Sep 2026
                 #
                 # The plating line carries this in its note and deliberately does not add it,
                 # so that the plating figure equals what the PLATER charges and can be checked
@@ -9182,9 +9187,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 #
                 # THE ROUTE INHERITS; THE MONEY DOES NOT. Any job that sends work out to a
                 # platers pays to send it and pays to get it back, so the LINE exists on
-                # every plated job. The FIGURE is a transport quote — the £120/£20 was
+                # every plated job. The FIGURE is a transport quote — the £— was
                 # 7332-01's own, and holding it in config made it every plated job's
-                # freight, the same fault as the £250 in a smaller coat. The register
+                # freight, the same fault as the £— in a smaller coat. The register
                 # answers only for the job the quote belongs to; every other plated job
                 # gets this line UNPRICED with the owner named, exactly like any other
                 # missing quote.
@@ -9402,7 +9407,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # THE CUSTOMER'S FINISH STANDARD RIDES DOWN TO EVERY PART. "M&S dress all seen welds;
     # TTI none" is a job-level fact and estimate_part never sees the summary, so it is
     # stamped here — resolved from the SAME customer name the workbook header prints
-    # (job_customer), which is the lesson the £250 register learned the hard way.
+    # (job_customer), which is the lesson the £— register learned the hard way.
     _finish_std = customer_finish_standard(job_customer(summary)) if summary else None
 
     part_estimates: List[Dict[str, Any]] = []

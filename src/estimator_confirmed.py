@@ -528,7 +528,7 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
 # has to be entered on the sheet where it shows as a person's decision.
 #
 # The trouble is that it did not show up there either. Howard Thurley's answers to 7332-01 —
-# Brass Harrods 01 at £250, the tube bend not required, acrylic laser at 95/hr not 252 — have
+# Brass Harrods 01 at £—, the tube bend not required, acrylic laser at 95/hr not 252 — have
 # no home at all. Each is a config edit by us or an overtype that dies with that workbook,
 # and the next run of the same job asks him the same questions again.
 #
@@ -536,7 +536,7 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
 # point:
 #
 #   parts               "the drawing says 1.0 mm"        a READING, ranked with the readers
-#   estimator_decisions "we are charging £250 for this"  a DECISION, ranked as a person's
+#   estimator_decisions "we are charging £— for this"  a DECISION, ranked as a person's
 #
 # A decision carries its owner's name and date onto every line it touches and is reported as
 # theirs, never as the engine's. It is not a price the engine found; it is a price a person

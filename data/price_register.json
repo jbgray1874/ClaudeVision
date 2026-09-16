@@ -6,98 +6,34 @@
     "estimator needs to decide whether to trust it: where it came from, when that source",
     "was current, what it may price, how firm it is, and when it should be looked at again.",
     "",
+    "WHAT MAY ENTER THIS FILE — James Gray, 16 Sep 2026:",
+    "  'A number copied from an estimator's sheet is not a price source, even as a",
+    "   reference. It must not be retained in the current register, documentation,",
+    "   reports, prompts, tests, or audit payloads.'",
+    "  'Unless there is a re-useable / understandable calculation we can't use it.'",
+    "",
+    "So an entry needs a CURRENT, REPRODUCIBLE source: an SDI Live / UDEF lookup, a",
+    "supplier catalogue or API, or an identified quote document for the job in hand.",
+    "A figure relayed off a manual estimate — however honestly attributed — does not",
+    "qualify and is not kept here in any status. What carries forward from old estimates",
+    "is the METHOD: item identity, specification, route, applicability and evidence,",
+    "which live in config and the change register, number-free.",
+    "",
     "status:  live       a current system/supplier price — the engine may charge it",
     "         confirmed  a current quote or figure confirmed for its scope",
-    "         historical a dated quote from an earlier job — priced only as a LABELLED",
-    "                    comparator, never as a silent default",
     "         indicative a market/derived figure — priced, labelled, to be replaced",
     "",
     "scope:   material / department / customer / job_family / job_only. `job_only` prices",
-    "         that job and nothing else; it is written here only for the audit trail, and",
-    "         the job's own answers file remains where such a figure belongs.",
+    "         that job and nothing else.",
     "",
     "review_date is not decoration. Past it, the engine keeps pricing — silence is worse —",
     "and says the figure is out of review so nobody mistakes age for agreement.",
     "",
-    "historical_audit_record is OUTSIDE the resolver. load() does not read it, lookup()",
-    "cannot return it, and no estimate can charge, display or fall back to it. It exists so a",
-    "figure somebody once quoted is not lost to the audit trail — and for nothing else."
+    "This file is empty because nothing SDI holds today meets the standard. A line the",
+    "engine cannot price from SDI Live or a current supplier source is raised AWAITING",
+    "PRICE, naming what is missing and who owns it — never filled from a sheet."
   ],
   "schema_version": 1,
-  "prices": [
-    {
-      "price_key": "TAPE113C",
-      "label": "EPDM closed-cell tape 25 x 1 mm — 10 m roll",
-      "amount": 4.5,
-      "unit": "roll",
-      "currency": "GBP",
-      "source_type": "estimator_stated",
-      "source_reference": "Howard Thurley (SDI estimating/buying), 0355255 review",
-      "source_date": "2026-09-09",
-      "review_date": "2026-12-09",
-      "scope": {
-        "kind": "material",
-        "value": "roll goods — TAPE113C"
-      },
-      "status": "confirmed",
-      "supersedes": null,
-      "notes": "Asked of SDI Live first; this answers when it cannot. The roll LENGTH is a packaging fact and lives in ROLL_GOODS_CATALOGUE, not here."
-    },
-    {
-      "price_key": "EDGE23X1ABS",
-      "label": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate, Ostermann",
-      "amount": 0.35,
-      "unit": "metre",
-      "currency": "GBP",
-      "source_type": "estimator_stated",
-      "source_reference": "Tony Ford (SDI estimating), 11908-21 estimate sheet",
-      "source_date": "2026-09-03",
-      "review_date": "2026-12-03",
-      "scope": {
-        "kind": "material",
-        "value": "faced board edging"
-      },
-      "status": "confirmed",
-      "supersedes": null,
-      "notes": "The RATE generalises; the banded metreage does not — only visible edges are banded, which is a judgement about the product and not a number on the drawing."
-    }
-  ],
-  "historical_audit_record": [
-    {
-      "price_key": "HARRODS01",
-      "label": "Brass — Harrods 01 decorative plating",
-      "amount": 250.0,
-      "unit": "unit",
-      "currency": "GBP",
-      "source_type": "plater_quote",
-      "source_reference": "plater quote via SDI estimating (Howard Thurley), job 7332-01",
-      "source_date": "2026-09-09",
-      "review_date": "2026-10-09",
-      "scope": {
-        "kind": "job_only",
-        "value": "7332-01"
-      },
-      "status": "historical_audit_only",
-      "supersedes": null,
-      "notes": "Kept for audit and NOT for pricing. James Gray, 16 Sep 2026: a new estimate must be independent of an earlier one — this figure may not appear as a charge, a fallback, a comparator, a workbook note or a suggested value. What 7332-01 taught is that Harrods 01 is DECORATIVE plating, so the per-kg zinc card cannot price it and a fresh job-specific quote is required. That knowledge lives in config.NAMED_PLATE_SPECS; this number lives here and goes nowhere."
-    },
-    {
-      "price_key": "PLATER_FREIGHT",
-      "label": "Freight to and from the plater — pallet network, round trip (7332-01)",
-      "amount": 120.0,
-      "unit": "order",
-      "currency": "GBP",
-      "source_type": "manual_estimate_reference",
-      "source_reference": "Howard Thurley's 7332-01 estimate review, 9 Sep 2026: '** Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network - £20.00 per Unit' — relayed FOR REFERENCE, no quote document or transport-system lookup held",
-      "source_date": "2026-09-09",
-      "review_date": "2026-10-09",
-      "scope": {
-        "kind": "job_only",
-        "value": "7332-01"
-      },
-      "status": "historical_audit_only",
-      "supersedes": null,
-      "notes": "NOT CHARGEABLE — moved out of prices the same day it went in. James Gray, 16 Sep 2026: 'never convert a manual-estimate figure into confirmed merely by moving it from config to the register'; 'unless there is a re-useable / understandable calculation we can't use it'. £120 round trip, shown as £20 a unit at 6 off, is transport separate from the plating charge — the arithmetic and the method are kept here so the number stays understandable, and it prices nothing. A current SDI transport lookup or a current, identified transport quote goes into prices as a NEW entry; until then every plated job's freight line, 7332-01 included, is raised awaiting a current quote."
-    }
-  ]
+  "prices": [],
+  "historical_audit_record": []
 }

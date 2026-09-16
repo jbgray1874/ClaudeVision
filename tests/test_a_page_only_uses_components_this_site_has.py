@@ -211,7 +211,7 @@ def test_the_guide_sits_directly_below_the_estimating_guide():
 # stacked four near-identical wrapped lines and read as a duplicated mess (James, 16 Sep:
 # "menu items are all messed up") — the arrow is the site's own external-link convention,
 # already on "wearesdi.com ↗" in the footer.
-_APP_NAME = "SDI Drawing Search Intelligence&nbsp;↗</a>"
+_APP_NAME = "LC-328802:5000/"  # the launcher is found by its target, its label pinned below
 _APP_URL = "http://LC-328802:5000/"
 
 
@@ -221,6 +221,12 @@ def test_the_drawing_search_app_is_in_every_sidebar_below_its_guide(page_name):
     nav = page[page.index(">Operate<"):]
     guide_at = nav.index(_GUIDE_NAME)
     app_at = nav.index(_APP_NAME)
+    # "it needs to be called SDI Drawing Search Intelligence" — James, 16 Sep. Exactly that:
+    # the visible label is the name and nothing else, any launch mark in its own span.
+    tag_end = nav.index("</a>", app_at)
+    label = nav[app_at:tag_end].split(">")[-1] if "<span" not in nav[app_at:tag_end] \
+        else nav[app_at:tag_end].split(">")[1].split("<")[0]
+    assert label == "SDI Drawing Search Intelligence", label
     assert guide_at < app_at, f"{page_name}: the app entry must sit BELOW its guide"
     between = nav[guide_at:app_at]
     assert between.count("</a>") == 1, (

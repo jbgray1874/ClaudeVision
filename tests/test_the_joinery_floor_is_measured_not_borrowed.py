@@ -141,20 +141,21 @@ def test_the_machining_figure_is_recorded_even_though_no_row_emits_it_yet():
 # not from the drawing), so the engine could not mint the material without inventing it.
 # His sheet states both halves, and only one of them generalises.
 
-def test_his_edging_line_is_reproduced_from_the_register():
-    """5 m at £0.35 with his 4% scrap is the £1.82 on his sheet."""
+def test_his_edging_rate_is_no_longer_held_anywhere():
+    """THE RULE TIGHTENED, 16 Sep: "we can't take a number off a sheet." Tony's rate came
+    off his 11908-21 estimate — attributed, dated, and still a copy — so it is retained
+    nowhere: not in config, not in the register, not here. What survives is the SPEC
+    (config.FACED_BOARD_EDGING_SPEC, Ostermann, credited to him) and the method: measured
+    drawn metres as the upper bound, his judgement on banded metres, rate from SDI Live or
+    the supplier catalogue — else the line is explicitly unpriced."""
     import stated_prices
     rate = stated_prices.resolve(config.FACED_BOARD_EDGING_CODE,
                                  "ABS edging for faced board")
-    assert rate["gbp"] == 0.35
-    assert round(5 * rate["gbp"] * 1.04, 2) == 1.82
-
-
-def test_the_rate_says_whose_it_is_and_that_it_is_not_a_live_price():
-    import stated_prices
-    label = stated_prices.resolve(config.FACED_BOARD_EDGING_CODE, "")["label"]
-    assert "Tony Ford" in label and "11908-21" in label
-    assert "not a live system price" in label
+    assert rate["gbp"] is None, "no source answers offline, so nothing prices"
+    spec = config.FACED_BOARD_EDGING_SPEC
+    assert "Tony Ford" in spec["identified_by"] and "Ostermann" in spec["supplier"]
+    assert not any(k in spec for k in ("gbp", "amount", "rate")), \
+        "the spec carries identity and method, never money"
 
 
 def test_the_metreage_is_never_taken_from_the_drawn_perimeter():
@@ -173,7 +174,7 @@ def test_the_edging_code_is_named_once():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
                encoding="utf-8").read()
     assert "FACED_BOARD_EDGING_CODE" in src
-    assert config.FACED_BOARD_EDGING_CODE in config.ESTIMATOR_STATED_PRICES
+    assert config.FACED_BOARD_EDGING_SPEC["code"] == config.FACED_BOARD_EDGING_CODE
 
 
 # ── a scoped pilot, not a joinery constant ───────────────────────────────────────────────

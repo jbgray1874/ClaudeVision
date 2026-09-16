@@ -514,7 +514,7 @@ MATERIAL_PRICE_BREAK = {
 #
 # 0355255's tape line is the whole gap between our sheet and the estimator's: £19.50 a unit
 # against £7.63, and £18.84 against £4.55 at a thousand off. TAPE113C is supplied on a 10
-# METRE ROLL at £4.50. The drawing asks for three strips across the base, 200 mm each — six
+# METRE ROLL at £—. The drawing asks for three strips across the base, 200 mm each — six
 # hundredths of a roll, twenty-eight pence. The line was costed 3 x £4.37, a PER-EACH default
 # material rate, and came to £13.63. A per-each charge does not amortise either, which is why
 # our column barely moved across the quantity breaks while the estimator's fell by a third.
@@ -546,45 +546,42 @@ ROLL_GOODS_CATALOGUE = {
     },
 }
 
-# --- What an estimator told us a thing costs, with the date on it -----------------
+# --- What an estimator told us a thing costs: NOTHING, by rule --------------------
 #
-# SECOND TO THE SYSTEM, ALWAYS. price_sources.get_best_price is asked first — the part system
-# cost off Access Supply Chain, UDEF, historical quotes, the supplier catalogue. This is what
-# answers when none of them can, and a line priced from here SAYS so on the sheet, with the
-# name and the date, so an estimator can see he is reading his own six-week-old figure.
+# THIS TABLE IS EMPTY AND STAYS EMPTY. James Gray, 16 Sep 2026: "A number copied from an
+# estimator's sheet is not a price source, even as a 'reference'. It must not be retained
+# in the current register, documentation, reports, prompts, tests, or audit payloads."
+# "We can't take a number off a sheet."
 #
-# WHY THE DATE IS THE POINT. PLAS534 already has three answers — £45.19 the supplier's current
-# price per Howard, £47.21 what our sheet charged, £49.55 the material cost on Access Supply
-# Chain which Howard reckons was migrated from the old system. Nothing in the engine can say
-# which is right, and picking one silently is how the question stops being asked. Where this
-# register and the system disagree by more than a penny in a pound, BOTH are reported.
-ESTIMATOR_STATED_PRICES = {
-    "TAPE113C": {
-        "gbp": 4.50, "unit": "roll",
-        "by": "Howard Thurley (SDI estimating/buying)",
-        "on": "2026-09-09", "job": "0355255",
-        "note": "10 m roll of EPDM closed-cell tape 25 x 1 mm",
-    },
-    # "Not all materials calculated no ABS edging Allowed" — Tony Ford's first finding on
-    # 11908-21. The pack states no edging spec anywhere (his own line quotes the Egger
-    # reference from the spec book, not from the drawing), so the engine could not mint the
-    # material without inventing it. His sheet states both halves: the spec and the rate.
-    #
-    # THE RATE IS HERE. THE METREAGE IS NOT, AND MUST NOT BE. He bands 5 m a unit against a
-    # much larger drawn perimeter, because only the VISIBLE edges are banded — which edges
-    # those are is a judgement about the product, not a number on the drawing, and a rule
-    # that banded every drawn edge would overcharge every joinery job by the difference.
-    # So the engine measures what is drawn, holds this rate, and asks.
-    "EDGE23X1ABS": {
-        "gbp": 0.35, "unit": "metre",
-        "by": "Tony Ford (SDI estimating)",
-        "on": "2026-09-03", "job": "11908-21",
-        "note": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate, Ostermann",
-    },
-}
+# It held the tape's roll price (Howard's sheet) and the edging rate (Tony's sheet) —
+# attributed and dated, which made them honest and did not make them price sources: an
+# attributed copy is still a copy, and it cannot be re-derived from anything current.
+#
+# The MECHANISM stays: stated_prices.resolve asks SDI's own priced sources (SDI Live /
+# UDEF / supplier catalogue) and falls through to this table — so a genuinely current,
+# identified figure (a supplier quotation with a reference, entered the day it is given)
+# has somewhere to live if one is ever entered. Where nothing answers, the line is
+# WITHHELD, awaiting price, naming the owner — never filled from a sheet. What the old
+# entries taught survives, number-free: the identities and methods directly below.
+ESTIMATOR_STATED_PRICES: dict = {}
 
-# The edging code above, named once so the ask and the register cannot drift apart.
+# WHAT CARRIES FORWARD from the estimators' sheets is the method, never the money:
+# the item identity, its specification, and how its quantity is measured.
+#   TAPE113C     the roll LENGTH lives in ROLL_GOODS_CATALOGUE above (a packaging fact);
+#                cut length x quantity ÷ roll length is the costing method; the roll
+#                PRICE is asked of SDI Live / a supplier source, else awaiting price.
+#   EDGE23X1ABS  the SPEC is below; drawn-edge metreage is measured, the BANDED metreage
+#                is the estimator's judgement (only visible edges band); the RATE is
+#                asked of SDI Live / the Ostermann catalogue, else explicitly unpriced.
 FACED_BOARD_EDGING_CODE = "EDGE23X1ABS"
+FACED_BOARD_EDGING_SPEC = {
+    "code": "EDGE23X1ABS",
+    "description": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate",
+    "supplier": "Ostermann",
+    "identified_by": "Tony Ford (SDI estimating), 11908-21 review, 2026-09-03",
+    "note": ("Specification and supplier only — the rate comes from SDI Live or the "
+             "supplier catalogue at run time, or the line is explicitly unpriced."),
+}
 
 # --- Which machine cuts a blank, when a part is charged two ways -------------------
 #
@@ -748,7 +745,7 @@ STANDARD_COMMODITY_PRICE_GBP = {
 # process at all. A finish naming one of these words is a plating this rate actually
 # prices. A finish naming none of them is a plating we cannot identify, and £2.50/kg is
 # then not an indication of anything: brass, nickel and decorative specs run an order of
-# magnitude above it, and the £250 Howard Thurley quoted for Brass Harrods 01 against the
+# magnitude above it, and the £— Howard Thurley quoted for Brass Harrods 01 against the
 # card's £15.83 is that order of magnitude on one line of one job.
 #
 # Widen this list ONLY with a process the £2.50 card genuinely covers. Anything else
@@ -779,10 +776,10 @@ LABOUR_GROUP_RATE_SPREAD_FLAG = 3.0
 #      that we will be found out on with the next drawing with the same characteristics"
 #                                                     — James Gray, SDI, 14 Sep 2026
 #
-# Brass Harrods 01 at £250 was put in 7332-01's own answers file, which governs 7332-01 and
+# Brass Harrods 01 at £— was put in 7332-01's own answers file, which governs 7332-01 and
 # nothing else. That is correct for a decision about one stand and WRONG for this one: the
 # next Harrods stand states the same bare "PLATED", blocks for the same reason, and somebody
-# types the same £250 again. Same characteristics, same manual work, every time — which is
+# types the same £— again. Same characteristics, same manual work, every time — which is
 # the hack he is describing.
 #
 # THIS REVERSES A TEST I WROTE ON PURPOSE. test_the_customer_name_alone_buys_nothing pinned
@@ -791,7 +788,7 @@ LABOUR_GROUP_RATE_SPREAD_FLAG = 3.0
 # this is not an inference. An estimator stated it, for stated conditions, and recording that
 # is the opposite of guessing — it is the difference between "Harrods, so probably brass" and
 # "Howard Thurley told us on 9 Sep that Harrods stands calling up a bare PLATED are Brass
-# Harrods 01 at £250".
+# Harrods 01 at £—".
 #
 # WHAT MAKES INHERITANCE SAFE IS THAT IT ANNOUNCES ITSELF. Every entry carries who decided
 # it, when, and on which job; every line it reaches says it was inherited and asks to be
@@ -802,12 +799,12 @@ LABOUR_GROUP_RATE_SPREAD_FLAG = 3.0
 # entry with no conditions is rejected rather than applied to everything.
 # ══ REVOKED 16 SEP 2026 — HOWARD SAID PLATING DOES NOT INHERIT ══════════════════════════
 #
-# The entry that lived here bound £250 to any HARRODS job whose drawing said only "PLATED".
+# The entry that lived here bound £— to any HARRODS job whose drawing said only "PLATED".
 # We told Howard we had done it — "recorded as a standing decision, so any future Harrods job
-# whose drawing only says Harrods01 prices at £250 rather than guessing zinc" — and he came
+# whose drawing only says Harrods01 prices at £— rather than guessing zinc" — and he came
 # back and corrected us:
 #
-#     "Plating would be as drawing specific, £250.00 is from supplier per unit and is
+#     "Plating would be as drawing specific, £— is from supplier per unit and is
 #      independent of any other job. Plating jobs priced independently."
 #
 # So the premise was wrong, not the implementation. Plating is quoted job by job; a price
@@ -868,7 +865,7 @@ SHOP_STATED = {
     "brush_before_plate_min": 40.0,        # per UNIT, before it goes to the platers
     "plater_pack_min": 4.0,                # packing to send
     "plater_final_pack_min": 8.0,          # packing again on the way back
-    # The plater FREIGHT (£120/order, £20 a unit at 6 off) is deliberately NOT here any
+    # The plater FREIGHT (£—/order, £— a unit at 6 off) is deliberately NOT here any
     # more: it is MONEY, and 7332-01's own transport quote at that. It lives in the price
     # register scoped job_only to 7332-01 (PLATER_FREIGHT) — a new plated job needs its
     # own quote from SDI transport, and the line says so instead of borrowing this one.
@@ -1210,7 +1207,7 @@ PLATE_SUBCONTRACT_POLICY = {
 # The policy above says so itself — "a decorative / named 'Harrods' plate spec is NOT this
 # rate … the line stays blocking until a plater quote confirms". 7332-01 is exactly that
 # case and the quote has now arrived: the requirement is Brass Harrods 01 and the plater
-# charges £250.00 per stand, against an indicative zinc line of a few pounds on mass. That
+# charges £— per stand, against an indicative zinc line of a few pounds on mass. That
 # is the largest single error on the sheet by an order of magnitude.
 #
 # Keyed on the FINISH the drawing names, so it can only ever price a job that calls that
@@ -1228,7 +1225,7 @@ PLATE_SUBCONTRACT_POLICY = {
 # configuration. Code should contain the pricing MECHANISM; data should contain approved
 # rates, dates, scope, source, and expiry."
 #
-# £250 was a numeric literal in source. It was attributed and dated, which made it honest and
+# £— was a numeric literal in source. It was attributed and dated, which made it honest and
 # did not make it right: a plater's quote for one stand in September is not a rate, and this
 # file is not a price register. Scoping it to its own job (the previous fix) stopped it
 # reaching other jobs and still left the engine charging from a hard-coded number.
@@ -1267,10 +1264,10 @@ NAMED_PLATE_SPECS = {
 # & Pack." The sheet booked ONE pack operation of 2 minutes for both. A part that leaves the
 # building and comes back is packed twice, and the second pack is not the first one again.
 #
-# And it travels: "Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet
-# Network - £20.00 per Unit". Held as the ORDER figure with the per-unit share derived, which
-# is the form that survives a quantity change — £120 over the six stands that quote was
-# written against is the £20 a unit he quotes. Whether £120 is the round trip or each way is
+# And it travels: "Delivery to & from Platers from Transport Dept. For Ref. £— Pallet
+# Network - £— per unit". Held as the ORDER figure with the per-unit share derived, which
+# is the form that survives a quantity change — £— over the six stands that quote was
+# written against is the £— a unit he quotes. Whether £— is the round trip or each way is
 # the one thing the note does not settle, so the line says which it assumed.
 #
 # EVERY FIGURE HERE IS KEYED ON PLATING BEING PRESENT, which is what makes it safe: a job
@@ -1280,7 +1277,7 @@ PLATING_LOGISTICS = {
         "PLATER_PACK_MIN", SHOP_STATED["plater_pack_min"])),
     "final_pack_min": float(os.getenv(
         "PLATER_FINAL_PACK_MIN", SHOP_STATED["plater_final_pack_min"])),
-    # NO FREIGHT FIGURE HERE ANY MORE. The £120/£20 was 7332-01's own transport quote and
+    # NO FREIGHT FIGURE HERE ANY MORE. The £— was 7332-01's own transport quote and
     # a config constant made it every plated job's freight. It lives in the price register
     # scoped job_only to 7332-01 (PLATER_FREIGHT); estimator.plater_freight_for_job asks
     # the register with the job's own codes, and a job with no current transport quote

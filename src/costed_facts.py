@@ -757,8 +757,8 @@ def costed_finish_label(source: Any, default: str = "As drawing") -> str:
     _FINISH_OPS and has to be recognised from the priced rows."""
     labels = [label for op, label in _FINISH_OPS if has_operation(source, op)]
     # AND IT NAMES WHICH PLATE, WHERE THE JOB KNOWS. "Plated" is true of zinc and true of a
-    # £250 decorative brass, and on a quote those are not the same sentence. 7332-01's
-    # headline read "Diamond polished" alone while £250 of Brass — Harrods 01 sat in the
+    # £— decorative brass, and on a quote those are not the same sentence. 7332-01's
+    # headline read "Diamond polished" alone while £— of Brass — Harrods 01 sat in the
     # price: the plating paid for and unnamed, which is the exact failure the docstring
     # above was written about, recurring because the recogniser knew one spelling.
     _plate = _subcontract_plate_label(source)
@@ -780,7 +780,7 @@ def _plating_row_is_costed(row: Mapping[str, Any]) -> bool:
     `"plating" in cost_method`, which was true of every method that existed when it was
     written — and then the plating line learned to be priced from a named spec, from an
     estimator's own figure and from an inherited decision, none of which contain the word.
-    7332-01's headline went to a customer reading "Diamond polished" with £250 of brass in
+    7332-01's headline went to a customer reading "Diamond polished" with £— of brass in
     the price.
 
     The placeholder flag and the -PLATE identity are what make the line a plating line. The
@@ -804,7 +804,7 @@ def _plating_row_is_costed(row: Mapping[str, Any]) -> bool:
 def _subcontract_plate_label(source: Any) -> str:
     """"Brass — Harrods 01" where the job knows which plate, "Plated" where it does not.
 
-    A quote that says "Plated" of a £250 decorative brass is not wrong so much as useless:
+    A quote that says "Plated" of a £— decorative brass is not wrong so much as useless:
     it is equally true of £15.83 of trade zinc, and the reader cannot tell which he is
     buying. Where a spec was named — read off the pack, stated by an estimator, or inherited
     from a decision — that name is the finish, and it is the name the plater would use.
@@ -1548,7 +1548,7 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # A DEPARTMENT'S OWN FIGURE IS NOT A MARKET LOOKUP.
     #
     # "Mislabelled as an AI market indication — it is Transport Dept. Relabel; don't drop
-    # it." The plater-freight line is £120 the round trip, stated by SDI's own transport
+    # it." The plater-freight line is £— the round trip, stated by SDI's own transport
     # department through Howard Thurley, held in config and divided by the order quantity.
     # Nothing about it moves between runs and there is no supplier to replace it with.
     #
@@ -1575,7 +1575,7 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # plater-freight defect again, on the very line the estimator supplied the numbers for.
     #
     # 10975-02's tape is costed by roll_goods_material from config.ROLL_GOODS_CATALOGUE:
-    # TAPE113C, a 10 m roll at £4.50, sourced to "Howard Thurley (SDI estimating/buying),
+    # TAPE113C, a 10 m roll at £—, sourced to "Howard Thurley (SDI estimating/buying),
     # 0355255 review, 9 Sep 2026". It came out of the classifier as
     #
     #     AI market indication (AI/market lookup) — NOT A QUOTE, replace it

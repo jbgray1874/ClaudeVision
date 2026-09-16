@@ -1,27 +1,30 @@
-"""Prices live in a register that can be reviewed without a code edit.
+"""Prices live in a register that can be reviewed without a code edit — and today it is empty.
 
     "Prices are data, not hidden logic. A price must state its source, date, scope, status
      and review/expiry date. A job-specific quote must never become an automatic shared
      rate."                              — the operating rules, added 16 Sep 2026
 
-THE FIGURES WERE NUMERIC LITERALS IN config.py — the tape's roll at £4.50, Tony's edging at
-£0.35/m, a plater's £250. Each was attributed and dated, which made them honest and did not
-make them right. Three things follow from money living in source:
+    "A number copied from an estimator's sheet is not a price source, even as a
+     'reference'. It must not be retained in the current register, documentation, reports,
+     prompts, tests, or audit payloads."          — James Gray, 16 Sep 2026, later the same day
 
-  * changing a rate is a CODE change, so a commercial decision needs an engineer;
-  * nothing carries an EXPIRY, so a figure is as loud on the day it goes stale as on the day
-    it was given, and age becomes indistinguishable from agreement;
-  * a job's quote and a shop's standing rate look identical in the file — which is how £250
-    for one stand came to be chargeable on every job whose drawing named the same finish.
+THE FIGURES WERE NUMERIC LITERALS IN config.py — a roll price, an edging rate, a plater's
+quote. Each was attributed and dated, which made them honest and did not make them right.
+Moving them to a register fixed where money lives; it did not fix where it CAME FROM. Every
+one of them was a number off a manual estimate, and an attributed copy is still a copy: it
+cannot be re-derived from anything current, so it cannot be trusted current.
 
-So the money moved to data/price_register.json and the engine kept the MECHANISM. The same
-£250 is now this job's confirmed quote on 7332-01 and a labelled comparator anywhere else,
-from ONE entry, because scope carries the restriction and status carries the firmness.
+So the register ships EMPTY — prices and audit record both — and stays empty until an entry
+can cite a CURRENT, REPRODUCIBLE source: an SDI Live / UDEF lookup, a supplier catalogue or
+API, or an identified quote document for the job in hand. What carries forward from the old
+entries is the METHOD, number-free: the tape's roll length and length arithmetic, the edging
+spec and its measured-length method, the knowledge that Harrods 01 is decorative plating
+needing a fresh quote. The MECHANISM below is proven on synthetic entries in temp files.
 """
 from __future__ import annotations
 
+import json
 import os
-import pathlib
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -31,6 +34,16 @@ import pytest                                                         # noqa: E4
 
 import config                                                         # noqa: E402
 import price_register                                                 # noqa: E402
+
+# A synthetic, complete entry — nobody's figure — for proving the mechanism.
+SYNTH_ENTRY = {
+    "price_key": "SYNTH01", "label": "synthetic mechanism-test entry",
+    "amount": 9.99, "unit": "each", "currency": "GBP",
+    "source_type": "supplier_catalogue", "source_reference": "a test, not a sheet",
+    "source_date": "2026-09-01", "review_date": "2026-12-01",
+    "scope": {"kind": "material", "value": "test goods"},
+    "status": "confirmed", "supersedes": None,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -43,29 +56,56 @@ def _fresh_register():
     price_register._CACHE = None
 
 
-def test_the_register_is_readable_and_complete():
-    """Every entry must say what it is, where it came from, when that was current, what it
-    may price and how firm it is. A problem here is a price NOT APPLIED, so it must be
-    empty on a healthy tree."""
+def _tmp_register(tmp_path, monkeypatch, prices=(), audit=()):
+    f = tmp_path / "price_register.json"
+    f.write_text(json.dumps({"prices": list(prices),
+                             "historical_audit_record": list(audit)}), encoding="utf-8")
+    monkeypatch.setattr(price_register, "_REGISTER_PATH", f)
+    return price_register.load(refresh=True)
+
+
+# ── the shipped state: empty, by rule ────────────────────────────────────────────────────
+
+def test_the_shipped_register_holds_no_prices_and_no_audit_figures():
+    """Nothing SDI holds today meets the standard, so nothing is here — not chargeable,
+    not 'historical', not as an audit payload. A run cannot discover a manual-estimate
+    amount because none exists to discover."""
     assert price_register.problems() == [], price_register.problems()
-    assert price_register.load()["prices"], "the register must not be empty"
+    assert price_register.load()["prices"] == {}
+    raw = json.loads(price_register._REGISTER_PATH.read_text(encoding="utf-8"))
+    assert raw["prices"] == []
+    assert raw["historical_audit_record"] == []
 
 
-def test_every_entry_carries_every_field_the_policy_demands():
-    for key, entry in price_register.load()["prices"].items():
-        for field in price_register.REQUIRED_FIELDS:
-            assert entry.get(field) not in (None, ""), (key, field)
-        assert entry["status"] in price_register.STATUSES, (key, entry["status"])
-        assert isinstance(entry["scope"], dict) and entry["scope"].get("kind"), key
+def test_the_readme_states_the_standard():
+    raw = json.loads(price_register._REGISTER_PATH.read_text(encoding="utf-8"))
+    readme = " ".join(raw.get("_README") or [])
+    assert "not a price source" in readme
+    assert "CURRENT, REPRODUCIBLE source" in readme
+
+
+def test_no_earlier_jobs_figure_is_reachable_by_any_key():
+    """James Gray, 16 Sep 2026: "it must be impossible for an estimator run to read,
+    display or charge it." The strongest form: the keys do not exist."""
+    for key in ("HARRODS01", "PLATER_FREIGHT", "TAPE113C", "EDGE23X1ABS"):
+        assert price_register.lookup(key, job=("7332-01",)) is None, key
+        assert price_register.lookup(key, job=("9001-01",)) is None, key
+
+
+# ── the mechanism, proven on entries nobody's sheet supplied ─────────────────────────────
+
+def test_a_complete_entry_loads_and_prices(tmp_path, monkeypatch):
+    loaded = _tmp_register(tmp_path, monkeypatch, prices=[SYNTH_ENTRY])
+    assert "SYNTH01" in loaded["prices"]
+    got = price_register.lookup("SYNTH01", job=("9999-99",))
+    assert got["chargeable"] is True and got["amount"] == 9.99
 
 
 def test_an_incomplete_price_is_refused_and_named(monkeypatch, tmp_path):
     """The one shape this register exists to prevent: a number with no date, scope or
     status is the literal it replaced, wearing a JSON file's clothes."""
-    bad = tmp_path / "price_register.json"
-    bad.write_text('{"prices": [{"price_key": "X", "amount": 1.0}]}', encoding="utf-8")
-    monkeypatch.setattr(price_register, "_REGISTER_PATH", bad)
-    loaded = price_register.load(refresh=True)
+    loaded = _tmp_register(tmp_path, monkeypatch,
+                           prices=[{"price_key": "X", "amount": 1.0}])
     assert "X" not in loaded["prices"], "an incomplete price must not be applied"
     assert any("X:" in p and "NOT APPLIED" in p for p in loaded["problems"])
 
@@ -79,73 +119,55 @@ def test_a_missing_register_costs_the_run_nothing(monkeypatch, tmp_path):
     assert loaded["problems"], "silence would be the fault"
 
 
-# ── scope carries the restriction, status carries the firmness ───────────────────────────
-
-def test_an_earlier_jobs_quote_is_not_in_the_resolver_at_all():
-    """THE RULE, and it is stronger than scoping. James Gray, 16 Sep 2026: "it should not
-    appear in a new estimate at all — not as a charge, fallback, comparator, workbook note
-    or suggested value… it must be impossible for an estimator run to read, display or
-    charge it." Labelling it was not enough; a figure on the line is a figure somebody
-    accepts. So it is not a price here — it is an audit record the resolver cannot see."""
-    assert price_register.lookup("HARRODS01", job=("7332-01",)) is None
-    assert price_register.lookup("HARRODS01", job=("9001-01",)) is None
-    assert "HARRODS01" not in price_register.load()["prices"]
+def test_a_job_only_entry_prices_its_job_and_no_other(tmp_path, monkeypatch):
+    entry = dict(SYNTH_ENTRY, price_key="SYNTHJOB",
+                 scope={"kind": "job_only", "value": "1234-56"})
+    _tmp_register(tmp_path, monkeypatch, prices=[entry])
+    assert price_register.lookup("SYNTHJOB", job=("1234-56",))["chargeable"] is True
+    other = price_register.lookup("SYNTHJOB", job=("9999-99",))
+    assert other["chargeable"] is False
 
 
-def test_the_audit_record_keeps_it_and_the_resolver_never_reads_it():
-    """Not deleted — a figure somebody once quoted should not be lost to the audit trail.
-    Kept where nothing that prices can reach it."""
-    import json
-    raw = json.loads(pathlib.Path(price_register._REGISTER_PATH).read_text(encoding="utf-8"))
-    audit = {e["price_key"]: e for e in raw.get("historical_audit_record") or []}
-    assert audit["HARRODS01"]["amount"] == 250.00
-    assert audit["HARRODS01"]["status"] == "historical_audit_only"
-    # and load() builds `prices` from the prices array alone
-    # PLATER_FREIGHT is deliberately NOT here: it sat in prices for one commit and was
-    # moved to the audit record the same day — its only source is a manual-estimate
-    # reference ("For Ref."), and a figure does not become confirmed by moving it from
-    # config to the register (James Gray, 16 Sep 2026).
-    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS"}
-
-
-def test_a_material_scoped_price_prices_any_job():
-    """Only `job_only` narrows by job. A material rate is about the material."""
-    for key in ("TAPE113C", "EDGE23X1ABS"):
-        assert price_register.lookup(key, job=("9999-99",))["chargeable"] is True, key
+def test_the_audit_record_is_invisible_to_the_resolver(tmp_path, monkeypatch):
+    """Whatever ends up in the audit array — and by rule no manual-estimate amount may —
+    load() never reads it and lookup() can never return it."""
+    _tmp_register(tmp_path, monkeypatch, prices=[],
+                  audit=[dict(SYNTH_ENTRY, price_key="SYNTHAUDIT",
+                              status="historical_audit_only")])
+    assert price_register.load()["prices"] == {}
+    assert price_register.lookup("SYNTHAUDIT", job=("1234-56",)) is None
 
 
 # ── the review date is not decoration ────────────────────────────────────────────────────
 
-def test_a_price_past_its_review_still_answers_and_says_so(monkeypatch):
+def test_a_price_past_its_review_still_answers_and_says_so(monkeypatch, tmp_path):
     """Silence is worse than an old number, so it keeps pricing — and nobody may mistake
     age for agreement."""
+    _tmp_register(tmp_path, monkeypatch, prices=[SYNTH_ENTRY])
     monkeypatch.setenv("SDI_REGISTER_TODAY", "2031-01-01")
-    e = price_register.lookup("TAPE113C", job=("9999-99",))
+    e = price_register.lookup("SYNTH01", job=("9999-99",))
     assert e["chargeable"] is True
     assert e["out_of_review"] is True
     assert "PAST ITS REVIEW DATE" in price_register.describe(e)
 
 
-def test_a_price_within_review_says_nothing_extra(monkeypatch):
+def test_a_price_within_review_says_nothing_extra(monkeypatch, tmp_path):
+    _tmp_register(tmp_path, monkeypatch, prices=[SYNTH_ENTRY])
     monkeypatch.setenv("SDI_REGISTER_TODAY", "2026-09-16")
     assert "PAST ITS REVIEW" not in price_register.describe(
-        price_register.lookup("TAPE113C", job=("9999-99",)))
+        price_register.lookup("SYNTH01", job=("9999-99",)))
 
 
-# ── and the engine reads it ──────────────────────────────────────────────────────────────
+# ── and the engine's consumers hold no fallback of their own ─────────────────────────────
 
-def test_the_stated_price_waterfall_reads_the_register():
+def test_the_stated_price_waterfall_answers_nothing_shipped(monkeypatch):
+    """Register empty, stated table empty: resolve() has nothing, and the lines downstream
+    are withheld/awaiting price rather than filled from anywhere else."""
     import stated_prices
-    got = stated_prices.resolve("EDGE23X1ABS", "ABS edging for faced board")
-    assert got["gbp"] == 0.35
-    assert "Tony Ford" in got["label"]
-
-
-def test_a_job_only_price_never_enters_the_shared_waterfall():
-    """stated() answers "what does this code cost on ANY job", and a quote given for one job
-    is not an answer to that question."""
-    import stated_prices
-    assert "HARRODS01" not in stated_prices._cfg()
+    monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: None)
+    for code in ("TAPE113C", "EDGE23X1ABS", "HARRODS01", "PLATER_FREIGHT"):
+        got = stated_prices.resolve(code, "")
+        assert got["gbp"] is None, code
 
 
 def test_the_money_has_left_config():
@@ -154,12 +176,15 @@ def test_the_money_has_left_config():
     spec = config.NAMED_PLATE_SPECS["HARRODS01"]
     assert spec["decorative"] is True and spec["requires_quote"] is True
     assert "gbp_per_unit" not in spec
-    assert "last_known_quote" not in spec, "the figure belongs in the register, not here"
+    assert "last_known_quote" not in spec, "the figure belongs nowhere"
+    assert config.ESTIMATOR_STATED_PRICES == {}
+    edging = config.FACED_BOARD_EDGING_SPEC
+    assert "gbp" not in str(sorted(edging)) and "amount" not in edging
+    assert "Ostermann" in edging["supplier"]
 
 
 def test_plating_asks_rather_than_reaching_for_an_earlier_jobs_figure():
-    """The register prices what it holds — and it deliberately holds no plating price, so
-    the line asks. Scoping was the fix before this one; independence is the rule now."""
+    """Independence is the rule: the line asks for a current quote, every time."""
     from estimator import plating_unit_price
     for job in (("7332-01",), ("9001-01",), ()):
         unit, note, method = plating_unit_price(

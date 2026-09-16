@@ -4,7 +4,7 @@
      rates but we need to start understanding if these change and why."
                                                             — James Gray, SDI, 15 Sep 2026
 
-He is right, and config.ROLL_GOODS_CATALOGUE had £4.50 written into it. That is a price in
+He is right, and config.ROLL_GOODS_CATALOGUE had £— written into it. That is a price in
 source control: it cannot go stale visibly, nobody is told when it moves, and the first person
 to notice is a customer.
 
@@ -15,7 +15,7 @@ THE SPLIT THIS MODULE EXISTS TO MAKE:
                                 supplier changes the product, and it
                                 is not money. Config is right for it.
 
-    what it COSTS               £4.50 a roll                             money.
+    what it COSTS               £— a roll                             money.
                                 Moves without telling anyone. Must come
                                 from a priced source, carry a date, and
                                 be checkable against the system.
