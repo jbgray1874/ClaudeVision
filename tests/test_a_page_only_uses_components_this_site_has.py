@@ -206,7 +206,12 @@ def test_the_guide_sits_directly_below_the_estimating_guide():
 # the APPLICATION is Muhammad's search, live on the UAT host, so its entry is a plain
 # external href (the portal nav's click handler only acts on data-view entries) that
 # opens in its own tab.
-_APP_NAME = "SDI Drawing Search Intelligence</a>"
+# The launch arrow is the difference between this entry and the two that share its words:
+# the GUIDE directly above it and the AI Services write-up further up. Without it the rail
+# stacked four near-identical wrapped lines and read as a duplicated mess (James, 16 Sep:
+# "menu items are all messed up") — the arrow is the site's own external-link convention,
+# already on "wearesdi.com ↗" in the footer.
+_APP_NAME = "SDI Drawing Search Intelligence&nbsp;↗</a>"
 _APP_URL = "http://LC-328802:5000/"
 
 

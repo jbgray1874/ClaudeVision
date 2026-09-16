@@ -108,15 +108,14 @@ def test_the_minutes_are_one_config_edit(monkeypatch):
 
 # ── freight to the platers and back ──────────────────────────────────────────────────────
 
-def test_the_freight_figure_is_register_data_scoped_to_its_own_job():
-    """The £120/£20 was 7332-01's own transport quote. In config it was every plated
-    job's freight — the £250 fault in a smaller coat — so it moved to the register,
-    job_only, and another job's plated route raises the line UNPRICED naming SDI
-    transport instead of borrowing it."""
+def test_the_freight_figure_prices_nothing_until_a_current_source_exists():
+    """The £120/£20 was a line on Howard's estimate review marked 'For Ref.' — not a
+    transport quote SDI holds. In config it was every plated job's freight; register-
+    scoped it was still a manual-estimate figure wearing 'confirmed'. It now lives in the
+    audit record, prices nobody — 7332-01 included — and every plated route raises the
+    freight line UNPRICED naming SDI transport as the owner."""
     from estimator import plater_freight_for_job
-    entry = plater_freight_for_job(("7332-01",))
-    assert entry and entry["amount"] == 120.0
-    assert "transport department" in entry["source_reference"].lower()
+    assert plater_freight_for_job(("7332-01",)) is None
     assert plater_freight_for_job(("8888-02",)) is None
     assert "freight_gbp_per_order" not in config.PLATING_LOGISTICS
 

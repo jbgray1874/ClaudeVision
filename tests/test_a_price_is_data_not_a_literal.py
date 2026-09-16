@@ -101,8 +101,11 @@ def test_the_audit_record_keeps_it_and_the_resolver_never_reads_it():
     assert audit["HARRODS01"]["amount"] == 250.00
     assert audit["HARRODS01"]["status"] == "historical_audit_only"
     # and load() builds `prices` from the prices array alone
-    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS",
-                                                    "PLATER_FREIGHT"}
+    # PLATER_FREIGHT is deliberately NOT here: it sat in prices for one commit and was
+    # moved to the audit record the same day — its only source is a manual-estimate
+    # reference ("For Ref."), and a figure does not become confirmed by moving it from
+    # config to the register (James Gray, 16 Sep 2026).
+    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS"}
 
 
 def test_a_material_scoped_price_prices_any_job():

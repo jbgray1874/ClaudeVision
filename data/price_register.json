@@ -60,24 +60,6 @@
       "status": "confirmed",
       "supersedes": null,
       "notes": "The RATE generalises; the banded metreage does not — only visible edges are banded, which is a judgement about the product and not a number on the drawing."
-    },
-    {
-      "price_key": "PLATER_FREIGHT",
-      "label": "Freight to and from the plater — pallet network, round trip",
-      "amount": 120.0,
-      "unit": "order",
-      "currency": "GBP",
-      "source_type": "transport_quote",
-      "source_reference": "SDI transport department, via Howard Thurley (SDI estimating)",
-      "source_date": "2026-09-09",
-      "review_date": "2026-10-09",
-      "scope": {
-        "kind": "job_only",
-        "value": "7332-01"
-      },
-      "status": "confirmed",
-      "supersedes": null,
-      "notes": "THIS JOB'S transport quote and nobody else's: £120 the round trip, quoted as £20 a unit at the 6-off the enquiry stated. lookup() refuses it for any other job — a new plated job needs its own quote from SDI transport, and the line says so instead of borrowing this one."
     }
   ],
   "historical_audit_record": [
@@ -98,6 +80,24 @@
       "status": "historical_audit_only",
       "supersedes": null,
       "notes": "Kept for audit and NOT for pricing. James Gray, 16 Sep 2026: a new estimate must be independent of an earlier one — this figure may not appear as a charge, a fallback, a comparator, a workbook note or a suggested value. What 7332-01 taught is that Harrods 01 is DECORATIVE plating, so the per-kg zinc card cannot price it and a fresh job-specific quote is required. That knowledge lives in config.NAMED_PLATE_SPECS; this number lives here and goes nowhere."
+    },
+    {
+      "price_key": "PLATER_FREIGHT",
+      "label": "Freight to and from the plater — pallet network, round trip (7332-01)",
+      "amount": 120.0,
+      "unit": "order",
+      "currency": "GBP",
+      "source_type": "manual_estimate_reference",
+      "source_reference": "Howard Thurley's 7332-01 estimate review, 9 Sep 2026: '** Delivery to & from Platers from Transport Dept. For Ref. £120.00 Pallet Network - £20.00 per Unit' — relayed FOR REFERENCE, no quote document or transport-system lookup held",
+      "source_date": "2026-09-09",
+      "review_date": "2026-10-09",
+      "scope": {
+        "kind": "job_only",
+        "value": "7332-01"
+      },
+      "status": "historical_audit_only",
+      "supersedes": null,
+      "notes": "NOT CHARGEABLE — moved out of prices the same day it went in. James Gray, 16 Sep 2026: 'never convert a manual-estimate figure into confirmed merely by moving it from config to the register'; 'unless there is a re-useable / understandable calculation we can't use it'. £120 round trip, shown as £20 a unit at 6 off, is transport separate from the plating charge — the arithmetic and the method are kept here so the number stays understandable, and it prices nothing. A current SDI transport lookup or a current, identified transport quote goes into prices as a NEW entry; until then every plated job's freight line, 7332-01 included, is raised awaiting a current quote."
     }
   ]
 }

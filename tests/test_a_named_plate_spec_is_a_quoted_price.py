@@ -156,19 +156,30 @@ def test_the_line_says_both_packs_and_whose_figures():
     assert "TWO set-ups" in flags and "the second comes off" in flags
 
 
-def test_the_freight_is_held_per_order_and_shared():
-    """£120 over the six stands it was quoted against is the £20 a unit he quotes —
-    answered by the REGISTER for 7332-01 alone, because that £120 is that job's own
-    transport quote. Config no longer holds it: a money figure in config was every plated
-    job's freight, the £250 fault in a smaller coat."""
+def test_the_freight_prices_no_job_until_a_current_source_exists():
+    """The £120 came off Howard's estimate review — 'For Ref.', relayed, no quote document
+    and no transport-system lookup. James Gray, 16 Sep: a manual-estimate figure is never
+    converted to confirmed by moving it from config to the register, and 'unless there is
+    a re-useable / understandable calculation we can't use it'. So it prices NOBODY —
+    7332-01 included — and every plated job's freight line is raised awaiting a current
+    quote. The £120 and its £20-a-unit-at-6-off arithmetic survive in the AUDIT record,
+    where nothing that prices can reach them."""
+    import json
+    import pathlib
+    import price_register
     from estimator import plater_freight_for_job
-    entry = plater_freight_for_job(("7332-01",))
-    assert entry and entry["amount"] == 120.0
-    assert round(entry["amount"] / 6, 2) == 20.0
-    assert "transport department" in entry["source_reference"].lower()
-    assert plater_freight_for_job(("9999-01",)) is None, \
-        "another job must not borrow 7332-01's quote"
+    assert plater_freight_for_job(("7332-01",)) is None, \
+        "even the job it was written on cannot charge a reference figure"
+    assert plater_freight_for_job(("9999-01",)) is None
     assert "freight_gbp_per_order" not in config.PLATING_LOGISTICS
+    assert price_register.lookup("PLATER_FREIGHT", ("7332-01",)) is None, \
+        "the resolver cannot see the audit record at all"
+    raw = json.loads(pathlib.Path(price_register._REGISTER_PATH).read_text(encoding="utf-8"))
+    audit = {e["price_key"]: e for e in raw.get("historical_audit_record") or []}
+    fr = audit["PLATER_FREIGHT"]
+    assert fr["amount"] == 120.0 and fr["status"] == "historical_audit_only"
+    assert "For Ref" in fr["source_reference"], "the source says what it is: a reference"
+    assert "£20 a unit at 6 off" in fr["notes"], "the arithmetic stays understandable"
 
 
 # ── the drawing's own callout, not only the engine's word for it ─────────────────────────

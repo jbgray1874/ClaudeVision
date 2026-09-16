@@ -196,14 +196,15 @@ def test_taking_one_operation_off_leaves_the_others():
 
 def test_the_rules_that_should_inherit_are_in_config_not_in_the_job_file():
     """Weld allowance and brushing are METHOD facts, true of any job that welds or sends
-    work out, so they inherit through config. The plater FREIGHT no longer does: £120/£20
-    was 7332-01's own transport quote, and it moved to the price register scoped job_only
-    — money never inherits, only the rule that a plated job needs a quote does."""
+    work out, so they inherit through config. The plater FREIGHT does not inherit and does
+    not price at all: the £120/£20 was a manual-estimate REFERENCE ('For Ref.'), so it
+    lives in the register's audit record and every plated job — 7332-01 included — raises
+    the freight line awaiting a current transport quote."""
     import config                                                        # noqa: PLC0415
     from estimator import plater_freight_for_job                        # noqa: PLC0415
     assert config.WELD_TIME_MODEL["allowance_min_per_weldment"] == 30.0
     assert "freight_gbp_per_order" not in config.PLATING_LOGISTICS
-    assert plater_freight_for_job(("7332-01",))["amount"] == 120.0
+    assert plater_freight_for_job(("7332-01",)) is None
     assert plater_freight_for_job(("8888-01",)) is None
     assert config.BRUSH_BEFORE_PLATE["minutes_per_unit"] == 40.0
     for block in (config.WELD_TIME_MODEL, config.PLATING_LOGISTICS,
