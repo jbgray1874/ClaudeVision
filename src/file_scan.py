@@ -2884,6 +2884,31 @@ def _finalize_scan_summary(
                 job_folder, pdf_path,
                 (summary.get("document_analysis") or {}).get("drawing_number")
                 or summary.get("drawing_number"))
+            if not _ecq_path:
+                # THE DRAWING NUMBER IS NOT KNOWN YET AT THIS POINT of the run, so the
+                # name-matched lookup can miss a file the later confirmations pass will
+                # find — which is how 10975-02's order_quantity: 10 sat unread beside
+                # the drawings while its tape length applied. When exactly ONE answers
+                # file exists in the job folder, it is unambiguous whatever it is
+                # called; two or more stay untouched, because a folder holding several
+                # jobs must never have one file quietly govern them all.
+                _cands = []
+                for _root in {p for p in (job_folder,
+                                          (Path(pdf_path).parent if pdf_path else None))
+                              if p}:
+                    try:
+                        _cands += list(Path(_root).glob("*_confirmed.json"))
+                        _cands += list(Path(_root).glob("*_estimator_dimensions.json"))
+                    except OSError:
+                        pass
+                _cands = sorted(set(_cands))
+                if len(_cands) == 1:
+                    _ecq_path = _cands[0]
+                elif len(_cands) > 1:
+                    print(f"   [order-qty] {len(_cands)} answers files in the job folder "
+                          f"and no drawing number known yet — none consulted for the "
+                          f"order quantity; the name-matched pass later will pick the "
+                          f"right one for its own fields.", flush=True)
             if _ecq_path:
                 import json as _json_q
                 _raw_q = _json_q.loads(Path(_ecq_path).read_text(encoding="utf-8"))
