@@ -98,12 +98,17 @@ def test_a_plated_part_that_is_not_the_weldment_still_only_asks():
     assert "Confirm whether this finish needs it" in text
 
 
-def test_the_gauge_substitution_question_is_raised_at_zero_nine():
+def test_the_gauge_substitution_states_itself_at_zero_nine():
+    """No longer a question: Howard confirmed the practice on 15 Sep, so the rule COSTS
+    the 1.0 mm the shop buys — and the statement of what happened, with the drawn figure
+    and the way to override it, must still reach the flags a person reads."""
+    from estimator import apply_production_substitutions
     part = {"part_number": "7332-01-008", "normalized_material": "MILD_STEEL",
             "normalized_thickness_mm": 0.9, "textual_operations": ["laser_cutting"]}
-    estimate_process_times(part, 6)
+    apply_production_substitutions(part)
     text = _flags(part)
-    assert "1.0 mm in lieu" in text and "confirm" in text.lower()
+    assert "COSTED AT 1 mm" in text and "drawn at 0.9 mm" in text
+    assert "stands down" in text
 
 
 def test_the_tube_bend_question_is_raised_when_only_a_word_states_it():

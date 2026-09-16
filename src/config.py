@@ -1130,6 +1130,39 @@ BRUSH_BEFORE_PLATE = {
     "confirm_outside_similar_size": True,
 }
 
+# ── PRODUCTION SUBSTITUTES A GAUGE THE SHOP DOES NOT STOCK ──────────────────────────────
+#
+# "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu" — raised as TBC on 9 Sep
+# and CONFIRMED in Howard Thurley's 15 Sep 7332-01 reply: the shop does not stock 0.9 mm
+# steel, so production buys and runs 1.0 mm wherever a drawing calls the thinner gauge up.
+#
+# A RULE, NOT A SWAP. The engine costs the material the shop actually buys, and the line
+# says so with the drawn figure beside it — a silent rewrite would be this engine inventing
+# a spec, and costing as drawn (the old TBC handling) under-charges every 0.9 mm job by the
+# difference between a gauge the buyer cannot order and the one production uses.
+#
+# OVERRIDABLE BY A PERSON, mechanically: an estimator-confirmed thickness (rank 100 in
+# source_precedence — the answers file simply states thickness_mm) outranks this rule and
+# the substitution stands down, saying so. A rule whose status is not "confirmed" only
+# FLAGS, costing as drawn — which is exactly how this one behaved while it was TBC.
+#
+# Scoped to the steels his statement covers. Stainless is deliberately NOT here: 0.9 mm
+# stainless is a real buy, and widening a production fact past the person who stated it is
+# the scoped-pilot-becoming-a-constant fault.
+PRODUCTION_MATERIAL_SUBSTITUTIONS = [
+    {
+        "rule_id": "steel_0.9_to_1.0",
+        "materials": ("MILD STEEL", "ZINTEC"),
+        "drawn_mm_low": 0.85, "drawn_mm_high": 0.95,
+        "substitute_mm": 1.0,
+        "reason": "0.9 mm sheet steel is not stocked; production uses 1.0 mm in lieu",
+        "stated_by": "Howard Thurley (SDI estimating, from production)",
+        "stated_on": "2026-09-15",
+        "first_seen_on_job": "7332-01",
+        "status": "confirmed",
+    },
+]
+
 PLATE_SUBCONTRACT_POLICY = {
     "gbp_per_kg": 2.50,
     "vat_minimum_gbp": 95.0,

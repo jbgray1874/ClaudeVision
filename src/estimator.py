@@ -5762,21 +5762,12 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_times_min["hole_machining"] = round(rule["setup_min"], 2)
         run_times_min["hole_machining"] = round((holes * rule["sec_per_hole"]) / 60.0, 2)
 
-    # ---- TWO THINGS THE SHOP KNOWS THAT THE DRAWING DOES NOT SAY ----------------
-    # Both are FLAGS, never rewrites. An estimator told us each of them about one job;
-    # neither is on the drawing, and acting on either silently would be this engine
-    # inventing a spec. Raised where a person can rule, and the figure stays as drawn.
+    # ---- THINGS THE SHOP KNOWS THAT THE DRAWING DOES NOT SAY --------------------
+    # (The 0.9 mm gauge substitution used to be flagged here as TBC. Howard confirmed the
+    #  practice on 15 Sep, so it is now a RULE — config.PRODUCTION_MATERIAL_SUBSTITUTIONS,
+    #  applied by apply_production_substitutions at the top of estimate_part, before the
+    #  mass and the laser speed read the gauge. The flag lives with the rule.)
     #
-    # "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu – TBC." He marked it TBC
-    # himself. The gauge on the sheet stays 0.9; the line says production may substitute.
-    _gauge_now = _safe_float(part.get("normalized_thickness_mm")) or 0.0
-    if (_mat_u in _SHEET_METALS and 0.85 <= _gauge_now <= 0.95
-            and not part.get("_gauge_substitution_flagged")):
-        part["_gauge_substitution_flagged"] = True
-        part.setdefault("review_flags", []).append(
-            f"drawn at {_gauge_now:g} mm: production has raised substituting 1.0 mm in lieu "
-            f"(estimator, TBC). Costed AS DRAWN — confirm which gauge is bought before issue")
-
     # "Line 85 – Drawing doesn't annotate – material is brushed prior to sending to platers,
     # op. for Manual Labour (Metal) 40 Minutes – Grey area as drawing only nominates a finish
     # as Harrods01." Real work, worth real money, and stated nowhere on the pack. Not added:
@@ -6556,6 +6547,65 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
     return raw_qty
 
 
+def apply_production_substitutions(part: Dict[str, Any]) -> None:
+    """The shop costs the material it actually buys, and says so beside the drawn figure.
+
+    "0.9mm Steel Production use 1mm in Lieu" — raised TBC on 9 Sep, confirmed in Howard
+    Thurley's 15 Sep 7332-01 reply. While it was TBC the engine flagged and costed as
+    drawn; a confirmed rule costs the substitute, because 0.9 mm steel cannot be bought and
+    a price on a gauge the buyer cannot order under-charges the difference on every job.
+
+    THREE STATES, ALL SAID OUT LOUD:
+      confirmed rule    the substitute gauge is costed; the drawn figure stays on the part
+                        (`drawn_thickness_mm`) and in the flag.
+      person overrode   an estimator-confirmed thickness (rank 100) outranks any rule —
+                        the answers file simply states thickness_mm — and the substitution
+                        stands down, saying it did.
+      rule not firm     status other than "confirmed" flags and costs as drawn, exactly as
+                        the TBC handling always did.
+    """
+    _gauge = _safe_float(part.get("normalized_thickness_mm")) or 0.0
+    if _gauge <= 0 or part.get("production_substitution"):
+        return
+    _mat = str(part.get("normalized_material") or "").upper().replace("_", " ")
+    for rule in getattr(config, "PRODUCTION_MATERIAL_SUBSTITUTIONS", None) or []:
+        if _mat not in tuple(rule.get("materials") or ()):
+            continue
+        if not (float(rule.get("drawn_mm_low", 0)) <= _gauge
+                <= float(rule.get("drawn_mm_high", 0))):
+            continue
+        _sub = float(rule.get("substitute_mm") or 0)
+        _who = f"{rule.get('stated_by')}, {rule.get('stated_on')}"
+        if str(rule.get("status") or "").lower() != "confirmed":
+            part.setdefault("review_flags", []).append(
+                f"drawn at {_gauge:g} mm: production has raised substituting {_sub:g} mm "
+                f"in lieu ({_who} — {rule.get('status', 'unconfirmed')}). Costed AS "
+                f"DRAWN — confirm which gauge is bought before issue")
+            return
+        _src = source_precedence.source_of(part, "normalized_thickness_mm")
+        if source_precedence.rank(_src) >= source_precedence.rank("estimator_confirmed"):
+            part.setdefault("review_flags", []).append(
+                f"production substitution ({rule.get('rule_id')}) stood down: the "
+                f"{_gauge:g} mm gauge is estimator-confirmed ({_src}), and a person's "
+                f"ruling outranks a production rule")
+            return
+        part["drawn_thickness_mm"] = _gauge
+        part["production_substitution"] = {
+            "rule_id": rule.get("rule_id"), "drawn_thickness_mm": _gauge,
+            "costed_thickness_mm": _sub, "reason": rule.get("reason"),
+            "stated_by": rule.get("stated_by"), "stated_on": rule.get("stated_on"),
+        }
+        # The substitute is what the buyer orders and the laser cuts, so it is what every
+        # downstream figure (mass, speed table, the workbook's gauge column) must use.
+        part["normalized_thickness_mm"] = _sub   # precedence: direct-write ok — a production rule the flag names, not a competing reading of the drawing
+        part.setdefault("review_flags", []).append(
+            f"drawn at {_gauge:g} mm, COSTED AT {_sub:g} mm: "
+            f"{rule.get('reason')} ({_who}). A production rule, not a reading of the "
+            f"drawing — to keep the drawn gauge, confirm thickness_mm {_gauge:g} in the "
+            f"answers file and this rule stands down")
+        return
+
+
 def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     quantity = _sanitise_part_quantity(part)
@@ -6572,6 +6622,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # settling it only where the money is looked up would leave labour costing a thickness
     # that material had already stopped believing in.
     source_precedence.settle_companion_facts(part)
+
+    # AFTER the pair is settled, BEFORE anything reads the gauge: the shop costs the
+    # material it actually buys (0.9 mm steel is not stocked; production runs 1.0), and
+    # the substitution has to land before the mass, the laser speed and the workbook's
+    # gauge column are derived from a thickness the buyer cannot order.
+    apply_production_substitutions(part)
 
     # Commercial placeholders (PACKAGING, DELIVERY) are NOT parts to be estimated — they are
     # always-present reminder lines whose real cost is order-specific and lives in the enquiry,

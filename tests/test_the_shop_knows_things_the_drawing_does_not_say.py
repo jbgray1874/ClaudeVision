@@ -115,23 +115,91 @@ def test_a_part_with_no_tube_bend_op_is_untouched():
     assert not part.get("removed_operations")
 
 
-# ── 0.9 mm: flagged, and costed as drawn ─────────────────────────────────────────────────
+# ── 0.9 mm: a confirmed production rule, costed at what the shop buys ────────────────────
+#
+# While Howard's "0.9mm Steel Production use 1mm in Lieu" was TBC, the engine flagged and
+# costed as drawn. His 15 Sep reply confirmed the practice, so it is now a rule
+# (config.PRODUCTION_MATERIAL_SUBSTITUTIONS): the substitute gauge is costed — 0.9 mm
+# cannot be bought, and pricing a gauge the buyer cannot order under-charges the
+# difference — with the drawn figure kept on the part and named in the flag. A person
+# still outranks it: an estimator-confirmed thickness stands the rule down.
 
-def test_a_zero_nine_gauge_raises_the_substitution_without_making_it():
+def test_a_zero_nine_gauge_is_costed_at_the_one_mm_the_shop_buys():
+    from estimator import apply_production_substitutions
     part = {"part_number": "7332-01-008", "normalized_material": "MILD_STEEL",
             "normalized_thickness_mm": 0.9, "textual_operations": ["laser_cutting"]}
-    estimate_process_times(part)
-    assert "1.0 mm in lieu" in _flags(part)
+    apply_production_substitutions(part)
+    assert part["normalized_thickness_mm"] == 1.0, "costed at what production buys"
+    assert part["drawn_thickness_mm"] == 0.9, "the drawn figure is kept, not erased"
+    sub = part["production_substitution"]
+    assert sub["rule_id"] == "steel_0.9_to_1.0"
+    assert "Howard Thurley" in sub["stated_by"]
+    f = _flags(part)
+    assert "COSTED AT 1 mm" in f and "drawn at 0.9 mm" in f
+    assert "production rule" in f and "stands down" in f, \
+        "the flag must say how a person overrides it"
+
+
+def test_an_estimator_confirmed_gauge_stands_the_rule_down():
+    """A person's ruling outranks a production rule — the answers file simply states
+    thickness_mm and the substitution does not happen, saying so."""
+    import source_precedence as sp
+    from estimator import apply_production_substitutions
+    part = {"part_number": "7332-01-008", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 0.9}
+    sp.apply_field(part, "normalized_thickness_mm", 0.9, "estimator_confirmed")
+    apply_production_substitutions(part)
+    assert part["normalized_thickness_mm"] == 0.9
+    assert not part.get("production_substitution")
+    assert "stood down" in _flags(part)
+
+
+def test_an_unconfirmed_rule_only_flags_and_costs_as_drawn(monkeypatch):
+    """The TBC behaviour is not deleted — it is what any rule does until a person
+    confirms it."""
+    import config
+    from estimator import apply_production_substitutions
+    _tbc = [dict(config.PRODUCTION_MATERIAL_SUBSTITUTIONS[0], status="tbc")]
+    monkeypatch.setattr(config, "PRODUCTION_MATERIAL_SUBSTITUTIONS", _tbc)
+    part = {"part_number": "X", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 0.9}
+    apply_production_substitutions(part)
+    assert part["normalized_thickness_mm"] == 0.9
     assert "Costed AS DRAWN" in _flags(part)
-    assert part["normalized_thickness_mm"] == 0.9, "the gauge must not be rewritten"
+
+
+def test_the_substitution_reaches_the_gauge_the_money_is_derived_from():
+    """END TO END: estimate_part itself. The whole point of substituting before the mass
+    and the laser read the gauge is that every downstream figure uses 1.0 mm."""
+    import estimator
+    part = {"part_number": "7332-01-008", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 0.9, "quantity": 1,
+            "blank_length_mm": 200, "blank_width_mm": 100,
+            "textual_operations": ["laser_cutting"]}
+    estimator.estimate_part(part, job_quantity=6)
+    assert part["normalized_thickness_mm"] == 1.0
+    assert part["drawn_thickness_mm"] == 0.9
 
 
 def test_a_normal_gauge_says_nothing():
+    from estimator import apply_production_substitutions
     for g in (0.7, 1.2, 1.5, 2.5):
         part = {"part_number": "X", "normalized_material": "MILD_STEEL",
                 "normalized_thickness_mm": g, "textual_operations": ["laser_cutting"]}
-        estimate_process_times(part)
+        apply_production_substitutions(part)
         assert "in lieu" not in _flags(part), g
+        assert part["normalized_thickness_mm"] == g
+
+
+def test_stainless_is_outside_what_howard_spoke_for():
+    """0.9 mm stainless is a real buy. Widening a production fact past the person who
+    stated it is the scoped-pilot-becoming-a-constant fault."""
+    from estimator import apply_production_substitutions
+    part = {"part_number": "X", "normalized_material": "STAINLESS_STEEL",
+            "normalized_thickness_mm": 0.9}
+    apply_production_substitutions(part)
+    assert part["normalized_thickness_mm"] == 0.9
+    assert not part.get("production_substitution")
 
 
 # ── brushing before the platers: named, not added ────────────────────────────────────────
