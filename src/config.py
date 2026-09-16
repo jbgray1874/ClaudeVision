@@ -924,6 +924,19 @@ SHOP_STATED = {
     # breaks had nothing left to amortise. That is Tony's "CNC setup not amortised" arriving
     # from the other side.
     #
+    # CONFIRMED ON A SECOND SHEET, AND A METAL ONE. Howard Thurley's 7332-01 (15 Sep 2026,
+    # quantity 6) decomposes the same way against the same table, and reproduces three
+    # figures he had already stated in words:
+    #
+    #   WELD  3.50 h - 30 m set-up = 3.00 h / 6 = 30.000 min/unit   his "0.5 hr"
+    #   DRES  2.50 h - 30 m set-up = 2.00 h / 6 = 20.000 min/unit   his "20 min"
+    #   MANM  4.25 h - 15 m set-up = 4.00 h / 6 = 40.000 min/unit   his "40 minutes"
+    #
+    # Two estimators, two product families, two jobs, one convention — and on this one the
+    # decomposition lands on figures he had independently told us in plain English. The
+    # set-up model is therefore SHOP-WIDE, not a joinery finding. The RATES below remain a
+    # joinery pilot; what is confirmed is how his sheets are built, not his tray's speeds.
+    #
     # STILL A SCOPED PILOT. One job is one job: these apply to the family they were measured
     # on, and widen when a second job or the department confirms them.
     "joinery_cnc_parts_per_hour":          12.0,

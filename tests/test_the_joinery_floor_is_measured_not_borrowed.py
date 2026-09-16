@@ -221,3 +221,32 @@ def test_the_register_and_the_code_agree_about_scope():
     assert row, "D-045 must exist"
     assert "generic (joinery)" not in row[0], \
         "the code scopes these to faced board; the register may not call them generic"
+
+
+# ── the set-up convention holds on a second sheet, and a metal one ───────────────────────
+#
+# Howard Thurley's 7332-01 (15 Sep 2026, quantity 6) decomposes the same way against the
+# same table — and on this one the decomposition lands on three figures he had already
+# stated in plain English, weeks before anybody looked at his hours.
+
+_HOWARD_7332_HOURS = {"WELD": 3.5, "DRES": 2.5, "MANM": 4.25}
+_HOWARD_SAID = {"WELD": 30.0, "DRES": 20.0, "MANM": 40.0}   # "0.5 hr", "20 min", "40 minutes"
+
+
+def test_the_convention_reproduces_what_howard_told_us_in_words():
+    """Two estimators, two product families, two jobs, one convention. This is what makes
+    the set-up model SHOP-WIDE rather than a joinery finding: on Tony's sheet the proof is
+    five whole numbers; on Howard's it is three figures he had independently said out loud."""
+    for code, hours in _HOWARD_7332_HOURS.items():
+        run_h = hours - config.OPERATION_SETUP_MIN[code] / 60.0
+        assert abs(run_h * 60 / 6 - _HOWARD_SAID[code]) < 0.001, code
+
+
+def test_the_second_confirmation_is_written_down_where_the_rates_live():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "config.py"),
+               encoding="utf-8").read()
+    assert "CONFIRMED ON A SECOND SHEET, AND A METAL ONE" in src
+    assert "his \"0.5 hr\"" in src and "his \"40 minutes\"" in src
+    # and it must not overclaim: the RATES are still a joinery pilot
+    i = src.index("CONFIRMED ON A SECOND SHEET")
+    assert "remain a" in src[i:i + 1400] and "pilot" in src[i:i + 1400]
