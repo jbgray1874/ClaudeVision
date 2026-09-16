@@ -154,11 +154,18 @@ def test_the_line_says_both_packs_and_whose_figures():
 
 
 def test_the_freight_is_held_per_order_and_shared():
-    """£120 over the six stands it was quoted against is the £20 a unit he quotes."""
-    lg = config.PLATING_LOGISTICS
-    assert lg["freight_gbp_per_order"] == 120.0
-    assert round(lg["freight_gbp_per_order"] / 6, 2) == 20.0
-    assert "transport department" in lg["source"].lower()
+    """£120 over the six stands it was quoted against is the £20 a unit he quotes —
+    answered by the REGISTER for 7332-01 alone, because that £120 is that job's own
+    transport quote. Config no longer holds it: a money figure in config was every plated
+    job's freight, the £250 fault in a smaller coat."""
+    from estimator import plater_freight_for_job
+    entry = plater_freight_for_job(("7332-01",))
+    assert entry and entry["amount"] == 120.0
+    assert round(entry["amount"] / 6, 2) == 20.0
+    assert "transport department" in entry["source_reference"].lower()
+    assert plater_freight_for_job(("9999-01",)) is None, \
+        "another job must not borrow 7332-01's quote"
+    assert "freight_gbp_per_order" not in config.PLATING_LOGISTICS
 
 
 # ── the drawing's own callout, not only the engine's word for it ─────────────────────────

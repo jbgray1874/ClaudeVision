@@ -868,7 +868,10 @@ SHOP_STATED = {
     "brush_before_plate_min": 40.0,        # per UNIT, before it goes to the platers
     "plater_pack_min": 4.0,                # packing to send
     "plater_final_pack_min": 8.0,          # packing again on the way back
-    "plater_freight_gbp_per_order": 120.0,  # pallet network, round trip
+    # The plater FREIGHT (£120/order, £20 a unit at 6 off) is deliberately NOT here any
+    # more: it is MONEY, and 7332-01's own transport quote at that. It lives in the price
+    # register scoped job_only to 7332-01 (PLATER_FREIGHT) — a new plated job needs its
+    # own quote from SDI transport, and the line says so instead of borrowing this one.
     # Acrylic Dept via Howard Thurley — 0355255 (A4 table-top graphic holder), same date.
     # 60 parts/hour on the two-bend A01: one minute a part, half a minute a bend. Lived in
     # ACRYLIC_OP_DRIVERS with its own attribution comment, which was a second home for
@@ -1013,8 +1016,6 @@ SHOP_STATED_PROVENANCE = {
                  "larger or smaller stand should be asked about again"),
     "plater_pack_min":              dict(_HOWARD_7332, unit="minutes/consignment"),
     "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/consignment"),
-    "plater_freight_gbp_per_order": dict(_HOWARD_7332, unit="GBP/order",
-                                         evidence="pallet network, round trip"),
     "linebend_parts_per_hour":      dict(_ACRYLIC_0355255, unit="parts/hour",
                                          evidence="stated on his sheet for the two-bend "
                                                   "A01 — the figure as he gave it"),
@@ -1268,13 +1269,13 @@ PLATING_LOGISTICS = {
         "PLATER_PACK_MIN", SHOP_STATED["plater_pack_min"])),
     "final_pack_min": float(os.getenv(
         "PLATER_FINAL_PACK_MIN", SHOP_STATED["plater_final_pack_min"])),
-    "freight_gbp_per_order": float(os.getenv(
-        "PLATER_FREIGHT_GBP", SHOP_STATED["plater_freight_gbp_per_order"])),
-    "freight_is_round_trip": True,
-    "source": (f"SDI transport department, via "
-               f"{shop_stated_source('plater_freight_gbp_per_order')} — £"
-               f"{SHOP_STATED['plater_freight_gbp_per_order']:.0f} pallet network, "
-               f"quoted as £20 a unit"),
+    # NO FREIGHT FIGURE HERE ANY MORE. The £120/£20 was 7332-01's own transport quote and
+    # a config constant made it every plated job's freight. It lives in the price register
+    # scoped job_only to 7332-01 (PLATER_FREIGHT); estimator.plater_freight_for_job asks
+    # the register with the job's own codes, and a job with no current transport quote
+    # gets an owned gap naming SDI transport — never an inherited figure.
+    "source": (f"pack times: SDI shop practice via "
+               f"{shop_stated_source('plater_pack_min')}"),
 }
 
 # ── ESTIMATOR MANUAL-OVERRIDE OUTPUTS ────────────────────────────────────────────────

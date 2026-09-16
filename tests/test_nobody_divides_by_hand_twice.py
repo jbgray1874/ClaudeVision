@@ -87,10 +87,13 @@ def test_the_division_is_written_down_not_done_in_prose():
 # ── one home, and the others read from it ────────────────────────────────────────────────
 
 def test_every_figure_howard_stated_is_in_the_register():
+    # The freight is deliberately NOT in this list any more: £120/order was 7332-01's own
+    # transport quote — MONEY, not a shop method — and it lives in the price register
+    # scoped job_only to that job (PLATER_FREIGHT).
     for key in ("weld_min_per_weldment", "dress_min_per_weldment", "weld_joints_measured_on",
-                "brush_before_plate_min", "plater_pack_min", "plater_final_pack_min",
-                "plater_freight_gbp_per_order"):
+                "brush_before_plate_min", "plater_pack_min", "plater_final_pack_min"):
         assert key in config.SHOP_STATED, key
+    assert "plater_freight_gbp_per_order" not in config.SHOP_STATED
 
 
 def test_every_figure_carries_its_own_who_and_when():
@@ -133,8 +136,6 @@ def test_the_consumers_read_the_register_rather_than_repeating_it():
         config.SHOP_STATED["plater_pack_min"]
     assert config.PLATING_LOGISTICS["final_pack_min"] == \
         config.SHOP_STATED["plater_final_pack_min"]
-    assert config.PLATING_LOGISTICS["freight_gbp_per_order"] == \
-        config.SHOP_STATED["plater_freight_gbp_per_order"]
 
 
 def test_no_consumer_hard_codes_a_figure_the_register_owns():
@@ -159,6 +160,8 @@ def test_every_consumer_names_howard_on_the_sheet():
 
 def test_the_values_the_env_can_still_override():
     """A shop cannot be made to wait for a commit to change a rate it has just re-measured."""
+    # PLATER_FREIGHT_GBP is gone on purpose: the freight is register data now (a diff to
+    # data/price_register.json, no code or env involved), not a shop rate to retune.
     for var in ("WELD_MIN_PER_JOINT", "WELD_DRESS_MIN_PER_JOINT", "PLATER_PACK_MIN",
-                "PLATER_FINAL_PACK_MIN", "PLATER_FREIGHT_GBP"):
+                "PLATER_FINAL_PACK_MIN"):
         assert var in SRC, var

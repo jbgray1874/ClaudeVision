@@ -1448,6 +1448,25 @@ def job_customer(summary: Any) -> str:
         return ""
 
 
+def plater_freight_for_job(job_codes: Any) -> Optional[Dict[str, Any]]:
+    """THIS job's plater freight quote from the register, or None.
+
+    The £120/£20 was 7332-01's own transport quote, and holding it in config made it every
+    plated job's freight — the same fault as the £250, in a smaller coat. The register
+    holds it scoped job_only, so this returns a figure ONLY for the job it was quoted for;
+    every other plated job gets None and the caller writes an owned gap naming SDI
+    transport, never a borrowed number.
+    """
+    try:
+        import price_register
+    except Exception:                                                # noqa: BLE001
+        return None
+    entry = price_register.lookup("PLATER_FREIGHT", job_codes or ())
+    if entry and entry.get("chargeable") and (_safe_float(entry.get("amount")) or 0) > 0:
+        return entry
+    return None
+
+
 def customer_finish_standard(customer: Any) -> Optional[Dict[str, Any]]:
     """The finish standard SDI has learned for this customer, or None.
 
@@ -1922,18 +1941,25 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # the plater's own quote — which is the whole reason the named spec is priced as a
         # quote. So the figure is carried on the record and stated in the note, for the
         # delivery line and for the person reading it, and the plating price stays plating.
-        _plog = getattr(config, "PLATING_LOGISTICS", {}) or {}
-        _freight_order = _safe_float(_plog.get("freight_gbp_per_order")) or 0.0
-        if unit is not None and _freight_order > 0:
+        _fr_entry = plater_freight_for_job(job_identity_codes(summary))
+        if unit is not None and _fr_entry:
+            import price_register as _preg
+            _freight_order = _safe_float(_fr_entry.get("amount")) or 0.0
             _q = max(1, int(order_qty or 1))
             _freight_unit = round(_freight_order / _q, 2)
             pe["plater_freight_gbp_per_unit"] = _freight_unit
             pe["plater_freight_gbp_per_order"] = _freight_order
             note += (f". NOT INCLUDED here: freight to and from the plater, "
-                     f"£{_freight_order:.0f} the "
-                     f"{'round trip' if _plog.get('freight_is_round_trip', True) else 'leg'}"
+                     f"£{_freight_order:.0f} the round trip"
                      f" = £{_freight_unit:.2f} a unit at {_q} off — put it on the delivery "
-                     f"line ({_plog.get('source', 'transport figure')})")
+                     f"line ({_preg.describe(_fr_entry)})")
+        elif unit is not None:
+            # AN OWNED GAP, NOT A BORROWED FIGURE. The part goes out and comes back, so the
+            # freight is real money — and no current transport quote for THIS job is on
+            # record. An earlier job's quote is that job's and does not price this one.
+            note += (". NOT INCLUDED and NOT PRICED: freight to and from the plater needs "
+                     "a CURRENT transport quote for this job — MISSING: the haulage figure; "
+                     "ASK: SDI transport department")
         qty = max(1, int(pe.get("quantity") or 1))
         ext = round((unit or 0.0) * qty, 2)
         pe["unit_material_cost_gbp"] = unit or 0.0
@@ -9151,49 +9177,80 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # halves of the rule are then satisfied — the plating equals the plater's
                 # quote, and the freight is in the price.
                 #
-                # IT INHERITS, AND IT SHOULD. Any job that sends work out to a platers pays
-                # to send it and pays to get it back. Keyed on the plating line existing, so
-                # a job with no plating never sees it.
-                _plog2 = getattr(config, "PLATING_LOGISTICS", {}) or {}
-                _fr_order = _safe_float(_plog2.get("freight_gbp_per_order")) or 0.0
+                # THE ROUTE INHERITS; THE MONEY DOES NOT. Any job that sends work out to a
+                # platers pays to send it and pays to get it back, so the LINE exists on
+                # every plated job. The FIGURE is a transport quote — the £120/£20 was
+                # 7332-01's own, and holding it in config made it every plated job's
+                # freight, the same fault as the £250 in a smaller coat. The register
+                # answers only for the job the quote belongs to; every other plated job
+                # gets this line UNPRICED with the owner named, exactly like any other
+                # missing quote.
                 _fr_code = "PLATERFREIGHT"
-                if _fr_order > 0 and _fr_code not in _have:
+                _fr_entry2 = plater_freight_for_job(job_identity_codes(summary))
+                if _fr_code not in _have:
                     _fq = max(1, int(_commercial_order_quantity(summary) or 1))
-                    _fr_unit = round(_fr_order / _fq, 2)
-                    _fstub = _bought_in_part_stub(
-                        _fr_code,
-                        f"Delivery to and from the platers — "
-                        f"£{_fr_order:.0f} the "
-                        f"{'round trip' if _plog2.get('freight_is_round_trip', True) else 'leg'}"
-                        f" over {_fq} off", 1)
+                    if _fr_entry2:
+                        import price_register as _preg2
+                        _fr_order = _safe_float(_fr_entry2.get("amount")) or 0.0
+                        _fr_unit = round(_fr_order / _fq, 2)
+                        _fstub = _bought_in_part_stub(
+                            _fr_code,
+                            f"Delivery to and from the platers — "
+                            f"£{_fr_order:.0f} the round trip over {_fq} off", 1)
+                        _fstub["unit_cost_gbp"] = _fr_unit
+                        _fstub["unit_material_cost_gbp"] = _fr_unit
+                        _fstub["extended_total_cost_gbp"] = _fr_unit
+                        _fstub["material_estimate"] = {
+                            "unit_material_cost_gbp": _fr_unit,
+                            "cost_per_part_gbp": _fr_unit,
+                            "extended_material_cost_gbp": _fr_unit,
+                            "cost_method": "plater_freight_quoted",
+                        }
+                        _fstub["cost_source"] = "plater_freight_quoted"
+                        _fstub["costing_basis"] = "plater_freight_quoted"
+                        _fstub["review_flags"] = [
+                            f"plater freight: £{_fr_order:.0f} per order spread over "
+                            f"{_fq} off = £{_fr_unit:.2f} a unit. NOT part of the plating "
+                            f"line, which is held equal to the plater's own quote so it "
+                            f"can be checked against it. Moves with the order quantity "
+                            f"({_preg2.describe(_fr_entry2)}). Confirm the round trip and "
+                            f"the carrier"]
+                        print(f"   [plating] plater freight charged as its own line: "
+                              f"£{_fr_order:.0f} / {_fq} off = £{_fr_unit:.2f} a unit",
+                              flush=True)
+                    else:
+                        _fstub = _bought_in_part_stub(
+                            _fr_code,
+                            "Delivery to and from the platers — AWAITING a current "
+                            "transport quote for this job", 1)
+                        _fstub["unit_cost_gbp"] = None
+                        _fstub["unit_material_cost_gbp"] = None
+                        _fstub["extended_total_cost_gbp"] = None
+                        _fstub["_price_explicitly_withheld"] = True
+                        _fstub["material_estimate"] = {
+                            "unit_material_cost_gbp": None,
+                            "cost_per_part_gbp": None,
+                            "extended_material_cost_gbp": None,
+                            "cost_method": "plater_freight_awaiting_quote",
+                        }
+                        _fstub["cost_source"] = "plater_freight_awaiting_quote"
+                        _fstub["costing_basis"] = "plater_freight_awaiting_quote"
+                        _fstub["review_flags"] = [
+                            "plater freight NOT PRICED: the part goes out and comes back, "
+                            "so this is real money — and no current transport quote for "
+                            "THIS job is on record. An earlier job's quote is that job's "
+                            "and does not price this one. MISSING: the haulage figure; "
+                            "ASK: SDI transport department"]
+                        print("   [plating] plater freight line raised UNPRICED — no "
+                              "current transport quote for this job", flush=True)
                     _fstub["source"] = "plater_freight_stated"
                     _fstub["_commercial_placeholder"] = True
                     _fstub["_plater_freight"] = True
                     _fstub["textual_operations"] = []
                     _fstub["inferred_operations"] = []
-                    _fstub["unit_cost_gbp"] = _fr_unit
-                    _fstub["unit_material_cost_gbp"] = _fr_unit
-                    _fstub["extended_total_cost_gbp"] = _fr_unit
-                    _fstub["material_estimate"] = {
-                        "unit_material_cost_gbp": _fr_unit,
-                        "cost_per_part_gbp": _fr_unit,
-                        "extended_material_cost_gbp": _fr_unit,
-                        "cost_method": "plater_freight_stated",
-                    }
-                    _fstub["cost_source"] = "plater_freight_stated"
-                    _fstub["costing_basis"] = "plater_freight_stated"
                     _fstub["price_verified"] = False
                     _fstub["review_flag"] = True
-                    _fstub["review_flags"] = [
-                        f"plater freight: £{_fr_order:.0f} per order spread over {_fq} off "
-                        f"= £{_fr_unit:.2f} a unit. NOT part of the plating line, which is "
-                        f"held equal to the plater's own quote so it can be checked against "
-                        f"it. Moves with the order quantity "
-                        f"({_plog2.get('source', 'transport figure')}). Confirm the round "
-                        f"trip and the carrier"]
                     parts.append(_fstub)
-                    print(f"   [plating] plater freight charged as its own line: "
-                          f"£{_fr_order:.0f} / {_fq} off = £{_fr_unit:.2f} a unit", flush=True)
 
         # SDI Intelligence — powder coating / wet spray is declared once in the
         # drawing title block (e.g. "POWDER COATED"), not per part. Stamp the

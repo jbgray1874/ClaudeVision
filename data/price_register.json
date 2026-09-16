@@ -60,6 +60,24 @@
       "status": "confirmed",
       "supersedes": null,
       "notes": "The RATE generalises; the banded metreage does not — only visible edges are banded, which is a judgement about the product and not a number on the drawing."
+    },
+    {
+      "price_key": "PLATER_FREIGHT",
+      "label": "Freight to and from the plater — pallet network, round trip",
+      "amount": 120.0,
+      "unit": "order",
+      "currency": "GBP",
+      "source_type": "transport_quote",
+      "source_reference": "SDI transport department, via Howard Thurley (SDI estimating)",
+      "source_date": "2026-09-09",
+      "review_date": "2026-10-09",
+      "scope": {
+        "kind": "job_only",
+        "value": "7332-01"
+      },
+      "status": "confirmed",
+      "supersedes": null,
+      "notes": "THIS JOB'S transport quote and nobody else's: £120 the round trip, quoted as £20 a unit at the 6-off the enquiry stated. lookup() refuses it for any other job — a new plated job needs its own quote from SDI transport, and the line says so instead of borrowing this one."
     }
   ],
   "historical_audit_record": [

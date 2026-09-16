@@ -101,7 +101,8 @@ def test_the_audit_record_keeps_it_and_the_resolver_never_reads_it():
     assert audit["HARRODS01"]["amount"] == 250.00
     assert audit["HARRODS01"]["status"] == "historical_audit_only"
     # and load() builds `prices` from the prices array alone
-    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS"}
+    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS",
+                                                    "PLATER_FREIGHT"}
 
 
 def test_a_material_scoped_price_prices_any_job():

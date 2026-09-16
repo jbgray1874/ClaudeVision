@@ -108,11 +108,17 @@ def test_the_minutes_are_one_config_edit(monkeypatch):
 
 # ── freight to the platers and back ──────────────────────────────────────────────────────
 
-def test_the_freight_figures_are_config_and_named():
-    pl = config.PLATING_LOGISTICS
-    assert pl["freight_gbp_per_order"] == 120.0
-    assert pl["freight_is_round_trip"] is True
-    assert "Howard Thurley" in pl["source"] and "transport" in pl["source"].lower()
+def test_the_freight_figure_is_register_data_scoped_to_its_own_job():
+    """The £120/£20 was 7332-01's own transport quote. In config it was every plated
+    job's freight — the £250 fault in a smaller coat — so it moved to the register,
+    job_only, and another job's plated route raises the line UNPRICED naming SDI
+    transport instead of borrowing it."""
+    from estimator import plater_freight_for_job
+    entry = plater_freight_for_job(("7332-01",))
+    assert entry and entry["amount"] == 120.0
+    assert "transport department" in entry["source_reference"].lower()
+    assert plater_freight_for_job(("8888-02",)) is None
+    assert "freight_gbp_per_order" not in config.PLATING_LOGISTICS
 
 
 def test_the_engine_mints_a_freight_line_beside_the_plating():
@@ -134,9 +140,11 @@ def test_the_plating_line_is_still_held_equal_to_the_platers_quote():
 
 def test_it_only_exists_where_there_is_plating():
     """A job with no plating never mints a plating placeholder, so it never reaches the
-    freight line either — the two are minted together, deliberately."""
+    freight line either — the two are minted together, deliberately. And the route
+    inherits while the money does not: the unpriced branch exists beside the priced one."""
     src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
     plate_at = src.index('_pstub["_plating_placeholder"] = True')
     freight_at = src.index('_fr_code = "PLATERFREIGHT"')
     assert plate_at < freight_at
-    assert "a job with no plating never sees it" in src.lower()
+    assert "THE ROUTE INHERITS; THE MONEY DOES NOT" in src
+    assert "plater_freight_awaiting_quote" in src
