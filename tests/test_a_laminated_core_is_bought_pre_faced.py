@@ -75,6 +75,37 @@ def test_the_tray_base_prices_off_the_laminated_sheet():
     assert any("bought pre-faced" in f for f in part.get("review_flags", []))
     # and NOT the plain-MDF kilo money the 08:04 book shipped (£43.12/sheet)
     assert (out.get("unit_material_cost_gbp") or 0) > 3.0, out
+    # the yield is computed on the sheet the £172 actually buys — never on a stocked
+    # size the money was not paid for
+    assert (out.get("stock_estimate") or {}).get("candidate_sheet_size_mm") == \
+        [3080.0, 1220.0], out.get("stock_estimate")
+
+
+def test_a_modelled_weight_does_not_put_the_board_back_on_core_kilos():
+    """The 09:57 book: the trays carry a modelled weight, the stated-weight branch
+    returned plain-MDF £/kg before the promotion ever ran, and the board shipped at
+    £43.12-a-sheet money again. The weight stays on the record; its PRICING yields to
+    the purchased sheet."""
+    import estimator
+    part = {"part_number": "11908-21-01J", "normalized_material": "MDF",
+            "normalized_thickness_mm": 9.0, "blank_length_mm": 390.0,
+            "blank_width_mm": 390.0, "quantity": 2,
+            "dxf_weight_kg": 1.03,
+            "textual_operations": ["laminating"]}
+    out = estimator.estimate_material(part)
+    assert out.get("cost_method") == "board_sheet_yield", out.get("cost_method")
+    assert out.get("sheet_price_gbp") == 172.0
+
+
+def test_a_plain_board_with_a_weight_still_prices_by_its_weight():
+    import estimator
+    part = {"part_number": "X-01", "normalized_material": "MDF",
+            "normalized_thickness_mm": 9.0, "blank_length_mm": 390.0,
+            "blank_width_mm": 390.0, "quantity": 1,
+            "dxf_weight_kg": 1.03}
+    out = estimator.estimate_material(part)
+    assert out.get("cost_method") != "board_sheet_yield", \
+        "no laminate evidence — the stated-weight path keeps its job"
 
 
 def test_a_promoted_board_with_no_rate_never_falls_back_to_core_kilos():

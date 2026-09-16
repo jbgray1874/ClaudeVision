@@ -2795,7 +2795,10 @@ def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
     thk = _safe_float(thickness)
     if not isinstance(table, dict) or not table or not thk or thk <= 0:
         return None, ""
-    points = sorted((float(t), float(p)) for t, p in table.items())
+    # A point may be a plain price, or {"gbp": …, "sheet_mm": (L, W)} when the size the
+    # price was PAID FOR matters — _board_priced_sheet_mm reads the size; this reads money.
+    points = sorted((float(t), float(p["gbp"] if isinstance(p, dict) else p))
+                    for t, p in table.items())
     for _t, _p in points:
         if abs(_t - thk) < 0.51:
             return _p, f"observed at {_t:g}mm"
@@ -2807,6 +2810,30 @@ def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
     rate = p0 + (p1 - p0) * (thk - t0) / (t1 - t0)
     return round(rate, 2), (f"interpolated for {thk:g}mm between SDI's own {t0:g}mm "
                             f"(£{p0:.2f}) and {t1:g}mm (£{p1:.2f})")
+
+
+def _board_priced_sheet_mm(material: Optional[str], thickness: Optional[float]):
+    """(sheet_length, sheet_width) the recorded board price was PAID FOR, or None.
+
+    £172 buys a 3080x1220 of the 9mm laminated board; the stocked-size list also offers a
+    2800x2070, which yields more parts — and dividing the 3080x1220's money by the
+    2800x2070's yield understates every part on the job. Where a price point states its
+    sheet, the yield must be computed on that sheet and no other."""
+    table = (getattr(config, "BOARD_SHEET_PRICE_GBP", {}) or {}).get(
+        str(material or "").upper().replace(" ", "_")) or \
+        (getattr(config, "BOARD_SHEET_PRICE_GBP", {}) or {}).get(
+            str(material or "").upper())
+    thk = _safe_float(thickness)
+    if not isinstance(table, dict) or not thk:
+        return None
+    for _t, _p in table.items():
+        if abs(float(_t) - thk) < 0.51 and isinstance(_p, dict) and _p.get("sheet_mm"):
+            _s = _p["sheet_mm"]
+            try:
+                return (float(_s[0]), float(_s[1]))
+            except (TypeError, ValueError, IndexError):
+                return None
+    return None
 
 
 def _powder_consumable_estimate(
@@ -4592,6 +4619,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # Critical for timber/wood where the extracted thickness is often a tolerance artefact.
     _NON_SHEET_MATERIALS = {"TIMBER", "WOOD", "MDF", "PLYWOOD", "SOFTWOOD"}
     stated_weight_kg = _stated_weight_kg_for_part(part)
+    # A LAMINATED BOARD IS BOUGHT BY THE SHEET, NOT MASSED AT THE CORE'S £/kg — however
+    # well the model weighed it. 11908-21's trays carry a modelled weight, so this branch
+    # returned plain-MDF kilo money before the faced-board promotion below ever ran: the
+    # weight was right and the price basis still wrong. The weight stays on the record;
+    # only its PRICING is declined, and the sheet-yield branch prices the purchased board.
+    if stated_weight_kg is not None:
+        try:
+            if _faced_board_promotion(part, material)[0]:
+                stated_weight_kg = None
+        except Exception:                                            # noqa: BLE001
+            pass
     # Plausibility gate: a DXF/PDF "stated weight" is trusted only when it agrees with the
     # blank-based mass (area x thickness x density). Bad unit conversions produce weights that
     # are wildly too small (e.g. 0.0007 kg for a ~2.3 kg peg) or too large (the 1450 title-block
@@ -4762,6 +4800,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             }
     if _board_rate and blank_length and blank_width:
         _b_sheet = select_sheet_size(_cost_family, blank_length, blank_width)
+        # THE YIELD IS COMPUTED ON THE SHEET THE MONEY BOUGHT. Where the price point
+        # states its sheet (£172 buys a 3080x1220), the nester's preferred stock size is
+        # overridden: dividing one sheet's price by a bigger sheet's yield understates
+        # every part on the job.
+        _b_paid_sheet = _board_priced_sheet_mm(_cost_family, thickness)
+        if _b_paid_sheet:
+            _paid_nest = _costed_facts.nest_on_sheet(
+                _cost_family, blank_length, blank_width,
+                _b_paid_sheet[0], _b_paid_sheet[1])
+            if _paid_nest and _paid_nest.get("parts_per_sheet"):
+                _b_sheet = {
+                    "candidate_sheet_size_mm": [_b_paid_sheet[0], _b_paid_sheet[1]],
+                    "utilisation_pct": round(
+                        _paid_nest["parts_per_sheet"] * blank_length * blank_width
+                        / (_b_paid_sheet[0] * _b_paid_sheet[1]) * 100.0, 2),
+                    **_paid_nest,
+                }
         _b_pps = max(1, int(_b_sheet.get("parts_per_sheet") or 1))
         _b_scrap = 1.0 + float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
         _b_unit = (_board_rate / _b_pps) * _b_scrap

@@ -2554,7 +2554,10 @@ BOARD_SHEET_PRICE_GBP = {
     # interpolate DOWNWARD across two different products. The label _board_sheet_rate
     # prints quotes both ends, so a falling curve is visible, INDICATIVE, and Tony's to
     # overrule — but treat any 10-17mm faced-board price from this table with suspicion.
-    "MFMDF":     {9.0: 172.00, 18.0: 58.55, 36.0: 84.54},
+    # The dict form carries the SHEET SIZE the price was paid for: £172 buys a
+    # 3080x1220, and dividing it by a 2800x2070's yield would understate every part.
+    "MFMDF":     {9.0: {"gbp": 172.00, "sheet_mm": (3080, 1220)},
+                  18.0: 58.55, 36.0: 84.54},
     "CHIPBOARD": {18.0: 58.55, 36.0: 84.54},
     # DIBOND / ACM — PROVISIONAL, per full 3050x1500 (4.575 m2) sheet, ~£36/m2 at 3mm and
     # ~£46/m2 at 4mm (mid trade). CONFIRM against SDI's own Dibond buy price and replace these
