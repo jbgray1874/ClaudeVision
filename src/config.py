@@ -430,8 +430,14 @@ PACKING_METHOD = {
     "stated_by": "Howard Thurley (SDI estimating)",
     "stated_on": "9 Sep 2026",
     "source_job": "0355255",
+    # WHICH BAG: THE SHEET BEATS THE EMAIL. Howard's email named PACK13 (an 18 x 24 bag);
+    # his own priced sheet for 0355255 (7 Sep 2026) bags the unit in PACK56 — "Poly Bag
+    # 12 x 18 x 100G", The Packaging Company, £17.91 a thousand — which also matches the
+    # 12 x 18 size his method describes. The sheet is the estimate he actually issued, so
+    # PACK56 is what this method buys; the discrepancy is his to settle and is asked in
+    # the covering email.
     "consumables": [
-        {"code": "PACK13", "what": "individual bag 12 x 18, 100 gauge", "per_unit": 1},
+        {"code": "PACK56", "what": "individual bag 12 x 18, 100 gauge", "per_unit": 1},
         {"code": "BOX481", "what": "bulk stock box",
          "per_order_steps": {10: 1, 50: 1, 250: 3, 1000: 9}},
     ],
@@ -847,6 +853,12 @@ SHOP_STATED = {
     # throughput table — against the estimator who runs the department. Third home found
     # for a stated shop figure (wb_populate._THROUGHPUT_DEFAULTS), now read from here.
     "laser_acrylic_parts_per_hour": 95.0,
+    # PACP "Apply Tape, Bag, Bulk Pack" at 30 parts/hour, off Howard's own 0355255 sheet
+    # (7 Sep 2026). The corpus-derived 99/hr was measured over 15 mixed lines and cannot
+    # say what taping, bagging and boxing THIS kind of unit takes; the department figure
+    # on his priced estimate can. This one line was most of the labour gap at volume
+    # between his book and the engine's (~59p a unit at 10-off).
+    "acrylic_assemble_pack_parts_per_hour": 30.0,
 }
 
 # EVERY FIGURE CARRIES ITS OWN PROVENANCE. The register used to close with one shared
@@ -878,6 +890,10 @@ SHOP_STATED_PROVENANCE = {
     "laser_acrylic_parts_per_hour": dict(_ACRYLIC_0355255, unit="parts/hour",
                                          evidence="his manual estimate's own laser rate, "
                                                   "against 252 from 13 corpus lines"),
+    "acrylic_assemble_pack_parts_per_hour": dict(
+        _ACRYLIC_0355255, stated_by="Howard Thurley (SDI estimating)",
+        stated_on="7 Sep 2026", unit="parts/hour",
+        evidence="his own 0355255 sheet: PACP 30/hour, 'Apply Tape, Bag, Bulk Pack'"),
 }
 
 

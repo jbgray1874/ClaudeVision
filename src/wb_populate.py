@@ -4761,6 +4761,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _THROUGHPUT_DEFAULTS["Laser (Acrylic)"] = float(
         (getattr(config, "SHOP_STATED", None) or {}).get("laser_acrylic_parts_per_hour")
         or _THROUGHPUT_DEFAULTS["Laser (Acrylic)"])
+    _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"] = float(
+        (getattr(config, "SHOP_STATED", None) or {}).get(
+            "acrylic_assemble_pack_parts_per_hour")
+        or _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"])
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which

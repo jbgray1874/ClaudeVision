@@ -69,7 +69,7 @@ def test_beyond_the_last_stated_point_nothing_is_invented():
 
 def test_a_fully_priced_method_puts_real_money_on_the_line(monkeypatch):
     monkeypatch.setattr(CL, "_consumable_price",
-                        _prices({"PACK13": 0.06, "BOX481": 1.89}))
+                        _prices({"PACK56": 0.06, "BOX481": 1.89}))
     line = CL.packaging_line(_parts(), 50)
     # 50 bags at 0.06 + 1 box at 1.89
     assert line["order_gbp"] == 4.89
@@ -78,7 +78,7 @@ def test_a_fully_priced_method_puts_real_money_on_the_line(monkeypatch):
     assert line["price_source"]["source_class"] == "packing_method"
     assert line["price_source"]["indicative"] is True, \
         "priced and honest about being a method, not a quote"
-    assert "PACK13" in line["packing_working"] and "BOX481" in line["packing_working"]
+    assert "PACK56" in line["packing_working"] and "BOX481" in line["packing_working"]
     assert "0355255" in line["method_source"] and "Howard Thurley" in line["method_source"]
 
 
@@ -87,7 +87,7 @@ def test_the_breaks_carry_the_step_not_a_slope(monkeypatch):
     across the four breaks — the one line on his estimate that moves. Dividing one
     order's cost by other quantities would smear that step into a slope."""
     monkeypatch.setattr(CL, "_consumable_price",
-                        _prices({"PACK13": 0.06, "BOX481": 1.89}))
+                        _prices({"PACK56": 0.06, "BOX481": 1.89}))
     line = CL.packaging_line(_parts(), 50)
     at = line["order_gbp_at_breaks"]
     assert at[10] == round(10 * 0.06 + 1 * 1.89, 2)
@@ -100,7 +100,7 @@ def test_the_breaks_carry_the_step_not_a_slope(monkeypatch):
 
 
 def test_one_missing_consumable_keeps_the_honest_zero_and_names_itself(monkeypatch):
-    monkeypatch.setattr(CL, "_consumable_price", _prices({"PACK13": 0.06}))  # no BOX481
+    monkeypatch.setattr(CL, "_consumable_price", _prices({"PACK56": 0.06}))  # no BOX481
     line = CL.packaging_line(_parts(), 50)
     assert line.get("order_gbp") is None, "a half-priced method is confidently short"
     assert line["estimator_input_required"] is True
@@ -109,7 +109,7 @@ def test_one_missing_consumable_keeps_the_honest_zero_and_names_itself(monkeypat
 
 def test_an_order_beyond_the_stated_steps_is_not_priced_by_extrapolation(monkeypatch):
     monkeypatch.setattr(CL, "_consumable_price",
-                        _prices({"PACK13": 0.06, "BOX481": 1.89}))
+                        _prices({"PACK56": 0.06, "BOX481": 1.89}))
     line = CL.packaging_line(_parts(), 2000)
     assert line.get("order_gbp") is None
     assert "beyond the last stated point" in line["note"]
@@ -118,7 +118,7 @@ def test_an_order_beyond_the_stated_steps_is_not_priced_by_extrapolation(monkeyp
 def test_an_estimators_house_rate_still_beats_the_method(monkeypatch):
     """The explicit figure a person typed outranks the derived one, always."""
     monkeypatch.setattr(CL, "_consumable_price",
-                        _prices({"PACK13": 0.06, "BOX481": 1.89}))
+                        _prices({"PACK56": 0.06, "BOX481": 1.89}))
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {"PACKAGING": 12.0},
                         raising=False)
     line = CL.packaging_line(_parts(), 50)
@@ -131,7 +131,9 @@ def test_the_method_carries_its_own_provenance_in_config():
     assert m["stated_by"].startswith("Howard Thurley")
     assert m["source_job"] == "0355255"
     codes = [c["code"] for c in m["consumables"]]
-    assert codes == ["PACK13", "BOX481"]
+    assert codes == ["PACK56", "BOX481"], \
+        ("PACK56 is the bag on Howard's own 0355255 sheet (12 x 18 x 100G, £17.91/1000); "
+         "his email said PACK13 (an 18 x 24) — the sheet is the estimate he issued")
     assert not any("gbp" in str(k).lower() or "price" in str(k).lower()
                    for c in m["consumables"] for k in c), \
         "the method holds NO money — prices come from the system at run time"
@@ -139,7 +141,7 @@ def test_the_method_carries_its_own_provenance_in_config():
 
 def test_delivery_is_untouched_by_the_packing_method(monkeypatch):
     monkeypatch.setattr(CL, "_consumable_price",
-                        _prices({"PACK13": 0.06, "BOX481": 1.89}))
+                        _prices({"PACK56": 0.06, "BOX481": 1.89}))
     line = CL.delivery_line(_parts(), 50)
     assert line.get("order_gbp") is None, \
         "no stated method exists for haulage yet — the honest zero stands there"
@@ -150,14 +152,14 @@ def test_delivery_is_untouched_by_the_packing_method(monkeypatch):
 # James ran the UDEF query, 15 Sep 2026:
 #
 #   BOX481   H266266 - 610 x 455 x 455mm (Large stock box) ...   COMPLETE PACKAGING   1.89
-#   PACK13   POLY BAG 18 x 24 x 100G (PACK OF 1000)   The Packaging Company   29.68
+#   PACK56   POLY BAG 12 x 18 x 100G (PACK OF 1000)   The Packaging Company   17.91
 #
 # £29.68 is a THOUSAND bags. Read per-bag, a 50-off order carries £1,484 of poly bags —
 # the crazy number, wearing a real supplier's name.
 
 def _udef(code):
-    rows = {"PACK13": {"gbp": 29.68, "source": "udef_sqlserver",
-                       "description": "POLY BAG 18 x 24 x 100G (PACK OF 1000)"},
+    rows = {"PACK56": {"gbp": 17.91, "source": "udef_sqlserver",
+                       "description": "POLY BAG 12 x 18 x 100G (PACK OF 1000)"},
             "BOX481": {"gbp": 1.89, "source": "udef_sqlserver",
                        "description": "H266266 - 610 x 455 x 455mm (Large stock box)"}}
     return rows.get(code)
@@ -166,9 +168,9 @@ def _udef(code):
 def test_a_pack_of_1000_is_divided_to_the_price_of_one(monkeypatch):
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
-    px = CL._consumable_price("PACK13")
-    assert px["gbp"] == round(29.68 / 1000, 5)
-    assert px["pack_of"] == 1000 and px["pack_gbp"] == 29.68
+    px = CL._consumable_price("PACK56")
+    assert px["gbp"] == round(17.91 / 1000, 5)
+    assert px["pack_of"] == 1000 and px["pack_gbp"] == 17.91
 
 
 def test_a_dimension_is_never_read_as_a_pack_size(monkeypatch):
@@ -188,8 +190,8 @@ def test_the_real_catalogue_rows_price_howards_break_line(monkeypatch):
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_parts(), 50)
-    _bag = round(29.68 / 1000, 5)
-    assert line["order_gbp"] == round(50 * _bag + 1 * 1.89, 2)     # £3.37, not £1,485.89
+    _bag = round(17.91 / 1000, 5)
+    assert line["order_gbp"] == round(50 * _bag + 1 * 1.89, 2)     # £2.79, not £1,485.89
     at = line["order_gbp_at_breaks"]
     for q, boxes in ((10, 1), (50, 1), (250, 3), (1000, 9)):
         assert at[q] == round(q * _bag + boxes * 1.89, 2)
@@ -203,7 +205,7 @@ def test_an_in_between_quantity_is_priced_and_labelled_inferred(monkeypatch):
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_parts(), 100)
-    assert line["order_gbp"] == round(100 * round(29.68 / 1000, 5) + 3 * 1.89, 2)
+    assert line["order_gbp"] == round(100 * round(17.91 / 1000, 5) + 3 * 1.89, 2)
     assert line.get("inferred_step") is True
     assert "INFERRED" in line["packing_working"]
     line50 = CL.packaging_line(_parts(), 50)
@@ -276,7 +278,7 @@ def test_the_source_job_itself_still_prices(monkeypatch):
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_parts(), 50)
-    assert line["order_gbp"] == 3.37
+    assert line["order_gbp"] == 2.79
 
 
 def test_the_sheet_row_says_what_the_number_is_made_of(monkeypatch):
@@ -288,7 +290,8 @@ def test_the_sheet_row_says_what_the_number_is_made_of(monkeypatch):
     assert P.source_system_label("stated_method_system_priced") == "Stated method + SDI Live"
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
                encoding="utf-8").read()
-    assert "bagged (PACK13) + boxed (BOX481)" in src, "the row's own description"
+    assert "bagged ({_bag_code}) + boxed " in src, \
+        "the row names the method's OWN codes — a literal kept printing PACK13 after the sheet moved to PACK56"
     assert "PACKED BY THE STATED METHOD" in src, "and the working in the flag"
 
 
@@ -347,7 +350,7 @@ def test_an_unmeasured_bought_in_rides_along(monkeypatch):
     from bought_in_policy import is_bought_in
     assert is_bought_in(parts[-1]), "fixture must be a real bought-in by the one predicate"
     line = CL.packaging_line(parts, 50)
-    assert line["order_gbp"] == 3.37
+    assert line["order_gbp"] == 2.79
 
 
 def test_an_assembly_parent_is_still_ignored(monkeypatch):
@@ -356,7 +359,7 @@ def test_an_assembly_parent_is_still_ignored(monkeypatch):
     parts = _parts() + [{"part_number": "10975-02-GA", "description": "ASSEMBLY",
                          "is_assembly_parent": True, "quantity": 1}]
     line = CL.packaging_line(parts, 50)
-    assert line["order_gbp"] == 3.37, "counted through its children, exactly as the weight is"
+    assert line["order_gbp"] == 2.79, "counted through its children, exactly as the weight is"
 
 
 # ── the 17:56 book: right method, wrong money, frozen flat ───────────────────────────────
@@ -373,7 +376,7 @@ def test_the_live_connector_shape_still_divides_the_pack(monkeypatch):
     import stated_prices
 
     def _live_shape(code, description=None):
-        rows = {"PACK13": ("POLY BAG 18 x 24 x 100G (PACK OF 1000)", 29.68),
+        rows = {"PACK56": ("POLY BAG 12 x 18 x 100G (PACK OF 1000)", 17.91),
                 "BOX481": ("H266266 - 610 x 455 x 455mm (Large stock box)", 1.89)}
         if code not in rows:
             return None
@@ -388,10 +391,10 @@ def test_the_live_connector_shape_still_divides_the_pack(monkeypatch):
     monkeypatch.setattr(price_sources, "get_best_price",
                         lambda req, connectors=None, source_priority=None:
                         _live_shape(req.part_code))
-    px = CL._consumable_price("PACK13")
-    assert px["gbp"] == round(29.68 / 1000, 5),         "the catalogue row's own words reach the divider on the live shape"
+    px = CL._consumable_price("PACK56")
+    assert px["gbp"] == round(17.91 / 1000, 5),         "the catalogue row's own words reach the divider on the live shape"
     line = CL.packaging_line(_parts(), 50)
-    assert line["order_gbp"] == 3.37, "not £1,485.89"
+    assert line["order_gbp"] == 2.79, "not £1,485.89"
 
 
 def test_the_commercial_line_is_harvested_from_the_part_records():
@@ -421,7 +424,7 @@ def test_the_method_answers_for_quantity_one_as_well(monkeypatch):
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_parts(), 50)
     at = line["order_gbp_at_breaks"]
-    assert at[1] == round(1 * round(29.68 / 1000, 5) + 1 * 1.89, 2),         "one bag and one box — the sheet's vector opens at 1 and the method must answer"
+    assert at[1] == round(1 * round(17.91 / 1000, 5) + 1 * 1.89, 2),         "one bag and one box — the sheet's vector opens at 1 and the method must answer"
 
 
 def test_the_sheet_writes_a_lookup_with_the_runs_figure_as_fallback():
@@ -464,14 +467,14 @@ def test_every_outcome_carries_a_method_status(monkeypatch):
 # is judged from the principal structural product; only a structural component may veto.
 
 def test_the_printed_graphic_rides_inside_the_bag(monkeypatch):
-    """The 18:21 decline, reproduced and fixed: the real job's own shape prices at £3.37."""
+    """The 18:21 decline, reproduced and fixed: the real job's own shape prices at £2.79."""
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     parts = _parts() + [{"part_number": "10975-02-G01", "description": "GRAPHIC",
                          "normalized_material": "PAPER", "quantity": 1,
                          "flat_pattern_detected": True}]        # unmeasured, non-plastic
     line = CL.packaging_line(parts, 50)
-    assert line["order_gbp"] == 3.37, line.get("method_status")
+    assert line["order_gbp"] == 2.79, line.get("method_status")
 
 
 def test_labels_inserts_and_stickers_ride_along_too(monkeypatch):
@@ -483,7 +486,7 @@ def test_labels_inserts_and_stickers_ride_along_too(monkeypatch):
                              "normalized_material": mat, "quantity": 1,
                              "flat_pattern_detected": True}]
         line = CL.packaging_line(parts, 50)
-        assert line["order_gbp"] == 3.37, (desc, line.get("method_status"))
+        assert line["order_gbp"] == 2.79, (desc, line.get("method_status"))
 
 
 def test_a_structural_unknown_still_vetoes(monkeypatch):

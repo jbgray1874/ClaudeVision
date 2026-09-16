@@ -8548,8 +8548,19 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # "when we explain the packaging and delivery on s/sheet we need to try to
                 # provide as much clarity as possible on the number" — James, 15 Sep. The
                 # ROW says what the number is made of; the full arithmetic is one flag away.
-                _stub["description"] = ("Packaging — bagged (PACK13) + boxed (BOX481), "
-                                        "Howard's stated method, priced from SDI Live")
+                # The codes come from the method itself, so the row can never name a bag
+                # the method no longer buys — Howard's sheet moved PACK13 to PACK56 and
+                # a literal here would have kept printing the old one.
+                _pm_cons = (getattr(config, "PACKING_METHOD", {}) or {}).get(
+                    "consumables") or []
+                _bag_code = next((str(c.get("code")) for c in _pm_cons
+                                  if isinstance(c, dict) and c.get("per_unit")), "bag")
+                _box_code = next((str(c.get("code")) for c in _pm_cons
+                                  if isinstance(c, dict) and c.get("per_order_steps")),
+                                 "box")
+                _stub["description"] = (f"Packaging — bagged ({_bag_code}) + boxed "
+                                        f"({_box_code}), Howard's stated method, priced "
+                                        f"from SDI Live")
             if _cline:
                 _stub["commercial_line"] = _cline
                 _announce_packing_status(_cline)
