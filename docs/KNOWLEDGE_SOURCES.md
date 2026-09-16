@@ -22,9 +22,10 @@ reach:
    roll goods price by the length consumed; both sheet orientations are tried and the
    better valid yield taken; the requested quantity breaks land in one workbook; the
    customer's own rebate and absorption terms apply by name; catalogue pack prices
-   convert to the price of one; a confirmed exact-SKU price beats a derived
-   material-family median; generic labour rows name the work they contain. These carry
-   no job's assumptions — they are how estimating works, proven by a test each.
+   convert to the price of one; generic labour rows name the work they contain; and — as
+   F1, proposed, landing on Howard's PLAS534 confirmation — a confirmed exact-SKU price
+   beats a derived material-family median. These carry no job's assumptions — they are
+   how estimating works, proven by a test each.
 
 2. **Gated stated methods and figures** apply only to the job family they were stated
    for, with named and dated provenance — Howard's bag-and-box packing method and his
@@ -37,12 +38,17 @@ reach:
    one drawing pack and govern only it — a tape length, a gauge ruling, an order
    quantity, a "delivery not required". They cannot contaminate another estimate.
 
-Where a future drawing provides stronger evidence, that job's own drawing or CAD data
-takes precedence over anything stated — source precedence arbitrates, and the displaced
-reading stays on the record.
+Precedence applies only to competing statements of the SAME fact. Where sources
+describe the same fact, stronger evidence wins: measured CAD geometry over PDF geometry,
+an exact current SKU price over a category-derived median, a job-specific estimator
+ruling over a generic fallback — and the displaced reading stays on the record. CAD
+geometry can never displace a shop throughput, a packing method or a price; those are
+different facts with their own sources.
 
-**The success criterion:** the first run of the next comparable job should begin where
-the last corrected run of its predecessor finished. Estimator feedback should surface
+**The success criterion:** the first run of the next comparable job begins with the
+knowledge available at the end of the previous corrected job — not necessarily
+reproducing its estimate, because drawings, quantities, materials and current prices may
+differ. Estimator feedback should surface
 NEW knowledge, not rediscover defects already resolved — and the change register below
 is how that is held: every decision carries its test, so a change that would quietly
 undo a resolved defect fails the suite before it ships.
@@ -81,9 +87,9 @@ the tests police the boundary.
 
 | Register | What it holds | Rule |
 |---|---|---|
-| `SHOP_STATED` | **Source-controlled shop-stated operating figures.** Every figure the shop has stated: weld 30 / dress 20 min per weldment, brush-before-plate 40 min, plater pack + £120 freight, linebend 0.5 min/bend, acrylic laser 95 parts/hr — values as plain numbers, with who/when/which-job/what-unit per figure in `SHOP_STATED_PROVENANCE` (one shared header mis-attributed the 0355255 figures to 7332-01 — caught in review, 15 Sep) | Other tables read from it; changing a stated figure anywhere else changes nothing |
-| `ESTIMATOR_STATED_PRICES` | Prices an estimator gave us (dated, attributed) | Always **second to the system** — used only where no priced source answers, rendered "Estimator stated", disagreement reported when both answer |
-| `ROLL_GOODS_CATALOGUE` | Packaging facts only (roll lengths). **No money** — the price comes from Tier 1 or the stated register | |
+| `SHOP_STATED` | **Source-controlled shop-stated operating figures.** Every figure the shop has stated: weld 30 / dress 20 min per weldment, brush-before-plate 40 min, plater pack + £120 freight, linebend 60 parts/hour as stated (0.5 min/bend held beside it as the engine-derived driver, labelled DERIVED until Howard confirms it directly), acrylic laser 95 parts/hr, PACP assemble/pack 30 parts/hr — values as plain numbers, with who/when/which-job/what-unit per figure in `SHOP_STATED_PROVENANCE` (one shared header mis-attributed the 0355255 figures to 7332-01 — caught in review, 15 Sep) | Other tables read from it; changing a stated figure anywhere else changes nothing |
+| `ESTIMATOR_STATED_PRICES` | Prices an estimator gave us (dated, attributed) | An exact, dated and confirmed SKU price beats a category-derived rate; a matching live system price beats an estimator-stated price **for that same SKU**; category medians answer only when no exact suitable item does. Rendered "Estimator stated"; disagreement reported when both answer. (The exact-SKU-beats-median half is F1, proposed — lands when Howard confirms PLAS534 at £45.19) |
+| `ROLL_GOODS_CATALOGUE` | Roll-stock facts — roll length and unit of issue for tape, foam, gasket and similar roll goods. **No money** — current prices come from Tier 1 or a dated stated-price entry | |
 | `PACKING_METHOD` | How an order packs — PACK56 bag per unit (his priced sheet's bag; his email typed PACK13 — sheet beats email, confirmation asked), BOX481 boxes at Howard's 1/1/3/9 steps, his name and date on it. Gated to eligible acrylic display work | Holds NO money: consumable prices come live from UDEF each run; a missing rate keeps the honest zero and names the code; no extrapolation past the last stated step |
 | `PER_ORDER_UNIT_COUNTS` | Per-order counts for any other code an estimator states | The break table reads it |
 | `ACRYLIC_PRICE_GBP_PER_M2`, `ACRYLIC_SHEET_PRICE_GBP` | Offline fallback snapshot of the UDEF-derived rates | The live Tier-1 derivation wins when the database answers |

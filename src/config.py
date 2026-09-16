@@ -848,6 +848,13 @@ SHOP_STATED = {
     # exactly the kind of figure this register was built to hold in ONE — "can we put these
     # into a central area that is easy to identify and change if needed". ACRYLIC_OP_DRIVERS
     # now reads it from here, the way BRUSH_BEFORE_PLATE reads brush_before_plate_min.
+    # WHAT THE SHOP STATED versus WHAT WE DERIVED FROM IT — kept apart on review advice
+    # (16 Sep): Howard's workbook states 60 PARTS/HOUR on the two-bend A01; "0.5 minutes
+    # per bend" is this engine's reading of that figure, generalised per bend so a
+    # three-bend part books its real time. The stated fact and the derived driver are
+    # both here, each labelled as what it is; if Howard confirms the per-bend figure
+    # directly, its provenance upgrades from derived to stated.
+    "linebend_parts_per_hour": 60.0,
     "linebend_min_per_bend": 0.5,
     # "Line 96 – Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95 p/hour."
     # The 252 was measured off THIRTEEN corpus lines — the thinnest sample in the
@@ -886,8 +893,15 @@ SHOP_STATED_PROVENANCE = {
     "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/consignment"),
     "plater_freight_gbp_per_order": dict(_HOWARD_7332, unit="GBP/order",
                                          evidence="pallet network, round trip"),
+    "linebend_parts_per_hour":      dict(_ACRYLIC_0355255, unit="parts/hour",
+                                         evidence="stated on his sheet for the two-bend "
+                                                  "A01 — the figure as he gave it"),
     "linebend_min_per_bend":        dict(_ACRYLIC_0355255, unit="minutes/bend",
-                                         evidence="60 parts/hour on the two-bend A01"),
+                                         evidence="DERIVED by this engine from the stated "
+                                                  "60 parts/hour on the two-bend A01 "
+                                                  "(60/hr ÷ 2 bends); not itself a shop "
+                                                  "statement — confirm per-bend generality "
+                                                  "with Howard to upgrade it"),
     "laser_acrylic_parts_per_hour": dict(_ACRYLIC_0355255, unit="parts/hour",
                                          evidence="his manual estimate's own laser rate, "
                                                   "against 252 from 13 corpus lines"),
