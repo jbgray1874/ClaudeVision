@@ -70,8 +70,8 @@ def test_a_quoted_spec_still_wins_over_the_zinc_card():
     zinc card and a decorative brass is a different product, sixteen to one. A named spec
     stops the card dead — it just no longer charges a figure from source instead."""
     unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED Harrods01", ("7332-01",))
-    assert method == "subcontract_plating_quote_needed"
-    assert unit is None, "and emphatically not the £15.83 the zinc card would have charged"
+    assert method == "subcontract_plating_historical_comparator"
+    assert unit == 250.00, "and emphatically not the £15.83 the zinc card would have charged"
 
 
 # ── and a blocked line hands over everything needed to settle it ─────────────────────────

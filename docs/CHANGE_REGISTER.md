@@ -29,6 +29,59 @@ job's confirmed reading, governing that job only.
 independent job or the department itself confirms it. That distinction is what D-045 got
 wrong and is why this table carries the basis and the scope in their own columns.
 
+### Non-negotiable pricing policy
+
+**The engine learns methods and evidence; it does not copy an old estimate into a new one.**
+Code may decide *how* to price—quantity, yield, route, setup allocation and applicability—but a
+job-specific amount must not become an automatically chargeable code constant.
+
+Prices are resolved and printed in this order, with the winning source, date and scope shown
+on the line:
+
+1. **Exact current SDI Live / UDEF purchase or SKU price.**
+2. **Exact current supplier catalogue or connected supplier API price.**
+3. **A current quote or confirmed price for this job.**
+4. **A matched historical SDI estimate**, identified by job, date, supplier/specification and
+   match basis. It may price a new job as a *historical comparator/inference*, never as an
+   unlabelled standing rate.
+5. **LLM market research/estimate** when no better source exists. It is still a price, but
+   must be labelled indicative and retain its evidence/date so an estimator can replace it.
+
+The drawing, DXF and SolidWorks files determine the required item, geometry and route; they
+do not turn a supplier quote from another job into a current price. A named finish may identify
+the process, but does not by itself inherit a previous job's amount. Where the source is old,
+missing or inferred, the estimate still prices the work and explains that basis rather than
+silently omitting it.
+
+### Configuration and pricing logic
+
+**Configuration is SDI's named knowledge register, not a second estimating engine.**
+
+A value belongs in configuration only when it is reusable, named and evidenced: for example a
+material family, stocked sheet size, supplier/SKU mapping, department rate, approved routing
+method, packing rule, customer commercial term, or a dated stated figure. Each entry must carry
+a meaningful variable/key name plus source, owner, date, scope and review status.
+
+Pricing calculations and decision logic must be centralised in the engine's pricing modules.
+The configuration supplies the facts and rules they consume; it must not hide bespoke
+calculation code or silently embed a prior job's price.
+
+The estimate workbook remains authoritative for its own formulas, template layout and visible
+quantity-break calculations. The engine must populate it with traceable inputs and read back
+the resulting figures; it must not recreate divergent spreadsheet logic in configuration or
+code.
+
+A new pricing-related setting must answer all of these:
+
+- What does this value represent, in plain estimator language?
+- Is it a reusable rule, a current price, a historic comparator, or a job-only answer?
+- What source supports it, and when was that source current?
+- Which materials, departments, customers, products or job families may use it?
+- What supersedes it, and how is a disagreement shown to the estimator?
+
+Job-specific confirmations and quotes remain beside that job's drawings. They must never be
+promoted to shared configuration merely because they produced a good result once.
+
 | Rule | Type | Applies to — and NOT to | Source, date, stated or derived | Quantity / setup basis | Proven on | Commit | Status |
 |---|---|---|---|---|---|---|---|
 | Roll goods price by the length used | engine rule | anything on a roll with a catalogued roll length. NOT bulk or sheet stock | Howard Thurley, 9 Sep 2026 — **stated** (roll length); price live from SDI Live | per unit, by length | 10975-02 16:38 book, tape £0.2808 | `5ee2da9` | verified |
@@ -58,6 +111,8 @@ disproved it) → superseded.
 
 | ID | Date | Estimator / source | Job | Finding | Decision / rule | Scope | Implemented in | Commit | Proven by | Status |
 |---|---|---|---|---|---|---|---|---|---|---|
+| D-058 | 16 Sep 2026 | James Gray — architecture decision | all jobs | Estimator feedback has shown that knowledge currently spans SDI Live, spreadsheets, source files, answers files and code. Without clear ownership, a number can become an unexplained constant or duplicate calculation. | **Configuration and pricing-logic boundary defined.** Shared, reusable, evidenced facts belong in named configuration entries; pricing calculations belong in central engine modules; workbook formulas remain the workbook's authority. Every shared entry needs source, date, owner, scope and review status. | generic architecture rule; job answers remain job-scoped | policy recorded in Part 1; existing config entries need audit and classification | — | verify through the SDI Estimating Intelligence architecture page and future estimate provenance | **implementation/audit required** |
+| D-057 | 16 Sep 2026 | James Gray — pricing-policy decision | all jobs | The Harrods 01 £250 figure exposed a design risk: it was a valid supplier figure for 7332-01, but source code could charge it on a future job merely because the finish name matched. That copies an old estimate rather than learning from it. | **Price-source hierarchy added to the operating guide.** SDI Live/UDEF and supplier data are preferred; a current job quote may price that job; historic sheets can be used as dated, identified comparators/inferences; and LLM market research remains a labelled last-resort price. The price line must state which source won. A previous job's supplier figure may identify a likely process or provide a transparent historical comparator, but must not become an unlabelled automatic price on a new job | generic safeguard; job quotes remain job-scoped | policy recorded in Part 1; D-056 removed the chargeable constant | `this commit` | `test_a_named_plate_spec_is_a_quoted_price`, `test_a_decision_made_once_is_made_once` | **implemented — awaiting live proof.** Clauses 1–3: `gbp_per_unit` is gone from `NAMED_PLATE_SPECS.HARRODS01` entirely (D-056), SDI Live is asked first, and this job's answers file outranks everything below it. Clause 4: with no live price the line now PRICES from the last quote as a labelled historical comparator — £250, 7332-01, 9 Sep 2026, "NOT a current price", why no better source won, and what to do — carried into the sheet's own description column, because a comparator that reads "plating" by the time an estimator sees it is an unlabelled standing rate whatever the note said upstream. A first cut returned NOT PRICED and was wrong: a £0 plating line understates a decorative-brass unit by most of its value |
 | D-056 | 16 Sep 2026 | James Gray | 7332-01 | **£250 was a numeric literal in source and the engine charged from it.** Revoking the customer-keyed inheritance (D-053) did not stop that, and marking the entry `priced_per_job` did not either — those were labels, and `plating_unit_price` never saw a job to check them against, so any drawing naming Harrods01 still inherited 7332-01's quote. James: "the engine must learn methods, conditions, and evidence, not copy a manual estimate's numbers into the next estimate… prices should live in a versioned, attributable price register or live system connector — not as numeric literals in Python configuration. Code should contain the pricing MECHANISM; data should contain approved rates, dates, scope, source, and expiry" | The entry keeps the KNOWLEDGE and loses the rate. What it teaches: "Harrods 01" is a **decorative** requirement, so the £/kg zinc card must not price it (the original defect, sixteen to one); and it is **quoted per job**. `gbp_per_unit` is gone from the entry entirely, so nothing can charge from it. The figure is asked of SDI's own sources at run time like the tape's roll price; where they cannot answer the line is NOT PRICED and asks for the plater's current figure, showing the last quote (£250, 7332-01, 9 Sep 2026) as dated context marked "for reference, not applied". A job-specific quote belongs in that job's answers file, which already has a path for it. **Not even 7332-01 prices from source** | generic | `config.NAMED_PLATE_SPECS` (rate removed, method kept), `estimator.plating_unit_price` (live lookup → ask), specs-on-file listing | `this commit` | `test_a_named_plate_spec_is_a_quoted_price` (a live price prices it; nothing in the sources means an ask; the entry carries no chargeable rate), `test_a_decision_made_once_is_made_once`, `test_the_card_only_prices_the_plating_it_is_a_card_for` (the zinc card is still stopped dead) | implemented |
 | D-055 | 16 Sep 2026 | James Gray's reviewer (13:47 assessment) | 0355255 | The Rev box was blank beside a filename that says REV B. The pattern required "_rev" immediately followed by the letter and searched only the PDF title or the caller's stem — both real packs defeat it: "10975_REV B" has a space, "_Rev_A_" an underscore, and neither is the stem it was given | The separator may be space, dot, dash or underscore; the drawings' own names are searched as well as the title and the stem; and the token must END there, so "REVERSE PANEL" is not Rev E. Both real packs now read (10975-02 Rev B, 11908-21 Rev A) | generic | `client_quote_html._drawing_identity` (revision) | `this commit` | `test_the_pack_names_the_unit` | implemented — verify on the rerun |
 | D-054 | 16 Sep 2026 | Traced in session (13:47 book, four runs) | 0355255 | The tape blocked as `10975EPDMCLOSEDCELL` through FOUR builds. Every fix chased where a WITHHELD FLAG lived — set it on the record (D-041), record the names it answers to (D-044), close those names over the job (D-050) — and each failed identically, because a flag written in one place has to survive to another and on this job it does not | **The flag was never the evidence.** The sheet is: this line is priced by the roll-goods length arithmetic off SDI Live, £0.28, reproducible between runs. A line whose APPLIED price came from a reproducible source cannot also be a line costed by an AI market estimate — the money that reached the total came from the catalogue and the market figure beside it is a rival that lost. True whatever any flag says, and true under every spelling, because the aliases come from the job's own records. Narrow: only a reproducible APPLIED price on the SAME line clears it, so 11350's £86.04 with nothing behind it still blocks | generic | `invariants.check_prices_are_reproducible` (alias groups + reproducibly-priced set) | `this commit` | `test_a_displaced_price_stays_displaced_under_every_name` (the live shape with NO flag anywhere; a catalogue price on a different line clears nothing) | implemented — verify on the rerun |

@@ -1564,21 +1564,35 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
                     f"price for the named spec and not the per-kilo rate ({_live_label or 'source not named'})",
                     "subcontract_plating_named_spec")
         if _spec.get("requires_quote"):
-            # NOT PRICED, AND THE LAST QUOTE SHOWN AS CONTEXT. A figure a person can act on,
-            # never money the engine charges — the whole point of keeping the knowledge and
-            # dropping the literal.
+            # NO LIVE PRICE — SO THE LAST QUOTE PRICES IT, LABELLED AS WHAT IT IS.
+            #
+            # The first cut of this returned None, and a plating line at £0 understates the
+            # sheet by whatever the plating costs, which on a decorative brass is most of
+            # the unit. The pricing policy is explicit about the choice: "where the source is
+            # old, missing or inferred, the estimate still prices the work and explains that
+            # basis rather than silently omitting it", and a previous job's figure "may
+            # provide a transparent historical comparator, but must not become an UNLABELLED
+            # automatic price".
+            #
+            # So it prices, and every word of the label is the difference between the two:
+            # the job it was quoted for, the date, the supplier, and that it is a comparator
+            # to be replaced. Source priority is intact — SDI Live was asked first and could
+            # not answer; a figure in this job's answers file outranks this line entirely.
             _lk = _spec.get("last_known_quote") or {}
-            _lk_bit = ""
-            if _safe_float(_lk.get("gbp_per_unit")):
-                _lk_bit = (f" The last quote we hold is £{float(_lk['gbp_per_unit']):.2f} a "
-                           f"unit for {_lk.get('job') or 'an earlier job'} on "
-                           f"{_lk.get('on') or 'an unrecorded date'} "
-                           f"({_lk.get('source') or 'source not recorded'}) — for reference, "
-                           f"not applied.")
+            _lk_gbp = _safe_float(_lk.get("gbp_per_unit"))
+            if _lk_gbp:
+                return (round(float(_lk_gbp), 2),
+                        f"{_spec.get('label') or _code} — £{float(_lk_gbp):.2f} per unit, a "
+                        f"HISTORICAL COMPARATOR from {_lk.get('job') or 'an earlier job'} "
+                        f"({_lk.get('on') or 'date not recorded'}, "
+                        f"{_lk.get('source') or 'source not recorded'}), NOT a current "
+                        f"price and not the per-kilo zinc card. Nothing in SDI Live answered "
+                        f"for this spec. {_spec.get('confirm') or 'Plating is quoted job by job'}",
+                        "subcontract_plating_historical_comparator")
             return (None,
                     f"{_spec.get('label') or _code} — a named decorative plating "
                     f"requirement, NOT the zinc/passivate card. NOT PRICED: "
-                    f"{_spec.get('confirm') or 'plating is quoted job by job'}.{_lk_bit}",
+                    f"{_spec.get('confirm') or 'plating is quoted job by job'}",
                     "subcontract_plating_quote_needed")
         if _safe_float(_spec.get("gbp_per_unit")):
             _unit = round(float(_spec["gbp_per_unit"]), 2)
@@ -1904,6 +1918,12 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             pe["description"] = (
                 f"{_pn_plate} plating — SPEC NOT IDENTIFIED: the drawing names a plate but "
                 f"not which plate. NOT PRICED — confirm the process with the plater").strip()
+        elif method == "subcontract_plating_historical_comparator":
+            # THE LABEL IS THE WHOLE DIFFERENCE, SO IT HAS TO REACH THE SHEET. A comparator
+            # that prices £250 and reads "plating" in the description column is an unlabelled
+            # standing rate by the time an estimator sees it, whatever the note said upstream.
+            _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
+            pe["description"] = f"{_pn_plate} plating — {note}".strip()
         elif method == "subcontract_plating_quote_needed":
             # THE SPEC IS KNOWN AND THE PRICE IS NOT OURS TO REUSE. Distinct from the
             # unidentified case on purpose: there the question is "which plate?", here it
@@ -1940,6 +1960,7 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
         # A list that is wrong in a direction that costs nothing is still wrong, and it is
         # the list an estimator checks the £250 against.
         _per_unit_price = method in ("subcontract_plating_named_spec",
+                                     "subcontract_plating_historical_comparator",
                                      "estimator_stated_price",
                                      "inherited_estimator_decision")
         if _per_unit_price and (_contrib or _deferred):

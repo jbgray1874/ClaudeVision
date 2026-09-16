@@ -119,9 +119,10 @@ def test_a_drawing_that_states_its_own_process_is_read_not_overruled():
     assert line["unit_cost_gbp"] == 15.83
 
 
-def test_a_drawing_naming_the_spec_is_read_and_then_asks_its_price():
+def test_a_drawing_naming_the_spec_is_read_and_priced_as_a_comparator():
     """The pack still outranks everything for IDENTIFICATION — a drawing naming Harrods 01
-    is read, not overruled. What follows is an ask, because the price is not ours to reuse."""
+    is read, not overruled — and the line is then priced from the labelled comparator rather
+    than left at £0, with the ask attached."""
     parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
               "normalized_finish": "HARRODS 01", "is_assembly_parent": True, "quantity": 1,
               "material_estimate": {"unit_material_mass_kg": 0.9}},
@@ -131,8 +132,8 @@ def test_a_drawing_naming_the_spec_is_read_and_then_asks_its_price():
     apply_subcontract_plating(parts, {"customer": "Harrods"}, 6, parts)
     _desc = str(parts[1].get("description") or "")
     assert "Harrods 01" in _desc, "the spec the drawing names is read"
-    assert "NOT PRICED" in _desc
-    assert parts[1].get("unit_cost_gbp") in (0.0, None)
+    assert "HISTORICAL COMPARATOR" in _desc and "NOT a current price" in _desc
+    assert parts[1].get("unit_cost_gbp") == 250.00
 
 
 # ── it says where it came from, every time ───────────────────────────────────────────────
@@ -255,39 +256,44 @@ def test_it_delegates_rather_than_copying_the_rule():
 
 from estimator import job_identity_codes, plating_unit_price      # noqa: E402
 
-_POLICY = {"gbp_per_kg": 2.50, "vat_minimum_gbp": 95.0}
+# The real card, because its `rate_covers` is what stops zinc pricing a brass — a
+# stripped-down fixture silently disables the guard these tests are about.
+_POLICY = config.PLATE_SUBCONTRACT_POLICY
 
 
-def test_not_even_the_job_it_was_quoted_for_prices_from_source():
+def test_no_job_charges_it_as_a_rate_any_more():
     """Scoping the figure to its own job was the first correction and not the last one:
-    James, 16 Sep — "prices should live in a versioned, attributable price register or live
-    system connector, not as numeric literals in Python configuration". So 7332-01 asks too,
-    and its own answers file is where its plater quote belongs."""
-    unit, _, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("7332-01",))
-    assert unit is None
-    assert method == "subcontract_plating_quote_needed"
+    "prices should live in a versioned, attributable price register or live system
+    connector, not as numeric literals in Python configuration". The entry carries no
+    chargeable rate at all now — what reaches the sheet is a labelled comparator, and a
+    figure in this job's answers file outranks it."""
+    for job in (("7332-01",), ("9001-01",), ()):
+        _, _, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", job)
+        assert method == "subcontract_plating_historical_comparator", job
+    assert "gbp_per_unit" not in config.NAMED_PLATE_SPECS["HARRODS01"]
 
 
-def test_another_job_naming_the_same_spec_is_not_priced_from_it():
-    """THE DEFECT. A future Harrods 01 drawing silently inheriting 7332-01's quote is
-    exactly what Howard revoked: "£250.00 is from supplier per unit and is independent of
-    any other job"."""
+def test_another_job_never_inherits_it_SILENTLY():
+    """THE DEFECT, and the exact shape of the fix. Howard revoked the inheritance — "£250.00
+    is from supplier per unit and is independent of any other job" — and the policy says the
+    work is still priced and the basis explained. Both hold at once only because the line
+    says, in terms, that this is another job's figure."""
     unit, note, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("9001-01",))
-    assert unit is None
-    assert method == "subcontract_plating_quote_needed"
-    assert "NOT PRICED" in note
-    assert "7332-01" in note, "it says whose quote the reference figure was"
+    assert unit == 250.00, "priced, because a £0 plating line understates the sheet"
+    assert method == "subcontract_plating_historical_comparator"
+    assert "HISTORICAL COMPARATOR" in note and "NOT a current price" in note
+    assert "7332-01" in note, "it says whose quote the figure was"
     assert "job by job" in note
 
 
-def test_a_job_we_cannot_identify_is_not_a_match():
-    """The safe direction is to ask for a quote, never to apply somebody else's."""
-    assert plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ())[0] is None
+def test_the_spec_must_still_be_named_by_the_drawing():
+    """The comparator is reached by the PACK naming the spec. A drawing that says only
+    "PLATED" names no spec and reaches none of this — it blocks, as it always did."""
+    unit, _, method = plating_unit_price(2.4, 6, _POLICY, "PLATED", ("9001-01",))
+    assert unit is None and method == "subcontract_plating_spec_unidentified"
 
 
-def test_the_spec_is_still_identified_even_where_it_is_not_priced():
-    """Reading the spec off the drawing is drawing evidence and survives. What stops is the
-    figure travelling — the estimator is told WHICH plate and asked what it costs here."""
+def test_the_spec_is_named_on_the_line_wherever_it_lands():
     _, note, _ = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("9001-01",))
     assert "Harrods 01" in note
 

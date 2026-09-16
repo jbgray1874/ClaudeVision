@@ -158,7 +158,7 @@ def test_the_callout_survives_the_classifier_naming_it_something_else():
     assert "Harrods01" in text
     assert (named_plate_spec(text) or {}).get("last_known_quote", {}).get("gbp_per_unit") == 250.00
     assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[2] == \
-        "subcontract_plating_quote_needed", text
+        "subcontract_plating_historical_comparator", text
 
 
 def test_every_spelling_of_the_finish_fields_is_read():
@@ -219,20 +219,29 @@ def a_live_price(monkeypatch):
     return 250.00
 
 
-def test_a_named_spec_is_not_priced_from_config(a_live_price=None):
-    """THE CORRECTION. With nothing in the price sources, the spec is recognised and the
-    line asks — it does not charge a number that lives in source."""
+def test_with_no_live_price_it_prices_as_a_labelled_comparator():
+    """THE POLICY, clause 4 and its closing sentence: "where the source is old, missing or
+    inferred, the estimate still prices the work and explains that basis rather than
+    silently omitting it". A first cut of this returned None, and a plating line at £0
+    understates the sheet by most of the unit on a decorative brass."""
     unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
-    assert unit is None
-    assert method == "subcontract_plating_quote_needed"
-    assert "NOT the zinc/passivate card" in note, "the learned fact survives"
-    assert "quoted job by job" in note
+    assert unit == 250.00
+    assert method == "subcontract_plating_historical_comparator"
+    assert "not the per-kilo zinc card" in note, "the learned fact survives"
 
 
-def test_the_last_quote_is_shown_for_reference_and_not_applied():
+def test_every_word_that_stops_it_being_an_unlabelled_standing_rate():
+    """"A previous job's supplier figure may provide a transparent historical comparator,
+    but must not become an UNLABELLED automatic price." The label is the whole difference,
+    so each part of it is pinned."""
     _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
-    assert "£250.00" in note and "7332-01" in note and "9 Sep 2026" in note
-    assert "not applied" in note
+    assert "HISTORICAL COMPARATOR" in note      # what it is
+    assert "7332-01" in note                    # whose job it was
+    assert "9 Sep 2026" in note                 # when it was current
+    assert "Howard Thurley" in note             # who supplied it
+    assert "NOT a current price" in note        # what it is not
+    assert "Nothing in SDI Live answered" in note   # why a better source did not win
+    assert "quoted job by job" in note          # what to do about it
 
 
 def test_a_current_price_from_sdis_own_sources_does_price_it(a_live_price):
