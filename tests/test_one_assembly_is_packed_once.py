@@ -51,6 +51,40 @@ def test_the_tray_is_packed_once_under_its_fuller_name():
         "the spelling with the fuller parts list (it knows about the bumpers) keeps the event"
 
 
+def test_the_drawing_quantities_are_not_doubled_by_the_second_spelling():
+    """The 09:57 book's own audit: quantity OWN 1/4/4, EFFECTIVE 2/8/8, "no reason
+    recorded" — both spellings of the root cascaded one unit each into the same
+    children. The colourway collapse missed it by one bumpon: Jaccard 3/4 = 0.75
+    against its 0.8 bar. A same-spelling root whose children are CONTAINED in the
+    other's is one assembly, and the drawing's own counts stand."""
+    from route_compiler import build_part_graph
+    graph = build_part_graph(
+        [{"part_number": "11908-21", "description": "SUNGLASSES TRAY - LRG",
+          "assembly_children": ["11908-21-01J", "11908-21-02J", "FIXING1270"],
+          "is_assembly_parent": True},
+         {"part_number": "11908-21 GA", "description": "SUNGLASSES TRAY - LRG GA",
+          "assembly_children": ["11908-21-01J", "11908-21-02J"],
+          "is_assembly_parent": True},
+         {"part_number": "11908-21-01J", "description": "TRAY BASE",
+          "normalized_material": "MDF"},
+         {"part_number": "11908-21-02J", "description": "TRAY SIDE",
+          "normalized_material": "MDF"},
+         {"part_number": "FIXING1270", "description": "BUMPON 19MM", "quantity": 4}],
+        {"assemblies": [
+            {"part_number": "11908-21", "children": [
+                {"part_number": "11908-21-01J", "qty": 1},
+                {"part_number": "11908-21-02J", "qty": 4},
+                {"part_number": "FIXING1270", "qty": 4}]},
+            {"part_number": "11908-21 GA", "children": [
+                {"part_number": "11908-21-01J", "qty": 1},
+                {"part_number": "11908-21-02J", "qty": 4}]}]},
+        None, None, None)
+    q = graph["quantities"]
+    assert q.get("11908-21-01J") == 1.0, q
+    assert q.get("11908-21-02J") == 4.0, q
+    assert q.get("FIXING1270") == 4.0, q
+
+
 def test_two_genuinely_different_stands_both_pack():
     """A digit in the tail is a different drawing: GA and GA2 are two stands (7332-01),
     and folding them is how a whole BOM went out doubled once before — in reverse."""

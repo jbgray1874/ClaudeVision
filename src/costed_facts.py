@@ -1529,6 +1529,13 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
                 "label": "nothing to charge here — an assembly's material is its members'"}
     if kind == "commercial" and not money:
+        # "Delivery is not required" — Tony Ford, 16 Sep 2026 — is an ANSWER: the line's
+        # £0 is a person's decision, and asking somebody to price it on every run is how
+        # a settled question becomes a standing irritation.
+        if part.get("_commercial_excluded"):
+            return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
+                    "label": "NOT REQUIRED for this job — excluded by the estimator's "
+                             "decision; the £0 is deliberate, not missing"}
         return {"class": "unpriced_commercial", "firmness": UNPRICED, "owner": "estimator",
                 "label": "NOT PRICED — held at £0 until the estimators' own figure lands; "
                          "enter the per-unit amount"}

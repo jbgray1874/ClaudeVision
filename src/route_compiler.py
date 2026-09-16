@@ -1563,6 +1563,26 @@ def build_part_graph(
                     return ord(_mm.group(1)) - ord("A")
             return -1
 
+        # TWO SPELLINGS OF ONE ROOT ARE ONE ROOT, and the child-set overlap alone cannot
+        # see it. 11908-21 arrives as "11908-21" (the BOM's assembly — boards AND the
+        # bumpons) and "11908-21 GA" (the GA sheet's own name — boards only): Jaccard is
+        # 3/4 = 0.75, one bumpon short of the 0.8 the colourway rule asks, so BOTH
+        # cascaded and every drawing quantity doubled — base 1 costed as 2, sides and
+        # dividers 4 as 8, "no reason recorded". A root whose children are wholly
+        # CONTAINED in a same-named root's children is the same assembly seen by a
+        # narrower reader; a trailing purely-alphabetic token (GA, ASSY) is a sheet role,
+        # never a different product, while GA2's digit names a second stand and two
+        # genuinely different arrangements have disjoint children and fold on neither
+        # test.
+        def _same_assembly_spelling(_a: str, _b: str) -> bool:
+            def _strip_role(t: str) -> str:
+                return re.sub(r"[\s\-]+[A-Za-z]+$", "", str(t or "").strip())
+            def _bare(t: str) -> str:
+                return re.sub(r"[\s\-]+", "", str(t or "").upper())
+            return _bare(_strip_role(_a)) == _bare(_strip_role(_b)) \
+                or _bare(_strip_role(_a)) == _bare(_b) \
+                or _bare(_a) == _bare(_strip_role(_b))
+
         _by_stem: Dict[str, List[str]] = {}
         for _r in top_ids:
             _by_stem.setdefault(_assembly_stem(_r), []).append(_r)
@@ -1570,7 +1590,8 @@ def build_part_graph(
         for _stem, _group in _by_stem.items():
             if not _stem or len(_group) < 2:
                 continue
-            # cluster the same-stem roots by near-identical child set (Jaccard >= 0.8)
+            # cluster the same-stem roots by near-identical child set (Jaccard >= 0.8),
+            # or by containment where the two names are one assembly's spellings
             _clusters: List[List[str]] = []
             for _r in _group:
                 _kids = frozenset(children.get(_r) or {})
@@ -1579,7 +1600,9 @@ def build_part_graph(
                 for _cl in _clusters:
                     _ref = frozenset(children.get(_cl[0]) or {})
                     _union = _kids | _ref
-                    if _union and len(_kids & _ref) / len(_union) >= 0.8:
+                    if _union and (len(_kids & _ref) / len(_union) >= 0.8
+                                   or ((_kids <= _ref or _ref <= _kids)
+                                       and _same_assembly_spelling(_r, _cl[0]))):
                         _cl.append(_r)
                         break
                 else:

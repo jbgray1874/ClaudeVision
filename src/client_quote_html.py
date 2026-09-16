@@ -854,6 +854,26 @@ def _is_an_engine_note(text: Any) -> bool:
     return t.strip(" .-–—()") in _BARE_KINDS
 
 
+def _reads_as_an_instruction(text: Any) -> bool:
+    """True when a 'title' is a manufacturing note wearing the title box's clothes.
+
+    11908-21's quotation went out headed "QTY FILL ANY OPEN GAPS ON CORNERS WITH
+    MATCHING WAX" — a drawing note the extractor filed as the title, printed as the
+    PRODUCT NAME on a customer document. A product name names a thing; an instruction
+    commands one, and the imperative verbs are the tell. Judged on words, never on this
+    job: "FILL", "CHECK", "ENSURE" head notes on every SDI drawing, and no SDI product
+    is called any of them.
+    """
+    t = str(text or "").strip().upper()
+    if not t:
+        return False
+    _IMPERATIVES = ("FILL ", "CHECK ", "ENSURE ", "DO NOT", "APPLY ", "REMOVE ",
+                    "ALLOW ", "REFER TO", "SEE SHEET", "SEE DRAWING", "MUST BE",
+                    "TO BE ", "NOTE:", "ALL DIMENSIONS")
+    _t_body = re.sub(r"^QTY\.?\s+", "", t)      # a swallowed column header before a note
+    return any(_t_body.startswith(w) for w in _IMPERATIVES)
+
+
 def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     """(drawing number, revision, unit description) for the quotation header.
 
@@ -869,6 +889,11 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     _number = str(_di.get("drawing_number") or "").strip()
     _rev_raw = str(_di.get("revision") or "").strip()
     _title = str(_di.get("title") or "").strip()
+    # A NOTE IS NOT A NAME. Cleared here, at the source, so the top-assembly fallback
+    # below supplies the draughtsman's own description instead — the same path a blank
+    # title has always taken.
+    if _reads_as_an_instruction(_title):
+        _title = ""
     _project = str(_di.get("project") or "").strip()
 
     # The canonical top assembly is the next best statement of what the unit IS: it is the

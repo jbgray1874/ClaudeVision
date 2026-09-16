@@ -278,6 +278,12 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
             price_provenance.NOT_APPLICABLE,
             "FREE-ISSUE: the customer supplies this item, so the nil is on purpose. "
             "Confirm free issue with the customer; do not price it")
+    # "Delivery is not required" is an estimator's ruling, recorded through the answers
+    # file — the £0 is the decision, and it comes off the outstanding list for good.
+    if part.get("_commercial_excluded"):
+        return price_provenance.unpriced_reason(
+            price_provenance.NOT_APPLICABLE,
+            "EXCLUDED by the estimator's recorded decision — not required for this job")
     # A REPRODUCIBLE GUESS IS KEPT OFF THE COLUMN ON PURPOSE. A figure exists and we have
     # decided not to stand behind it, which is the one category where the blank is a policy.
     if part.get("_ai_indicative_gbp"):

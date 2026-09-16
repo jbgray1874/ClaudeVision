@@ -8462,11 +8462,37 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         # makes the BOM complete (these lines are never silently omitted) without
         # inventing a number. Reconciled so they are not added twice if a re-estimate runs.
         _existing_now = {str(p.get("part_number", "")).strip().upper() for p in parts if p.get("part_number")}
+        _dec_block = (summary or {}).get("estimator_decisions") or {}
+        _excluded_cl = {str(c).strip().upper()
+                        for c in (_dec_block.get("commercial_excluded") or [])}
         for _code, _desc in (
             ("PACKAGING", "Packaging (box / pallet — per-unit share, estimator to price)"),
             ("DELIVERY", "Delivery (per-unit share of order haulage — estimator to price)"),
         ):
             if _code in _existing_now:
+                continue
+            # AN ESTIMATOR'S "NOT REQUIRED" IS AN ANSWER, NOT A GAP. Tony: "Delivery is
+            # not required" — and the line still went out as "estimator to price", an
+            # open question on every run of a job whose answer was already given. An
+            # excluded line stays ON the sheet at a deliberate £0 saying whose call it
+            # was; absence would read as forgotten.
+            if _code in _excluded_cl:
+                _who_x = str(_dec_block.get("decided_by") or "the estimator")
+                _stub = _bought_in_part_stub(
+                    _code, f"{_code.capitalize()} — NOT REQUIRED for this job "
+                           f"(excluded by {_who_x}; a decision, not a missing price)", 1)
+                _stub["source"] = "commercial_placeholder"
+                _stub["_commercial_excluded"] = True
+                _stub["price_verified"] = True
+                _stub["unit_cost_gbp"] = 0.0
+                _stub["unit_material_cost_gbp"] = 0.0
+                _stub["extended_total_cost_gbp"] = 0.0
+                _stub.setdefault("review_flags", []).append(
+                    f"{_code}: excluded by {_who_x} — not required for this job. The £0 "
+                    f"is the decision, not a gap.")
+                parts.append(_stub)
+                print(f"   [commercial] {_code} EXCLUDED — {_who_x}'s decision: not "
+                      f"required for this job", flush=True)
                 continue
             # ASKED, NOT DERIVED — AND NOT LEFT AT ZERO. The comment above is right that the
             # engine cannot DERIVE these from the drawings, and wrong that it therefore has

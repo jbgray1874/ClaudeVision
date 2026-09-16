@@ -382,7 +382,7 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
 # homes answer two different questions: "how does SDI work" and "what did we decide about
 # this stand".
 _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
-                  "throughput_per_hour")
+                  "throughput_per_hour", "commercial_excluded")
 
 
 def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], List[str]]:
@@ -429,6 +429,28 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                     clean_off[str(code).strip().upper()] = names
             if clean_off:
                 out["operations_off"] = clean_off
+
+    # "Delivery is not required" — a commercial line an estimator has RULED OUT for this
+    # job. The line stays on the sheet at a deliberate £0 naming whose call it was;
+    # excluding it here beats a standing "estimator to price" ask on every run.
+    _exc = block.get("commercial_excluded")
+    if _exc is not None:
+        if isinstance(_exc, str):
+            _exc = [_exc]
+        if not isinstance(_exc, (list, tuple)):
+            problems.append("estimator_decisions.commercial_excluded: expected a list of "
+                            "line codes (e.g. [\"DELIVERY\"]) — ignored")
+        else:
+            _codes = [str(c).strip().upper() for c in _exc if str(c).strip()]
+            _known = {"PACKAGING", "DELIVERY", "CARRIAGE", "FREIGHT"}
+            _bad = [c for c in _codes if c not in _known]
+            for _b in _bad:
+                problems.append(f"estimator_decisions.commercial_excluded: '{_b}' is not "
+                                f"a commercial line this engine mints "
+                                f"({', '.join(sorted(_known))}) — that entry did nothing")
+            _good = [c for c in _codes if c in _known]
+            if _good:
+                out["commercial_excluded"] = _good
 
     _tp = block.get("throughput_per_hour")
     if _tp is not None:

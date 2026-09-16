@@ -3607,6 +3607,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                           or summary.get("order_quantity")
                           or (summary.get("estimate_summary") or {}).get("assumed_job_quantity")
                           or 180) or 180)
+    # THE QUANTITY ASKED FOR IS THE QUANTITY WRITTEN, OR THE SHEET SAYS SO. Two runs of
+    # 11908-21 went out at 1-off against a --order-qty 50 command; nothing anywhere said
+    # the request had been lost, and the reviewer found it by opening D6. The request
+    # travels as SDI_ORDER_QTY; when it exists and the cell about to be written disagrees,
+    # that is a run-level fault and it is said as one.
+    _req_qty = os.getenv("SDI_ORDER_QTY", "").strip()
+    if _req_qty.isdigit() and int(_req_qty) != order_qty:
+        _flag(f"ORDER QTY MISMATCH: the run asked for {_req_qty} (--order-qty / "
+              f"SDI_ORDER_QTY) and Estimate D6 is being written at {order_qty} — the "
+              f"request did not reach the costed record. The sheet is NOT the quantity "
+              f"asked for.", flags)
+
     _customer_name = (summary.get("customer") or summary.get("client")
                       or client_from_job_folder(summary) or job_folder_name)
     ws[hdr["customer"]]   = _customer_name
