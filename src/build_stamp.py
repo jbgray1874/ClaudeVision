@@ -87,7 +87,7 @@ def build_stamp(refresh: bool = False) -> Dict[str, Any]:
     if _CACHE is not None and not refresh:
         return _CACHE
     stamp: Dict[str, Any] = {"commit": "", "commit_date": "", "dirty": None,
-                             "source_digest": "", "module_count": 0}
+                             "untracked_files": 0, "source_digest": "", "module_count": 0}
     stamp.update(_source_digest())
     commit = _git("rev-parse", "--short=7", "HEAD")
     if commit:
@@ -96,7 +96,21 @@ def build_stamp(refresh: bool = False) -> Dict[str, Any]:
         # A tree with uncommitted edits is NOT the commit it claims to be, and saying so
         # is the difference between "your fix is in" and "your fix is in, plus whatever
         # else is sitting in the working tree".
-        stamp["dirty"] = bool(_git("status", "--porcelain"))
+        #
+        # TRACKED CHANGES ONLY — the same lesson engine_build.py already paid for, missed
+        # here. Plain `git status --porcelain` lists untracked files as `??`, so a drawing
+        # pack, the workbook a run just wrote or an answers file placed beside the drawings
+        # branded every estimate "+local edits" — a claim about the ENGINE, made from files
+        # the engine never imported. A stamp that cries wolf on every real machine goes
+        # unread on the day the tree genuinely is modified.
+        #
+        # Narrowing this loses nothing: an untracked .py dropped into src/ cannot hide,
+        # because the SOURCE DIGEST above hashes every module on the import path whether
+        # git has ever heard of it or not. Loose files are still counted and reported —
+        # as loose files, which is what they are.
+        stamp["dirty"] = bool(_git("status", "--porcelain", "--untracked-files=no"))
+        stamp["untracked_files"] = len([ln for ln in _git("status", "--porcelain").splitlines()
+                                        if ln.startswith("??")])
     _CACHE = stamp
     return stamp
 
@@ -109,7 +123,12 @@ def build_stamp_line() -> str:
     s = build_stamp()
     head = f"{s['commit']}{' +local edits' if s.get('dirty') else ''}" if s.get("commit") \
         else "no git checkout"
-    return f"{head} · src {s.get('source_digest') or '?'} ({s.get('module_count', 0)} modules)"
+    line = f"{head} · src {s.get('source_digest') or '?'} ({s.get('module_count', 0)} modules)"
+    if s.get("commit") and not s.get("dirty") and s.get("untracked_files"):
+        # Worth saying, and deliberately a different sentence from "+local edits": loose
+        # material in the folder is not a modified engine.
+        line += f" · {s['untracked_files']} loose file(s) in the tree, none of them the engine"
+    return line
 
 
 def print_build_stamp() -> None:

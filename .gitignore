@@ -42,6 +42,25 @@ input/
 *.xls
 *.xlsx
 
+# CAD exports are job data exactly as PDFs are — a DXF carries the customer's geometry.
+# The fixtures under tests/ are already TRACKED, and a tracked file is unaffected by an
+# ignore, so this costs the replay harness nothing.
+*.dxf
+*.DXF
+*.dwg
+*.DWG
+
+# Generated deliverables. Named narrowly, NOT as a blanket *.html: docs/, reports/ and
+# sdi-intelligence-backend/ are full of hand-written HTML that must stay committable, and
+# the lesson at the foot of this file is that a broad ignore is a trap for the next file.
+# These four patterns are what the engine itself writes beside a job:
+#   job_report_html.py -> {stem}_report.html      client_quote_html.py -> {safe}_quote.html
+#   also *_quote_LLM-ONLY.html and *.estimate_report.html
+*_report.html
+*.estimate_report.html
+*_quote.html
+*_quote_LLM-ONLY.html
+
 # ── Backups / scratch ────────────────────────────────────────────────────
 *.bak
 *.bak_*

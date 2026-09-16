@@ -109,6 +109,70 @@ def test_git_being_unavailable_is_still_not_a_claim_of_cleanliness(monkeypatch):
     assert "could not tell" in engine_build.one_line(b)
 
 
+# ── the SAME defect lived on in the workbook/report stamp (build_stamp.py) ──────────────
+#
+# engine_build.py learned this lesson and build_stamp.py did not: the "Build:" line on the
+# estimation report and the console banner still asked plain `git status --porcelain`, so a
+# drawing pack, an answers file placed beside the drawings, or the workbook a run had just
+# written stamped every deliverable "+local edits" — on the 10975-02 runner, on the very
+# rerun meant to prove which build made the book.
+
+import build_stamp  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_stamp():
+    build_stamp._CACHE = None
+    yield
+    build_stamp._CACHE = None
+
+
+def _stamp_git(tracked, all_out):
+    def fake(*args):
+        if args[0] == "rev-parse":
+            return "abc1234"
+        if args[0] == "log":
+            return "2026-09-16T00:00:00+01:00"
+        if args[0] == "status":
+            return tracked if "--untracked-files=no" in args else all_out
+        return ""
+    return fake
+
+
+def test_a_loose_file_does_not_stamp_the_book_with_local_edits(monkeypatch):
+    monkeypatch.setattr(build_stamp, "_git",
+                        _stamp_git("", "?? 10975-02_confirmed.json\n?? drawing.pdf"))
+    s = build_stamp.build_stamp(refresh=True)
+    assert s["dirty"] is False
+    line = build_stamp.build_stamp_line()
+    assert "+local edits" not in line
+    assert "2 loose file(s)" in line, "counted and said out loud, as what they are"
+
+
+def test_a_modified_tracked_file_still_stamps_local_edits(monkeypatch):
+    """The alarm the stamp exists for must still fire."""
+    monkeypatch.setattr(build_stamp, "_git",
+                        _stamp_git(" M src/estimator.py", " M src/estimator.py\n?? notes.md"))
+    assert build_stamp.build_stamp(refresh=True)["dirty"] is True
+    assert "+local edits" in build_stamp.build_stamp_line()
+
+
+def test_a_wholly_clean_tree_says_only_the_identity(monkeypatch):
+    monkeypatch.setattr(build_stamp, "_git", _stamp_git("", ""))
+    build_stamp.build_stamp(refresh=True)
+    line = build_stamp.build_stamp_line()
+    assert "loose" not in line and "+local edits" not in line
+
+
+def test_the_book_stamp_asks_the_tracked_files_only_question():
+    """Stated against the source, for the same reason as the engine_build pin below: the
+    mutant that drops the flag is wrong only on machines with loose files — every real
+    runner, never the test machine."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "build_stamp.py"),
+               encoding="utf-8").read()
+    assert '"status", "--porcelain", "--untracked-files=no"' in src
+
+
 def test_the_reproducibility_question_is_asked_of_tracked_files_only():
     """Stated against the source, because the whole defect was one missing flag and a mutant
     that drops it produces a stamp that is wrong only on machines with loose files — which is
