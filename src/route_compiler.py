@@ -1570,18 +1570,22 @@ def build_part_graph(
         # cascaded and every drawing quantity doubled — base 1 costed as 2, sides and
         # dividers 4 as 8, "no reason recorded". A root whose children are wholly
         # CONTAINED in a same-named root's children is the same assembly seen by a
-        # narrower reader; a trailing purely-alphabetic token (GA, ASSY) is a sheet role,
-        # never a different product, while GA2's digit names a second stand and two
-        # genuinely different arrangements have disjoint children and fold on neither
-        # test.
+        # narrower reader — but ONLY when the extra token is a named SHEET ROLE
+        # (part_code_conventions.ASSEMBLY_ROLE_TOKENS). The first cut stripped any
+        # trailing word and merged ABC-LEFT into ABC-RIGHT, deleting a real assembly:
+        # LEFT is a hand, not a role, and no containment test excuses folding it.
         def _same_assembly_spelling(_a: str, _b: str) -> bool:
-            def _strip_role(t: str) -> str:
-                return re.sub(r"[\s\-]+[A-Za-z]+$", "", str(t or "").strip())
+            try:
+                from part_code_conventions import strip_assembly_role as _strip_role
+            except Exception:                                        # noqa: BLE001
+                return False          # no convention, no fold — losing a root is worse
             def _bare(t: str) -> str:
                 return re.sub(r"[\s\-]+", "", str(t or "").upper())
-            return _bare(_strip_role(_a)) == _bare(_strip_role(_b)) \
-                or _bare(_strip_role(_a)) == _bare(_b) \
-                or _bare(_a) == _bare(_strip_role(_b))
+            _sa, _sb = _strip_role(_a), _strip_role(_b)
+            if _sa == str(_a).strip() and _sb == str(_b).strip():
+                return False          # neither carries a role token — different products
+            return _bare(_sa) == _bare(_sb) or _bare(_sa) == _bare(_b) \
+                or _bare(_a) == _bare(_sb)
 
         _by_stem: Dict[str, List[str]] = {}
         for _r in top_ids:
@@ -3435,20 +3439,18 @@ def compile_job_route(
     # incl. the bumpers) and "11908-21 GA" (the GA sheet's own name, children the three
     # boards) — and the loop below minted an assembly/pack event for EACH, so the sheet
     # charged two Packing Joinery rows for one tray. Two roots whose names differ only by
-    # a trailing purely-alphabetic sheet-role token (GA, ASSY) are one assembly; the one
-    # with the fuller parts list keeps the event. "GA2" is NOT such a token — a second
-    # stand is a second stand (7332-01) — because a digit in the tail names a different
-    # drawing, not a role.
+    # a NAMED sheet-role token (ASSEMBLY_ROLE_TOKENS: GA, ASSY, …) are one assembly; the
+    # one with the fuller parts list keeps the event. "GA2" is not such a token (a digit
+    # names a second stand), and neither is LEFT or RIGHT — a hand is a product, and the
+    # any-alpha version of this strip merged ABC-LEFT into ABC-RIGHT.
     def _assembly_stem(name: Any) -> str:
         text = str(name or "").strip()
-        _m = re.match(r"^(.*\d)[\s\-]+([A-Za-z]+)$", text)
-        if _m:
-            text = _m.group(1)
         try:
-            from part_code_conventions import bare_code as _bare
+            from part_code_conventions import bare_code as _bare, \
+                strip_assembly_role as _strip_role
         except Exception:                                            # noqa: BLE001
             return re.sub(r"[\s\-]+", "", text.upper())
-        return _bare(text)
+        return _bare(_strip_role(text))
 
     _stem_groups: Dict[str, List[Any]] = {}
     for node in graph["nodes"]:

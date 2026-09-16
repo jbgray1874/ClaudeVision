@@ -256,6 +256,28 @@ PACKAGING PALLET PALLETS BOX BOXES
 }
 
 
+# ── THE SHEET-ROLE SUFFIXES, BY NAME ─────────────────────────────────────────────────
+# "11908-21 GA" is the GA SHEET of assembly 11908-21 — a role, not a different product.
+# The first cut of that rule stripped ANY trailing alphabetic word, which merged
+# ABC-LEFT into ABC-RIGHT and deleted a genuine assembly whose children happened to be
+# a subset (found by review, 16 Sep 2026). LEFT, RIGHT, TOP, REAR name PRODUCTS; only
+# the words below name a sheet's role, and only these may ever be stripped when two
+# identities are compared as spellings of one assembly.
+ASSEMBLY_ROLE_TOKENS = frozenset({"GA", "ASSY", "ASSEMBLY", "ARR", "ARRANGEMENT", "GEN"})
+
+
+def strip_assembly_role(identity: str) -> str:
+    """The identity with one trailing SHEET-ROLE token removed — "11908-21 GA" and
+    "11908-21-GA" both give "11908-21"; "ABC-LEFT" is returned untouched, because LEFT
+    is a hand, not a role. Purely-alphabetic tokens only: GA2's digit names a second
+    drawing and never strips."""
+    text = str(identity or "").strip()
+    m = re.match(r"^(.*\S)[\s\-]+([A-Za-z]+)$", text)
+    if m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS:
+        return m.group(1)
+    return text
+
+
 def is_category_not_a_code(identity: str) -> bool:
     """True when the part-code column holds a CLASS of thing rather than an identifier.
 

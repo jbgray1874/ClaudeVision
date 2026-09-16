@@ -2870,14 +2870,39 @@ def _finalize_scan_summary(
     # outranks being told. Which of the three supplied it is recorded, because "10" from
     # the enquiry and "10" from a default are the same number and not the same evidence.
     _req_qty_raw = os.getenv("SDI_ORDER_QTY", "").strip()
+    _req_qty_src = "--order-qty / SDI_ORDER_QTY"
+    if not _req_qty_raw:
+        # THE RUN CONTRACT SURVIVES A DROPPED FLAG. Two 11908-21 runs went out at 1-off
+        # against a --order-qty 50 command the runner never delivered, and nothing on the
+        # sheet said so. The answers file beside the drawings is the durable, job-owned
+        # statement of the same fact: {"order_quantity": 50} in <job>_confirmed.json is
+        # read here, at the one point the run decides its quantity. The flag, when it
+        # arrives, still wins — a per-run instruction beats the file's standing one.
+        try:
+            import estimator_confirmed as _ecq
+            _ecq_path = _ecq.find_corrections_file(
+                job_folder, pdf_path,
+                (summary.get("document_analysis") or {}).get("drawing_number")
+                or summary.get("drawing_number"))
+            if _ecq_path:
+                import json as _json_q
+                _raw_q = _json_q.loads(Path(_ecq_path).read_text(encoding="utf-8"))
+                if isinstance(_raw_q, dict) and _raw_q.get("order_quantity"):
+                    _req_qty_raw = str(_raw_q["order_quantity"]).strip()
+                    _req_qty_src = f"{_ecq_path.name} (the job's answers file)"
+        except Exception:                                            # noqa: BLE001
+            pass
     _req_qty = None
     if _req_qty_raw:
         try:
             _req_qty = max(1, int(float(_req_qty_raw)))
         except (TypeError, ValueError):
-            print(f"   [order-qty] IGNORED — SDI_ORDER_QTY={_req_qty_raw!r} is not a number. "
+            print(f"   [order-qty] IGNORED — the requested quantity {_req_qty_raw!r} "
+                  f"({_req_qty_src}) is not a number. "
                   f"Costing at the quantity the drawings imply instead.", flush=True)
     if _req_qty:
+        summary["requested_order_quantity"] = _req_qty
+        summary["requested_order_quantity_source"] = _req_qty_src
         # precedence: direct-write ok — this is the JOB HEADER, not a part record. The
         # arbitrated `quantity` the resolver protects is a per-part figure read off a BOM
         # against competing readings of the same drawing; how many units the customer

@@ -48,14 +48,14 @@ def test_the_note_is_told_whether_the_job_is_provisional():
     i = SRC.index("from estimate_explained import covering_email as _covering_email")
     call = SRC[i:i + 900]
     assert "provisional=_provisional" in call, "the flag defaults to True and is never passed"
-    block = SRC[i - 2500:i]
+    block = SRC[i - 4500:i]   # widened 16 Sep: the order-qty refusal block sits between the release read and the call
     assert "_rel3.get(\"draft\")" in block and "may_quote_firm" in block, (
         "the flag is not read from the record's release and the checks' verdict")
 
 
 def test_the_attached_line_names_what_the_service_will_attach():
     i = SRC.index("from estimate_explained import covering_email as _covering_email")
-    block = SRC[i - 2500:i]
+    block = SRC[i - 4500:i]   # widened 16 Sep: the order-qty refusal block sits between the release read and the call
     for excluded in ('"json"', '"covering_email"', '"quantity_variants"'):
         assert excluded in block, f"{excluded} is listed as attached and it is not"
     assert '_k == "quote" and _provisional' in block, (

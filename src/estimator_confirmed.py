@@ -140,21 +140,27 @@ def drawing_stems(drawing_number: Any) -> List[str]:
     The engine knows a pack by its GA sheet — "10975-02-GA" — and the office knows the job
     by the number on the folder — "10975-02". A confirmations file is written by the office,
     so `10975-02_confirmed.json` sat unread beside a job whose only recognised name carried
-    the sheet-role suffix, and Howard's answers did nothing. The suffix (GA, DETAIL, an
-    issue letter) is the engine's business, not the author's, so every trailing PURELY
-    ALPHABETIC dash-segment yields a further stem. Segments with digits are the code itself
-    ("-02", "-A01") and are never stripped: "10975" alone could name a different job in the
-    same folder, which is exactly the quiet cross-governance the specific-name-first rule
-    exists to prevent.
+    the sheet-role suffix, and Howard's answers did nothing.
+
+    ONLY A NAMED SHEET-ROLE TOKEN COMES OFF (part_code_conventions.ASSEMBLY_ROLE_TOKENS:
+    GA, ASSY, …). The first cut stripped any purely-alphabetic tail, which would have let
+    one `ABC_confirmed.json` govern both ABC-LEFT and ABC-RIGHT — two different products
+    answering to one file is exactly the quiet cross-governance the specific-name-first
+    rule exists to prevent. Digit-bearing segments ("-02", "-A01", "GA2") never strip.
     """
+    try:
+        from part_code_conventions import strip_assembly_role as _strip_role
+    except Exception:                                                 # noqa: BLE001
+        def _strip_role(t: str) -> str:                               # type: ignore
+            return str(t or "").strip()
     stems: List[str] = []
     text = str(drawing_number or "").strip()
     while text and text not in stems:
         stems.append(text)
-        head, sep, tail = text.rpartition("-")
-        if not sep or not head or not tail.isalpha():
+        stripped = _strip_role(text)
+        if stripped == text:
             break
-        text = head
+        text = stripped
     return stems
 
 

@@ -2154,6 +2154,30 @@ def main() -> None:
             _mp_block = summary.get("money_provenance")
             _money_refused = bool(isinstance(_mp_block, dict) and _mp_block
                                   and not _mp_block.get("can_evidence_a_price"))
+            # THE QUANTITY ASKED FOR IS PART OF THE RUN CONTRACT, and a book costed at a
+            # different one is wrong in every setup amortisation and per-order division
+            # it contains. Two 11908-21 runs shipped 1-off books against a 50-off request
+            # with nothing but a cell to find it in. A recorded request the record does
+            # not match gets the same treatment as unreadable money: refusal note, quote
+            # held, workbook still delivered because fixing it needs the file.
+            _req_oq = summary.get("requested_order_quantity")
+            _used_oq = summary.get("quantity") or summary.get("assumed_job_quantity")
+            _qty_refused = False
+            _qty_why = ""
+            try:
+                _qty_refused = bool(_req_oq) and bool(_used_oq) \
+                    and int(_req_oq) != int(_used_oq)
+            except (TypeError, ValueError):
+                _qty_refused = False
+            if _qty_refused:
+                _qty_why = (f"the run was asked for {_req_oq} off "
+                            f"({summary.get('requested_order_quantity_source')}) and the "
+                            f"record was costed at {_used_oq} off — every setup "
+                            f"amortisation and per-order division on the sheet is for "
+                            f"the wrong batch")
+                _provisional = True
+                print(f"   [covering-note] DO NOT SEND — {_qty_why}; the covering email "
+                      f"is replaced by a refusal and the quote is held", flush=True)
             if _money_refused:
                 _provisional = True
                 print(f"   [covering-note] DO NOT SEND — this record cannot evidence a "
@@ -2170,10 +2194,12 @@ def main() -> None:
                 _attach.append(str(_v))
             try:
                 from estimate_explained import covering_email as _covering_email
-                if _money_refused:
+                if _money_refused or _qty_refused:
                     from estimate_explained import do_not_send_note as _dns_note
-                    _note = _dns_note(Path(xlsx_path).stem,
-                                      str((_mp_block or {}).get("why") or ""))
+                    _why_bits = [b for b in
+                                 (str((_mp_block or {}).get("why") or "") if _money_refused
+                                  else "", _qty_why) if b]
+                    _note = _dns_note(Path(xlsx_path).stem, "; ".join(_why_bits))
                 else:
                     _note = _covering_email(
                         Path(xlsx_path),
