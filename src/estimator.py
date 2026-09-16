@@ -7079,10 +7079,43 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         _rt["diamond_polish"] = round(_rt.get("diamond_polish", 0.0)
                                       + float(_drv.get("diamond_polish_min_per_part", 0.5)), 4)
         _st.setdefault("diamond_polish", float(_drv.get("diamond_polish_setup_min", 10.0)))
-        # Peel the protective film — present on every acrylic part.
-        _rt["manual_labour_acrylic"] = round(_rt.get("manual_labour_acrylic", 0.0)
-                                             + float(_drv.get("peel_min_per_part", 0.5)), 4)
-        _st.setdefault("manual_labour_acrylic", float(_drv.get("peel_setup_min", 15.0)))
+        # ── THE PEEL ALLOWANCE COMES OFF, BECAUSE THE SHOP SAYS IT IS NOT A THING ──────
+        #
+        # This booked "peel the protective film" as a Manual Labour (Acrylic) line on
+        # every acrylic part — the engine's standard allowance, read off nothing. Howard
+        # Thurley, asked directly whether his sheet carries it ("Manual Labour Acrylic
+        # allowing – no additional op. on manual estimating sheet – is this Peel?"):
+        #
+        #   "Subjective – depends on component, peel may be incorporated into individual
+        #    operations. Nothing fixed for this."
+        #
+        # A default the department itself calls not-fixed is this engine inventing a
+        # standing charge. So it is booked ONLY where the drawing states the work —
+        # peel / protective film / masking in the part's own text — and otherwise the
+        # line does not exist and the record says why, so the absence is a decision a
+        # person can reverse, not a gap.
+        _peel_text = " ".join(
+            str(x) for x in ([part.get("description")]
+                             + list(part.get("textual_operations") or [])
+                             + list(part.get("process_notes") or []))).upper()
+        if any(_w in _peel_text for _w in ("PEEL", "PROTECTIVE FILM", "MASKING", "DEMASK")):
+            _rt["manual_labour_acrylic"] = round(
+                _rt.get("manual_labour_acrylic", 0.0)
+                + float(_drv.get("peel_min_per_part", 0.5)), 4)
+            _st.setdefault("manual_labour_acrylic", float(_drv.get("peel_setup_min", 15.0)))
+            part.setdefault("review_flags", []).append(
+                "Manual Labour (Acrylic): peel/masking charged because the drawing's own "
+                "text states it — the shop has no fixed allowance for this "
+                "(Howard Thurley: 'Subjective – depends on component'), so confirm the "
+                "minutes fit this component")
+        elif not part.get("_acrylic_peel_declined"):
+            part["_acrylic_peel_declined"] = True
+            part.setdefault("review_flags", []).append(
+                "Manual Labour (Acrylic): NO default handling/peel allowance charged. The "
+                "shop has nothing fixed for this — Howard Thurley: 'Subjective – depends "
+                "on component, peel may be incorporated into individual operations. "
+                "Nothing fixed for this.' If this component needs a hand operation, state "
+                "it with a time and it will be charged as stated")
         # Acrylic is never powder coated — strip any powder op the finish-resolver added.
         for _pw in ("powder_coating",):
             _rt.pop(_pw, None)

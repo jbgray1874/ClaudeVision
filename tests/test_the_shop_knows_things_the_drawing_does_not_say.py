@@ -228,6 +228,44 @@ def test_a_normal_gauge_says_nothing():
         assert part["normalized_thickness_mm"] == g
 
 
+# ── the acrylic peel allowance the shop says is not a thing ──────────────────────────────
+#
+# "Manual Labour Acrylic allowing – no additional op. on manual estimating sheet – is this
+# Peel?" was the question, and Howard's answer names the rule: "Subjective – depends on
+# component, peel may be incorporated into individual operations. Nothing fixed for this."
+# A default the department itself calls not-fixed is the engine inventing a standing
+# charge. Charged only where the drawing's own text states the work.
+
+def _acrylic(**over):
+    part = {"part_number": "7332-01-007", "description": "LENS",
+            "normalized_material": "ACRYLIC", "normalized_thickness_mm": 3.0,
+            "quantity": 2, "blank_length_mm": 300, "blank_width_mm": 200,
+            "textual_operations": ["laser_cutting"]}
+    part.update(over)
+    return part
+
+
+def test_an_acrylic_part_gets_no_default_peel_allowance():
+    import estimator
+    part = _acrylic()
+    est = estimator.estimate_part(part, job_quantity=2)
+    rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+    assert "manual_labour_acrylic" not in rt, rt
+    f = _flags(part)
+    assert "NO default handling/peel allowance charged" in f
+    assert "Nothing fixed for this" in f, "his words travel with the decision"
+    assert "state it with a time" in f, "the absence is reversible, and says how"
+
+
+def test_a_drawing_that_states_the_peel_is_charged_for_it():
+    import estimator
+    part = _acrylic(process_notes=["PEEL PROTECTIVE FILM BOTH SIDES"])
+    est = estimator.estimate_part(part, job_quantity=2)
+    rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+    assert rt.get("manual_labour_acrylic"), rt
+    assert "drawing's own text states it" in _flags(part)
+
+
 def test_stainless_is_outside_what_howard_spoke_for():
     """0.9 mm stainless is a real buy. Widening a production fact past the person who
     stated it is the scoped-pilot-becoming-a-constant fault."""
