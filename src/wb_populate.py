@@ -2390,6 +2390,20 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
             _m["laser_nest_size"] = _n
         if _n < 2:
             continue                       # one row, the template's own set-up, untouched
+        # THE NEST MUST BE PROVEN, NOT PRESUMED. Same material and gauge only says the
+        # parts COULD share a program; canonical_labour_groups proves whether the whole
+        # order actually fits one stock sheet from the engine's own nesting results, and
+        # stamps the verdict on every member. Unproven, each row keeps its own full
+        # set-up — overstated and said so, never reduced on a presumption.
+        if not all(_m.get("laser_nest_proven") for _m in _members):
+            _why_np = next((str(_m.get("laser_nest_evidence") or "") for _m in _members
+                            if _m.get("laser_nest_evidence")), "no nesting proof")
+            _flag(f"laser nest {_nid}: rows split per component but the ONE-set-up "
+                  f"allocation was NOT applied — the nest is not proven to fit one "
+                  f"sheet ({_why_np}). Each of the {_n} rows carries a full department "
+                  f"set-up; if these genuinely share a sheet program, reduce it on the "
+                  f"sheet.", flags)
+            continue
         # CHECK EVERY ROW BEFORE WRITING ANY. A nest half-allocated would under-charge the
         # divided rows while the others still carry a full set-up — worse than either
         # honest state, and invisible on the sheet.
@@ -2452,6 +2466,61 @@ def canonical_labour_groups(
     }
     tube_pns = tube_part_numbers(summary)
     groups: Dict[Any, Dict[str, Any]] = {}
+
+    def _prove_laser_nests(groups_in: Dict[Any, Dict[str, Any]]) -> None:
+        """ONE SHEET, PROVEN — NOT PRESUMED FROM MATERIAL AND GAUGE.
+
+        Same material and gauge says the parts COULD share a sheet program; Howard's
+        constraint is conditional on their actually fitting one sheet: "if multiple
+        components used but don't exceed a single sheet, laser rate would be reduced to
+        not exceed the given set up time". So before any set-up is shared, the nest is
+        proven from the engine's own nesting results (the template's K38 formula, run per
+        part into stock_estimate): every member on the SAME stock sheet, and the sum of
+        each member's share of a sheet — (qty/unit × order qty) ÷ its parts-per-sheet —
+        at most 1.0. A member with no nest result, a mixed stock sheet, or a total past
+        one sheet leaves the nest UNPROVEN, each row keeping its own full set-up with the
+        reason recorded on the group.
+        """
+        _nests: Dict[str, List[Dict[str, Any]]] = {}
+        for _g in groups_in.values():
+            if _g.get("laser_nest_id"):
+                _nests.setdefault(str(_g["laser_nest_id"]), []).append(_g)
+        for _nid, _members in _nests.items():
+            if len(_members) < 2:
+                for _g in _members:
+                    _g["laser_nest_proven"] = True
+                    _g["laser_nest_evidence"] = "single row — nothing shared, nothing to prove"
+                continue
+            _fraction, _sheets, _bad = 0.0, set(), []
+            for _g in _members:
+                _pn = str((_g.get("parts") or [""])[0]).strip().upper()
+                _se = (((estimates.get(_pn) or {}).get("material_estimate") or {})
+                       .get("stock_estimate") or {})
+                _pps = _safe(_se.get("parts_per_sheet"))
+                _sheet = _se.get("candidate_sheet_size_mm")
+                if not _pps or _pps <= 0 or not _sheet:
+                    _bad.append(_pn or "(unnamed)")
+                    continue
+                _sheets.add(tuple(_sheet) if isinstance(_sheet, (list, tuple)) else _sheet)
+                _fraction += ((_safe(_g.get("qty"), 1) or 1) * float(order_qty or 1)) \
+                    / float(_pps)
+            if _bad:
+                _proven, _why = False, (f"no nest result for {', '.join(_bad)} — nothing "
+                                        f"proves these share a sheet")
+            elif len(_sheets) > 1:
+                _proven, _why = False, (f"members nest on DIFFERENT stock sheets "
+                                        f"({sorted(_sheets)}) — not one program")
+            elif _fraction <= 1.0:
+                _proven, _why = True, (f"the whole order takes {_fraction:.2f} of one "
+                                       f"{next(iter(_sheets))} sheet, by the template's "
+                                       f"own nesting")
+            else:
+                _proven, _why = False, (f"the order needs {_fraction:.2f} sheets — past "
+                                        f"one sheet, Howard's one-set-up condition is not "
+                                        f"met and each row keeps its own")
+            for _g in _members:
+                _g["laser_nest_proven"] = _proven
+                _g["laser_nest_evidence"] = _why
 
     for decision in payload.get("decisions") or []:
         if not isinstance(decision, dict) or decision.get("status") != "required":
@@ -2733,6 +2802,7 @@ def canonical_labour_groups(
                     geometry.get("estimated_hole_count"), 0) or 0) * int(qty)
 
     _merge_unread_colour_into_the_known_one(groups)
+    _prove_laser_nests(groups)
 
     for group in groups.values():
         group["decision_ids"] = sorted(set(group.get("decision_ids") or []))
@@ -3574,6 +3644,8 @@ def build_workbook_labour(
                 # the record, not reverse-engineered from a cell.
                 **({"laser_nest_id": g.get("laser_nest_id"),
                     "laser_nest_size": g.get("laser_nest_size"),
+                    "laser_nest_proven": g.get("laser_nest_proven"),
+                    "laser_nest_evidence": g.get("laser_nest_evidence"),
                     "setup_share": g.get("setup_share")}
                    if g.get("laser_nest_id") else {}),
             }

@@ -149,8 +149,11 @@ def test_the_line_says_both_packs_and_whose_figures():
     part = _part("zinc plated")
     estimate_process_times(part)
     flags = " ".join(str(f) for f in part.get("review_flags") or [])
-    assert "packed TWICE" in flags and "4 min pack to the plater" in flags
-    assert "transport department" in flags.lower() or "Howard Thurley" in flags
+    assert "packed TWICE" in flags and "4 min a unit pack to the plater" in flags
+    assert "Howard Thurley" in flags
+    # the split's own consequence is on the line too: two rows means two PACM set-ups,
+    # one per occasion, with the way to halve it if the bench regards them as one
+    assert "TWO set-ups" in flags and "the second comes off" in flags
 
 
 def test_the_freight_is_held_per_order_and_shared():

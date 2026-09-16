@@ -6358,11 +6358,14 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 part["plater_pack_applied"] = True
                 part.setdefault("review_flags", []).append(
                     f"plated part: packed TWICE, as two operations on two rows — "
-                    f"{_to_plater:g} min pack to the plater and {_final:g} min final "
-                    f"assembly and pack, in place of the single "
+                    f"{_to_plater:g} min a unit pack to the plater and {_final:g} min a "
+                    f"unit final assembly and pack, in place of the single "
                     f"{LABOUR_RULES['handling']['min_per_part']:g} min handling allowance "
                     f"({_pl.get('source', 'shop figure')}). Split per the estimator: 'Two "
-                    f"separate Operations this job'")
+                    f"separate Operations this job'. NOTE: each row takes the template's "
+                    f"own PACM set-up, so the split books TWO set-ups — one per occasion "
+                    f"(packing out, and packing back after plating). If the bench regards "
+                    f"these as one set-up, say so and the second comes off")
 
     if "wire_forming" in ops:
         _wire_len_mm = _safe_float(part.get("wire_total_length_mm")) or cut_length_mm

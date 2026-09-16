@@ -45,11 +45,18 @@ import wb_populate as wb                                               # noqa: E
 LB = {"col_hours": 10, "col_setup": 12}
 
 
-def _pe(pn, thk=2.5, material="MILD STEEL"):
+def _pe(pn, thk=2.5, material="MILD STEEL", pps=30, sheet=(2500, 1250)):
+    """A steel part the way the engine estimates one — including its OWN nest result
+    (the template's K38 formula into stock_estimate), which is what proves a shared
+    sheet. pps=None models a part nothing nested."""
+    _stock = ({"candidate_sheet_size_mm": list(sheet), "parts_per_sheet": pps,
+               "utilisation_pct": 60.0} if pps else
+              {"candidate_sheet_size_mm": None, "parts_per_sheet": None,
+               "utilisation_pct": None})
     return {"part_number": pn, "normalized_material": material,
             "normalized_thickness_mm": thk,
             "material_estimate": {"material": material, "thickness_mm": thk,
-                                  "stock_form": "sheet"},
+                                  "stock_form": "sheet", "stock_estimate": _stock},
             "labour_estimate": {"batch_hours": {"laser_cutting": 0.2}}}
 
 
@@ -66,11 +73,13 @@ def _laser_decision(i, pn, thk=None):
     return d
 
 
-def _five_part_groups(thicknesses=(2.5, 2.5, 2.5, 2.5, 2.5)):
+def _five_part_groups(thicknesses=(2.5, 2.5, 2.5, 2.5, 2.5), pps=(30,) * 5,
+                      sheets=((2500, 1250),) * 5, order_qty=6):
     pns = [f"7332-01-00{i}" for i in range(1, 6)]
     decisions = [_laser_decision(i, p) for i, p in enumerate(pns)]
-    estimates = [_pe(p, thk) for p, thk in zip(pns, thicknesses)]
-    return wb.canonical_labour_groups(_summary(decisions, pns), estimates, 6)
+    estimates = [_pe(p, thk, pps=n, sheet=s)
+                 for p, thk, n, s in zip(pns, thicknesses, pps, sheets)]
+    return wb.canonical_labour_groups(_summary(decisions, pns), estimates, order_qty)
 
 
 def _template_rows(ws, rows):
@@ -192,6 +201,48 @@ def test_an_unrecognised_template_is_not_touched_and_says_so():
         assert ws.cell(row=r, column=LB["col_setup"]).value == originals[r], r
     assert any("OVERSTATED" in f for f in flags)
     assert not any(g.get("setup_share") for g in groups.values())
+
+
+# ── the nest is proven, not presumed ─────────────────────────────────────────────────────
+#
+# Same material and gauge says the parts COULD share a program. Howard's condition is that
+# they actually fit one sheet — "if multiple components used but don't exceed a single
+# sheet" — so the proof comes from the engine's own nesting results, and an unproven nest
+# keeps a full set-up on every row: overstated and said so, never reduced on a presumption.
+
+def test_a_proven_nest_records_its_own_arithmetic():
+    groups = _five_part_groups()          # 5 parts x 6 off / 30 per sheet = 1.00 sheets
+    for g in groups.values():
+        assert g["laser_nest_proven"] is True
+        assert "1.00 of one" in g["laser_nest_evidence"]
+
+
+def test_an_order_past_one_sheet_is_not_allocated():
+    groups = _five_part_groups(order_qty=12)   # 12 off: 2.00 sheets — past his condition
+    ws = Workbook().active
+    rows = list(range(96, 101))
+    _template_rows(ws, rows)
+    originals = {r: ws.cell(row=r, column=LB["col_setup"]).value for r in rows}
+    for g, r in zip(groups.values(), rows):
+        g["workbook_row"] = r
+    flags = []
+    wb.allocate_laser_nest_setup(ws, groups, LB, flags)
+    for r in rows:
+        assert ws.cell(row=r, column=LB["col_setup"]).value == originals[r], r
+    assert any("NOT applied" in f and "2.00 sheets" in f for f in flags), flags
+
+
+def test_a_part_nothing_nested_leaves_the_nest_unproven():
+    groups = _five_part_groups(pps=(30, 30, None, 30, 30))
+    assert not any(g["laser_nest_proven"] for g in groups.values())
+    evid = next(iter(groups.values()))["laser_nest_evidence"]
+    assert "no nest result" in evid and "7332-01-003" in evid
+
+
+def test_members_on_different_stock_sheets_are_not_one_program():
+    groups = _five_part_groups(sheets=((2500, 1250),) * 4 + ((3000, 1500),))
+    assert not any(g["laser_nest_proven"] for g in groups.values())
+    assert "DIFFERENT stock sheets" in next(iter(groups.values()))["laser_nest_evidence"]
 
 
 # ── the allocation is row DATA, auditable off the record ─────────────────────────────────

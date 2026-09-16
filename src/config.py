@@ -1014,8 +1014,19 @@ SHOP_STATED_PROVENANCE = {
                  "similar size units, time would vary per unit / size\". An experienced "
                  "judgement scaled to similar-sized work, not a measurement — a much "
                  "larger or smaller stand should be asked about again"),
-    "plater_pack_min":              dict(_HOWARD_7332, unit="minutes/consignment"),
-    "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/consignment"),
+    # PER UNIT, RECONCILED. These read "minutes/consignment" while the code charged them
+    # per unit — two records of one fact disagreeing, which is the exact defect this
+    # register exists to stop. The evidence settles it per unit: the 14:28 7332-01 book
+    # showed the combined line as 12 minutes A UNIT (£6.90 at 6 off), Howard reviewed that
+    # line and disputed only its presentation ("Two separate Operations this job"), never
+    # the per-unit figure — and his own 4/8 was given against the engine's per-unit
+    # 2-minute allowance on the same line.
+    "plater_pack_min":              dict(_HOWARD_7332, unit="minutes/unit",
+                                         evidence="4 min a unit packed out to the plater; "
+                                                  "reviewed per-unit on the 7332-01 book"),
+    "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/unit",
+                                         evidence="8 min a unit final assembly & pack; "
+                                                  "reviewed per-unit on the 7332-01 book"),
     "linebend_parts_per_hour":      dict(_ACRYLIC_0355255, unit="parts/hour",
                                          evidence="stated on his sheet for the two-bend "
                                                   "A01 — the figure as he gave it"),
