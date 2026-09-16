@@ -6836,6 +6836,53 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             pass
         process["assembly_parent_fab_suppressed"] = True
 
+    # ── A BOARD ASSEMBLY IS FITTED BEFORE IT IS PACKED ───────────────────────────────────
+    #
+    # "No bench work time" — Tony Ford, 11908-21. BENC is 25.5 of his 42 hours, the single
+    # biggest operation on the job, and the engine charged NONE of it. Not a wrong rate: the
+    # operation never existed, and the reason is one line in the workbook's op map.
+    #
+    # Every non-welded assembly node mints ONE `assembly` event. For board,
+    # OP_NAME_MAP_JOINERY sends "assembly" to Packing Joinery — so a tray's assembly event
+    # became its PACKING row, and the fitting that produced the tray was charged as boxing
+    # it. One event doing two jobs, and landing on the wrong one. Tony's sheet has both,
+    # because they are both real: BENC to fit it together, PACJ to box it.
+    #
+    # THE EVIDENCE IS THE BOM'S OWN STRUCTURE — a parent with more than one child has to be
+    # put together before it can be packed — which is the same standard the assembly event
+    # itself is minted on, not a new inference. Gated to board so no metal or acrylic job
+    # moves: an acrylic display really is assembled and packed in one PACP pass, which is
+    # what Howard's "Apply Tape, Bag, Bulk Pack" describes.
+    _mat_bench = str(part.get("normalized_material") or "").upper().replace("_", " ")
+    _is_board_asm = (
+        any(_w in _mat_bench for _w in ("MDF", "MFMDF", "MFC", "CHIPBOARD", "PLYWOOD",
+                                        "PLY", "TIMBER", "BIRCH", "VENEER", "LAMINATE"))
+        and (part.get("is_assembly_parent") or part.get("assembly_children")
+             or str(part.get("canonical_kind") or "").lower() == "assembly"))
+    if _is_board_asm and not part.get("bench_work_applied"):
+        _rt_b = process.setdefault("run_times_min_per_unit", {})
+        _st_b = process.setdefault("setup_times_min", {})
+        # THE MINUTES COME FROM THE REGISTER'S RUN RATE, not from the generic 2-minute
+        # bench default, so the engine and the workbook agree instead of relying on the
+        # throughput guard to correct a figure we already know. Tony's 2/hr is 30 minutes a
+        # tray; the set-up is the department's own and is charged once per order, which is
+        # why it is NOT added here.
+        _bench_rate = float((getattr(config, "SHOP_STATED", None) or {}).get(
+            "joinery_bench_parts_per_hour") or 0.0)
+        _bench_min = (60.0 / _bench_rate) if _bench_rate > 0 else float(
+            (config.LABOUR_RULES.get("bench_work") or {}).get("min_per_part", 2.0))
+        _rt_b["bench_work"] = round(_rt_b.get("bench_work", 0.0) + _bench_min, 4)
+        part["bench_work_applied"] = True
+        record_operation(part, "bench_work", "joinery_route_rule")
+        part.setdefault("review_flags", []).append(
+            f"bench fitting: {_bench_min:g} min of Bench Work Joinery on this board "
+            f"assembly before it is packed. THE DRAWING DOES NOT ANNOTATE THIS — it is the "
+            f"assembly's own structure ({len(part.get('assembly_children') or []) or 'its'} "
+            f"children have to be put together) costed at the joinery bench run rate "
+            f"({config.shop_stated_source('joinery_bench_parts_per_hour')}), with the "
+            f"department's set-up charged once per order. A SCOPED PILOT measured on one "
+            f"job — confirm it applies to an assembly this size")
+
     # Acrylic route, costed the SDI way (canonical model from the M18 workbook). The laser
     # op is recomputed to the SDI acrylic model — load/unload (per sheet ÷ parts nested) +
     # profile cut (perimeter ÷ speed) + hole cutting — then estimate_labour_costs applies the
