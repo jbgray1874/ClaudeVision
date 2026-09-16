@@ -970,12 +970,52 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # quietly defeating the guard that exists to stop three different totals on identical
     # inputs. A stamp is skipped only where the name AND the price both say it is the
     # displaced figure stated again.
+    # THE NAMES ARE CLOSED OVER THE JOB, NOT CAPTURED AT THE MOMENT OF WITHHOLDING.
+    #
+    # mark_withheld records the spellings the record carried WHEN ITS PRICE WAS DISPLACED,
+    # and on 10975-02 that is too early: the roll-goods pricer displaces the tape's market
+    # answer while the record still knows itself only as "10975", and the compiler attaches
+    # the merged spelling "10975EPDMCLOSEDCELL" afterwards. So the job went on blocking
+    # under a name the withholding never saw, through three builds that each believed they
+    # had fixed it.
+    #
+    # Here the whole job is visible, so the identities are closed: any record sharing a name
+    # with a displaced line contributes ITS names too. That is a closure over one job's own
+    # identity graph — not a general amnesty, because the fingerprint below still has to
+    # agree before anything is skipped.
+    def _identities(rec: Any) -> set:
+        out = set()
+        if not isinstance(rec, dict):
+            return out
+        for key in ("part_number", "matched_part_code", "part_code",
+                    "canonical_part_number"):
+            _v = rec.get(key)
+            if isinstance(_v, str) and _v.strip():
+                out.add(_v.strip().upper())
+        for _v in (rec.get("folded_duplicate_identities") or []):
+            if isinstance(_v, str) and _v.strip():
+                out.add(_v.strip().upper())
+        _ev = rec.get("evidence")
+        for _v in ((_ev.get("raw_aliases") or []) if isinstance(_ev, dict) else []):
+            if isinstance(_v, str) and _v.strip():
+                out.add(_v.strip().upper())
+        return out
+
+    _all = [_p for _p in _parts(summary) if isinstance(_p, dict)]
     _superseded: List[tuple] = []
-    for _part in _parts(summary):
+    for _part in _all:
         _names = {str(n).strip().upper()
                   for n in (_part.get("price_superseded_identities") or []) if str(n).strip()}
         if not _names:
             continue
+        _grew = True
+        while _grew:                     # a fold can chain: A merged from B, B from C
+            _grew = False
+            for _other in _all:
+                _ids = _identities(_other)
+                if _ids & _names and not _ids <= _names:
+                    _names |= _ids
+                    _grew = True
         _prints = _part.get("price_superseded_prints") or []
         _superseded.append((_names, _prints))
 

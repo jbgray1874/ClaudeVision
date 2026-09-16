@@ -167,3 +167,54 @@ def test_nothing_is_recorded_when_nothing_was_displaced():
         "price_source": _stamp(affects_total=False)}}
     assert pp.mark_withheld(part) == 0
     assert "price_superseded_identities" not in part
+
+
+# ── the alias arrives AFTER the price is displaced ───────────────────────────────────────
+#
+# THE REASON THIS TOOK THREE BUILDS. mark_withheld records the spellings the record carried
+# WHEN ITS PRICE WAS DISPLACED — and on 10975-02 that moment is too early. The roll-goods
+# pricer displaces the tape's market answer while the record still knows itself only as
+# "10975"; the compiler attaches the merged spelling "10975EPDMCLOSEDCELL" afterwards. So
+# every build that "fixed" this went on blocking under a name the withholding never saw.
+
+def _tape_whose_alias_arrives_later():
+    tape = {"part_number": "10975",
+            "material_estimate": {"price_source": _stamp()}}
+    pp.mark_withheld(tape, reason="superseded — priced by the roll-goods arithmetic")
+    assert [n.upper() for n in tape["price_superseded_identities"]] == ["10975"], \
+        "at withholding time the merged spelling does not exist yet"
+    tape["evidence"] = {"raw_aliases": ["10975EPDMCLOSEDCELL"]}     # attached later
+    return tape
+
+
+def test_a_name_attached_after_the_withholding_is_still_honoured():
+    """THE DEFECT, in its real shape."""
+    out = invariants.check_prices_are_reproducible(
+        _job(_tape_whose_alias_arrives_later(), "10975EPDMCLOSEDCELL"))
+    assert [v.get("code") for v in out] == [], out
+
+
+def test_the_closure_does_not_become_a_general_amnesty():
+    """Closing over the job's identity graph must not quieten a market price that genuinely
+    reached the total, on a line that shares no name with anything displaced."""
+    job = _job(_tape_whose_alias_arrives_later(), "10975EPDMCLOSEDCELL")
+    job["estimate_summary"]["part_estimates"].append(
+        {"part_number": "BI-SCREENCABLE",
+         "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                            "source": _stamp()}}})
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == ["price_not_reproducible"], out
+    assert out[0]["detail"]["parts"] == ["BI-SCREENCABLE"], out[0]["detail"]
+
+
+def test_the_fingerprint_still_gates_the_closed_names():
+    """The closure widens WHICH NAMES may be skipped; it does not widen which PRICES. A
+    second line under a closed-in name, stating its own figure, still blocks."""
+    job = _job(_tape_whose_alias_arrives_later(), "10975EPDMCLOSEDCELL")
+    job["estimate_summary"]["part_estimates"].append(
+        {"part_number": "10975",
+         "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                            "source": _stamp(unit_price_gbp=13.63)}}})
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == ["price_not_reproducible"], out
+    assert out[0]["detail"]["count"] == 1
