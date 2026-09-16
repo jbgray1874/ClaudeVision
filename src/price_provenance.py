@@ -21,7 +21,7 @@ is reproducible for the same reason THUM620 is not today.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterator, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 # Every price stamp built through this module carries this marker. Consumers find priced
 # lines by looking for the marker rather than by knowing where in a part a price is stored,
@@ -735,17 +735,29 @@ def mark_withheld(record: Any, reason: Any = None) -> int:
     is not the same as added to a number.
     """
     changed = 0
+    _prints = []
     for _path, block in iter_price_stamps(record):
         if block.get("affects_total") is not False:
             block["affects_total"] = False
             block["withheld_reason"] = str(block.get("withheld_reason") or reason
                                            or "kept off the price column by the engine")
+            _prints.append(stamp_fingerprint(block))
             changed += 1
-    # AND UNDER EVERY NAME THE LINE ANSWERS TO. Marking the stamps on the object in hand
-    # leaves the twin still reading as money whenever the same line is stamped elsewhere
-    # under a spelling the compiler merged it from — 10975's tape was withheld as 10975 and
-    # went on blocking the job as 10975EPDMCLOSEDCELL. The reproducibility check reads this
-    # list, so the fact travels with the LINE rather than with one copy of it.
+    # AND UNDER EVERY NAME THE LINE ANSWERS TO — BUT IT IS THE PRICE THAT IS WITHHELD, NOT
+    # THE CODE.
+    #
+    # Marking the stamps on the object in hand leaves the twin still reading as money
+    # whenever the same line is stamped elsewhere under a spelling the compiler merged it
+    # from: 10975's tape was withheld as 10975 and went on blocking the job as
+    # 10975EPDMCLOSEDCELL.
+    #
+    # Suppressing by CODE alone would go too far the other way. One code can appear on two
+    # separately costed lines, and withholding one of them would then hide a live AI price
+    # on the other — quietly defeating the guard that exists to stop three different totals
+    # on identical inputs. So the record carries BOTH halves of the identity: the names the
+    # line answers to, AND a fingerprint of each displaced price (its source and its figure).
+    # A reader may skip a stamp only where both agree, so a second line's different price
+    # under the same code is still caught.
     if isinstance(record, dict) and changed:
         _names = record.setdefault("price_superseded_identities", [])
         for _key in ("part_number", "matched_part_code", "part_code",
@@ -753,15 +765,76 @@ def mark_withheld(record: Any, reason: Any = None) -> int:
             _v = record.get(_key)
             if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
                 _names.append(_v.strip())
-        for _key in ("folded_duplicate_identities",):
-            for _v in (record.get(_key) or []):
-                if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
-                    _names.append(_v.strip())
-        for _v in ((record.get("evidence") or {}).get("raw_aliases") or []) \
-                if isinstance(record.get("evidence"), dict) else []:
+        for _v in (record.get("folded_duplicate_identities") or []):
             if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
                 _names.append(_v.strip())
+        _ev = record.get("evidence")
+        for _v in ((_ev.get("raw_aliases") or []) if isinstance(_ev, dict) else []):
+            if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
+                _names.append(_v.strip())
+        _kept = record.setdefault("price_superseded_prints", [])
+        for _fp in _prints:
+            if _fp not in _kept:
+                _kept.append(_fp)
     return changed
+
+
+def stamp_fingerprint(block: Mapping[str, Any]) -> list:
+    """What this price WAS — its source and its figure — as a comparable value.
+
+    Enough to recognise the same displaced price stamped again somewhere else, and not so
+    loose that a different price under the same part code looks like it. A list rather than
+    a tuple because this is written into the record and read back out of JSON, where a tuple
+    does not survive the round trip.
+    """
+    if not isinstance(block, Mapping):
+        return ["", None]
+    _sel = block.get("selected") if isinstance(block.get("selected"), Mapping) else {}
+    # READ THE FIELDS THESE BLOCKS ACTUALLY CARRY. An LLM price stamp writes `source` and
+    # `source_type`; the resolver's blocks write `source_name` and `source_class`. Reading
+    # only one pair gives an empty fingerprint on exactly the stamps this is for.
+    _name = block.get("source_name") or block.get("source") or _sel.get("source") or ""
+    _kind = block.get("source_class") or block.get("source_type") or ""
+    _src = f"{_name}|{_kind}".strip().lower()
+    _px = block.get("unit_price_gbp")
+    if _px is None:
+        _px = _sel.get("price")
+    if _px is None:
+        _px = block.get("price")
+    try:
+        _px = round(float(_px), 4)
+    except (TypeError, ValueError):
+        _px = None
+    return [_src, _px]
+
+
+def fingerprints_match(a: Any, b: Any) -> bool:
+    """Two fingerprints describing the same displaced price.
+
+    `a` is the price that was DISPLACED, `b` the stamp being judged.
+
+    The source must agree. Then:
+      * both state a figure — they must be the same figure;
+      * neither states one — the source and the line's name are all the evidence there is,
+        and an LLM stamp genuinely records no price, so this is the ordinary case and
+        refusing it would put the original defect straight back;
+      * the JUDGED stamp states a figure the displaced one does not — NOT a match. A stated
+        figure is evidence we cannot check off, and the safe direction is to report it. This
+        is what keeps a second, separately costed line under the same part code from being
+        hidden by the first line's displacement.
+    """
+    try:
+        _a_src, _a_px = a[0], a[1]
+        _b_src, _b_px = b[0], b[1]
+    except (TypeError, IndexError, KeyError):
+        return False
+    if not _a_src or _a_src != _b_src:
+        return False
+    if _a_px is None:
+        return _b_px is None
+    if _b_px is None:
+        return True
+    return abs(float(_a_px) - float(_b_px)) < 1e-6
 
 
 def stamp_is_ai_estimate(block: Dict[str, Any]) -> bool:

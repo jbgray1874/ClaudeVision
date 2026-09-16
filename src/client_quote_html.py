@@ -874,6 +874,29 @@ def _reads_as_an_instruction(text: Any) -> bool:
     return any(_t_body.startswith(w) for w in _IMPERATIVES)
 
 
+# A code, not a name: digits-led, then only SEPARATED short segments — 10975-02-GA,
+# 7332-01-001, 0355255. The separator is required, not optional: without it the pattern
+# chops any run of letters into code-sized pieces and "600mm Shelf" reads as a part number.
+_CODE_SHAPED = re.compile(r"^\d{3,}[A-Za-z]?(?:[-_ ][A-Za-z0-9]{1,4})*$")
+
+
+def _reads_as_a_code(text: Any) -> bool:
+    """True when a 'description' is only the number the job is already filed under.
+
+    10975-02's Description box came out reading "10975-02-GA" — the assembly's own code,
+    printed under a label an estimator asked for so he could tell at a glance WHAT a sheet
+    was for when requoting. The number is already in the Drawing box beside it, so this
+    says nothing twice and costs the box its only job.
+
+    The existing guard compared the description against the drawing NUMBER and let this
+    through, because "10975-02-GA" and "10975-02" are not equal strings — they are the same
+    fact in two spellings, which is precisely the case worth catching. Judged on SHAPE
+    instead, so it holds for any pack: a code is digits followed by short segments, and a
+    product name has a word in it.
+    """
+    return bool(_CODE_SHAPED.match(str(text or "").strip()))
+
+
 def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     """(drawing number, revision, unit description) for the quotation header.
 
@@ -1070,6 +1093,14 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
                     _title = _d
                     break
 
+    # AND A CODE IS NOT A DESCRIPTION EITHER. Every arm above reads a description off a
+    # record, and a minted assembly parent's "description" is often just its own code.
+    # Refused here, in front of the stem fallback, so the pack's own filename gets the
+    # chance it was always meant to have — "0355255 - A4 Table Top Graphic Holder -
+    # 10975_REV B.pdf" knows what the unit is even when no record says so.
+    if _title and _reads_as_a_code(_title):
+        _title = ""
+
     # Folder name LAST, and cleaned. A stem that reduces to nothing but noise words yields
     # no description at all rather than a misleading one — "SolidWorks" is not a product.
     if not _number:
@@ -1095,6 +1126,20 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
         # "BootsLadderRackCommsBar" is not something to put in front of a customer.
         _cleaned = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", _cleaned)
         _cleaned = re.sub(r"\s{2,}", " ", _cleaned).strip(" -_")
+        # AND THE FILING DEBRIS OFF BOTH ENDS. A pack is named for the office as well as
+        # for the product, and the office's half brackets the product's:
+        #   "0355255 - A4 Table Top Graphic Holder - 10975_REV B"
+        #   "0359967 - 11908-21-GA - Rev A - Sunglsses Tray Large Colour Core"
+        # Job numbers, sheet-role tokens and a bare revision letter are all in their own
+        # boxes on the sheet already. Only whole tokens at the ENDS come off, and only
+        # these kinds, so "A4", "Type 2 Bracket" and "L Stand" keep every word they have.
+        _DEBRIS = re.compile(r"^(?:\d+|[A-Za-z]|GA\d?|ASSY|ASSEMBLY|ARR|GEN)$", re.IGNORECASE)
+        _words = _cleaned.split()
+        while _words and _DEBRIS.match(_words[0]):
+            _words.pop(0)
+        while _words and _DEBRIS.match(_words[-1]):
+            _words.pop()
+        _cleaned = " ".join(_words).strip(" -_")
         _title = _cleaned if len(_cleaned) > 2 else ""
 
     _rev = ""

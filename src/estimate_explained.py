@@ -1496,6 +1496,18 @@ def build(workbook: Path, scan_json: Optional[Path],
         _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
                                 for r in _market), 2)
     _indicative = _house + _market
+    # ONE LINE, ONE VERDICT. A cell holding a FORMULA reads back as no number, and the
+    # unpriced test above reads exactly that: so PACKAGING — priced by Howard's stated
+    # method, £1.91, and correctly classed house by the record — appeared in this tab TWICE,
+    # once as "an SDI house rate marked INDICATIVE" and again two rows later as "£0.00 — the
+    # line is costing nothing. A rate. Nothing we can query holds a price for this code."
+    # The summary above then told the estimator that both packaging and delivery were
+    # missing prices, on a sheet where one of them was priced.
+    #
+    # The record is the authority on whether a line is priced; the read-back is only a fact
+    # about a cell. So a line the record has already classified comes off the unpriced list.
+    _classified = {id(r) for r in _indicative}
+    _unpriced = [r for r in _unpriced if id(r) not in _classified]
     add("## The questions, answered first")
     add("")
     add(f"- **What does a unit cost, and of what?** "
@@ -2376,6 +2388,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         _market_gbp = round(sum((_money(r.get("price")) or 0) * (_money(r.get("qty")) or 0)
                                 for r in _market), 2)
     _indicative = _market + _house
+    # ONE LINE, ONE VERDICT — the same fix as the Explanation tab, for the same reason and
+    # from the same cause: a formula cell reads back as no number, so a line the record has
+    # already classified as priced was listed here a second time as costing nothing.
+    _classified_ids = {id(r) for r in _indicative}
+    _unpriced = [r for r in _unpriced if id(r) not in _classified_ids]
     needs_a_person = _unpriced + _indicative
     labour = _setup_and_run(labour_rows, order_qty)
     untraced = _tracing_failures(scan, pack, steel_calc, material, page_index)

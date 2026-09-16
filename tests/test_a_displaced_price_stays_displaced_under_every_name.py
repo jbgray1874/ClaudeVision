@@ -109,6 +109,57 @@ def test_one_lines_displacement_does_not_excuse_another_line():
     assert out[0]["detail"]["parts"] == ["BI-KNOB"], out[0]["detail"]
 
 
+def test_the_same_code_on_a_second_line_is_still_caught():
+    """THE REVIEW'S P1: suppressing by part code alone would hide a live AI price the
+    moment any line sharing that code had been displaced. One code can appear on two
+    separately costed lines — a length off a roll and a whole unit bought in — and only
+    ONE of them was displaced. The other is exactly what this check exists for."""
+    tape = _tape_priced_by_the_roll()
+    job = _job(tape, "10975EPDMCLOSEDCELL")
+    job["estimate_summary"]["part_estimates"].append(
+        {"part_number": "10975",          # the SAME code, a different line and price
+         "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                            "source": _stamp(unit_price_gbp=13.63)}}})
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == ["price_not_reproducible"], out
+    assert out[0]["detail"]["count"] == 1, "the displaced copy stays suppressed"
+
+
+def test_a_fingerprint_needs_the_source_and_the_figure_to_agree():
+    """First argument is the DISPLACED price, second the stamp being judged."""
+    from price_provenance import fingerprints_match as _m
+    assert _m(["llm_market|ai_estimate", 13.63], ["llm_market|ai_estimate", 13.63])
+    assert not _m(["llm_market|ai_estimate", 13.63], ["llm_market|ai_estimate", 4.50])
+    assert not _m(["llm_market|ai_estimate", 13.63], ["udef|catalogue", 13.63])
+    # Neither states a figure: an LLM stamp genuinely records none, so this is the ordinary
+    # case and the source plus the line's name are all the evidence there is.
+    assert _m(["llm_market|ai_estimate", None], ["llm_market|ai_estimate", None])
+    # The judged stamp states one the displaced price does not. A figure we cannot check
+    # off is a figure we report — this is what stops a second line being hidden.
+    assert not _m(["llm_market|ai_estimate", None], ["llm_market|ai_estimate", 13.63])
+    assert not _m(["", None], ["", None]), "a sourceless stamp matches nothing"
+
+
+def test_the_fingerprint_reads_the_fields_an_llm_stamp_actually_writes():
+    """llm_scan_price writes `source` and `source_type`; the resolver writes `source_name`
+    and `source_class`. Reading only one pair gives an empty fingerprint on exactly the
+    stamps this was built for, and an empty fingerprint matches nothing."""
+    from price_provenance import stamp_fingerprint as _fp
+    assert _fp({"source": "llm_drawing_scan", "source_type": "ai_estimate"}) == \
+        ["llm_drawing_scan|ai_estimate", None]
+    assert _fp({"source_name": "llm_market", "source_class": "ai_estimate",
+                "selected": {"price": 4.5}}) == ["llm_market|ai_estimate", 4.5]
+
+
+def test_an_older_record_without_fingerprints_still_works():
+    """Records written before the fingerprint existed carry names only. They keep the
+    name-based behaviour rather than losing their suppression altogether."""
+    tape = _tape_priced_by_the_roll()
+    tape.pop("price_superseded_prints")
+    out = invariants.check_prices_are_reproducible(_job(tape, "10975EPDMCLOSEDCELL"))
+    assert [v.get("code") for v in out] == [], out
+
+
 def test_nothing_is_recorded_when_nothing_was_displaced():
     """A part whose stamps were already withheld gains no new claim — the list says what
     this call actually displaced, not what it looked at."""

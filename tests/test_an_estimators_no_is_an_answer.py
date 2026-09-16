@@ -74,6 +74,62 @@ def test_real_product_names_pass():
         assert not _reads_as_an_instruction(name), name
 
 
+# ── nor is a part number a description ───────────────────────────────────────────────────
+#
+# The 12:16 book filled the Description box with "10975-02-GA" — the assembly's own code,
+# under a label an estimator asked for so he could tell at a glance WHAT a sheet was for
+# when requoting. The number is already in the box beside it. The older guard compared the
+# description against the drawing NUMBER and let this through, because "10975-02-GA" and
+# "10975-02" are not equal strings — they are one fact in two spellings, which is exactly
+# the case worth catching.
+
+def test_a_part_number_is_not_a_description():
+    from client_quote_html import _reads_as_a_code
+    for code in ("10975-02-GA", "7332-01-001", "0355255", "11908-21", "12349-02-69-GA"):
+        assert _reads_as_a_code(code), code
+
+
+def test_a_product_name_with_a_number_in_it_survives():
+    """The separator is required, or the pattern chops any run of letters into code-sized
+    pieces and "600mm Shelf" reads as a part number."""
+    from client_quote_html import _reads_as_a_code
+    for name in ("600mm Shelf", "A4 Table Top Graphic Holder", "Type 2 Bracket",
+                 "GRAVITY FEEDER MODULES", "L-STAND", "BASE"):
+        assert not _reads_as_a_code(name), name
+
+
+def test_the_pack_filename_names_the_unit_when_no_record_can():
+    """Howard's pack knows what it is. Refusing the code-shaped title lets the stem
+    fallback — which was always there — finally have its turn."""
+    from client_quote_html import _drawing_identity
+    summary = {
+        "llm_full_extract": {"drawing_info": {"drawing_number": "10975-02",
+                                              "revision": "B"}},
+        "estimate_summary": {"canonical_route_shadow": {
+            "top_assemblies": ["10975-02-GA"], "top_assembly": "10975-02-GA",
+            "nodes": [{"part_number": "10975-02-GA", "description": "10975-02-GA"}]}}}
+    num, rev, title = _drawing_identity(
+        summary, "0355255 - A4 Table Top Graphic Holder - 10975_REV B.pdf")
+    assert (num, rev) == ("10975-02", "Rev B")
+    assert title == "A4 Table Top Graphic Holder", title
+
+
+def test_the_office_half_of_a_pack_name_is_trimmed_from_both_ends():
+    """Tony's pack brackets the product with filing: job number and role in front, revision
+    behind. Only whole tokens at the ENDS come off."""
+    from client_quote_html import _drawing_identity
+    _, _, title = _drawing_identity(
+        {"llm_full_extract": {"drawing_info": {"drawing_number": "11908-21"}}},
+        "0359967_-_11908-21-GA_-_Rev_A_Sunglsses_Tray_Large_Colour_Core.pdf")
+    assert title == "Sunglsses Tray Large Colour Core", title
+
+
+def test_a_word_inside_the_name_is_never_trimmed():
+    from client_quote_html import _drawing_identity
+    _, _, title = _drawing_identity({}, "11350-BootsLadderRackCommsBar")
+    assert title == "Boots Ladder Rack Comms Bar", title
+
+
 # ── the generic manual bucket names its work ─────────────────────────────────────────────
 
 def test_the_manual_row_says_what_the_hands_are_doing():

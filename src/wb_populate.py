@@ -3659,9 +3659,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Same title source as the quotation, same instruction guard (a drawing note is not
     # a product name), written only into an empty cell so a typed description stands.
     try:
-        from client_quote_html import _drawing_identity, _reads_as_an_instruction
+        from client_quote_html import (_drawing_identity, _reads_as_an_instruction,
+                                       _reads_as_a_code)
         _t_num, _t_rev, _t_title = _drawing_identity(summary, job_folder_name)
-        if _t_title and not _reads_as_an_instruction(_t_title):
+        # A quotation header would rather print the number than nothing, so the resolver
+        # falls back to it — but this box sits beside a Drawing box that already holds it,
+        # and 10975-02's read "10975-02-GA" under a label an estimator asked for so he
+        # could tell at a glance what a sheet was FOR. The same refusal the older header
+        # writer makes, on the shape rather than on string equality.
+        if _t_title and not _reads_as_an_instruction(_t_title) \
+                and not _reads_as_a_code(_t_title):
             _d_hit = _find_label_cell(ws, "description")
             if _d_hit:
                 _dr, _dc = _d_hit

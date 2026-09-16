@@ -316,6 +316,37 @@ def test_a_file_with_no_job_code_governs_nothing(tmp_path):
     assert ec.find_corrections_file(d, d / "drawings.pdf", None) is None
 
 
+# ── the file with no job in its name must earn the job too ───────────────────────────────
+#
+# `estimator_dimensions.json` carries no job in its name and was returned on sight, so one
+# file governed every job in a shared folder — the exact cross-governance the named lookups
+# were tightened to prevent, left open by the one pattern that has no name to check.
+
+def test_the_unnamed_file_is_trusted_in_a_single_job_folder(tmp_path):
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["a.pdf"], ["estimator_dimensions.json"])
+    assert ec.find_corrections_file(d, d / "a.pdf", "11111-01") is not None
+
+
+def test_the_unnamed_file_cannot_govern_a_folder_of_several_jobs(tmp_path, capsys):
+    """THE P1."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["11111-01.pdf", "22222-01.pdf"], ["estimator_dimensions.json"])
+    assert ec.find_corrections_file(d, d / "11111-01.pdf", "11111-01") is None
+    out = capsys.readouterr().out
+    assert "NOT APPLIED" in out and "names no job" in out
+
+
+def test_the_unnamed_file_may_name_its_own_job(tmp_path):
+    """The other way to earn it: say inside which job you are for."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["11111-01.pdf", "22222-01.pdf"], [])
+    (d / "estimator_dimensions.json").write_text(
+        '{"drawing_number": "11111-01"}', encoding="utf-8")
+    assert ec.find_corrections_file(d, d / "11111-01.pdf", "11111-01") is not None
+    assert ec.find_corrections_file(d, d / "22222-01.pdf", "22222-01") is None
+
+
 def test_a_job_code_is_four_digits_not_a_sheet_size():
     """"A4", "2mm" and "REV B" are not job numbers, and a rule that thinks they are matches
     every file in every folder."""

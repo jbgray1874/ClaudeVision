@@ -205,6 +205,54 @@ def _confirmed_stem(name: str) -> str:
     return ""
 
 
+_PDF_GLOBS = ("*.pdf", "*.PDF")
+# The keys a person would use to say which job an unnamed answers file belongs to.
+_JOB_DECLARATION_KEYS = ("drawing_number", "drawing", "job", "job_number", "part_number")
+
+
+def _unnamed_file_is_for_this_job(path: Path, root: Path, pdf_path: Any,
+                                  drawing_number: Any) -> bool:
+    """May a file with no job in its name govern this job? Only on proof.
+
+    Two proofs, and nothing else. EITHER the folder holds a single job, so the file has
+    nothing to be confused with; OR the file names its job inside and that job is this one.
+    A folder of several jobs with one unnamed file is the cross-job pollution case, and the
+    answer there is to say so rather than to guess.
+    """
+    try:
+        _pdfs = {p.name for g in _PDF_GLOBS for p in root.glob(g)}
+    except OSError:
+        return False
+    if len(_pdfs) <= 1:
+        return True
+
+    ours = set()
+    for text in [drawing_number, (Path(pdf_path).stem if pdf_path else None), root.name]:
+        ours.update(job_codes(text))
+        _t = str(text or "").strip().upper()
+        if _t:
+            ours.add(_t)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raw = None
+    if isinstance(raw, Mapping):
+        for key in _JOB_DECLARATION_KEYS:
+            _stated = str(raw.get(key) or "").strip()
+            if not _stated:
+                continue
+            if _stated.upper() in ours or any(
+                    _same_job_code(c, m) for c in job_codes(_stated) for m in ours):
+                return True
+            print(f"   [confirmed] NOT APPLIED — {path.name} states {key} "
+                  f"'{_stated}', which is not this job.", flush=True)
+            return False
+    print(f"   [confirmed] NOT APPLIED — {path.name} names no job and this folder holds "
+          f"{len(_pdfs)} of them. Rename it for the drawing, or add a "
+          f"\"drawing_number\" to it, and it will be read.", flush=True)
+    return False
+
+
 def find_corrections_file(job_folder: Any, pdf_path: Any = None,
                           drawing_number: Any = None) -> Optional[Path]:
     """The confirmations file for this job, if one has been written. None is the normal case.
@@ -263,8 +311,16 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
                     if path.is_file():
                         return path
                 continue
+            # THE UNNAMED FILE HAS TO EARN THE JOB LIKE ANY OTHER. `estimator_dimensions.json`
+            # carries no job in its name, and returning it on sight put one file in charge of
+            # every job in a shared folder — the exact cross-governance the named lookups
+            # above were tightened to prevent, left open by the one pattern that has no name
+            # to check. It is trusted on two grounds only: the folder holds a single job, so
+            # there is nothing to confuse it with; or the file SAYS which job it is for and
+            # that job is this one.
             path = root / pattern
-            if path.is_file():
+            if path.is_file() and _unnamed_file_is_for_this_job(path, root, pdf_path,
+                                                                drawing_number):
                 return path
 
     # ── 3: one file whose job code is this job's ────────────────────────────────────────

@@ -964,18 +964,43 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # alias read as an absence.
     #
     # The names come from mark_withheld, which records every spelling the superseded line
-    # answers to. Deliberately not "every alias of every part": only a line whose price was
-    # explicitly displaced contributes, so a genuinely applied market price is still caught
-    # under whichever of its names it is stamped with.
+    # answers to — AND a fingerprint of the price it displaced. A NAME IS NOT ENOUGH ON ITS
+    # OWN: one part code can appear on two separately costed lines, and suppressing by code
+    # would then hide a live AI price on the second line while the first was displaced —
+    # quietly defeating the guard that exists to stop three different totals on identical
+    # inputs. A stamp is skipped only where the name AND the price both say it is the
+    # displaced figure stated again.
+    _superseded: List[tuple] = []
     for _part in _parts(summary):
-        for _sid in (_part.get("price_superseded_identities") or []):
-            _s = str(_sid).strip().upper()
-            if _s:
-                _withheld.add(_s)
-    _withheld.discard("")
+        _names = {str(n).strip().upper()
+                  for n in (_part.get("price_superseded_identities") or []) if str(n).strip()}
+        if not _names:
+            continue
+        _prints = _part.get("price_superseded_prints") or []
+        _superseded.append((_names, _prints))
+
+    def _is_a_displaced_price(_owner: Any, _block: Dict[str, Any]) -> bool:
+        _o = str(_owner or "").strip().upper()
+        if not _o:
+            return False
+        _fp = price_provenance.stamp_fingerprint(_block)
+        for _names, _prints in _superseded:
+            if _o not in _names:
+                continue
+            # No fingerprints recorded (an older record) falls back to the name alone,
+            # which is where this started; with them, the price has to agree too.
+            # (displaced, judged) — the order is the whole asymmetry: a judged stamp that
+            # states a figure the displaced price does not is reported, not suppressed.
+            if not _prints or any(price_provenance.fingerprints_match(_p, _fp)
+                                  for _p in _prints):
+                return True
+        return False
+
     guessed = []
     for path, block, owner in price_provenance.applied_ai_prices(summary):
         if str(owner or "").strip().upper() in _withheld:
+            continue
+        if _is_a_displaced_price(owner, block):
             continue
         _sel = block.get("selected") if isinstance(block.get("selected"), dict) else {}
         guessed.append({
