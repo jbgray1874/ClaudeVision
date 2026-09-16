@@ -1448,6 +1448,40 @@ def job_customer(summary: Any) -> str:
         return ""
 
 
+def customer_finish_standard(customer: Any) -> Optional[Dict[str, Any]]:
+    """The finish standard SDI has learned for this customer, or None.
+
+    "M&S dress all seen welds; TTI none" — Howard Thurley, 15 Sep 2026. A fact about the
+    customer, kept as a rule with his name on it (config.CUSTOMER_FINISH_STANDARDS), never
+    a price. Matched on the normalised trading name so "M&S", "Marks & Spencer" and a job
+    folder's spelling are one customer; a customer not in the table gets None and the shop
+    default stands.
+    """
+    _table = getattr(config, "CUSTOMER_FINISH_STANDARDS", None) or {}
+    if not _table:
+        return None
+
+    def _norm(text: Any) -> str:
+        _s = re.sub(r"\b(LTD|LIMITED|PLC|LLP|INC|GROUP|HOLDINGS|UK|GB|CO|AND)\b", " ",
+                    str(text or "").upper())
+        return re.sub(r"[^A-Z0-9]+", "", _s)
+
+    _want = _norm(customer)
+    if not _want:
+        return None
+    for _name, _std in _table.items():
+        if _norm(_name) != _want:
+            continue
+        _alias = (_std or {}).get("alias_of")
+        if _alias:
+            _std = _table.get(_alias) or {}
+            _name = _alias
+        if not isinstance(_std, dict) or "dress_visible_welds" not in _std:
+            return None
+        return dict(_std, customer=_name)
+    return None
+
+
 def named_plate_spec_anywhere_on_the_pack(
         *record_lists: Any) -> Tuple[Optional[Dict[str, Any]], str, str]:
     """A registered plate spec named on ANY part of this pack: (spec, part_number, text).
@@ -5670,13 +5704,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
     # lands on the route (timing set in the run/setup tables below). Config-gated; spot/
     # resistance welds leave no proud bead and are not dressed, so only `welding` triggers.
+    #
+    # AND THE CUSTOMER'S OWN STANDARD DECIDES WHETHER THE LINE EXISTS. "M&S dress all seen
+    # welds; TTI none" — Howard Thurley, 15 Sep 2026 — is a fact about the customer, not
+    # about a job, and it governs the engine's INFERENCE only: a drawing that states
+    # dressing outright is never overruled by a customer default. estimate_document stamps
+    # the standard (_customer_finish_standard) from the same customer name the workbook
+    # header prints; a customer not in the table keeps the shop default exactly as before.
+    _cfs = part.get("_customer_finish_standard")
     if (
         getattr(config, "DRESS_AFTER_STRUCTURAL_WELD", True)
         and "welding" in ops
         and "dress_welds" not in ops
     ):
-        ops = list(ops) + ["dress_welds"]
-        record_operation(part, "dress_welds", "override_rule")
+        if isinstance(_cfs, dict) and _cfs.get("dress_visible_welds") is False:
+            part.setdefault("review_flags", []).append(
+                f"weld dressing NOT charged: {_cfs.get('customer')}'s own standard is no "
+                f"weld dressing — '{_cfs.get('statement')}' "
+                f"({_cfs.get('stated_by')}, {_cfs.get('stated_on')}). A customer rule "
+                f"governing the engine's inference; a drawing that states dressing would "
+                f"still be charged")
+        else:
+            ops = list(ops) + ["dress_welds"]
+            record_operation(part, "dress_welds", "override_rule")
+            if isinstance(_cfs, dict) and _cfs.get("dress_visible_welds") is True:
+                part.setdefault("review_flags", []).append(
+                    f"weld dressing charged per {_cfs.get('customer')}'s own standard — "
+                    f"'{_cfs.get('statement')}' ({_cfs.get('stated_by')}, "
+                    f"{_cfs.get('stated_on')})")
 
     setup_times_min: Dict[str, float] = {}
     run_times_min: Dict[str, float] = {}
@@ -9270,6 +9325,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     if debug:
         print(f"[DEBUG] estimate_document order_qty for setup amortisation = {_order_qty}")
 
+    # THE CUSTOMER'S FINISH STANDARD RIDES DOWN TO EVERY PART. "M&S dress all seen welds;
+    # TTI none" is a job-level fact and estimate_part never sees the summary, so it is
+    # stamped here — resolved from the SAME customer name the workbook header prints
+    # (job_customer), which is the lesson the £250 register learned the hard way.
+    _finish_std = customer_finish_standard(job_customer(summary)) if summary else None
+
     part_estimates: List[Dict[str, Any]] = []
     for idx, part in enumerate(estimable_parts, start=1):
         part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
@@ -9278,6 +9339,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 f"[DEBUG] estimate_document start part {idx}/{len(estimable_parts)}: "
                 f"{part_number} (+{round(time.time()-started,2)}s)"
             )
+        if _finish_std and not part.get("_customer_finish_standard"):
+            part["_customer_finish_standard"] = dict(_finish_std)
         part_estimate = estimate_part(part, job_quantity=_order_qty)
         part_estimates.append(part_estimate)
         if debug:

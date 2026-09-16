@@ -1130,6 +1130,29 @@ BRUSH_BEFORE_PLATE = {
     "confirm_outside_similar_size": True,
 }
 
+# ── A CUSTOMER'S FINISH STANDARD IS A RULE WE LEARNED, NEVER A PRICE ────────────────────
+#
+# "M&S dress all seen welds; TTI none" — Howard Thurley, 7332-01 reply, 15 Sep 2026. His
+# words, kept as a rule: whether a customer's standard has the welds dressed is a fact
+# about the CUSTOMER, not about any one job, and it decides whether the DRES line exists
+# at all — which the engine was deciding by shop default alone.
+#
+# Matched on the trading name the job header resolves (job_customer), normalised so
+# "M&S", "Marks & Spencer" and a job-folder spelling are one customer. A customer not
+# listed keeps the shop default (dress after a structural weld) and the line says so. A
+# drawing that STATES dressing is never overruled by this table — the drawing outranks a
+# customer default, and suppression only ever stops the engine's own inference.
+CUSTOMER_FINISH_STANDARDS = {
+    "M&S": {"dress_visible_welds": True,
+            "stated_by": "Howard Thurley (SDI estimating)", "stated_on": "2026-09-15",
+            "statement": "M&S dress all seen welds"},
+    "MARKS & SPENCER": {"alias_of": "M&S"},
+    "MARKS AND SPENCER": {"alias_of": "M&S"},
+    "TTI": {"dress_visible_welds": False,
+            "stated_by": "Howard Thurley (SDI estimating)", "stated_on": "2026-09-15",
+            "statement": "TTI none (no weld dressing)"},
+}
+
 # ── PRODUCTION SUBSTITUTES A GAUGE THE SHOP DOES NOT STOCK ──────────────────────────────
 #
 # "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu" — raised as TBC on 9 Sep

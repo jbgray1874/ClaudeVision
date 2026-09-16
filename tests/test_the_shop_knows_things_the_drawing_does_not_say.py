@@ -228,6 +228,64 @@ def test_a_normal_gauge_says_nothing():
         assert part["normalized_thickness_mm"] == g
 
 
+# ── whether the welds are dressed is the customer's standard, not the shop's guess ───────
+#
+# "M&S dress all seen welds; TTI none" — Howard Thurley, 15 Sep 2026. A fact about the
+# CUSTOMER, kept as a rule with his name on it, never a price. It governs the engine's
+# inference only: a drawing that states dressing is never overruled by a customer default,
+# and a customer not in the table keeps the shop default exactly as before.
+
+def _weldment(**over):
+    part = {"part_number": "W1", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 2.0, "quantity": 1,
+            "textual_operations": ["welding"]}
+    part.update(over)
+    return part
+
+
+def test_the_standard_resolves_however_the_folder_spelled_the_customer():
+    from estimator import customer_finish_standard
+    for spelling in ("M&S", "Marks & Spencer Ltd", "marks and spencer"):
+        std = customer_finish_standard(spelling)
+        assert std and std["customer"] == "M&S" and std["dress_visible_welds"], spelling
+    assert customer_finish_standard("TTI Group UK")["dress_visible_welds"] is False
+    assert customer_finish_standard("Harrods") is None, "not listed means shop default"
+
+
+def test_a_tti_weldment_is_not_charged_dressing_and_says_whose_rule_that_is():
+    from estimator import customer_finish_standard
+    part = _weldment(_customer_finish_standard=customer_finish_standard("TTI"))
+    out = estimate_process_times(part, 6)
+    assert "dress_welds" not in out["run_times_min_per_unit"]
+    f = _flags(part)
+    assert "TTI" in f and "no weld dressing" in f and "Howard Thurley" in f
+    assert "drawing that states dressing would still be charged" in f
+
+
+def test_an_ms_weldment_is_dressed_and_credits_the_standard():
+    from estimator import customer_finish_standard
+    part = _weldment(_customer_finish_standard=customer_finish_standard("M&S"))
+    out = estimate_process_times(part, 6)
+    assert "dress_welds" in out["run_times_min_per_unit"]
+    assert "M&S dress all seen welds" in _flags(part)
+
+
+def test_an_unknown_customer_keeps_the_shop_default():
+    part = _weldment()
+    out = estimate_process_times(part, 6)
+    assert "dress_welds" in out["run_times_min_per_unit"]
+
+
+def test_a_drawing_that_states_dressing_outranks_the_customer_default():
+    """TTI's standard suppresses the INFERENCE. It does not delete work the drawing
+    itself calls up — the drawing outranks a customer default."""
+    from estimator import customer_finish_standard
+    part = _weldment(textual_operations=["welding", "dress_welds"],
+                     _customer_finish_standard=customer_finish_standard("TTI"))
+    out = estimate_process_times(part, 6)
+    assert "dress_welds" in out["run_times_min_per_unit"]
+
+
 # ── the acrylic peel allowance the shop says is not a thing ──────────────────────────────
 #
 # "Manual Labour Acrylic allowing – no additional op. on manual estimating sheet – is this
