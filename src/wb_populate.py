@@ -3503,6 +3503,17 @@ _THROUGHPUT_UNMEASURED = frozenset({
 })
 
 
+def _clear_or_set(ws, row: int, column: int, value: Any) -> None:
+    """Write `value` into a cell, CLEARING it when the value is None.
+
+    ws.cell(row, column, value=None) is a read, not a write: openpyxl assigns only when the
+    value is not None. A template cell holding a formula therefore survives an "unpriced"
+    write untouched — which is how a delivered book carried the blank template's own
+    #REF! on a line the engine believed it had left blank.
+    """
+    ws.cell(row=row, column=column).value = value
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
@@ -4615,8 +4626,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                            f"LOOKUP($D$6,'{_sheet_name}'!$D$4:$N$4,"
                            f"'{_sheet_name}'!D{_t}:N{_t}))"))
         else:
-            ws.cell(row=row, column=b["col_price"],
-                    value=price if price is not None else None)
+            # CLEARED, NOT LEFT. openpyxl's ws.cell(..., value=None) assigns NOTHING — it only
+            # writes when the value is not None — so an unpriced line kept whatever formula
+            # the template had in its price cell. The 17:36 7332-01 book carried the
+            # template's own broken reference on its plating line:
+            #     J20  =LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,'Material Price Break'!#REF!)
+            # and a misrouted one on the freight line, both propagating into M and the
+            # block total. An unpriced line is a BLANK price, written as one.
+            _clear_or_set(ws, row, b["col_price"], price)
         ws.cell(row=row, column=b["col_qty"],      value=qty)
         # 4% SCRAP IS AN ALLOWANCE FOR MATERIAL YOU CUT AND SPOIL. A pallet is not cut, and
         # a lorry is not spoiled.
