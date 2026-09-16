@@ -186,6 +186,7 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `VISION_RENDER_DPI` | Page render DPI for vision/OCR (default **300**, was 144) |
 | `VISION_MAX_SIDE` | Max rendered image edge in px (default 4000) |
 | `SDI_ENABLE_PART_DESC_SCAN=1` | Re-enable the description `LIKE` catalogue scan (default **off** — see *Performance*) |
+| `SDI_REGISTER_TODAY=YYYY-MM-DD` | Pretend it is this date when judging whether a price in `data/price_register.json` is past its review date. For testing and for asking "what goes stale next quarter"; unset in normal use |
 | `ESTIMATE_DEFAULT_JOB_QUANTITY` | Default order quantity when not supplied |
 | `SDI_APPLY_SOLIDWORKS=0` / `=1` | Force the native extract off / on. Default: **on**. Models present and unread is a **WARNING** — a seat is not always available and the engine falls back to the drawings by design. A job folder that cannot be OPENED is still BLOCKING: "I could not look" must never read as "there is nothing there" |
 | `SDI_SW_EXTRACT_JSON` | Read the native extract from an explicit path (models on a CAD share, job folder elsewhere) |

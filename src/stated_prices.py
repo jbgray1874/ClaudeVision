@@ -48,11 +48,41 @@ from typing import Any, Dict, Optional
 
 
 def _cfg() -> Dict[str, Any]:
+    """The stated prices, from the REGISTER first and config second.
+
+    The register (data/price_register.json) is where a price belongs: changeable without a
+    code edit, and carrying the scope, status and review date a literal cannot. config's
+    ESTIMATOR_STATED_PRICES is read after it so nothing breaks while entries migrate — a key
+    in both is answered by the register, because that is the one somebody can maintain.
+
+    A `job_only` entry is deliberately NOT returned here. This function answers "what did an
+    estimator tell us this code costs" for any job, and a quote given for one job is not an
+    answer to that question; callers that can supply a job ask price_register.lookup.
+    """
+    out: Dict[str, Any] = {}
     try:
         import config                                              # noqa: PLC0415
-        return dict(getattr(config, "ESTIMATOR_STATED_PRICES", {}) or {})
+        out.update(dict(getattr(config, "ESTIMATOR_STATED_PRICES", {}) or {}))
     except Exception:                                              # noqa: BLE001
-        return {}
+        pass
+    try:
+        import price_register                                      # noqa: PLC0415
+        for _k, _e in (price_register.load().get("prices") or {}).items():
+            _scope = _e.get("scope") if isinstance(_e.get("scope"), dict) else {}
+            if str(_scope.get("kind") or "").lower() == "job_only":
+                continue
+            out[_k] = {
+                "gbp": _e.get("amount"),
+                "unit": _e.get("unit"),
+                "by": _e.get("source_reference"),
+                "on": _e.get("source_date"),
+                "job": (_scope.get("value") if _scope.get("kind") == "job_family" else ""),
+                "note": _e.get("label"),
+                "_register": _e,
+            }
+    except Exception:                                              # noqa: BLE001
+        pass
+    return out
 
 
 def stated(code: Any) -> Optional[Dict[str, Any]]:

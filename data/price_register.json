@@ -1,0 +1,70 @@
+{
+  "_README": [
+    "SDI's prices, as DATA — reviewable and changeable without a code edit.",
+    "",
+    "Every entry is one price. `amount` is the money; everything beside it is what an",
+    "estimator needs to decide whether to trust it: where it came from, when that source",
+    "was current, what it may price, how firm it is, and when it should be looked at again.",
+    "",
+    "status:  live       a current system/supplier price — the engine may charge it",
+    "         confirmed  a current quote or figure confirmed for its scope",
+    "         historical a dated quote from an earlier job — priced only as a LABELLED",
+    "                    comparator, never as a silent default",
+    "         indicative a market/derived figure — priced, labelled, to be replaced",
+    "",
+    "scope:   material / department / customer / job_family / job_only. `job_only` prices",
+    "         that job and nothing else; it is written here only for the audit trail, and",
+    "         the job's own answers file remains where such a figure belongs.",
+    "",
+    "review_date is not decoration. Past it, the engine keeps pricing — silence is worse —",
+    "and says the figure is out of review so nobody mistakes age for agreement."
+  ],
+  "schema_version": 1,
+  "prices": [
+    {
+      "price_key": "TAPE113C",
+      "label": "EPDM closed-cell tape 25 x 1 mm — 10 m roll",
+      "amount": 4.50,
+      "unit": "roll",
+      "currency": "GBP",
+      "source_type": "estimator_stated",
+      "source_reference": "Howard Thurley (SDI estimating/buying), 0355255 review",
+      "source_date": "2026-09-09",
+      "review_date": "2026-12-09",
+      "scope": {"kind": "material", "value": "roll goods — TAPE113C"},
+      "status": "confirmed",
+      "supersedes": null,
+      "notes": "Asked of SDI Live first; this answers when it cannot. The roll LENGTH is a packaging fact and lives in ROLL_GOODS_CATALOGUE, not here."
+    },
+    {
+      "price_key": "EDGE23X1ABS",
+      "label": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate, Ostermann",
+      "amount": 0.35,
+      "unit": "metre",
+      "currency": "GBP",
+      "source_type": "estimator_stated",
+      "source_reference": "Tony Ford (SDI estimating), 11908-21 estimate sheet",
+      "source_date": "2026-09-03",
+      "review_date": "2026-12-03",
+      "scope": {"kind": "material", "value": "faced board edging"},
+      "status": "confirmed",
+      "supersedes": null,
+      "notes": "The RATE generalises; the banded metreage does not — only visible edges are banded, which is a judgement about the product and not a number on the drawing."
+    },
+    {
+      "price_key": "HARRODS01",
+      "label": "Brass — Harrods 01 decorative plating",
+      "amount": 250.00,
+      "unit": "unit",
+      "currency": "GBP",
+      "source_type": "plater_quote",
+      "source_reference": "plater quote via SDI estimating (Howard Thurley), job 7332-01",
+      "source_date": "2026-09-09",
+      "review_date": "2026-10-09",
+      "scope": {"kind": "job_only", "value": "7332-01"},
+      "status": "confirmed",
+      "supersedes": null,
+      "notes": "Confirmed FOR 7332-01 and scoped to it. Plating is quoted job by job (Howard Thurley, 16 Sep 2026). Priced on any other job ONLY as a labelled historical comparator, never as a rate."
+    }
+  ]
+}

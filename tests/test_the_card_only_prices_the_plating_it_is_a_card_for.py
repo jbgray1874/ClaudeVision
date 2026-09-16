@@ -70,7 +70,7 @@ def test_a_quoted_spec_still_wins_over_the_zinc_card():
     zinc card and a decorative brass is a different product, sixteen to one. A named spec
     stops the card dead — it just no longer charges a figure from source instead."""
     unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED Harrods01", ("7332-01",))
-    assert method == "subcontract_plating_historical_comparator"
+    assert method == "subcontract_plating_named_spec"
     assert unit == 250.00, "and emphatically not the £15.83 the zinc card would have charged"
 
 
@@ -125,7 +125,7 @@ def test_a_spec_on_another_sheet_of_the_same_pack_is_found():
     recs = [{"part_number": "7332-01-101", "normalized_finish": "PLATED"},
             {"part_number": "7332-01-GA", "surface_finishes": ["Harrods01"]}]
     spec, found_on, text = named_plate_spec_anywhere_on_the_pack(recs)
-    assert spec["last_known_quote"]["gbp_per_unit"] == 250.00
+    assert spec["requires_quote"] is True
     assert found_on == "7332-01-GA"                  # named, so the estimator can check it
     assert "Harrods01" in text
 
@@ -149,4 +149,4 @@ def test_the_customer_name_alone_buys_nothing():
 
 def test_a_non_dict_in_the_list_does_not_break_the_search():
     recs = [None, "7332-01-101", 42, {"part_number": "G", "surface_finishes": ["HARRODS 01"]}]
-    assert named_plate_spec_anywhere_on_the_pack(recs)[0]["last_known_quote"]["gbp_per_unit"] == 250.00
+    assert named_plate_spec_anywhere_on_the_pack(recs)[0]["requires_quote"] is True

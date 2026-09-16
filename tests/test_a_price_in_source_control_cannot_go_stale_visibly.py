@@ -160,9 +160,15 @@ def test_the_line_says_where_the_length_came_from_and_where_the_price_did():
 
 def test_a_roll_we_hold_but_cannot_price_is_withheld(monkeypatch):
     """The length alone is not enough, and a zero here would read as free tape."""
+    import price_register
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: None)
+    # BOTH STATED SOURCES, because there are now two: the register is where a price lives
+    # and config is what remains while entries migrate. Emptying one and calling that
+    # "nothing priced it" would test a state the engine can no longer be in.
     monkeypatch.setattr(config, "ESTIMATOR_STATED_PRICES", {})
+    monkeypatch.setattr(price_register, "_CACHE",
+                        {"prices": {}, "problems": [], "path": "(emptied for this test)"})
     part = _tape()
     out = roll_goods_material(part)
     assert out["unit_material_cost_gbp"] is None

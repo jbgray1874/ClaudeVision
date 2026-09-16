@@ -23,6 +23,12 @@ output/
 *.log
 *.txt
 
+# THE PRICE REGISTER IS THE OPPOSITE OF A RUN OUTPUT. It is SDI's commercial data, versioned
+# on purpose so a rate change is reviewable in a diff without a code edit — which is the
+# whole reason the figures were moved out of config.py. The blanket *.json above exists to
+# keep job data and run outputs out of the repository; this is neither.
+!data/price_register.json
+
 # A confirmations file is an INPUT, not an output: what a person read off the drawing,
 # entered once and ranked above everything the engine derived (src/estimator_confirmed.py).
 # The *.json rule above exists to keep run outputs and job data out of the repo, and these

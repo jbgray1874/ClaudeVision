@@ -1578,21 +1578,56 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             # the job it was quoted for, the date, the supplier, and that it is a comparator
             # to be replaced. Source priority is intact — SDI Live was asked first and could
             # not answer; a figure in this job's answers file outranks this line entirely.
-            _lk = _spec.get("last_known_quote") or {}
-            _lk_gbp = _safe_float(_lk.get("gbp_per_unit"))
-            if _lk_gbp:
-                return (round(float(_lk_gbp), 2),
-                        f"{_spec.get('label') or _code} — £{float(_lk_gbp):.2f} per unit, a "
-                        f"HISTORICAL COMPARATOR from {_lk.get('job') or 'an earlier job'} "
-                        f"({_lk.get('on') or 'date not recorded'}, "
-                        f"{_lk.get('source') or 'source not recorded'}), NOT a current "
-                        f"price and not the per-kilo zinc card. Nothing in SDI Live answered "
-                        f"for this spec. {_spec.get('confirm') or 'Plating is quoted job by job'}",
+            # THE REGISTER, NOT A SECOND COPY IN CONFIG. The last quote lives in
+            # data/price_register.json under this key, scoped to the job it was given for.
+            # On THAT job it is chargeable — it is that job's confirmed quote, rung 2 of the
+            # hierarchy. On any other it is out of scope, and prices only as a comparator
+            # wearing every word of its label.
+            _reg = None
+            try:
+                import price_register as _pr
+                _reg = _pr.lookup(_code, job_codes_here)
+            except Exception:                                        # noqa: BLE001
+                _reg = None
+            if _reg and _safe_float(_reg.get("amount")):
+                _amt = round(float(_reg["amount"]), 2)
+                _why = ""
+                try:
+                    _why = _pr.describe(_reg)
+                except Exception:                                    # noqa: BLE001
+                    _why = ""
+                if _reg.get("chargeable"):
+                    return (_amt,
+                            f"{_spec.get('label') or _code} — £{_amt:.2f} per unit, this "
+                            f"job's own confirmed plater quote and not the per-kilo zinc "
+                            f"card ({_why})",
+                            "subcontract_plating_named_spec")
+                return (_amt,
+                        f"{_spec.get('label') or _code} — £{_amt:.2f} per unit, a HISTORICAL "
+                        f"COMPARATOR from "
+                        f"{(_reg.get('scope') or {}).get('value') or 'an earlier job'}, NOT a "
+                        f"current price and not the per-kilo zinc card. Nothing in SDI Live "
+                        f"answered for this spec. ({_why}) "
+                        f"{_spec.get('confirm') or 'Plating is quoted job by job'}",
                         "subcontract_plating_historical_comparator")
+            # RUNG 5, AND ONLY AFTER THE OTHERS. The source hierarchy for this line is:
+            #   1  live SDI / UDEF or supplier price          — asked above
+            #   2  a confirmed figure for THIS job            — the answers file, outranks all
+            #   3  a matched historical quote, labelled       — the branch above
+            #   4  a market estimate, labelled indicative     — NOT CONNECTED for a named
+            #      PROCESS: the market path prices parts off a drawing, and nothing asks it
+            #      what a plater charges for a finish. Declared, not pretended.
+            #   5  awaiting a quote — here
+            # "No silent gaps" requires this last state to name the missing information and
+            # who is being asked for it, so it does.
             return (None,
                     f"{_spec.get('label') or _code} — a named decorative plating "
-                    f"requirement, NOT the zinc/passivate card. NOT PRICED: "
-                    f"{_spec.get('confirm') or 'plating is quoted job by job'}",
+                    f"requirement, NOT the zinc/passivate card, and NOT PRICED. "
+                    f"MISSING: a price for this spec. Nothing in SDI Live answered for it, "
+                    f"no figure for this job has been entered, and we hold no earlier quote "
+                    f"for it to compare against. ASKED OF: the estimator — get the plater's "
+                    f"price for this job and enter it in this job's answers file. "
+                    f"{_spec.get('confirm') or ''}".strip(),
                     "subcontract_plating_quote_needed")
         if _safe_float(_spec.get("gbp_per_unit")):
             _unit = round(float(_spec["gbp_per_unit"]), 2)
@@ -1650,23 +1685,29 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
         # THE SPECS WE KNOW, WITH WHAT THEY LAST COST — offered so an estimator can say
         # "that one" rather than start from the drawing again. The figure is the LAST QUOTE
         # and reads as one: the entries themselves carry no chargeable rate any more.
-        def _spec_quote(_s):
-            _lk = _s.get("last_known_quote") or {}
-            return _safe_float(_lk.get("gbp_per_unit")) or _safe_float(_s.get("gbp_per_unit"))
+        # THE SPECS WE KNOW, WITH WHAT THEY LAST COST — offered so an estimator can say
+        # "that one" rather than start from the drawing again. The figures come from the
+        # price register, because that is where money lives; config holds only the method.
+        def _spec_quote(_key, _s):
+            try:
+                import price_register as _pr
+                _e = _pr.lookup(_key, job_codes_here)
+                if _e and _safe_float(_e.get("amount")):
+                    _sc = (_e.get("scope") or {}).get("value") or ""
+                    return (round(float(_e["amount"]), 2),
+                            f"last quoted{(' for ' + _sc) if _sc else ''} on "
+                            f"{_e.get('source_date') or 'an unrecorded date'} — "
+                            f"{_e.get('source_reference') or 'source not recorded'}")
+            except Exception:                                        # noqa: BLE001
+                pass
+            return None, ""
 
-        def _spec_where(_s):
-            _lk = _s.get("last_known_quote") or {}
-            _src = _lk.get("source") or _s.get("source") or "source not recorded"
-            _job = _lk.get("job")
-            _on = _lk.get("on")
-            return (f"last quoted {('for ' + _job) if _job else ''}"
-                    f"{(' on ' + _on) if _on else ''} — {_src}").replace("  ", " ").strip()
-
-        _cands = "; ".join(
-            f"{(_s.get('label') or _k)} £{_spec_quote(_s):.2f} per unit "
-            f"({_spec_where(_s)})"
-            for _k, _s in (getattr(config, "NAMED_PLATE_SPECS", {}) or {}).items()
-            if _spec_quote(_s))
+        _rows = []
+        for _k, _s in (getattr(config, "NAMED_PLATE_SPECS", {}) or {}).items():
+            _amt, _where = _spec_quote(_k, _s)
+            if _amt:
+                _rows.append(f"{(_s.get('label') or _k)} £{_amt:.2f} per unit ({_where})")
+        _cands = "; ".join(_rows)
         return (None,
                 f"PLATING SPEC NOT IDENTIFIED — the drawing's finish reads {_named!r}, which "
                 f"names a plate but not which plate. The £{float(rate):.2f}/kg card is trade "

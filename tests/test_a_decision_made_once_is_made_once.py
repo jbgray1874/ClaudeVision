@@ -97,10 +97,12 @@ def test_the_last_quote_is_kept_as_evidence_not_as_a_rate():
     It stays, marked as this job's quote, with the question attached."""
     spec = config.NAMED_PLATE_SPECS["HARRODS01"]
     assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source at all"
-    assert spec["requires_quote"] is True
-    last = spec["last_known_quote"]
-    assert last["gbp_per_unit"] == 250.00 and last["job"] == "7332-01"
-    assert "job by job" in spec["confirm"]
+    assert "last_known_quote" not in spec, "nor a figure by another name"
+    assert spec["requires_quote"] is True and "job by job" in spec["confirm"]
+    # The money is in the register, scoped to the job it was quoted for.
+    import price_register
+    entry = price_register.lookup("HARRODS01", ("7332-01",))
+    assert entry["amount"] == 250.00 and entry["scope"]["value"] == "7332-01"
 
 
 def test_another_customer_inherits_nothing():
@@ -129,7 +131,8 @@ def test_a_drawing_naming_the_spec_is_read_and_priced_as_a_comparator():
              {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
               "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
               "quantity": 1, "description": "plating"}]
-    apply_subcontract_plating(parts, {"customer": "Harrods"}, 6, parts)
+    apply_subcontract_plating(parts, {"customer": "Harrods",
+                                      "job_output_stem": "9001-01"}, 6, parts)
     _desc = str(parts[1].get("description") or "")
     assert "Harrods 01" in _desc, "the spec the drawing names is read"
     assert "HISTORICAL COMPARATOR" in _desc and "NOT a current price" in _desc
@@ -267,7 +270,11 @@ def test_no_job_charges_it_as_a_rate_any_more():
     connector, not as numeric literals in Python configuration". The entry carries no
     chargeable rate at all now — what reaches the sheet is a labelled comparator, and a
     figure in this job's answers file outranks it."""
-    for job in (("7332-01",), ("9001-01",), ()):
+    # Its OWN job reads it as that job's confirmed quote; every other job as a comparator.
+    # One entry, two answers, decided by SCOPE — not by two copies of the number.
+    _, _, own = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("7332-01",))
+    assert own == "subcontract_plating_named_spec"
+    for job in (("9001-01",), ()):
         _, _, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", job)
         assert method == "subcontract_plating_historical_comparator", job
     assert "gbp_per_unit" not in config.NAMED_PLATE_SPECS["HARRODS01"]

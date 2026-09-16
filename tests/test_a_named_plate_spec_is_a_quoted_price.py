@@ -38,7 +38,7 @@ POLICY = config.PLATE_SUBCONTRACT_POLICY
 
 def test_every_spelling_on_the_pack_finds_the_spec():
     for text in ("Harrods01", "HARRODS 01", "Harrods-01", "BRASS HARRODS 01 FINISH"):
-        assert (named_plate_spec(text) or {}).get("last_known_quote", {}).get("gbp_per_unit") == 250.00, text
+        assert (named_plate_spec(text) or {}).get("requires_quote") is True, text
 
 
 def test_an_unnamed_finish_names_no_spec():
@@ -79,10 +79,11 @@ def test_the_table_records_the_method_and_dates_the_evidence():
     assert spec["decorative"] is True, "not zinc — this is what stopped the per-kilo card"
     assert spec["requires_quote"] is True
     assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source"
-    last = spec["last_known_quote"]
-    assert last["gbp_per_unit"] == 250.00
-    assert last["job"] == "7332-01" and last["on"] == "9 Sep 2026"
-    assert "plater quote" in last["source"]
+    assert "last_known_quote" not in spec, "nor a figure by another name"
+    import price_register
+    entry = price_register.lookup("HARRODS01", ("7332-01",))
+    assert entry["amount"] == 250.00 and entry["source_date"] == "2026-09-09"
+    assert "plater quote" in entry["source_reference"]
 
 
 # ── the work a plated part causes that an unplated one does not ──────────────────────────
@@ -156,9 +157,9 @@ def test_the_callout_survives_the_classifier_naming_it_something_else():
     part = {"normalized_finish": "zinc plated", "surface_finishes": ["Harrods01"]}
     text = _part_finish_text(part)
     assert "Harrods01" in text
-    assert (named_plate_spec(text) or {}).get("last_known_quote", {}).get("gbp_per_unit") == 250.00
+    assert (named_plate_spec(text) or {}).get("requires_quote") is True
     assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[2] == \
-        "subcontract_plating_historical_comparator", text
+        "subcontract_plating_named_spec", text
 
 
 def test_every_spelling_of_the_finish_fields_is_read():
@@ -224,7 +225,7 @@ def test_with_no_live_price_it_prices_as_a_labelled_comparator():
     inferred, the estimate still prices the work and explains that basis rather than
     silently omitting it". A first cut of this returned None, and a plating line at £0
     understates the sheet by most of the unit on a decorative brass."""
-    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
     assert unit == 250.00
     assert method == "subcontract_plating_historical_comparator"
     assert "not the per-kilo zinc card" in note, "the learned fact survives"
@@ -234,13 +235,14 @@ def test_every_word_that_stops_it_being_an_unlabelled_standing_rate():
     """"A previous job's supplier figure may provide a transparent historical comparator,
     but must not become an UNLABELLED automatic price." The label is the whole difference,
     so each part of it is pinned."""
-    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
     assert "HISTORICAL COMPARATOR" in note      # what it is
     assert "7332-01" in note                    # whose job it was
-    assert "9 Sep 2026" in note                 # when it was current
+    assert "2026-09-09" in note                 # when it was current
     assert "Howard Thurley" in note             # who supplied it
     assert "NOT a current price" in note        # what it is not
     assert "Nothing in SDI Live answered" in note   # why a better source did not win
+    assert "status confirmed" in note                # and how firm the source was
     assert "quoted job by job" in note          # what to do about it
 
 

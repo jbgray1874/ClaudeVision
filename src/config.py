@@ -1156,14 +1156,11 @@ NAMED_PLATE_SPECS = {
         # The learned facts: what it is, and how it is priced.
         "decorative": True,          # not zinc — the per-kilo card must not price it
         "requires_quote": True,      # the plater quotes it per job
-        # Context for the person who has to get that quote. Dated, attributed, and never
-        # charged: `gbp_per_unit` is deliberately NOT a key of this entry.
-        "last_known_quote": {
-            "gbp_per_unit": 250.00,
-            "job": "7332-01",
-            "on": "9 Sep 2026",
-            "source": "plater quote via SDI estimating (Howard Thurley)",
-        },
+        # THE MONEY IS NOT HERE. The last quote lives in data/price_register.json under
+        # this same key, scoped to the job it was given for — so a rate change is a data
+        # review rather than a code edit, and the figure carries a status and a review date
+        # that a literal never could. This entry teaches WHAT the finish is; the register
+        # says what it last cost and whose job that was.
         "confirm": ("plating is quoted job by job (Howard Thurley, 16 Sep 2026) — get the "
                     "plater's price for THIS job, or enter it in this job's answers file"),
     },
