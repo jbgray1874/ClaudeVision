@@ -236,6 +236,58 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
 </style>
 </head>
 <body>
+<div id="sdi-dlbar" style="font:500 13px/1.4 ui-sans-serif,-apple-system,'Segoe UI',sans-serif;
+     display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+     max-width:940px;margin:0 auto;padding:10px 22px 0;color:inherit">
+  <a id="sdi-dlbar-pdf" href="" target="_blank" rel="noopener"
+     style="text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:5px;
+            padding:5px 11px;opacity:.75">PDF version</a>
+  <button type="button" id="sdi-dlbar-save"
+     style="font:inherit;color:inherit;background:transparent;border:1px solid currentColor;
+            border-radius:5px;padding:5px 11px;opacity:.75;cursor:pointer">Save this page</button>
+  <span id="sdi-dlbar-note" style="opacity:.6"></span>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById("sdi-dlbar");
+  if (!bar) return;
+  var link = document.getElementById("sdi-dlbar-pdf");
+  var save = document.getElementById("sdi-dlbar-save");
+  var note = document.getElementById("sdi-dlbar-note");
+
+  // WHERE THE PDF IS, WHICH DEPENDS ENTIRELY ON HOW THIS PAGE WAS OPENED.
+  var here = String(location.href).split("#")[0];
+  var name = (here.split("/").pop() || "").split("?")[0];
+  if (/[?&]path=/.test(here)) {
+    // The portal: /api/file?path=<dir>/<name>.html -> swap the extension inside the query.
+    link.href = here.replace(/(\.html?)(?=($|&))/i, ".pdf");
+  } else if (/\.html?$/i.test(name)) {
+    link.href = name.replace(/\.html?$/i, ".pdf");   // sibling file, on disk or on K:
+  } else {
+    link.hidden = true;                              // cannot work it out: offer nothing broken
+  }
+
+  save.addEventListener("click", function () {
+    try {
+      bar.hidden = true;                             // the saved copy carries the report, not the bar
+      var html = "<!doctype html>\n" + document.documentElement.outerHTML;
+      bar.hidden = false;
+      var url = URL.createObjectURL(new Blob([html], {type: "text/html;charset=utf-8"}));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (name && /\.html?$/i.test(name)) ? name : "sdi-status-report.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) {
+      note.textContent = "Saving is blocked here — use the browser's own Save Page As.";
+    }
+  });
+})();
+</script>
+<style>@media print { #sdi-dlbar { display:none !important; } }</style>
+
 <div class="wrap">
 
   <div class="sheet">

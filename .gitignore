@@ -42,6 +42,18 @@ input/
 
 # PDFs, images and workbooks (CRITICAL — job data, never commit)
 *.pdf
+# THE STATUS REPORTS ARE THE EXCEPTION, and a narrow one.
+#
+# The rule above exists because a PDF in this repo is almost always job data — a customer's
+# drawing pack — and that must never be committed. The status reports are the opposite kind
+# of file: they are written to be read by other people, on other machines. The portal opens
+# them from a share, and the machine that prints them is not the machine that serves them, so
+# an ignored PDF is a report that exists for exactly one person.
+#
+# Scoped to reports/ and to PDF alone, so a drawing dropped anywhere else is still refused.
+# tools/report_pdf.py prints them; test_a_status_report_ships_in_both_formats.py fails when
+# one is missing or untracked.
+!reports/*.pdf
 *.png
 *.jpg
 *.jpeg
