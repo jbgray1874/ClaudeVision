@@ -1501,7 +1501,13 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     Three tests, three answers about one line."""
     me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
     ps = me.get("price_source") if isinstance(me.get("price_source"), Mapping) else {}
+    # cost_source ALWAYS joins the witness pool, never only as a fallback. The 11:19
+    # PACKAGING stub carried cost_source "stated_method_system_priced" AND a stale
+    # material_estimate whose cost_method said market — the or-chain let the stale stamp
+    # mask the stub's own classification, so the report called Howard's stated method an
+    # AI market indication three sections after the sheet said "Stated method + SDI Live".
     method = str(me.get("cost_method") or part.get("cost_source") or part.get("source") or "")
+    _cost_src = str(part.get("cost_source") or "")
     supplier = str(part.get("supplier") or "").strip()
     # THE ROW'S OWN TAG IS A WITNESS TOO. The 08:08 tape line printed "[AI ESTIMATE -
     # INDICATIVE, NOT A QUOTE]" on the sheet while the part record behind it had lost its
@@ -1509,8 +1515,8 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # and the record called it "source unrecorded", and the headline tally stopped asking
     # anyone to replace it. What wb_populate stamped onto the row travels with the row.
     tokens = " ".join(str(x) for x in (
-        method, ps.get("source_name"), ps.get("source_type"), ps.get("supplier_source"),
-        supplier, row_text)).lower()
+        method, _cost_src, ps.get("source_name"), ps.get("source_type"),
+        ps.get("supplier_source"), supplier, row_text)).lower()
     money = charged_unit if charged_unit is not None else engine_unit
     _row_says_ai = "ai estimate" in tokens and "indicative" in tokens
 

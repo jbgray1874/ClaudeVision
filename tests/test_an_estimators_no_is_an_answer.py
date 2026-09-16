@@ -93,3 +93,19 @@ def test_a_specific_operation_row_is_untouched():
     rd = labour_row_description("Linebend", "ACRYLIC", 2.0, ["10975-02-A01"],
                                 bends=2, work_ops=["folding"])
     assert "[" not in rd, "only the generic manual bucket needs its work naming"
+
+
+# ── a stale market stamp cannot mask the stated method ───────────────────────────────────
+
+def test_cost_source_always_joins_the_witness_pool():
+    """The 11:19 report called Howard's stated method "an AI market indication" three
+    sections after the sheet said "Stated method + SDI Live": the stub carried BOTH the
+    stated cost_source and a stale market stamp on its material_estimate, and the
+    or-chain let the stale stamp mask the stub's own classification."""
+    from costed_facts import _price_origin, INDICATIVE_HOUSE
+    pkg = {"part_number": "PACKAGING", "_commercial_placeholder": True,
+           "cost_source": "stated_method_system_priced",
+           "material_estimate": {"cost_method": "market_ai_indicative"}}
+    origin = _price_origin(pkg, "commercial", None, 1.91, 1.91, None, False)
+    assert origin["class"] == "stated_method", origin
+    assert origin["firmness"] == INDICATIVE_HOUSE

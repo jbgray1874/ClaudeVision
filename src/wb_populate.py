@@ -3653,6 +3653,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # layout. Written only into an EMPTY cell, so nothing on the template is ever displaced.
     write_revision_header(ws, summary, job_folder_name)
 
+    # THE DESCRIPTION BOX SAYS WHAT THE PRODUCT IS. Howard's own sheet reads "A4 Table
+    # Top Graphic Holder - L Stand (0355255)"; ours went out blank — an attachment header
+    # with an empty Description reads as unfinished before a single figure is checked.
+    # Same title source as the quotation, same instruction guard (a drawing note is not
+    # a product name), written only into an empty cell so a typed description stands.
+    try:
+        from client_quote_html import _drawing_identity, _reads_as_an_instruction
+        _t_num, _t_rev, _t_title = _drawing_identity(summary, job_folder_name)
+        if _t_title and not _reads_as_an_instruction(_t_title):
+            _d_hit = _find_label_cell(ws, "description")
+            if _d_hit:
+                _dr, _dc = _d_hit
+                _cell = _writable_cell(ws, _dr, _dc + 1)
+                if _cell is not None and _cell.value in (None, ""):
+                    _cell.value = str(_t_title)[:90]   # a typed description never moves
+    except Exception:                                            # noqa: BLE001
+        pass
+
     # ── Classify parts into blocks — from the FULL part audit ──────────────
     # Rules, in order, based on the engine's own fields (confirmed by _classify_audit):
     #   1. PACKAGING / DELIVERY placeholders (£0.00)     -> DROP (estimator adds manually)
