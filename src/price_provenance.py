@@ -741,6 +741,26 @@ def mark_withheld(record: Any, reason: Any = None) -> int:
             block["withheld_reason"] = str(block.get("withheld_reason") or reason
                                            or "kept off the price column by the engine")
             changed += 1
+    # AND UNDER EVERY NAME THE LINE ANSWERS TO. Marking the stamps on the object in hand
+    # leaves the twin still reading as money whenever the same line is stamped elsewhere
+    # under a spelling the compiler merged it from — 10975's tape was withheld as 10975 and
+    # went on blocking the job as 10975EPDMCLOSEDCELL. The reproducibility check reads this
+    # list, so the fact travels with the LINE rather than with one copy of it.
+    if isinstance(record, dict) and changed:
+        _names = record.setdefault("price_superseded_identities", [])
+        for _key in ("part_number", "matched_part_code", "part_code",
+                     "canonical_part_number"):
+            _v = record.get(_key)
+            if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
+                _names.append(_v.strip())
+        for _key in ("folded_duplicate_identities",):
+            for _v in (record.get(_key) or []):
+                if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
+                    _names.append(_v.strip())
+        for _v in ((record.get("evidence") or {}).get("raw_aliases") or []) \
+                if isinstance(record.get("evidence"), dict) else []:
+            if isinstance(_v, str) and _v.strip() and _v.strip() not in _names:
+                _names.append(_v.strip())
     return changed
 
 

@@ -952,6 +952,27 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
     # the sheet adds a code here, and a price that reached the total never appears.
     _withheld = {str(c).strip().upper()
                  for c in (summary.get("withheld_price_lines") or []) if str(c).strip()}
+    # WITHHOLDING IS A PROPERTY OF THE LINE, NOT OF THE OBJECT SOMEBODY HAPPENED TO HOLD.
+    #
+    # 10975's tape is priced by the roll-goods length arithmetic off SDI Live — reproducible,
+    # and the £0.28 on the sheet. The earlier market answer it displaced was marked withheld
+    # on the part record, but the SAME line is also stamped under the spelling the compiler
+    # merged it from (10975EPDMCLOSEDCELL), and that copy went on reading as applied money.
+    # So this check BLOCKED the job for a figure that never reached the total, and one report
+    # said both "no line rests on an AI market indication" and "2 priced lines were costed by
+    # an AI market estimate" — the same fault the missing-drawing check had when a folded
+    # alias read as an absence.
+    #
+    # The names come from mark_withheld, which records every spelling the superseded line
+    # answers to. Deliberately not "every alias of every part": only a line whose price was
+    # explicitly displaced contributes, so a genuinely applied market price is still caught
+    # under whichever of its names it is stamped with.
+    for _part in _parts(summary):
+        for _sid in (_part.get("price_superseded_identities") or []):
+            _s = str(_sid).strip().upper()
+            if _s:
+                _withheld.add(_s)
+    _withheld.discard("")
     guessed = []
     for path, block, owner in price_provenance.applied_ai_prices(summary):
         if str(owner or "").strip().upper() in _withheld:
