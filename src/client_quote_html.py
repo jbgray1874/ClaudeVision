@@ -1253,11 +1253,29 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     if _rev_raw:
         _rev = _rev_raw if _rev_raw.lower().startswith("rev") else f"Rev {_rev_raw.upper()}"
     else:
+        # THE REVISION IS ON THE PACK'S NAME, AND THIS COULD NOT READ IT.
+        #
+        # The old pattern required "_rev" immediately followed by the letter, and searched
+        # only the PDF title or the caller's stem. Both real packs defeat it:
+        #
+        #     "0355255 - A4 Table Top Graphic Holder - 10975_REV B"   -> space before B
+        #     "0359967_-_11908-21-GA_-_Rev_A_Sunglsses..."            -> underscore before A
+        #
+        # so 10975-02 went out with an empty Rev box beside a filename that says REV B. The
+        # separator is now any of space, dot, dash or underscore, the drawings' own names are
+        # searched as well, and the token has to END there — "REVERSE PANEL" is not Rev E.
         _pdf_title = str(_get(summary, "pdf_metadata", "/Title", default="")
                          or _get(summary, "drawing_metadata", "pdf_metadata", "/Title",
                                  default=""))
-        _m2 = re.search(r"_rev\[?([A-Za-z0-9]+)\]?", _pdf_title or stem, re.IGNORECASE)
-        _rev = ("Rev " + _m2.group(1).upper()) if _m2 else ""
+        _rev = ""
+        _rev_re = re.compile(
+            r"(?:^|[_\-\s])rev(?:ision)?[\s._\-]*\[?([A-Za-z]\d?|\d{1,2})\]?(?![A-Za-z0-9])",
+            re.IGNORECASE)
+        for _text in [_pdf_title, stem] + list(_source_drawing_names(summary) or []):
+            _m2 = _rev_re.search(str(_text or ""))
+            if _m2:
+                _rev = "Rev " + _m2.group(1).upper()
+                break
 
     return _number, _rev, (_title or _project or _number)
 

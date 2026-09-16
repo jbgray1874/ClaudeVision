@@ -119,14 +119,18 @@ def _plating_job(summary, finish="PLATED"):
 
 
 def test_a_quoted_price_lists_every_member():
-    line = _plating_job({"customer": "Harrods"})
+    # THE DRAWING NAMES THE SPEC. It used to be enough that the customer was Harrods, and
+    # Howard revoked that on 16 Sep — plating is drawing-specific and priced job by job. A
+    # quoted-price line is reached by the pack naming its own spec, which is what this
+    # fixture now does and what the test was always about.
+    line = _plating_job({"customer": "Harrods"}, finish="HARRODS 01")
     assert line["unit_cost_gbp"] == 250.00
     assert "7332-01-001" in line["description"] and "7332-01-008" in line["description"]
     assert "no member is excluded" in line["description"]
 
 
 def test_it_says_why_no_member_is_excluded():
-    line = _plating_job({"customer": "Harrods"})
+    line = _plating_job({"customer": "Harrods"}, finish="HARRODS 01")
     assert "the mass is not an input" in line["description"]
 
 

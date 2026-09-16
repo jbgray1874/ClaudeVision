@@ -218,3 +218,78 @@ def test_the_fingerprint_still_gates_the_closed_names():
     out = invariants.check_prices_are_reproducible(job)
     assert [v.get("code") for v in out] == ["price_not_reproducible"], out
     assert out[0]["detail"]["count"] == 1
+
+
+# ── what actually priced the line ────────────────────────────────────────────────────────
+#
+# THE FIX THAT SHOULD HAVE BEEN FIRST. The tape blocked through FOUR builds. Each attempt
+# chased where a withheld FLAG lived — set it on the record, record the names it answers to,
+# close those names over the job — and each failed the same way, because a flag written in
+# one place has to survive to another and on this job it does not.
+#
+# The flag was never the evidence. The evidence is on the sheet: the line is priced by the
+# roll-goods length arithmetic off SDI Live, £0.28, reproducible between runs. A line whose
+# applied price came from a reproducible source cannot ALSO be a line costed by an AI market
+# estimate — the money that reached the total came from the catalogue, and the market figure
+# beside it is a rival that lost.
+
+def _live(**over):
+    block = {"schema": pp.PRICE_SOURCE_SCHEMA, "source_name": "udef_sqlserver",
+             "source_class": "catalogue", "applied": True, "reproducible": True}
+    block.update(over)
+    return block
+
+
+def test_a_line_the_catalogue_priced_is_not_blocked_by_a_rival_market_stamp():
+    """THE LIVE SHAPE, with NO withheld flag anywhere — which is the state every previous
+    fix assumed could not happen."""
+    tape = {"part_number": "10975",
+            "evidence": {"raw_aliases": ["10975EPDMCLOSEDCELL"]},
+            "material_estimate": {"price_source": _live(unit_price_gbp=0.09)}}
+    job = {"parts": [tape], "estimate_summary": {"part_estimates": [
+        {"matched_part_code": "10975EPDMCLOSEDCELL",
+         "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                            "source": _stamp()}}}]}}
+    assert "price_superseded_identities" not in tape, "no flag is set in this shape"
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == [], out
+
+
+def test_the_clearance_travels_through_the_jobs_own_aliases():
+    """The catalogue price is stamped under "10975" and the market one under the merged
+    spelling. They are one line, and the job's own records say so."""
+    tape = {"part_number": "10975",
+            "folded_duplicate_identities": ["10975-02-00"],
+            "material_estimate": {"price_source": _live()}}
+    job = {"parts": [tape], "estimate_summary": {"part_estimates": [
+        {"matched_part_code": "10975-02-00",
+         "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                            "source": _stamp()}}}]}}
+    assert [v.get("code") for v in invariants.check_prices_are_reproducible(job)] == []
+
+
+def test_an_ai_price_with_no_catalogue_behind_it_still_blocks():
+    """THE GUARD. Only a REPRODUCIBLE APPLIED price on the same line clears it; 11350's
+    £86.04 entered a total with nothing behind it and is exactly what this is for."""
+    job = {"parts": [{"part_number": "BI-SCREENCABLE"}],
+           "estimate_summary": {"part_estimates": [
+               {"part_number": "BI-SCREENCABLE",
+                "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                                   "source": _stamp()}}}]}}
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == ["price_not_reproducible"], out
+
+
+def test_a_catalogue_price_on_a_DIFFERENT_line_clears_nothing():
+    """The clearance is per line, through that line's own names — not a job-wide amnesty
+    because something somewhere was priced properly."""
+    job = {"parts": [{"part_number": "10975",
+                      "material_estimate": {"price_source": _live()}},
+                     {"part_number": "BI-KNOB"}],
+           "estimate_summary": {"part_estimates": [
+               {"part_number": "BI-KNOB",
+                "cost_breakdown": {"system_cost": {"applied_to_total": True,
+                                                   "source": _stamp()}}}]}}
+    out = invariants.check_prices_are_reproducible(job)
+    assert [v.get("code") for v in out] == ["price_not_reproducible"], out
+    assert out[0]["detail"]["parts"] == ["BI-KNOB"]

@@ -1036,9 +1036,51 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
                 return True
         return False
 
+    # WHAT ACTUALLY PRICED THE LINE — the question three fixes went round the houses to
+    # avoid asking.
+    #
+    # The tape blocked as 10975EPDMCLOSEDCELL through four builds. Each fix chased where a
+    # WITHHELD FLAG lived — set it on the record, record the names, close the names over the
+    # job — and each failed the same way, because a flag written in one place has to survive
+    # to another, and on this job it does not.
+    #
+    # The flag was never the evidence. The evidence is on the sheet: this line is priced by
+    # the roll-goods length arithmetic off SDI Live, £0.28, reproducible between runs. A line
+    # whose applied price came from a reproducible source CANNOT also be a line costed by an
+    # AI market estimate — the money that reached the total came from the catalogue, and the
+    # market figure beside it is a rival that lost. That is true whatever any flag says, and
+    # it is true under every spelling, because the aliases come from the job's own records.
+    #
+    # Deliberately narrow: only a REPRODUCIBLE APPLIED price on the same line clears it. An
+    # AI price on a line with no catalogue price behind it is exactly what this check exists
+    # for and still blocks — 11350's £86.04 is untouched.
+    _alias_groups: List[set] = []
+    for _rec in _all:
+        _ids = _identities(_rec)
+        if not _ids:
+            continue
+        _hit = next((g for g in _alias_groups if g & _ids), None)
+        if _hit is None:
+            _alias_groups.append(set(_ids))
+        else:
+            _hit |= _ids
+    _priced_reproducibly: set = set()
+    for _path, _block, _owner in price_provenance.iter_price_stamps_with_owner(summary):
+        _o = str(_owner or "").strip().upper()
+        if not _o or not price_provenance.stamp_affects_total(_block):
+            continue
+        if price_provenance.stamp_is_ai_estimate(_block):
+            continue
+        _priced_reproducibly.add(_o)
+        for _g in _alias_groups:
+            if _o in _g:
+                _priced_reproducibly |= _g
+
     guessed = []
     for path, block, owner in price_provenance.applied_ai_prices(summary):
         if str(owner or "").strip().upper() in _withheld:
+            continue
+        if str(owner or "").strip().upper() in _priced_reproducibly:
             continue
         if _is_a_displaced_price(owner, block):
             continue

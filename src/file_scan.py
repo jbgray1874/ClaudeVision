@@ -3590,15 +3590,28 @@ def _finalize_scan_summary(
                     _near += [f.name for f in sorted(_root.glob("*.json"))
                               if "confirm" in f.name.lower()
                               or "estimator_dimensions" in f.name.lower()]
+                _dn = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number") or "")
+                _where = ", ".join(str(_p) for _p in dict.fromkeys(_looked)) or "nowhere"
                 if _near:
-                    _dn = ((summary.get("document_analysis") or {}).get("drawing_number")
-                           or summary.get("drawing_number") or "")
                     print(f"   [confirmed] NO answers file was accepted for this job, but "
                           f"the folder holds {', '.join(sorted(set(_near)))}. Searched "
-                          f"{', '.join(str(p) for p in dict.fromkeys(_looked))} against "
-                          f"drawing number {_dn!r}, the PDF name and the folder name. "
-                          f"Rename the file for the drawing, or put a \"drawing_number\" "
-                          f"inside it, and it will be read.", flush=True)
+                          f"{_where} against drawing number {_dn!r}, the PDF name and the "
+                          f"folder name. Rename the file for the drawing, or put a "
+                          f"\"drawing_number\" inside it, and it will be read.", flush=True)
+                else:
+                    # SAY IT EVEN WHEN THERE IS NOTHING TO FIND. No answers file is the
+                    # ORDINARY case and used to pass in silence — which is right until a
+                    # job is being re-run BECAUSE somebody placed one. Four 10975-02 runs
+                    # went out at quantity 1 with the gauge still being asked, and each
+                    # time the log said nothing at all, so the one question that mattered —
+                    # is the file where the engine looks? — could not be answered from the
+                    # evidence the run produced. One line costs nothing and settles it.
+                    print(f"   [confirmed] no answers file for this job — none found in "
+                          f"{_where} (looked for <name>_confirmed.json / "
+                          f"<name>_estimator_dimensions.json against drawing number "
+                          f"{_dn!r}, the PDF name and the folder name). If one was placed, "
+                          f"it is not in the folder the engine reads.", flush=True)
             except Exception:                                    # noqa: BLE001
                 pass
     except Exception as _ec_err:

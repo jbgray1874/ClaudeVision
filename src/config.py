@@ -800,25 +800,27 @@ LABOUR_GROUP_RATE_SPREAD_FLAG = 3.0
 #
 # `when` is ALL of its conditions — every key must match or the entry does not apply. An
 # entry with no conditions is rejected rather than applied to everything.
-INHERITED_ESTIMATOR_DECISIONS = [
-    {
-        "id": "harrods-bare-plate",
-        "when": {
-            "customer": "HARRODS",
-            "finish_family": "plate",
-            "spec_identified": False,
-        },
-        "then": {
-            "plating_gbp_per_unit": 250.00,
-            "plating_spec": "Brass — Harrods 01",
-        },
-        "decided_by": "Howard Thurley (SDI estimating)",
-        "decided_on": "9 Sep 2026",
-        "decided_on_job": "7332-01",
-        "why": ("the drawing states only PLATED; the requirement is Brass Harrods 01 and the "
-                "plater charges £250 a stand"),
-    },
-]
+# ══ REVOKED 16 SEP 2026 — HOWARD SAID PLATING DOES NOT INHERIT ══════════════════════════
+#
+# The entry that lived here bound £250 to any HARRODS job whose drawing said only "PLATED".
+# We told Howard we had done it — "recorded as a standing decision, so any future Harrods job
+# whose drawing only says Harrods01 prices at £250 rather than guessing zinc" — and he came
+# back and corrected us:
+#
+#     "Plating would be as drawing specific, £250.00 is from supplier per unit and is
+#      independent of any other job. Plating jobs priced independently."
+#
+# So the premise was wrong, not the implementation. Plating is quoted job by job; a price
+# from one job is evidence about THAT job and about nothing else, and a customer's name buys
+# nothing at all. test_the_customer_name_alone_buys_nothing was reversed to let this entry
+# exist; it is restored, and it was right the first time.
+#
+# THE MECHANISM STAYS, EMPTY. A genuine standing decision — one an estimator states as a
+# rule rather than as a price for a job — still belongs here, and the machinery around it
+# (every condition must match, every entry names who decided it, every line it reaches says
+# it was inherited) is what would make that safe. What it must not hold is a quoted price
+# wearing a rule's clothes.
+INHERITED_ESTIMATOR_DECISIONS: list = []
 
 # ══ WHAT THE SHOP TOLD US, IN ONE PLACE ═════════════════════════════════════════════════
 #
@@ -1124,11 +1126,25 @@ PLATE_SUBCONTRACT_POLICY = {
 #
 # Matched on the finish text with spaces and punctuation removed, because a drawing writes
 # "Harrods01", "HARRODS 01" and "Harrods-01" for one finish.
+# A NAMED SPEC IDENTIFIES THE FINISH. IT DOES NOT CARRY THE PRICE TO THE NEXT JOB.
+#
+# Howard, 16 Sep: "Plating would be as drawing specific, £250.00 is from supplier per unit
+# and is independent of any other job. Plating jobs priced independently."
+#
+# Reading the spec off the drawing is drawing evidence and stays. The FIGURE beside it is
+# the last quote we hold for that spec, on a named job and a named date — useful to show an
+# estimator, never a rate to quote from. `priced_per_job` says so, and any line it reaches
+# asks for a fresh plater quote rather than presenting the figure as settled.
 NAMED_PLATE_SPECS = {
     "HARRODS01": {
         "gbp_per_unit": 250.00,
         "label": "Brass — Harrods 01",
+        "priced_per_job": True,
+        "quoted_for_job": "7332-01",
         "source": "plater quote via SDI estimating for 7332-01 (Howard Thurley, 9 Sep 2026)",
+        "confirm": ("plating is quoted job by job (Howard Thurley, 16 Sep 2026) — this is "
+                    "the last figure we hold for this spec, not a rate. Get the plater's "
+                    "price for THIS job"),
     },
 }
 

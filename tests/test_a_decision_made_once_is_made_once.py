@@ -1,29 +1,32 @@
-"""The second Harrods stand must not ask the same question the first one answered.
+"""A decision inherits. A QUOTED PRICE does not — and plating is a quoted price.
 
     "All changes we do should be worked to be inherited or it's a pointless one off hack
      that we will be found out on with the next drawing with the same characteristics"
                                                         — James Gray, SDI, 14 Sep 2026
 
-He is right, and this file is where I was wrong. Brass Harrods 01 at £250 went into
-7332-01's own answers file, which governs 7332-01 and nothing else. So the next Harrods
-stand states the same bare "PLATED", blocks for the same reason, and somebody types the same
-£250 — same characteristics, same manual work, every time. The blocking rule generalised; the
-knowledge did not, and the knowledge is the part that cost a day to get.
+That is right, and this file used to apply it to the wrong thing. Brass Harrods 01 at £250
+went into a register keyed on the CUSTOMER, so the next Harrods stand whose drawing said
+only "PLATED" would price at £250 without asking. We told Howard we had done it. He
+corrected us on 16 Sep:
 
-THIS REVERSES A TEST WRITTEN ON PURPOSE. test_the_customer_name_alone_buys_nothing pinned
-that a client called Harrods buys no plate spec, and that reasoning still holds: the ENGINE
-must never infer a price from a customer's name. What changed is that this is not an
-inference. An estimator stated it, for stated conditions, and recording that is the opposite
-of guessing — "Harrods, so probably brass" against "Howard Thurley told us on 9 Sep that
-Harrods stands calling up a bare PLATED are Brass Harrods 01 at £250".
+    "Plating would be as drawing specific, £250.00 is from supplier per unit and is
+     independent of any other job. Plating jobs priced independently."
 
-WHAT MAKES INHERITANCE SAFE IS THAT IT ANNOUNCES ITSELF. Every inherited figure says whose
-decision it was, which job it was made on, why, and what the line would have read without
-it. An inherited price that arrives silently is indistinguishable from one the engine
-invented, and that is the one thing this codebase does not do.
+So the premise was wrong, not the implementation. A price a plater quoted for one job is
+evidence about THAT job; the customer's name buys nothing at all. The entry is revoked, and
+test_the_customer_name_alone_buys_nothing — which this file reversed on purpose, and which
+was right the first time — stands again.
 
-AND THE PACK STILL WINS. The register is consulted only where the drawings could not answer.
-A pack that names its own spec is read; a job with a price already on it is untouched.
+WHAT SURVIVES, AND WHY IT IS WORTH KEEPING. The machinery is sound and the fault was in what
+we put through it: every condition must match, an entry with no conditions applies to
+nothing, every entry names who decided it and when, and anything inherited announces itself
+on the line. A genuine standing decision — a rule an estimator states AS a rule — still
+belongs here. A quoted price wearing a rule's clothes does not, and the tests below now pin
+that distinction rather than the £250.
+
+AND READING THE SPEC OFF THE DRAWING IS UNAFFECTED. A pack that names "Harrods 01" is read;
+what no longer travels is the figure beside it, which is marked priced-per-job and asks for
+this job's plater quote.
 """
 from __future__ import annotations
 
@@ -51,27 +54,58 @@ def _job(customer, finish="PLATED", drawing="9001-01"):
     return parts[1]
 
 
-# ── the next drawing with the same characteristics ───────────────────────────────────────
+# The shape a GENUINE standing decision takes — a rule an estimator states AS a rule, not a
+# price he quoted for a job. Howard's own: "dressing varies between clients, M&S dress all
+# seen welds, TTI no dressing." Used as a fixture so the machinery keeps its tests without
+# the revoked price.
+_A_REAL_STANDING_RULE = {
+    "id": "ms-dress-seen-welds",
+    "when": {"customer": "M&S", "finish_family": "weld", "seen_welds": True},
+    "then": {"weld_dress_required": True},
+    "decided_by": "Howard Thurley (SDI estimating)", "decided_on": "16 Sep 2026",
+    "decided_on_job": "7332-01",
+    "why": "M&S dress all seen welds; TTI none. His words, as a rule rather than a price",
+}
 
-def test_the_second_harrods_stand_is_priced_without_asking_again():
-    line = _job("Harrods")
-    assert line["unit_cost_gbp"] == 250.00
-    assert line["cost_source"] == "inherited_estimator_decision"
+
+# ── the revoked entry ────────────────────────────────────────────────────────────────────
+
+def test_no_customer_buys_a_plating_price():
+    """THE REVOCATION. Howard: plating is drawing-specific and priced job by job."""
+    assert config.INHERITED_ESTIMATOR_DECISIONS == [], \
+        "a quoted price must not live in the standing-decision register"
+    assert inherited_decision("plating_gbp_per_unit", {
+        "customer": "Harrods", "finish_family": "plate", "spec_identified": False}) is None
 
 
-def test_it_finds_the_customer_however_the_folder_spelled_it():
-    """"Harrods Ltd" and "Harrods" are one customer. A rule that misses two spellings out of
-    three is the one-off hack it was written to replace."""
-    for name in ("Harrods", "HARRODS LTD", "Harrods Ltd", "Harrods Limited",
-                 "harrods 9001-01"):
-        assert _job(name)["unit_cost_gbp"] == 250.00, name
+def test_the_second_harrods_stand_asks_again_on_purpose():
+    """It looks like a regression and it is the correction. Another stand is another
+    plater quote, and the engine may not answer that question for him."""
+    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
+              "normalized_finish": "PLATED", "is_assembly_parent": True, "quantity": 1,
+              "material_estimate": {"unit_material_mass_kg": 0.9}},
+             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
+              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
+              "quantity": 1, "description": "plating"}]
+    apply_subcontract_plating(
+        parts, {"job_folder": r"D:\Enquiries\Harrods\9001-01"}, 6, parts)
+    assert parts[1]["unit_cost_gbp"] != 250.00
+
+
+def test_the_last_quote_is_kept_as_evidence_not_as_a_rate():
+    """Deleting the figure would throw away a real plater price somebody may want to see.
+    It stays, marked as this job's quote, with the question attached."""
+    spec = config.NAMED_PLATE_SPECS["HARRODS01"]
+    assert spec["gbp_per_unit"] == 250.00
+    assert spec["priced_per_job"] is True
+    assert spec["quoted_for_job"] == "7332-01"
+    assert "job by job" in spec["confirm"]
 
 
 def test_another_customer_inherits_nothing():
-    for name in ("Selfridges", "John Lewis", "", None):
-        line = _job(name)
-        assert line["unit_cost_gbp"] == 0.0, name
-        assert line["cost_source"] == "subcontract_plating_spec_unidentified", name
+    assert inherited_decision("plating_gbp_per_unit", {
+        "customer": "Selfridges", "finish_family": "plate",
+        "spec_identified": False}) is None
 
 
 # ── and the pack still outranks it ───────────────────────────────────────────────────────
@@ -92,28 +126,7 @@ def test_a_drawing_naming_the_spec_itself_prices_from_the_spec_table():
 
 # ── it says where it came from, every time ───────────────────────────────────────────────
 
-def test_the_line_says_it_was_inherited_and_from_what():
-    line = _job("Harrods")
-    text = line["description"] + " " + " ".join(line["review_flags"])
-    assert "INHERITED" in text
-    assert "7332-01" in text                       # the job the decision was made on
-    assert "Howard Thurley" in text                # whose decision
-    assert "9 Sep 2026" in text                    # when
-    assert "confirm it applies" in text.lower()
 
-
-def test_it_says_what_the_line_would_have_read_without_it():
-    """So an estimator can see the figure he is overriding, not just the one he is given."""
-    flags = " ".join(_job("Harrods")["review_flags"])
-    assert "Without it the line would read" in flags
-    assert "SPEC NOT IDENTIFIED" in flags
-
-
-def test_it_says_this_drawing_does_not_state_the_spec():
-    """The most important sentence on the line: the figure is from an earlier job, not from
-    the pack in front of the reader."""
-    flags = " ".join(_job("Harrods")["review_flags"])
-    assert "THIS DRAWING DOES NOT STATE THE SPEC" in flags
 
 
 # ── the register itself ──────────────────────────────────────────────────────────────────
@@ -127,21 +140,23 @@ def test_every_entry_says_who_decided_it_and_when_and_why():
             assert str(entry.get(field) or "").strip() or entry.get(field), (field, entry)
 
 
-def test_every_condition_must_match_not_just_one():
+def test_every_condition_must_match_not_just_one(monkeypatch):
     """`when` is a conjunction. A customer match alone must not buy the price — that is
     exactly the inference this engine refuses to make."""
-    assert inherited_decision("plating_gbp_per_unit", {"customer": "Harrods"}) is None
-    assert inherited_decision("plating_gbp_per_unit", {
-        "customer": "Harrods", "finish_family": "plate"}) is None
-    assert inherited_decision("plating_gbp_per_unit", {
-        "customer": "Harrods", "finish_family": "plate", "spec_identified": False})
+    monkeypatch.setattr(config, "INHERITED_ESTIMATOR_DECISIONS", [_A_REAL_STANDING_RULE])
+    assert inherited_decision("weld_dress_required", {"customer": "M&S"}) is None
+    assert inherited_decision("weld_dress_required", {
+        "customer": "M&S", "finish_family": "weld"}) is None
+    assert inherited_decision("weld_dress_required", {
+        "customer": "M&S", "finish_family": "weld", "seen_welds": True})
 
 
-def test_an_identified_spec_is_not_a_missing_one():
+def test_an_identified_spec_is_not_a_missing_one(monkeypatch):
     """spec_identified True must not match the False condition — a boolean compares exactly,
     because "the spec could not be identified" is not nearly true."""
-    assert inherited_decision("plating_gbp_per_unit", {
-        "customer": "Harrods", "finish_family": "plate", "spec_identified": True}) is None
+    monkeypatch.setattr(config, "INHERITED_ESTIMATOR_DECISIONS", [_A_REAL_STANDING_RULE])
+    assert inherited_decision("weld_dress_required", {
+        "customer": "M&S", "finish_family": "weld", "seen_welds": False}) is None
 
 
 def test_an_entry_with_no_conditions_applies_to_nothing(monkeypatch):
@@ -155,9 +170,10 @@ def test_an_entry_with_no_conditions_applies_to_nothing(monkeypatch):
     assert _job("Selfridges")["unit_cost_gbp"] == 0.0
 
 
-def test_a_decision_of_another_kind_is_not_returned():
+def test_a_decision_of_another_kind_is_not_returned(monkeypatch):
+    monkeypatch.setattr(config, "INHERITED_ESTIMATOR_DECISIONS", [_A_REAL_STANDING_RULE])
     assert inherited_decision("weld_minutes", {
-        "customer": "Harrods", "finish_family": "plate", "spec_identified": False}) is None
+        "customer": "M&S", "finish_family": "weld", "seen_welds": True}) is None
 
 
 def test_the_customer_is_read_the_way_the_workbook_header_reads_it():
@@ -209,20 +225,6 @@ def test_a_folder_that_names_no_customer_yields_nothing():
     assert job_customer({"job_folder": r"C:\jobs\7332-01"}) == ""
     assert job_customer({"job_folder": ""}) == ""
 
-
-def test_the_plate_decision_now_reaches_a_folder_named_job():
-    """The end-to-end case the 22:26 book missed: no customer field anywhere, Harrods only in
-    the path, and the £250 must apply."""
-    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
-              "normalized_finish": "PLATED", "is_assembly_parent": True, "quantity": 1,
-              "material_estimate": {"unit_material_mass_kg": 0.9}},
-             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
-              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
-              "quantity": 1, "description": "plating"}]
-    apply_subcontract_plating(
-        parts, {"job_folder": r"D:\Enquiries\Harrods\9001-01"}, 6, parts)
-    assert parts[1]["unit_cost_gbp"] == 250.00
-    assert parts[1]["cost_source"] == "inherited_estimator_decision"
 
 
 def test_it_delegates_rather_than_copying_the_rule():
