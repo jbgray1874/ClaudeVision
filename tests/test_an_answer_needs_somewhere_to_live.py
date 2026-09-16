@@ -201,7 +201,7 @@ def test_the_rules_that_should_inherit_are_in_config_not_in_the_job_file():
     import config                                                        # noqa: PLC0415
     assert config.WELD_TIME_MODEL["allowance_min_per_weldment"] == 30.0
     assert config.PLATING_LOGISTICS["freight_gbp_per_order"] == 120.0
-    assert config.BRUSH_BEFORE_PLATE["minutes_per_consignment"] == 40.0
+    assert config.BRUSH_BEFORE_PLATE["minutes_per_unit"] == 40.0
     for block in (config.WELD_TIME_MODEL, config.PLATING_LOGISTICS,
                   config.BRUSH_BEFORE_PLATE):
         assert any("source" in k for k in block), block

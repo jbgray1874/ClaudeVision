@@ -5607,7 +5607,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # says so rather than the engine guessing at a part it has never been given a figure for.
     if _is_plate_finish(_part_finish_text(part)) or named_plate_spec(_part_finish_text(part)):
         _bb = getattr(config, "BRUSH_BEFORE_PLATE", {}) or {}
-        _bb_min = _safe_float(_bb.get("minutes_per_consignment")) or 0.0
+        # PER UNIT — Howard's own answer, 16 Sep: "40 Minutes was given by production for
+        # one unit". It read per-consignment, which at six off understated it six-fold.
+        _bb_min = _safe_float(_bb.get("minutes_per_unit")) or 0.0
         _bb_op = str(_bb.get("operation") or "manual_labour_metal")
         if (_bb.get("enabled") and _bb_min > 0 and is_weldment_parent(part)
                 and not part.get("brush_before_plate_applied")):

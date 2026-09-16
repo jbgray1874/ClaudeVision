@@ -4807,18 +4807,44 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         (getattr(config, "SHOP_STATED", None) or {}).get(
             "acrylic_assemble_pack_parts_per_hour")
         or _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"])
-    # THE JOINERY DEPARTMENTS, off Tony Ford's own 11908-21 sheet. Every one of these was a
-    # guess borrowed from a neighbouring department because no joinery job had ever been
-    # measured — "no edge banding, no machining saw/spindle, no bench work time" is what
-    # that reads like from the estimator's side. Bench work at 79/hr against his 1.96/hr is
-    # 25.5 of his 42 hours run forty times too fast, and most of the gap to his £57.09.
-    for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
-                       ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
-                       ("Bench Work Joinery", "joinery_bench_parts_per_hour"),
-                       ("Packing Joinery",    "joinery_pack_parts_per_hour")):
-        _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
-        if _stated:
-            _THROUGHPUT_DEFAULTS[_row] = float(_stated)
+    # THE JOINERY DEPARTMENTS, off Tony Ford's own 11908-21 sheet — A SCOPED PILOT, NOT A
+    # UNIVERSAL FLOOR.
+    #
+    # Every joinery throughput here was a guess borrowed from a neighbouring department
+    # because no joinery job had ever been measured; "no edge banding, no machining
+    # saw/spindle, no bench work time" is what that reads like from the estimator's side,
+    # and bench work at 79/hr against his 1.96/hr is 25.5 of his 42 hours run forty times
+    # too fast. His sheet is real evidence and it belongs in the engine.
+    #
+    # WHAT IT IS NOT IS A JOINERY CONSTANT. The first version of this applied his figures to
+    # every joinery job at every quantity, which review caught immediately — and it is the
+    # SAME defect he reported, arriving from the other side. His figures are HOURS PER ORDER
+    # at fifty off. Hours per order contain both a per-unit run time and whatever setup the
+    # department did once, and one job gives one equation in two unknowns: it cannot be
+    # solved, only asked. Treating the lot as run time overstates the per-unit rate by
+    # however much of it was setup — on his own numbers, half an hour of setup a department
+    # moves the pack rate by 22%.
+    #
+    # So it is scoped to the family it was measured on — faced/laminated board, his colour-
+    # core tray — where the work the figures describe is the work being done. Outside that
+    # family the old guesses stand, still marked UNMEASURED, because an honest "we do not
+    # know" beats another department's number wearing joinery's name. The scope widens when
+    # a second job or the department confirms, not before.
+    _faced_board_job = any(
+        isinstance(_p, dict) and (
+            _p.get("_laminate_in_board")
+            or str((_p.get("material_estimate") or {}).get("costing_material_family")
+                   or "").upper() in {"MFMDF", "MFC"}
+            or str(_p.get("normalized_material") or "").upper() in {"MFMDF", "MFC"})
+        for _p in (bom_parts or []))
+    if _faced_board_job:
+        for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
+                           ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
+                           ("Bench Work Joinery", "joinery_bench_parts_per_hour"),
+                           ("Packing Joinery",    "joinery_pack_parts_per_hour")):
+            _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
+            if _stated:
+                _THROUGHPUT_DEFAULTS[_row] = float(_stated)
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which

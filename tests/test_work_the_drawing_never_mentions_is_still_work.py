@@ -102,7 +102,7 @@ def test_it_can_be_switched_back_to_a_flag(monkeypatch):
 
 
 def test_the_minutes_are_one_config_edit(monkeypatch):
-    monkeypatch.setitem(config.BRUSH_BEFORE_PLATE, "minutes_per_consignment", 25.0)
+    monkeypatch.setitem(config.BRUSH_BEFORE_PLATE, "minutes_per_unit", 25.0)
     assert _times(_weldment())["manual_labour_metal"] == 25.0
 
 

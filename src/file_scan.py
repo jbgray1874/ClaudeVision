@@ -3572,6 +3572,35 @@ def _finalize_scan_summary(
                         print(f"   [confirmed] operations_off names {_pc}, but NO part of "
                               f"this job carries that number — the line did nothing. Check "
                               f"the code", flush=True)
+        else:
+            # A FILE THAT DID NOTHING MUST NOT DO IT SILENTLY.
+            #
+            # Three 10975-02 runs went out at quantity 1 with the gauge and the tape still
+            # being asked, against an answers file the office had written and placed. Each
+            # time the only evidence was an absence — nothing in the log said the file had
+            # been looked for, where, or under what names — so the diagnosis cost a rerun
+            # every time. No file is the ORDINARY case and must stay quiet; a folder that
+            # holds something answers-shaped and still yields nothing is not ordinary, and
+            # this says exactly what was searched and what was seen.
+            try:
+                _looked = [p for p in ([Path(job_folder)] if job_folder else [])
+                           + ([Path(pdf_path).parent] if pdf_path else []) if p.is_dir()]
+                _near = []
+                for _root in dict.fromkeys(_looked):
+                    _near += [f.name for f in sorted(_root.glob("*.json"))
+                              if "confirm" in f.name.lower()
+                              or "estimator_dimensions" in f.name.lower()]
+                if _near:
+                    _dn = ((summary.get("document_analysis") or {}).get("drawing_number")
+                           or summary.get("drawing_number") or "")
+                    print(f"   [confirmed] NO answers file was accepted for this job, but "
+                          f"the folder holds {', '.join(sorted(set(_near)))}. Searched "
+                          f"{', '.join(str(p) for p in dict.fromkeys(_looked))} against "
+                          f"drawing number {_dn!r}, the PDF name and the folder name. "
+                          f"Rename the file for the drawing, or put a \"drawing_number\" "
+                          f"inside it, and it will be read.", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
     except Exception as _ec_err:
         print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
 

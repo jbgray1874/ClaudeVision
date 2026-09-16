@@ -857,7 +857,13 @@ SHOP_STATED = {
     "dress_min_per_weldment": 20.0,
     "weld_joints_measured_on": 5,          # joints the engine counts on 7332-01-101
     "weld_calibrated_on_part": "7332-01-101",
-    "brush_before_plate_min": 40.0,        # per consignment, before it goes to the platers
+    # PER UNIT. Howard was asked directly — "is the 40 minutes per stand, or once for the
+    # whole consignment? At 6 off that is the difference between about £3.50 and £21 a
+    # unit" — and answered: "40 Minutes was given by production for one unit, rate was
+    # priced based on experience and for similar size units, time would vary per unit /
+    # size." So it is per unit, it is an experienced judgement rather than a measurement,
+    # and it is scaled to SIMILAR-SIZED work. All three facts are in the provenance.
+    "brush_before_plate_min": 40.0,        # per UNIT, before it goes to the platers
     "plater_pack_min": 4.0,                # packing to send
     "plater_final_pack_min": 8.0,          # packing again on the way back
     "plater_freight_gbp_per_order": 120.0,  # pallet network, round trip
@@ -917,6 +923,18 @@ SHOP_STATED = {
     "joinery_pack_parts_per_hour":         18.1818,
     "joinery_rates_measured_on_job":       "11908-21",
     "joinery_rates_measured_at_quantity":  50,
+    # SETUP CANNOT BE SEPARATED FROM ONE JOB, AND PRETENDING OTHERWISE IS THE DEFECT TONY
+    # REPORTED. His hours per order contain a per-unit run time AND whatever setup each
+    # department did once. One job is one equation in two unknowns: unsolvable, only
+    # askable. None means UNKNOWN — not zero — and the figures above therefore carry the
+    # setup inside them, which overstates the per-unit rate by however much it was. On his
+    # own numbers, half an hour of setup a department moves the pack rate by 22%.
+    "joinery_setup_min_per_department":    None,
+    # Named here so the scope is a fact in the register rather than a sentence in a comment:
+    # these figures apply to the family they were measured on and nothing else, until a
+    # second job or the department itself widens them.
+    "joinery_rates_scope":                 "faced/laminated board (MFMDF, MFC)",
+    "joinery_rates_status":                "scoped pilot — provisional",
 }
 
 # EVERY FIGURE CARRIES ITS OWN PROVENANCE. The register used to close with one shared
@@ -955,7 +973,14 @@ SHOP_STATED_PROVENANCE = {
     "weld_joints_measured_on":      dict(_HOWARD_7332, unit="joints",
                                          evidence="joints the engine counts on 7332-01-101"),
     "weld_calibrated_on_part":      dict(_HOWARD_7332, unit="part number"),
-    "brush_before_plate_min":       dict(_HOWARD_7332, unit="minutes/consignment"),
+    "brush_before_plate_min":       dict(
+        _HOWARD_7332, stated_on="16 Sep 2026", unit="minutes/unit",
+        evidence="asked directly whether the 40 minutes was per stand or per "
+                 "consignment, Howard answered per unit: \"40 Minutes was given by "
+                 "production for one unit, rate was priced based on experience and for "
+                 "similar size units, time would vary per unit / size\". An experienced "
+                 "judgement scaled to similar-sized work, not a measurement — a much "
+                 "larger or smaller stand should be asked about again"),
     "plater_pack_min":              dict(_HOWARD_7332, unit="minutes/consignment"),
     "plater_final_pack_min":        dict(_HOWARD_7332, unit="minutes/consignment"),
     "plater_freight_gbp_per_order": dict(_HOWARD_7332, unit="GBP/order",
@@ -1000,6 +1025,26 @@ SHOP_STATED_PROVENANCE = {
         _TONY_11908, unit="units",
         evidence="the quantity his hours were stated at — the divisor behind every "
                  "joinery parts/hour figure above"),
+    "joinery_setup_min_per_department":    dict(
+        _TONY_11908, unit="minutes/department",
+        evidence="UNKNOWN, and None says so rather than zero. His sheet states hours per "
+                 "order, which contain a per-unit run time and whatever setup each "
+                 "department did once; one job is one equation in two unknowns and cannot "
+                 "be solved, only asked. Until it is asked, the run figures above carry "
+                 "the setup inside them and overstate the per-unit rate by however much "
+                 "of it was setup (on his numbers, 30 min a department moves the pack "
+                 "rate by 22%). ASK TONY: of the hours on your Labour tab, how much is "
+                 "set-up once and how much is per tray?"),
+    "joinery_rates_scope":                 dict(
+        _TONY_11908, unit="material family",
+        evidence="the family the measurement was taken on — his colour-core laminated "
+                 "tray. Outside it the engine keeps its UNMEASURED guesses, because an "
+                 "honest 'we do not know' beats another department's number wearing "
+                 "joinery's name. Widens on a second job or a department confirmation"),
+    "joinery_rates_status":                dict(
+        _TONY_11908, unit="status",
+        evidence="a scoped pilot: one job, setup not separated, applied only inside its "
+                 "own family. NOT a joinery constant and not to be quoted as one"),
 }
 
 
@@ -1023,14 +1068,22 @@ def shop_stated_source(key: str) -> str:
 # invention, but an estimator has mentioned it, with a duration, and leaving it off is simply
 # under-charging — the direction nobody notices, because a quote that is too low is accepted.
 #
-# PER CONSIGNMENT. What goes to the platers is the weldment, so this is booked once against
-# the part the plating line plates — never once per plated member, which on 7332-01 would be
-# four hours of linishing on one stand.
+# PER UNIT, ONCE PER WELDMENT. Two different questions, and the answers differ.
+#
+# WHICH PART: the weldment, never once per plated member — on 7332-01 that would be four
+# hours of linishing on one stand.
+#
+# HOW OFTEN: per UNIT. This read "per consignment", which at 6 off understated the
+# operation six-fold. Howard was asked outright and answered per unit (see the register
+# above), so the minutes scale with the order like any other run time.
 #
 # Set enabled False to go back to naming it without costing it.
 BRUSH_BEFORE_PLATE = {
     "enabled": True,
-    "minutes_per_consignment": SHOP_STATED["brush_before_plate_min"],
+    # ONE NAME. An alias for the old per-consignment spelling was tempting and wrong:
+    # two keys holding one figure is two places to edit and two chances to disagree, which
+    # is the fault this whole register exists to stop.
+    "minutes_per_unit": SHOP_STATED["brush_before_plate_min"],
     "setup_min": 0.0,
     "operation": "manual_labour_metal",
     "source": f"SDI shop practice via {shop_stated_source('brush_before_plate_min')}",

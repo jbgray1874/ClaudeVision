@@ -127,7 +127,7 @@ def test_a_consumer_prints_the_right_jobs_source():
 
 def test_the_consumers_read_the_register_rather_than_repeating_it():
     """A second copy of a number is the defect, however well the two copies agree today."""
-    assert config.BRUSH_BEFORE_PLATE["minutes_per_consignment"] == \
+    assert config.BRUSH_BEFORE_PLATE["minutes_per_unit"] == \
         config.SHOP_STATED["brush_before_plate_min"]
     assert config.PLATING_LOGISTICS["pack_for_plater_min"] == \
         config.SHOP_STATED["plater_pack_min"]

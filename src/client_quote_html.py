@@ -880,6 +880,90 @@ def _reads_as_an_instruction(text: Any) -> bool:
 _CODE_SHAPED = re.compile(r"^\d{3,}[A-Za-z]?(?:[-_ ][A-Za-z0-9]{1,4})*$")
 
 
+def _source_drawing_names(summary: Dict[str, Any]) -> List[str]:
+    """The filenames of the drawings this job was read from, without their extensions.
+
+    The office names a pack for the office AND for the product — "0355255 - A4 Table Top
+    Graphic Holder - 10975_REV B.pdf" — so when no record in the job can say what the unit
+    is, the drawing file often can. Gathered from wherever the scan recorded them, because
+    different readers file them in different places and a resolver that knows only one of
+    those places is a resolver that works on some packs.
+    """
+    out: List[str] = []
+    _seen = set()
+
+    def _add(value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        base = re.sub(r"\.(pdf|dxf|dwg|xls[xm]?|step|stp)$", "", text.split("\\")[-1]
+                      .split("/")[-1], flags=re.IGNORECASE).strip()
+        if base and base.upper() not in _seen:
+            _seen.add(base.upper())
+            out.append(base)
+
+    if not isinstance(summary, dict):
+        return out
+    for key in ("source_files", "pdf_files", "drawing_files", "files_scanned",
+                "input_files", "pdf_path", "source_pdf", "drawing_file"):
+        value = summary.get(key)
+        if isinstance(value, str):
+            _add(value)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _add(item if isinstance(item, str) else (item or {}).get("path")
+                     if isinstance(item, dict) else None)
+    _da = summary.get("document_analysis")
+    if isinstance(_da, dict):
+        for key in ("source_file", "pdf_path", "file", "files"):
+            value = _da.get(key)
+            if isinstance(value, str):
+                _add(value)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    _add(item)
+        for page in (_da.get("pages") or []):
+            if isinstance(page, dict):
+                _add(page.get("source_file") or page.get("file"))
+    return out
+
+
+def _title_from_a_filename(name: Any) -> str:
+    """The product name inside a drawing's filename, or "" when there is none in it.
+
+    A pack is named for the office as well as for the product, and the office's half
+    brackets the product's:
+
+        0355255 - A4 Table Top Graphic Holder - 10975_REV B
+        0359967 - 11908-21-GA - Rev A - Sunglsses Tray Large Colour Core
+
+    Job numbers, sheet-role tokens and a bare revision letter are all in their own boxes on
+    the sheet already, so they come off — but only as WHOLE TOKENS AT THE ENDS, which is why
+    "A4", "Type 2 Bracket" and "L Stand" keep every word they have.
+    """
+    cleaned = re.sub(r"\.(pdf|dxf|dwg|xls[xm]?)$", "", str(name or ""),
+                     flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*\s*[-_]?\s*", "", cleaned)
+    # ORDER MATTERS HERE, and it is not the obvious one. Separators become spaces FIRST, so
+    # "GA2_REV[E]" exposes its own word boundary. The noise filter runs BEFORE the camel-case
+    # split, because splitting turns "SolidWorks" into "Solid Works" and the filter would
+    # then match neither half.
+    cleaned = re.sub(r"[_\-]+", " ", cleaned)
+    cleaned = _STEM_NOISE.sub(" ", cleaned)
+    # Folder names are written without spaces far more often than not, and
+    # "BootsLadderRackCommsBar" is not something to put in front of a customer.
+    cleaned = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" -_")
+    _debris = re.compile(r"^(?:\d+|[A-Za-z]|GA\d?|ASSY|ASSEMBLY|ARR|GEN)$", re.IGNORECASE)
+    words = cleaned.split()
+    while words and _debris.match(words[0]):
+        words.pop(0)
+    while words and _debris.match(words[-1]):
+        words.pop()
+    cleaned = " ".join(words).strip(" -_")
+    return cleaned if len(cleaned) > 2 and not _reads_as_a_code(cleaned) else ""
+
+
 def _reads_as_a_code(text: Any) -> bool:
     """True when a 'description' is only the number the job is already filed under.
 
@@ -1113,34 +1197,28 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
         _m = re.match(r"\s*(\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*)", stem)
         _number = _m.group(1).strip(" -_") if _m else stem
     if not _title:
-        _cleaned = re.sub(r"\.(pdf|dxf|dwg|xlsx?)$", "", stem, flags=re.IGNORECASE)
-        _cleaned = re.sub(r"^\s*\d+[A-Za-z]?(?:[-_]\d+[A-Za-z]?)*\s*[-_]?\s*", "", _cleaned)
-        # ORDER MATTERS HERE, and it is not the obvious one.
+        # THE PACK'S OWN FILENAMES, NOT ONLY THE CALLER'S STEM.
         #
-        # Separators become spaces FIRST, so "GA2_REV[E]" exposes its own word boundary.
-        # The noise filter runs BEFORE the camel-case split, because splitting turns
-        # "SolidWorks" into "Solid Works" and the filter would then match neither half.
-        _cleaned = re.sub(r"[_\-]+", " ", _cleaned)
-        _cleaned = _STEM_NOISE.sub(" ", _cleaned)
-        # Folder names are written without spaces far more often than not, and
-        # "BootsLadderRackCommsBar" is not something to put in front of a customer.
-        _cleaned = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", _cleaned)
-        _cleaned = re.sub(r"\s{2,}", " ", _cleaned).strip(" -_")
-        # AND THE FILING DEBRIS OFF BOTH ENDS. A pack is named for the office as well as
-        # for the product, and the office's half brackets the product's:
-        #   "0355255 - A4 Table Top Graphic Holder - 10975_REV B"
-        #   "0359967 - 11908-21-GA - Rev A - Sunglsses Tray Large Colour Core"
-        # Job numbers, sheet-role tokens and a bare revision letter are all in their own
-        # boxes on the sheet already. Only whole tokens at the ENDS come off, and only
-        # these kinds, so "A4", "Type 2 Bracket" and "L Stand" keep every word they have.
-        _DEBRIS = re.compile(r"^(?:\d+|[A-Za-z]|GA\d?|ASSY|ASSEMBLY|ARR|GEN)$", re.IGNORECASE)
-        _words = _cleaned.split()
-        while _words and _DEBRIS.match(_words[0]):
-            _words.pop(0)
-        while _words and _DEBRIS.match(_words[-1]):
-            _words.pop()
-        _cleaned = " ".join(_words).strip(" -_")
-        _title = _cleaned if len(_cleaned) > 2 else ""
+        # This arm was always here and on 10975-02 it never fired, because `stem` is the JOB
+        # stem — "10975-02" — which cleans down to nothing. The name that knows what the
+        # unit is sits on the drawing file itself: "0355255 - A4 Table Top Graphic Holder -
+        # 10975_REV B.pdf". The refusal of a code-shaped title correctly blanked the
+        # Description box, and then there was nothing to put in it.
+        #
+        # Longest first: a pack usually holds a GA and some details, and the GA's name is
+        # the one carrying the product. Nothing is invented — a filename that cleans to
+        # noise still yields no description, exactly as the folder name does.
+        _names = [stem]
+        try:
+            for _f in (_source_drawing_names(summary) or []):
+                if _f and _f not in _names:
+                    _names.append(_f)
+        except Exception:                                             # noqa: BLE001
+            pass
+        for _cand_stem in sorted(_names, key=lambda s: -len(str(s or ""))):
+            _title = _title_from_a_filename(_cand_stem)
+            if _title:
+                break
 
     _rev = ""
     if _rev_raw:

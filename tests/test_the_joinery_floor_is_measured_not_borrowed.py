@@ -140,3 +140,49 @@ def test_the_edging_code_is_named_once():
                encoding="utf-8").read()
     assert "FACED_BOARD_EDGING_CODE" in src
     assert config.FACED_BOARD_EDGING_CODE in config.ESTIMATOR_STATED_PRICES
+
+
+# ── a scoped pilot, not a joinery constant ───────────────────────────────────────────────
+#
+# The first version of this applied Tony's figures to every joinery job at every quantity.
+# Review caught it immediately, and it is the SAME defect he reported arriving from the
+# other side: his hours are PER ORDER and contain both run time and whatever setup each
+# department did once. One job is one equation in two unknowns.
+
+def test_setup_is_recorded_as_unknown_not_as_zero():
+    """None, not 0.0. Zero is a claim — that the departments set up instantly — and it is
+    the claim that would silently bake the setup into the per-unit rate."""
+    assert config.SHOP_STATED["joinery_setup_min_per_department"] is None
+    ev = config.SHOP_STATED_PROVENANCE["joinery_setup_min_per_department"]["evidence"]
+    assert "UNKNOWN" in ev
+    assert "ASK TONY" in ev, "an unknown with no question attached never becomes known"
+
+
+def test_the_figures_declare_their_scope_and_their_status():
+    assert "MFMDF" in config.SHOP_STATED["joinery_rates_scope"]
+    assert "pilot" in config.SHOP_STATED["joinery_rates_status"]
+
+
+def test_the_overlay_only_fires_on_the_family_it_was_measured_on():
+    """Outside faced board the old UNMEASURED guesses stand. An honest 'we do not know'
+    beats another department's number wearing joinery's name."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "_faced_board_job" in src
+    i = src.index("_faced_board_job = any(")
+    j = src.index('joinery_pack_parts_per_hour', i)
+    gate = src[i:j]
+    assert "MFMDF" in gate and "MFC" in gate
+    assert "if _faced_board_job:" in gate, "the overlay must sit inside the gate"
+
+
+def test_the_register_and_the_code_agree_about_scope():
+    """D-045's first version said 'one job is one job' in its evidence and 'generic
+    (joinery)' in its scope. Both cannot be true, and a register that contradicts itself is
+    worse than no register."""
+    reg = open(os.path.join(os.path.dirname(__file__), "..", "docs", "CHANGE_REGISTER.md"),
+               encoding="utf-8").read()
+    row = [ln for ln in reg.splitlines() if ln.startswith("| D-045 ")]
+    assert row, "D-045 must exist"
+    assert "generic (joinery)" not in row[0], \
+        "the code scopes these to faced board; the register may not call them generic"
