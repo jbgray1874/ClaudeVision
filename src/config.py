@@ -411,7 +411,8 @@ PER_ORDER_UNIT_COUNTS = {
 #    Better than 0 or crazy numbers."                        — James Gray, 15 Sep 2026
 #
 # The same split as the tape roll. HOW a job is packed is a stated fact — Howard gave the
-# method in writing: every unit individually bagged (PACK13), then bulk-packed in stock
+# method in writing: every unit individually bagged (PACK56 — his email typed PACK13,
+# his priced sheet buys PACK56, see the consumables note), then bulk-packed in stock
 # boxes (BOX481) at 1 box for 10 or 50, 3 for 250, 9 for 1000. WHAT the bag and the box
 # COST is money, and money comes live from SDI's own priced sources (UDEF first) at run
 # time — nothing here holds a price, so nothing here can go stale invisibly.

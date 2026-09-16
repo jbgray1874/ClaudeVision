@@ -5,6 +5,8 @@
      Better than 0 or crazy numbers."                       — James Gray, 15 Sep 2026
 
     "Individually Bagged (PACK13 12 x 18 x 100G) Then Bulk Packed in Large Stock Boxes
+     [his email's code; his own priced sheet buys the 12 x 18 bag as PACK56 at £17.91/1000,
+      and the sheet is the estimate he issued — the method follows the sheet]
      (BOX481) 1 Box Suits 10 or 50 Components, 3 Boxes to Suit 250 Components 9 Boxes
      Suit 1000 Components."               — Howard Thurley, 0355255 packing note, 9 Sep
 

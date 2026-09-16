@@ -233,7 +233,7 @@ def _consumable_price(code: str) -> Optional[Dict[str, Any]]:
     """What ONE of this consumable costs, from SDI's own priced sources. Never raises,
     never invents — None is an honest answer and the caller says which code it was.
 
-    THE CATALOGUE SELLS PACKS AND THE METHOD COUNTS EACHES. PACK13 is on UDEF at £29.68 —
+    THE CATALOGUE SELLS PACKS AND THE METHOD COUNTS EACHES. PACK56 is on UDEF at £17.91 —
     "POLY BAG 18 x 24 x 100G (PACK OF 1000)". Read as a per-bag price, a 50-off order
     carries £1,484 of poly bags: exactly the crazy number this whole area exists to stop,
     and it would have shipped wearing a real supplier's name. The pack size is stated in

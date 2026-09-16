@@ -1489,7 +1489,8 @@ class CanonicalRouteUnavailable(RuntimeError):
 
 
 def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None,
-                           parts: Any = (), bends: Any = 0, holes: Any = 0) -> str:
+                           parts: Any = (), bends: Any = 0, holes: Any = 0,
+                           work_ops: Any = ()) -> str:
     """The text an estimator reads on a labour row.
 
     Module-level so it can be driven. The first check on the DRIL wording asserted that a
@@ -1524,6 +1525,21 @@ def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None
         _rd += " (%d bend%s)" % (int(bends), "" if int(bends) == 1 else "s")
     elif holes:
         _rd += " (%d hole%s)" % (int(holes), "" if int(holes) == 1 else "s")
+    # A GENERIC BUCKET NAMES ITS WORK. "Manual labour (Acrylic)" is the rate-table row;
+    # the WORK is the compiler's own operation (10975-02's is the deburr minted from
+    # SCRAPED EDGES on the drawing). Howard cannot judge whether his PACP figure already
+    # covers this row while the row will not say what it is — that judgement is his, so
+    # the row states the work and claims nothing about whose department owns it.
+    if str(wb_op).startswith("Manual labour") and work_ops:
+        _WORK_WORDS = {"deburr": "edge scraping / deburr",
+                       "deburring": "edge scraping / deburr"}
+        _generic = {"manual", "manual_labour", "manual_labour_acrylic",
+                    "manual_labour_metal", "handling"}
+        _work = ", ".join(sorted({
+            _WORK_WORDS.get(str(o).lower(), str(o).replace("_", " "))
+            for o in work_ops if str(o).lower() not in _generic}))
+        if _work:
+            _rd += f" [{_work}]"
     return _rd
 
 
@@ -5604,7 +5620,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # is the most useful thing on the line.
         _rd = labour_row_description(wb_op, g["material"],
                                      None if g.get("assembly_scoped") else g["thickness"],
-                                     g["parts"], g["bends"], g["holes"])
+                                     g["parts"], g["bends"], g["holes"],
+                                     work_ops=g.get("engine_ops") or ())
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
         ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])

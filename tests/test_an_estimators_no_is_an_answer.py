@@ -72,3 +72,24 @@ def test_real_product_names_pass():
                  "A4 Table-Top Graphic Holder",
                  "CHECKOUT DIVIDER — LARGE"):   # a product that merely CONTAINS a verb-word
         assert not _reads_as_an_instruction(name), name
+
+
+# ── the generic manual bucket names its work ─────────────────────────────────────────────
+
+def test_the_manual_row_says_what_the_hands_are_doing():
+    """"Manual labour (Acrylic) — 2mm ACRYLIC (10975-02-A01)" gave Howard nothing to
+    judge his PACP overlap question against. The row now states the compiler's own work
+    (SCRAPED EDGES minted a deburr) and claims nothing about whose department owns it —
+    that call is his."""
+    from wb_populate import labour_row_description
+    rd = labour_row_description("Manual labour (Acrylic)", "ACRYLIC", 2.0,
+                                ["10975-02-A01"], work_ops=["deburr",
+                                                            "manual_labour_acrylic"])
+    assert "[edge scraping / deburr]" in rd, rd
+
+
+def test_a_specific_operation_row_is_untouched():
+    from wb_populate import labour_row_description
+    rd = labour_row_description("Linebend", "ACRYLIC", 2.0, ["10975-02-A01"],
+                                bends=2, work_ops=["folding"])
+    assert "[" not in rd, "only the generic manual bucket needs its work naming"
