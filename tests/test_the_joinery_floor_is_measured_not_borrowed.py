@@ -98,3 +98,45 @@ def test_the_machining_figure_is_recorded_even_though_no_row_emits_it_yet():
     assert config.SHOP_STATED["joinery_machining_parts_per_hour"] > 0
     assert "does not yet emit" in \
         config.SHOP_STATED_PROVENANCE["joinery_machining_parts_per_hour"]["evidence"]
+
+
+# ── the edging: we hold the rate, we do not hold the metreage ────────────────────────────
+#
+# "Not all materials calculated no ABS edging Allowed" — Tony's first finding. The pack
+# states no edging spec anywhere (his line quotes the Egger reference from the spec book,
+# not from the drawing), so the engine could not mint the material without inventing it.
+# His sheet states both halves, and only one of them generalises.
+
+def test_his_edging_line_is_reproduced_from_the_register():
+    """5 m at £0.35 with his 4% scrap is the £1.82 on his sheet."""
+    import stated_prices
+    rate = stated_prices.resolve(config.FACED_BOARD_EDGING_CODE,
+                                 "ABS edging for faced board")
+    assert rate["gbp"] == 0.35
+    assert round(5 * rate["gbp"] * 1.04, 2) == 1.82
+
+
+def test_the_rate_says_whose_it_is_and_that_it_is_not_a_live_price():
+    import stated_prices
+    label = stated_prices.resolve(config.FACED_BOARD_EDGING_CODE, "")["label"]
+    assert "Tony Ford" in label and "11908-21" in label
+    assert "not a live system price" in label
+
+
+def test_the_metreage_is_never_taken_from_the_drawn_perimeter():
+    """THE RULE THAT MATTERS. Only the VISIBLE edges are banded, and which those are is a
+    judgement about the product rather than a number on the drawing. Tony bands 5 m where
+    the drawn perimeter is far more, so a rule that banded every drawn edge would overcharge
+    every joinery job by the difference — on his own tray, £5.18 against £1.82."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "if EVERY edge were" in src, "the ask must say the figure is an upper bound"
+    assert "tell us the banded metres" in src, "and ask for the real one"
+
+
+def test_the_edging_code_is_named_once():
+    """The ask and the register read the same constant, so they cannot drift apart."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "FACED_BOARD_EDGING_CODE" in src
+    assert config.FACED_BOARD_EDGING_CODE in config.ESTIMATOR_STATED_PRICES

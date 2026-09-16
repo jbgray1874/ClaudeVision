@@ -6076,15 +6076,35 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _q = _safe(_p.get("quantity")) or 1
                 _edge_m += 2.0 * (float(_l) + float(_w)) / 1000.0 * float(_q)
             if _edge_m > 0:
+                # AND THE RATE WE HOLD, so the ask is one number to fill rather than a
+                # specification to write out. Asked of the system first and the estimators'
+                # own register second, exactly as the tape is — a line priced from the
+                # register says so, with the name and the date on it.
+                _edge_rate = ""
+                try:
+                    import stated_prices as _sp
+                    _px = _sp.resolve(getattr(config, "FACED_BOARD_EDGING_CODE", ""),
+                                      "ABS edging for faced board")
+                    if _px and _px.get("gbp"):
+                        _edge_rate = (
+                            f" We hold £{float(_px['gbp']):.2f} a metre for it "
+                            f"({_px.get('label') or 'source not named'}), so "
+                            f"{_edge_m:.1f} m would be "
+                            f"£{_edge_m * float(_px['gbp']):.2f} a unit if EVERY edge were "
+                            f"banded — tell us the banded metres and it prices by length, "
+                            f"like any roll goods.")
+                except Exception:                                # noqa: BLE001
+                    _edge_rate = ""
                 _inputs.append({
                     "kind": "material_unstated", "part": "EDGING",
                     "where": "faced-board parts",
                     "what": (f"EDGING NOT STATED — the laminated parts have "
                              f"{_edge_m:.1f} m of drawn edges per unit (every edge; "
                              f"visible edges will be less). The pack does not name an "
-                             f"edging spec, so nothing is priced. State the spec and "
-                             f"the banded metres (e.g. 23 x 1mm ABS at £/m) and it "
-                             f"prices by length, like any roll goods."),
+                             f"edging spec, so nothing is priced."
+                             + (_edge_rate or
+                                " State the spec and the banded metres (e.g. 23 x 1mm ABS "
+                                "at £/m) and it prices by length, like any roll goods.")),
                 })
     except Exception:                                            # noqa: BLE001
         pass

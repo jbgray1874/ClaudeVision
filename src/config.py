@@ -565,7 +565,26 @@ ESTIMATOR_STATED_PRICES = {
         "on": "2026-09-09", "job": "0355255",
         "note": "10 m roll of EPDM closed-cell tape 25 x 1 mm",
     },
+    # "Not all materials calculated no ABS edging Allowed" — Tony Ford's first finding on
+    # 11908-21. The pack states no edging spec anywhere (his own line quotes the Egger
+    # reference from the spec book, not from the drawing), so the engine could not mint the
+    # material without inventing it. His sheet states both halves: the spec and the rate.
+    #
+    # THE RATE IS HERE. THE METREAGE IS NOT, AND MUST NOT BE. He bands 5 m a unit against a
+    # much larger drawn perimeter, because only the VISIBLE edges are banded — which edges
+    # those are is a judgement about the product, not a number on the drawing, and a rule
+    # that banded every drawn edge would overcharge every joinery job by the difference.
+    # So the engine measures what is drawn, holds this rate, and asks.
+    "EDGE23X1ABS": {
+        "gbp": 0.35, "unit": "metre",
+        "by": "Tony Ford (SDI estimating)",
+        "on": "2026-09-03", "job": "11908-21",
+        "note": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate, Ostermann",
+    },
 }
+
+# The edging code above, named once so the ask and the register cannot drift apart.
+FACED_BOARD_EDGING_CODE = "EDGE23X1ABS"
 
 # --- Which machine cuts a blank, when a part is charged two ways -------------------
 #
