@@ -108,6 +108,36 @@ _SUPERSEDED = [
         r"text-align:center\">24 Sep 26</span>",
         id="p2-date",
     ),
+    # 16 Sep 2026: Drawing Search came out of UAT and went live for the design and technical
+    # teams, ahead of the 25 Sep tracker date, and was put on the portal menu. "UAT from 7 Sep"
+    # as a live condition was on the dashboard, the programme strip, the guide and the service
+    # card. Prose that says UAT "ran from" 7 Sep is history and stays readable.
+    pytest.param(
+        "Drawing Search is live and out of UAT from 16 Sep 2026",
+        r"(?:UAT from 7 Sep"
+        r"|In UAT with the studio designers"
+        r"|UAT with the studio designers (?:starts|from)"
+        r"|status:'UAT from"
+        r"|In progress, 50%"
+        r"|one project in UAT)",
+        id="drawing-search-live",
+    ),
+    # 16 Sep 2026: Client Briefing came off hold; Muhammad resumed it. The "on hold" chip and
+    # status were on the dashboard, the roadmap, the programme page and the service card.
+    # "held from 4 Sep" / "was held" are history and stay readable; "on hold" as the current
+    # state is not.
+    pytest.param(
+        "Client Briefing is back on the agenda from 16 Sep 2026",
+        r"(?:On hold \\u00b7 4 Sep 26"
+        r"|On hold · 4 Sep 26"
+        r"|>On hold</span>"
+        r"|On hold from 4 Sep"
+        r"|on hold from 4 Sep"
+        r"|ON HOLD FROM 4 SEP"
+        r"|is on hold"
+        r"|Not released, and on hold)",
+        id="client-briefing-back-on",
+    ),
 ]
 
 
