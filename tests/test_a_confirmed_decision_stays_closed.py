@@ -244,6 +244,88 @@ def test_the_sheet_named_file_still_wins_over_the_stem(tmp_path):
     assert found is not None and found.name == "10975-02-GA_confirmed.json"
 
 
+# ── the pack's OWN names find the file, because the office does not use the engine's ──────
+#
+# 10975-02's answers file went unread on three consecutive runs and it looked like three
+# separate defects: order quantity stuck at 1, the delivery exclusion never landing, and a
+# gauge Howard had confirmed asked again on the outstanding list. One cause. The finder
+# only ever tried the DRAWING NUMBER, and this pack's drawing number is the CUSTOMER's
+# (0355255) while the office names the file after SDI's own job number (10975-02).
+
+_REAL_PDF = "0355255 - A4 Table Top Graphic Holder - 10975_REV B.pdf"
+
+
+def _pack(tmp_path, pdfs, answers, dirname="job"):
+    d = tmp_path / dirname
+    d.mkdir()
+    for n in pdfs:
+        (d / n).write_text("x", encoding="utf-8")
+    for n in answers:
+        (d / n).write_text("{}", encoding="utf-8")
+    return d
+
+
+def test_the_customers_drawing_number_still_finds_sdis_job_file(tmp_path):
+    """THE DEFECT, on the real filenames. 0355255 is the number on the drawing; 10975-02 is
+    the number on the file; they are one job and the pack says so in its own name."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, [_REAL_PDF], ["10975-02_confirmed.json"])
+    for dn in ("0355255", "10975", None):
+        found = ec.find_corrections_file(d, d / _REAL_PDF, dn)
+        assert found is not None and found.name == "10975-02_confirmed.json", dn
+
+
+def test_the_folder_name_is_one_of_the_jobs_names(tmp_path):
+    """A scanner-named pack in a job-numbered folder — the drawings say nothing useful and
+    the folder says everything."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["scan001.pdf"], ["10975-02_confirmed.json"], dirname="10975-02")
+    found = ec.find_corrections_file(d, d / "scan001.pdf", None)
+    assert found is not None and found.name == "10975-02_confirmed.json"
+
+
+def test_another_jobs_file_is_never_borrowed(tmp_path):
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, [_REAL_PDF], ["33333-01_confirmed.json"])
+    assert ec.find_corrections_file(d, d / _REAL_PDF, "0355255") is None
+
+
+def test_the_neighbouring_job_number_is_a_different_job(tmp_path):
+    """11908-21 and 11908-22 are two jobs, and 1097 is not a short way of writing 10975.
+    The relation has to break at a separator or it is a collision, not a match."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["11908-22_GA.pdf"], ["11908-21_confirmed.json"])
+    assert ec.find_corrections_file(d, d / "11908-22_GA.pdf", "11908-22") is None
+    d2 = _pack(tmp_path, ["10975_GA.pdf"], ["1097_confirmed.json"], dirname="job2")
+    assert ec.find_corrections_file(d2, d2 / "10975_GA.pdf", "10975") is None
+
+
+def test_two_files_matching_one_code_are_never_guessed_between(tmp_path, capsys):
+    """10975-02 and 10975-03 both answer to "10975". Which one governs is the estimator's
+    to say, and the run says so out loud rather than picking."""
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["10975_GA.pdf"],
+              ["10975-02_confirmed.json", "10975-03_confirmed.json"])
+    assert ec.find_corrections_file(d, d / "10975_GA.pdf", "10975") is None
+    assert "NOT APPLIED" in capsys.readouterr().out
+
+
+def test_a_file_with_no_job_code_governs_nothing(tmp_path):
+    import estimator_confirmed as ec
+    d = _pack(tmp_path, ["drawings.pdf"], ["notes_confirmed.json"])
+    assert ec.find_corrections_file(d, d / "drawings.pdf", None) is None
+
+
+def test_a_job_code_is_four_digits_not_a_sheet_size():
+    """"A4", "2mm" and "REV B" are not job numbers, and a rule that thinks they are matches
+    every file in every folder."""
+    import estimator_confirmed as ec
+    assert ec.job_codes("0355255 - A4 Table Top Graphic Holder - 10975_REV B") == \
+        ["0355255", "10975"]
+    assert ec.job_codes("A4 2mm REV B") == []
+    assert ec.job_codes("11908-21-GA") == ["11908-21"]
+
+
 def test_a_numeric_segment_is_never_stripped_from_the_stem():
     """"10975" alone could govern a different job in the same folder — only trailing
     PURELY ALPHABETIC sheet-role tokens (GA, DETAIL) come off."""

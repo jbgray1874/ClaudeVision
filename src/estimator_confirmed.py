@@ -164,12 +164,76 @@ def drawing_stems(drawing_number: Any) -> List[str]:
     return stems
 
 
+_JOB_CODE_RE = re.compile(r"\d{4,}(?:[-_]\d{1,3}[A-Z]?)*")
+
+# Paths whose match has already been announced this process, so the early quantity probe and
+# the apply pass do not report one file twice.
+_ANNOUNCED: set = set()
+
+
+def job_codes(text: Any) -> List[str]:
+    """The job codes written into a name — "0355255 - … - 10975_REV B" -> 0355255, 10975.
+
+    A job code is a run of four or more digits, with any dash- or underscore-joined numeric
+    tail ("10975-02", "11908-21"). Four digits because "A4", "2mm" and "REV B" are not job
+    numbers and a rule that thinks they are will match everything.
+    """
+    return [m.group(0).replace("_", "-") for m in _JOB_CODE_RE.finditer(str(text or "").upper())]
+
+
+def _same_job_code(a: str, b: str) -> bool:
+    """Two codes naming one job, one of them stated more precisely.
+
+    "10975" and "10975-02" are the same job written short and long, so a file named for
+    either governs a pack named for the other. The extra part must begin at a SEPARATOR:
+    1097 against 10975 is two different jobs that happen to share four digits, and that is
+    the whole difference between a match and a collision.
+    """
+    a, b = a.upper(), b.upper()
+    if a == b:
+        return True
+    lo, hi = (a, b) if len(a) < len(b) else (b, a)
+    return hi.startswith(lo) and hi[len(lo):len(lo) + 1] in ("-", "_")
+
+
+def _confirmed_stem(name: str) -> str:
+    """The job name a confirmations file is called after, with the suffix taken off."""
+    stem = str(name or "")
+    for suffix in ("_estimator_dimensions.json", "_confirmed.json"):
+        if stem.lower().endswith(suffix):
+            return stem[: -len(suffix)]
+    return ""
+
+
 def find_corrections_file(job_folder: Any, pdf_path: Any = None,
                           drawing_number: Any = None) -> Optional[Path]:
     """The confirmations file for this job, if one has been written. None is the normal case.
 
     Looked for beside the job's drawings, so it travels with the job rather than living in the
     engine — a pack handed to someone else carries its confirmations with it.
+
+    A JOB ANSWERS TO MORE THAN ONE NAME, AND THE OFFICE DOES NOT USE THE ENGINE'S.
+    10975-02's answers file went unread on three consecutive runs and the failure looked like
+    three separate defects: the order quantity stayed at 1, the delivery exclusion never
+    landed, and a gauge Howard had confirmed was asked again. One cause. This function only
+    ever tried the DRAWING NUMBER, and that pack's drawing number is the customer's (0355255)
+    while the office knows the job — and names the file — by SDI's own (10975-02). Neither
+    number is wrong; they are two names for one job, and the pack carries both: 0355255 in
+    the PDF's title block, 10975 in its filename, 10975-02 on the folder.
+
+    So the pack's own names are consulted too, in a strict order of precedence:
+
+      1. the drawing number and its stems — the most specific thing we know
+      2. an exact filename match against the folder name or the PDF's name
+      3. ONE answers file in the folder whose job code is this job's job code, longer or
+         shorter (10975 <-> 10975-02)
+
+    Step 3 is the only inexact step and it is deliberately narrow. Two files that both match
+    are never guessed between; a file whose name carries no job code at all matches nothing;
+    and the code relation must break at a separator, so 11908-21 never answers for 11908-22
+    and 1097 never answers for 10975. This is the same standard `file_scan`'s early quantity
+    probe was held to after the 16 Sep review — a file must EARN the job, not be the only one
+    in the folder.
     """
     stems = drawing_stems(drawing_number)
     roots: List[Path] = []
@@ -182,6 +246,15 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
             continue
         if root.is_dir() and root not in roots:
             roots.append(root)
+
+    # ── 1 & 2: an exact filename, most specific name first ───────────────────────────────
+    pack_names: List[str] = []
+    for text in ([Path(pdf_path).stem] if pdf_path else []) + [r.name for r in roots]:
+        if text and text not in pack_names:
+            pack_names.append(text)
+    for name in pack_names:
+        if name not in stems:
+            stems.append(name)
     for root in roots:
         for pattern in FILE_NAMES:
             if "{drawing}" in pattern:
@@ -193,6 +266,37 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
             path = root / pattern
             if path.is_file():
                 return path
+
+    # ── 3: one file whose job code is this job's ────────────────────────────────────────
+    ours: List[str] = []
+    for text in [drawing_number] + pack_names:
+        for code in job_codes(text):
+            if code not in ours:
+                ours.append(code)
+    if not ours:
+        return None
+    hits: List[Path] = []
+    for root in roots:
+        for path in sorted(root.glob("*.json")):
+            stem = _confirmed_stem(path.name)
+            if not stem:
+                continue
+            if any(_same_job_code(theirs, mine)
+                   for theirs in job_codes(stem) for mine in ours):
+                if path not in hits:
+                    hits.append(path)
+    if len(hits) == 1:
+        # Said once, not once per caller: the early quantity probe and the apply pass both
+        # ask this question, and one fact stated twice reads like two.
+        if str(hits[0]) not in _ANNOUNCED:
+            _ANNOUNCED.add(str(hits[0]))
+            print(f"   [confirmed] {hits[0].name} is this job's answers file — its job code "
+                  f"matches the pack ({', '.join(ours)})", flush=True)
+        return hits[0]
+    if hits:
+        print(f"   [confirmed] NOT APPLIED — {len(hits)} answers files match this job's "
+              f"code ({', '.join(p.name for p in hits)}). Name one of them for the drawing "
+              f"and it will be read; nothing is guessed between them.", flush=True)
     return None
 
 
