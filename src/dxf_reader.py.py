@@ -1527,10 +1527,23 @@ def _calculate_weight(
 def _is_flat_pattern(msp: Any, scale: float = 1.0) -> bool:
     """
     Return True if this DXF looks like a flat pattern:
+    - Has NO DIMENSION entities (a flat pattern has none, ever — a DXF carrying them is
+      a DRAWING of the part, whose border and views measure as fiction)
     - Has entities on CUT_LAYERS
     - Cut outline forms a sensible blank (area > 100mm², aspect < 50:1)
     - Optionally has BENDLINES layer
     """
+    # A DRAWING IS NOT A FLAT PATTERN, AND THIS READER SAID IT WAS. 10975-02's pack holds
+    # one DXF: the GA sheet exported whole — 9 DIMENSION entities, a BOM table, the M&S
+    # title block — and this returned True over it, so its extents (792 x 760.3 of views
+    # and border) reached the record as a "measured flat" and the blank check reported a
+    # phantom 377% disagreement against the model, twice. drawing_job_merge's guard
+    # already knows the decisive rule; the reader that MAKES the claim must apply it too,
+    # or every caller that trusts flat_pattern_detected (merge_dxf_into_scan_json does)
+    # inherits the lie.
+    for _e in msp:
+        if _e.dxftype() == "DIMENSION":
+            return False
     cut_lines = _get_layer_entities(msp, CUT_LAYERS, {"LINE"})
     if len(cut_lines) < 4:
         return False
@@ -1789,6 +1802,22 @@ def merge_dxf_into_scan_json(
         result.setdefault("dxf_merge_errors", []).append(
             {"dxf": str(dxf_path), "error": str(exc)}
         )
+        return result
+
+    # ONLY A FLAT PATTERN'S GEOMETRY MAY LAND ON A PART. This merge applied the blank
+    # whatever the extract said — flat_pattern_detected was computed and never consulted —
+    # so a drawing-sheet export's border extents could arrive on a part as measured
+    # geometry with confidence 1.0. Refused loudly: the augmentation record says the file
+    # was seen and why it gave no blank.
+    if not flat.get("flat_pattern_detected"):
+        result.setdefault("dxf_augmentations", []).append({
+            "dxf_file": str(dxf_path.name),
+            "part_number": (flat.get("part_number") or "").strip().upper() or None,
+            "matched": False,
+            "refused": ("not a flat pattern — the file is a drawing of the part "
+                        "(dimensions / title block) or its cut layers yield no blank; "
+                        "its extents would measure the border, not the profile"),
+        })
         return result
 
     dxf_pn = (flat.get("part_number") or "").strip().upper()
