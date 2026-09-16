@@ -867,6 +867,37 @@ SHOP_STATED = {
     # on his priced estimate can. This one line was most of the labour gap at volume
     # between his book and the engine's (~59p a unit at 10-off).
     "acrylic_assemble_pack_parts_per_hour": 30.0,
+    # ── THE JOINERY DEPARTMENTS, OFF TONY FORD'S OWN 11908-21 SHEET (3 Sep 2026) ────────
+    #
+    # "No edge banding, no machining saw/spindle, no bench work time, CNC setup not
+    # amortised" — Tony, reviewing the engine's book against his. Every joinery throughput
+    # the engine held was a GUESS borrowed from a neighbouring department, because no
+    # joinery job had ever been measured. His sheet is the first measurement, and the
+    # guesses were not close:
+    #
+    #     dept   his hours   min/unit   parts/hour      the guess we held
+    #     CNCJ      4.4167       5.30      11.3208      30   (2.6x too fast)
+    #     EDGE      4.6667       5.60      10.7143      30   (2.8x too fast)
+    #     MC J      4.6667       5.60      10.7143      no row at all
+    #     BENC     25.5000      30.60       1.9608      79   (40.3x too fast)
+    #     PACJ      2.7500       3.30      18.1818      99   (5.4x too fast)
+    #
+    # Bench work is 25.5 of his 42 hours, run 40x too fast — which is the whole of "no bench
+    # work time" in one number, and most of the gap between his £57.09 and ours.
+    #
+    # DERIVED, AND SAID SO. His sheet states HOURS PER ORDER at a quantity of 50; the engine
+    # needs parts/hour, so every figure here is his hours divided by his quantity. That is
+    # arithmetic on a stated fact, not a stated fact — the same distinction linebend already
+    # carries. Two things follow and are recorded in the provenance below: a per-order
+    # element (a setup) would inflate the per-part figure, and one job is one job. Confirm
+    # both with Tony and these upgrade from derived to stated.
+    "joinery_cnc_parts_per_hour":          11.3208,
+    "joinery_edge_banding_parts_per_hour": 10.7143,
+    "joinery_machining_parts_per_hour":    10.7143,
+    "joinery_bench_parts_per_hour":         1.9608,
+    "joinery_pack_parts_per_hour":         18.1818,
+    "joinery_rates_measured_on_job":       "11908-21",
+    "joinery_rates_measured_at_quantity":  50,
 }
 
 # EVERY FIGURE CARRIES ITS OWN PROVENANCE. The register used to close with one shared
@@ -882,6 +913,23 @@ _HOWARD_7332 = {"stated_by": "Howard Thurley (SDI estimating)", "stated_on": "9 
 _ACRYLIC_0355255 = {"stated_by": "Acrylic Dept via Howard Thurley (SDI estimating)",
                     "stated_on": "9 Sep 2026", "source_job": "0355255",
                     "evidence": "estimator review of the 0355255 book"}
+_TONY_11908 = {"stated_by": "Tony Ford (SDI estimating)", "stated_on": "3 Sep 2026",
+               "source_job": "11908-21",
+               "evidence": "his own 11908-21 estimate sheet, Labour tab"}
+
+
+def _joinery_derivation(code: str, hours: float, what: str) -> str:
+    """The same sentence for every joinery figure, so none of them can overstate itself.
+
+    Each one is his HOURS PER ORDER divided by his quantity. Saying that in the figure's own
+    provenance is the difference between "the shop told us 1.96 parts an hour" — which
+    nobody did — and "the shop told us 25.5 hours for fifty, and we divided"."""
+    _qty = SHOP_STATED["joinery_rates_measured_at_quantity"]
+    return (f"DERIVED by this engine: {what} — his Labour tab states {hours:g} hours for "
+            f"{code} across a stated quantity of {_qty} ({hours * 60 / _qty:.2f} min a unit), "
+            f"divided to parts/hour. Not itself a shop statement of a RATE: a per-order "
+            f"element inside those hours (a setup) would inflate the per-part figure, and "
+            f"this is one job. Confirm both with Tony to upgrade it from derived to stated.")
 SHOP_STATED_PROVENANCE = {
     "weld_min_per_weldment":        dict(_HOWARD_7332, unit="minutes/weldment"),
     "dress_min_per_weldment":       dict(_HOWARD_7332, unit="minutes/weldment"),
@@ -909,6 +957,30 @@ SHOP_STATED_PROVENANCE = {
         _ACRYLIC_0355255, stated_by="Howard Thurley (SDI estimating)",
         stated_on="7 Sep 2026", unit="parts/hour",
         evidence="his own 0355255 sheet: PACP 30/hour, 'Apply Tape, Bag, Bulk Pack'"),
+    "joinery_cnc_parts_per_hour":          dict(
+        _TONY_11908, unit="parts/hour",
+        evidence=_joinery_derivation("CNCJ", 4.4167, "the router pass on the board parts")),
+    "joinery_edge_banding_parts_per_hour": dict(
+        _TONY_11908, unit="parts/hour",
+        evidence=_joinery_derivation("EDGE", 4.6667, "banding the 23 x 1mm ABS edge")),
+    "joinery_machining_parts_per_hour":    dict(
+        _TONY_11908, unit="parts/hour",
+        evidence=_joinery_derivation("MC J", 4.6667, "saw and spindle — an operation the "
+                                                     "engine does not yet emit at all")),
+    "joinery_bench_parts_per_hour":        dict(
+        _TONY_11908, unit="parts/hour",
+        evidence=_joinery_derivation("BENC", 25.5, "bench assembly — 25.5 of his 42 hours, "
+                                                   "and the figure to confirm first")),
+    "joinery_pack_parts_per_hour":         dict(
+        _TONY_11908, unit="parts/hour",
+        evidence=_joinery_derivation("PACJ", 2.75, "boxing and palletising the tray")),
+    "joinery_rates_measured_on_job":       dict(
+        _TONY_11908, unit="job number",
+        evidence="the one job these joinery figures are measured on"),
+    "joinery_rates_measured_at_quantity":  dict(
+        _TONY_11908, unit="units",
+        evidence="the quantity his hours were stated at — the divisor behind every "
+                 "joinery parts/hour figure above"),
 }
 
 

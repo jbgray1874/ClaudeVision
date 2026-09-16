@@ -4737,10 +4737,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         "Saw":                      105,    # 10 lines  | was 60
         "Roll":                     100,    # 12 lines  | was 120
         "Assemble/pack (Acrylic)":   99,    # 15 lines  | was 35
-        # Joinery pack: no measured lines of its own yet, so it takes the acrylic pack
-        # figure rather than falling to a default that would bill hours for boxing a tray.
-        "Packing Joinery":           99,    # UNMEASURED — follows Assemble/pack (Acrylic)
-        "Bench Work Joinery":        79,    # UNMEASURED — follows Manual labour (Metal)
+        # JOINERY IS MEASURED NOW — Tony Ford's 11908-21 sheet, the register overwrites
+        # these literals below. Left here as the pre-measurement guesses they were, because
+        # the size of the correction is the point: bench work ran 40x too fast.
+        "Packing Joinery":           99,    # was UNMEASURED — follows Assemble/pack (Acrylic)
+        "Bench Work Joinery":        79,    # was UNMEASURED — follows Manual labour (Metal)
         "Fold":                      93,    # 329 lines | was 50
         "Manual labour (Metal)":     79,    # 23 lines  | was 40
         "Assemble/pack (Metal)":     58,    # 166 lines | was 40
@@ -4806,6 +4807,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         (getattr(config, "SHOP_STATED", None) or {}).get(
             "acrylic_assemble_pack_parts_per_hour")
         or _THROUGHPUT_DEFAULTS["Assemble/pack (Acrylic)"])
+    # THE JOINERY DEPARTMENTS, off Tony Ford's own 11908-21 sheet. Every one of these was a
+    # guess borrowed from a neighbouring department because no joinery job had ever been
+    # measured — "no edge banding, no machining saw/spindle, no bench work time" is what
+    # that reads like from the estimator's side. Bench work at 79/hr against his 1.96/hr is
+    # 25.5 of his 42 hours run forty times too fast, and most of the gap to his £57.09.
+    for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
+                       ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
+                       ("Bench Work Joinery", "joinery_bench_parts_per_hour"),
+                       ("Packing Joinery",    "joinery_pack_parts_per_hour")):
+        _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
+        if _stated:
+            _THROUGHPUT_DEFAULTS[_row] = float(_stated)
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which
