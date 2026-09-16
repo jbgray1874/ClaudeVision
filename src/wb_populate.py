@@ -374,6 +374,10 @@ OP_NAME_MAP = {
     "handling":       "Assemble/pack (Metal)",   # engine 'handling' -> WB assemble/pack metal
     "assembly":       "Assemble/pack (Metal)",
     "assemble":       "Assemble/pack (Metal)",
+    # The pack that sends a part OUT to the plater — same PACM department and rate-table
+    # row title, its own operation so it lands as its own row beside the final pack
+    # ("Two separate Operations this job" — Howard Thurley, 7332-01).
+    "plater_pack":    "Assemble/pack (Metal)",
     "robomac":        "Robomac",   # WB dept ROBO £31.45/hr — EXACT string or LOOKUP returns 0
     "wire_forming":   "Robomac",
     "tube_cutting":   "Tube",
@@ -1551,6 +1555,12 @@ def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None
             for o in work_ops if str(o).lower() not in _generic}))
         if _work:
             _rd += f" [{_work}]"
+    # A plated part packs TWICE and the two rows share one department title, so the
+    # plater row says which pack it is — otherwise "Assemble/pack (Metal)" twice reads
+    # as a double-charge. The final pack keeps the plain title every other job has.
+    if (str(wb_op).startswith("Assemble/pack")
+            and any(str(o).lower() == "plater_pack" for o in (work_ops or ()))):
+        _rd += " [pack to plater — the part goes out for plating and is packed again]"
     return _rd
 
 
@@ -3593,7 +3603,7 @@ _STATED_SHOP_TIME_MARKERS = (
      "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
     ("weld_time_is_per_joint", ("welding", "dress_welds"),
      "the welding department's stated per-joint weld time (config.WELD_TIME_MODEL)"),
-    ("plater_pack_applied", ("handling", "assembly"),
+    ("plater_pack_applied", ("handling", "assembly", "plater_pack"),
      "the stated pack times for a part that goes out to a plater "
      "(config.PLATING_LOGISTICS)"),
     ("brush_before_plate_applied", ("manual_labour_metal",),

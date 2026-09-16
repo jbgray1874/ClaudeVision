@@ -2058,6 +2058,8 @@ HOURLY_RATES_GBP = {
     "powder_coating": 355.43,        # P/C (applied with throughput divisor)
     "handling": 31.18,               # MANM (manual metal handling)
     "assembly": 28.56,               # PACM (Assemble/pack metal)
+    "plater_pack": 28.56,            # PACM — the pack OUT to the plater, its own row
+                                     # ("Two separate Operations this job" — H. Thurley)
     "assembly_acrylic": 25.43,       # PACP
     "welding": 41.77,                # WELD (CO2)
     "tube": 31.98,                   # TUBE

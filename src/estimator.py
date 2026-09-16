@@ -6310,19 +6310,33 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # plate, which is exactly why the spec table exists. A finish that names a spec in
         # that table goes to a plater by definition, so it counts here too. Without this the
         # part whose plating costs £250 was the one part not recognised as plated.
+        # TWO OPERATIONS, TWO ROWS — his answer to "say if you would rather see them
+        # split": "Two separate Operations this job, items need to be packed to send to
+        # platers before" the final pack. One combined 12-minute figure was the right
+        # money and the wrong record: neither 4 nor 8 could be checked against it, and
+        # the route did not say the part leaves the building in the middle. So the pack
+        # to the plater is its own operation (`plater_pack`, PACM department, its own
+        # row) and `handling` keeps the final assembly & pack.
         _fin_txt = _part_finish_text(part)
         if _is_plate_finish(_fin_txt) or named_plate_spec(_fin_txt):
             _pl = getattr(config, "PLATING_LOGISTICS", {}) or {}
             _to_plater = float(_pl.get("pack_for_plater_min", 4.0))
             _final = float(_pl.get("final_pack_min", 8.0))
+            if _to_plater > 0 and "plater_pack" not in ops:
+                ops = list(ops) + ["plater_pack"]
+                record_operation(part, "plater_pack", "override_rule")
+                run_times_min["plater_pack"] = round(_to_plater, 2)
+            if _final > 0:
+                run_times_min["handling"] = round(_final, 2)
             if _to_plater + _final > 0:
-                run_times_min["handling"] = round(_to_plater + _final, 2)
                 part["plater_pack_applied"] = True
                 part.setdefault("review_flags", []).append(
-                    f"plated part: packed twice — {_to_plater:g} min to the plater and "
-                    f"{_final:g} min final assembly and pack, in place of the single "
+                    f"plated part: packed TWICE, as two operations on two rows — "
+                    f"{_to_plater:g} min pack to the plater and {_final:g} min final "
+                    f"assembly and pack, in place of the single "
                     f"{LABOUR_RULES['handling']['min_per_part']:g} min handling allowance "
-                    f"({_pl.get('source', 'shop figure')})")
+                    f"({_pl.get('source', 'shop figure')}). Split per the estimator: 'Two "
+                    f"separate Operations this job'")
 
     if "wire_forming" in ops:
         _wire_len_mm = _safe_float(part.get("wire_total_length_mm")) or cut_length_mm

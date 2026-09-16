@@ -286,6 +286,49 @@ def test_a_drawing_that_states_dressing_outranks_the_customer_default():
     assert "dress_welds" in out["run_times_min_per_unit"]
 
 
+# ── a plated part packs twice, as two operations on two rows ─────────────────────────────
+#
+# "Two separate Operations this job, items need to be packed to send to platers before"
+# the final pack — Howard Thurley, 15 Sep 2026, answering "say if you would rather see
+# them split". One combined 12-minute figure was the right money and the wrong record:
+# neither 4 nor 8 could be checked against it, and the route never said the part leaves
+# the building in the middle.
+
+def test_a_plated_part_books_two_pack_operations():
+    part = _weldment(normalized_finish="PLATED",
+                     textual_operations=["welding", "assembly"])
+    out = estimate_process_times(part, 6)
+    rt = out["run_times_min_per_unit"]
+    assert rt.get("plater_pack") == 4.0, rt
+    assert rt.get("handling") == 8.0, rt
+    assert "plater_pack" in (part.get("inferred_operations") or []), \
+        "the op is recorded, so the route compiler carries it to its own row"
+    f = _flags(part)
+    assert "two operations on two rows" in f
+    assert "Two separate Operations this job" in f, "his words travel with the split"
+
+
+def test_an_unplated_part_packs_once():
+    part = _weldment(textual_operations=["welding", "assembly"])
+    out = estimate_process_times(part, 6)
+    assert "plater_pack" not in out["run_times_min_per_unit"]
+
+
+def test_the_plater_pack_reaches_its_own_department_row():
+    """Executed against the real maps: same PACM bench, its own row title suffix so two
+    Assemble/pack rows do not read as a double-charge."""
+    import wb_populate as wb
+    import department_codes
+    assert wb.OP_NAME_MAP["plater_pack"] == "Assemble/pack (Metal)"
+    assert department_codes.code_for("plater_pack") == "PACM"
+    desc = wb.labour_row_description("Assemble/pack (Metal)", "MILD STEEL", None,
+                                     ["7332-01-101"], work_ops=["plater_pack"])
+    assert "pack to plater" in desc
+    plain = wb.labour_row_description("Assemble/pack (Metal)", "MILD STEEL", None,
+                                      ["7332-01-101"], work_ops=["handling"])
+    assert "pack to plater" not in plain, "the final pack keeps the plain title"
+
+
 # ── the acrylic peel allowance the shop says is not a thing ──────────────────────────────
 #
 # "Manual Labour Acrylic allowing – no additional op. on manual estimating sheet – is this

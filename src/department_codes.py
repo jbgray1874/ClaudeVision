@@ -199,7 +199,11 @@ _alias("DPOL", "diamond_polish", "diamond polish", "diamond polishing", "polish"
 _alias("ROBO", "robomac", "wire_forming", "wire forming", "wire form")
 _alias("OVEN", "oven", "curing", "cure", "bake")
 _alias("PACM", "handling", "assembly", "assemble", "assemble/pack (metal)", "pack",
-       "packing", "packaging", "assemble & pack", "final assembly", "fit", "fitting")
+       "packing", "packaging", "assemble & pack", "final assembly", "fit", "fitting",
+       # The pack OUT to the plater — its own operation so a plated part's two packs are
+       # two rows ("Two separate Operations this job" — Howard Thurley, 7332-01), booked
+       # to the same PACM bench either way.
+       "plater_pack", "pack to plater", "pack for plater")
 _alias("PACP", "assemble/pack (acrylic)", "assemble/pack acrylic", "assemble acrylic",
        "acrylic assembly", "acrylic assemble", "carton", "cartoning")
 _alias("PACJ", "packing joinery", "packaging - joinery")
