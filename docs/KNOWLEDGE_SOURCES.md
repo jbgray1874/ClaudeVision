@@ -13,6 +13,42 @@ carry their dates. Decisions and changes are logged in `docs/CHANGE_REGISTER.md`
 
 ---
 
+## How the system learns — and how one job's lessons cannot pollute another's
+
+Every estimator finding lands in exactly one of three homes, and the home decides its
+reach:
+
+1. **Generic engine rules** improve every relevant future estimate automatically —
+   roll goods price by the length consumed; both sheet orientations are tried and the
+   better valid yield taken; the requested quantity breaks land in one workbook; the
+   customer's own rebate and absorption terms apply by name; catalogue pack prices
+   convert to the price of one; a confirmed exact-SKU price beats a derived
+   material-family median; generic labour rows name the work they contain. These carry
+   no job's assumptions — they are how estimating works, proven by a test each.
+
+2. **Gated stated methods and figures** apply only to the job family they were stated
+   for, with named and dated provenance — Howard's bag-and-box packing method and his
+   PACP 30/hour apply to eligible acrylic display work and decline, by name, on a steel
+   fabrication or a joinery tray; Tony's board knowledge is building the joinery side
+   the same way. When later evidence disagrees with a stated figure, the disagreement is
+   visible against a person and a date, never against a silent constant.
+
+3. **Per-job confirmations** (the `<drawing>_confirmed.json` answers file) travel with
+   one drawing pack and govern only it — a tape length, a gauge ruling, an order
+   quantity, a "delivery not required". They cannot contaminate another estimate.
+
+Where a future drawing provides stronger evidence, that job's own drawing or CAD data
+takes precedence over anything stated — source precedence arbitrates, and the displaced
+reading stays on the record.
+
+**The success criterion:** the first run of the next comparable job should begin where
+the last corrected run of its predecessor finished. Estimator feedback should surface
+NEW knowledge, not rediscover defects already resolved — and the change register below
+is how that is held: every decision carries its test, so a change that would quietly
+undo a resolved defect fails the suite before it ships.
+
+---
+
 ## Tier 1 — SDI Live (the systems of record)
 
 | Source | What it holds | Access |
@@ -48,7 +84,7 @@ the tests police the boundary.
 | `SHOP_STATED` | **Source-controlled shop-stated operating figures.** Every figure the shop has stated: weld 30 / dress 20 min per weldment, brush-before-plate 40 min, plater pack + £120 freight, linebend 0.5 min/bend, acrylic laser 95 parts/hr — values as plain numbers, with who/when/which-job/what-unit per figure in `SHOP_STATED_PROVENANCE` (one shared header mis-attributed the 0355255 figures to 7332-01 — caught in review, 15 Sep) | Other tables read from it; changing a stated figure anywhere else changes nothing |
 | `ESTIMATOR_STATED_PRICES` | Prices an estimator gave us (dated, attributed) | Always **second to the system** — used only where no priced source answers, rendered "Estimator stated", disagreement reported when both answer |
 | `ROLL_GOODS_CATALOGUE` | Packaging facts only (roll lengths). **No money** — the price comes from Tier 1 or the stated register | |
-| `PACKING_METHOD` | How an order packs — PACK13 bag per unit, BOX481 boxes at Howard's 1/1/3/9 steps, his name and date on it | Holds NO money: consumable prices come live from UDEF each run; a missing rate keeps the honest zero and names the code; no extrapolation past the last stated step |
+| `PACKING_METHOD` | How an order packs — PACK56 bag per unit (his priced sheet's bag; his email typed PACK13 — sheet beats email, confirmation asked), BOX481 boxes at Howard's 1/1/3/9 steps, his name and date on it. Gated to eligible acrylic display work | Holds NO money: consumable prices come live from UDEF each run; a missing rate keeps the honest zero and names the code; no extrapolation past the last stated step |
 | `PER_ORDER_UNIT_COUNTS` | Per-order counts for any other code an estimator states | The break table reads it |
 | `ACRYLIC_PRICE_GBP_PER_M2`, `ACRYLIC_SHEET_PRICE_GBP` | Offline fallback snapshot of the UDEF-derived rates | The live Tier-1 derivation wins when the database answers |
 | `BOARD_SHEET_PRICE_GBP` | Board sheet prices at thicknesses SDI has actually bought | Interpolated between purchases, never extrapolated beyond them |
