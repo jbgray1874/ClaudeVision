@@ -925,7 +925,10 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         # ── Override rules that fired ──────────────────────────────────────────
         if p["overrides_fired"]:
             ws.merge_cells(f"B{row}:{_LAST}{row}")
-            cell(row, 1, "🧠",                  bg=C_RULE, align="center", size=9)
+            # NO GLYPH EXCEL HAS NOT GOT — the same fault as the banner below, two rows
+            # further down the same tab. The colour is the marker and column B names the
+            # row in words; an astral-plane emoji only ever rendered as a box.
+            cell(row, 1, "",                    bg=C_RULE, align="center", size=9)
             cell(row, 2, "Learning: " + " | ".join(p["overrides_fired"]),
                  bg=C_RULE, size=9)
             ws.row_dimensions[row].height = 14
@@ -937,7 +940,7 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
                 cnt  = hm.get("SampleCount") or hm.get("sample_count") or 0
                 hmat = hm.get("Material") or hm.get("material") or "?"
                 ws.merge_cells(f"B{row}:{_LAST}{row}")
-                cell(row, 1, "📚",              bg=C_HIST, align="center", size=9)
+                cell(row, 1, "",               bg=C_HIST, align="center", size=9)
                 cell(row, 2,
                      f"Historical: {cnt} SDI estimate(s) for this part as "
                      f"{hmat} — avg £{avg:.2f}",
