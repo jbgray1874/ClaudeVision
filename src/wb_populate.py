@@ -492,6 +492,11 @@ OP_NAME_MAP_JOINERY = {
     "cnc_routing":    "CNC Joinery",
     "cnc":            "CNC Joinery",
     "cnc_joinery":    "CNC Joinery",
+    # SAW AND SPINDLE. Tony's MC J — the department has always been on the rate card and
+    # nothing ever emitted the operation, which is his "no machining saw/spindle" in one
+    # line. Minted only where the drawing calls up a rebate, groove, mortice, tenon,
+    # moulding or profile (document_builder), so a plain panel still gets no such row.
+    "machining_joinery": "Machines Joinery",
 }
 
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
@@ -4786,6 +4791,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # total exactly as the acrylic router did. Follows the router pass at 30/hr: a machine
         # pass along an edge, with nothing measured to say otherwise.
         "Edge Banding":  30,    # UNMEASURED — follows CNC Joinery, a machine pass on board
+        # MACHINES JOINERY (MC J) — saw and spindle. A row with no floor here derives a
+        # garbage throughput and blanks the labour total, which this table has been caught
+        # by twice (the acrylic router, then edge banding). Follows the router pass until
+        # the register's measured figure overlays it below.
+        "Machines Joinery": 30,  # UNMEASURED — overlaid from SHOP_STATED for faced board
         # Dress Welds (DRES): linish/grind the CO2 weld bead — a quick hand pass, like deburr.
         # Had no default, so the engine's garbage ~0.88/hr stood: a grouped 16-part line billed
         # 18.6 hrs / £533 — the single largest labour line on Cocktails and the whole gap to the
@@ -4841,6 +4851,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
                            ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
                            ("Bench Work Joinery", "joinery_bench_parts_per_hour"),
+                           ("Machines Joinery",   "joinery_machining_parts_per_hour"),
                            ("Packing Joinery",    "joinery_pack_parts_per_hour")):
             _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
             if _stated:
@@ -5606,6 +5617,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _SHOP_ORDER = {
         "Laser (Metal)": 10, "Laser (Acrylic)": 10, "Punch": 10, "Guillotine": 10,
         "Saw": 15, "Tube": 15, "CNC Joinery": 15,
+        # Saw and spindle follow the router: the panel is cut and profiled before its edges
+        # are banded, which is why this sits between CNC Joinery (15) and Edge Banding (28).
+        "Machines Joinery": 18,
         "Fold": 20, "Linebend": 20, "Tubebend": 20, "Roll": 20, "Robomac": 20,
         "Manual labour (Metal)": 25,
         "Edge Banding": 28, "Glue": 28,

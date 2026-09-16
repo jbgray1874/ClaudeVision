@@ -70,8 +70,8 @@ def test_a_quoted_spec_still_wins_over_the_zinc_card():
     zinc card and a decorative brass is a different product, sixteen to one. A named spec
     stops the card dead — it just no longer charges a figure from source instead."""
     unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED Harrods01", ("7332-01",))
-    assert method == "subcontract_plating_named_spec"
-    assert unit == 250.00, "and emphatically not the £15.83 the zinc card would have charged"
+    assert method == "subcontract_plating_quote_needed"
+    assert unit is None, "and emphatically not the £15.83 the zinc card would have charged"
 
 
 # ── and a blocked line hands over everything needed to settle it ─────────────────────────
@@ -85,10 +85,13 @@ def test_the_candidate_figure_is_carried_not_thrown_away():
     assert "£2.50/kg card is trade zinc/passivate" in note
 
 
-def test_the_quoted_specs_on_file_are_offered_beside_it():
-    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED", ("7332-01",))
-    assert "Brass — Harrods 01 £250.00 per unit" in note
-    assert "Howard Thurley" in note
+def test_no_earlier_quote_is_offered_as_a_candidate():
+    """This line used to list the specs on file WITH what they last cost, so an estimator
+    could say "that one". That is a suggested value from another job, which the independence
+    rule forbids in as many words. The spec may still be NAMED; the figure may not."""
+    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED", ("9001-01",))
+    assert "250" not in note
+    assert "SPEC NOT IDENTIFIED" in note, "the ask itself is unchanged"
 
 
 def test_the_line_says_what_the_drawing_actually_said():

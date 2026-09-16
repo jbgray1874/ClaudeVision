@@ -1578,38 +1578,28 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             # the job it was quoted for, the date, the supplier, and that it is a comparator
             # to be replaced. Source priority is intact — SDI Live was asked first and could
             # not answer; a figure in this job's answers file outranks this line entirely.
-            # THE REGISTER, NOT A SECOND COPY IN CONFIG. The last quote lives in
-            # data/price_register.json under this key, scoped to the job it was given for.
-            # On THAT job it is chargeable — it is that job's confirmed quote, rung 2 of the
-            # hierarchy. On any other it is out of scope, and prices only as a comparator
-            # wearing every word of its label.
-            _reg = None
-            try:
-                import price_register as _pr
-                _reg = _pr.lookup(_code, job_codes_here)
-            except Exception:                                        # noqa: BLE001
-                _reg = None
-            if _reg and _safe_float(_reg.get("amount")):
-                _amt = round(float(_reg["amount"]), 2)
-                _why = ""
-                try:
-                    _why = _pr.describe(_reg)
-                except Exception:                                    # noqa: BLE001
-                    _why = ""
-                if _reg.get("chargeable"):
-                    return (_amt,
-                            f"{_spec.get('label') or _code} — £{_amt:.2f} per unit, this "
-                            f"job's own confirmed plater quote and not the per-kilo zinc "
-                            f"card ({_why})",
-                            "subcontract_plating_named_spec")
-                return (_amt,
-                        f"{_spec.get('label') or _code} — £{_amt:.2f} per unit, a HISTORICAL "
-                        f"COMPARATOR from "
-                        f"{(_reg.get('scope') or {}).get('value') or 'an earlier job'}, NOT a "
-                        f"current price and not the per-kilo zinc card. Nothing in SDI Live "
-                        f"answered for this spec. ({_why}) "
-                        f"{_spec.get('confirm') or 'Plating is quoted job by job'}",
-                        "subcontract_plating_historical_comparator")
+            # A NEW ESTIMATE IS INDEPENDENT OF AN OLD ONE — NO COMPARATOR, NO FALLBACK.
+            #
+            # This priced from the last quote we held, labelled as a historical comparator.
+            # James Gray, 16 Sep 2026, on reading it: "we don't know about the 250 as our
+            # estimating process is as independent as it can be… it should not appear in a
+            # new estimate at all — not as a charge, fallback, comparator, workbook note or
+            # suggested value." He is right, and the label did not save it: a figure on the
+            # line is a figure somebody accepts.
+            #
+            # WHAT 7332-01 TAUGHT IS KEPT, AND IT IS NOT A NUMBER: that "Harrods 01" is
+            # DECORATIVE plating, so the per-kilo zinc card cannot price it (the original
+            # sixteen-to-one defect), and that a requirement of this kind needs a fresh
+            # job-specific quote. The £250 itself sits in the register's
+            # historical_audit_record, which the resolver does not read and this branch
+            # cannot reach.
+            #
+            # The rungs below a live price are, in order: a confirmed figure for THIS job
+            # (the answers file, which outranks everything here); a labelled market estimate
+            # — NOT CONNECTED for a named PROCESS, because the market path prices parts off
+            # a drawing and nothing asks it what a plater charges for a finish; then this.
+            # "No silent gaps" requires the last state to name what is missing and who is
+            # being asked, so it does.
             # RUNG 5, AND ONLY AFTER THE OTHERS. The source hierarchy for this line is:
             #   1  live SDI / UDEF or supplier price          — asked above
             #   2  a confirmed figure for THIS job            — the answers file, outranks all
@@ -1623,10 +1613,12 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
             return (None,
                     f"{_spec.get('label') or _code} — a named decorative plating "
                     f"requirement, NOT the zinc/passivate card, and NOT PRICED. "
-                    f"MISSING: a price for this spec. Nothing in SDI Live answered for it, "
-                    f"no figure for this job has been entered, and we hold no earlier quote "
-                    f"for it to compare against. ASKED OF: the estimator — get the plater's "
-                    f"price for this job and enter it in this job's answers file. "
+                    f"MISSING: a current price for this spec. Nothing in SDI Live answered "
+                    f"for it and no figure for this job has been entered. An earlier job's "
+                    f"quote is NOT used here — plating is priced job by job and this "
+                    f"estimate is independent of any other. ASKED OF: the estimator — get "
+                    f"the plater's price for this job and enter it in this job's answers "
+                    f"file. "
                     f"{_spec.get('confirm') or ''}".strip(),
                     "subcontract_plating_quote_needed")
         if _safe_float(_spec.get("gbp_per_unit")):

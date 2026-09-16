@@ -50,7 +50,13 @@ from where_do_the_rates_live import (against_the_template, clashes,      # noqa:
 # out; never raise one.
 FROZEN_BUDGET = {
     "src/sheet_steel_costing.py": 72,   # the department rate card, laser speeds, powder
-    "src/wb_populate.py": 36,           # _THROUGHPUT_DEFAULTS — the pieces/hour that set the
+    # 36 -> 37 on 16 Sep 2026, DELIBERATELY and once: "Machines Joinery" (MC J, saw and
+    # spindle) gained a floor. Tony Ford reported the operation missing entirely — the
+    # department was on the rate card and nothing minted the op — and a row added to
+    # this table with NO floor derives a garbage throughput and blanks the whole labour
+    # total, which has happened twice. The measured figure comes from SHOP_STATED and
+    # overlays this literal; the literal is the floor that stops a division by nothing.
+    "src/wb_populate.py": 37,           # _THROUGHPUT_DEFAULTS — the pieces/hour that set the
                                         #   Rate Per Hour column an estimator actually reads
     "src/commercial_lines.py": 19,      # density table (copy 2 of 3)
     "src/palletising.py": 19,           # density table (copy 3 of 3)

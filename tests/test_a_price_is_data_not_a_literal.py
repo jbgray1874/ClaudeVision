@@ -21,6 +21,7 @@ from ONE entry, because scope carries the restriction and status carries the fir
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -80,24 +81,27 @@ def test_a_missing_register_costs_the_run_nothing(monkeypatch, tmp_path):
 
 # ── scope carries the restriction, status carries the firmness ───────────────────────────
 
-def test_a_job_quote_prices_its_own_job():
-    e = price_register.lookup("HARRODS01", job=("7332-01",))
-    assert e["amount"] == 250.00
-    assert e["in_scope_for_this_job"] is True
-    assert e["chargeable"] is True, "on 7332-01 this IS the confirmed quote"
+def test_an_earlier_jobs_quote_is_not_in_the_resolver_at_all():
+    """THE RULE, and it is stronger than scoping. James Gray, 16 Sep 2026: "it should not
+    appear in a new estimate at all — not as a charge, fallback, comparator, workbook note
+    or suggested value… it must be impossible for an estimator run to read, display or
+    charge it." Labelling it was not enough; a figure on the line is a figure somebody
+    accepts. So it is not a price here — it is an audit record the resolver cannot see."""
+    assert price_register.lookup("HARRODS01", job=("7332-01",)) is None
+    assert price_register.lookup("HARRODS01", job=("9001-01",)) is None
+    assert "HARRODS01" not in price_register.load()["prices"]
 
 
-def test_the_same_entry_is_out_of_scope_on_any_other_job():
-    """THE DEFECT THIS REPLACES. One entry, two answers, decided by scope — not by two
-    copies of the number in two places."""
-    e = price_register.lookup("HARRODS01", job=("9001-01",))
-    assert e["amount"] == 250.00, "still visible as evidence"
-    assert e["in_scope_for_this_job"] is False
-    assert e["chargeable"] is False, "and never chargeable as a rate"
-
-
-def test_a_job_we_cannot_identify_is_not_the_job():
-    assert price_register.lookup("HARRODS01", job=())["chargeable"] is False
+def test_the_audit_record_keeps_it_and_the_resolver_never_reads_it():
+    """Not deleted — a figure somebody once quoted should not be lost to the audit trail.
+    Kept where nothing that prices can reach it."""
+    import json
+    raw = json.loads(pathlib.Path(price_register._REGISTER_PATH).read_text(encoding="utf-8"))
+    audit = {e["price_key"]: e for e in raw.get("historical_audit_record") or []}
+    assert audit["HARRODS01"]["amount"] == 250.00
+    assert audit["HARRODS01"]["status"] == "historical_audit_only"
+    # and load() builds `prices` from the prices array alone
+    assert set(price_register.load()["prices"]) == {"TAPE113C", "EDGE23X1ABS"}
 
 
 def test_a_material_scoped_price_prices_any_job():
@@ -149,16 +153,13 @@ def test_the_money_has_left_config():
     assert "last_known_quote" not in spec, "the figure belongs in the register, not here"
 
 
-def test_plating_prices_from_the_register_on_both_sides_of_the_scope():
+def test_plating_asks_rather_than_reaching_for_an_earlier_jobs_figure():
+    """The register prices what it holds — and it deliberately holds no plating price, so
+    the line asks. Scoping was the fix before this one; independence is the rule now."""
     from estimator import plating_unit_price
-    own, note_own, m_own = plating_unit_price(
-        2.4, 6, config.PLATE_SUBCONTRACT_POLICY, "Harrods 01", ("7332-01",))
-    assert own == 250.00 and m_own == "subcontract_plating_named_spec"
-    assert "this job's own confirmed plater quote" in note_own
-
-    other, note_other, m_other = plating_unit_price(
-        2.4, 6, config.PLATE_SUBCONTRACT_POLICY, "Harrods 01", ("9001-01",))
-    assert other == 250.00, "priced — a £0 plating line understates the sheet"
-    assert m_other == "subcontract_plating_historical_comparator"
-    assert "HISTORICAL COMPARATOR" in note_other and "NOT a current price" in note_other
-    assert "7332-01" in note_other, "it names whose job the figure was"
+    for job in (("7332-01",), ("9001-01",), ()):
+        unit, note, method = plating_unit_price(
+            2.4, 6, config.PLATE_SUBCONTRACT_POLICY, "Harrods 01", job)
+        assert unit is None, job
+        assert method == "subcontract_plating_quote_needed", job
+        assert "250" not in note, job

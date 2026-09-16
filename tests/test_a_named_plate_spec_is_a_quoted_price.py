@@ -71,6 +71,24 @@ def test_a_withheld_rate_is_still_withheld():
     assert unit is None and method == "estimator_to_price"
 
 
+def test_no_figure_from_an_earlier_job_reaches_the_line():
+    """THE RULE. Not a charge, not a fallback, not a comparator, not a note, not a
+    suggestion — and the note must not so much as print the number."""
+    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
+    assert unit is None
+    assert method == "subcontract_plating_quote_needed"
+    assert "250" not in note, "a figure on the line is a figure somebody accepts"
+    assert "independent of any other" in note
+
+
+def test_what_the_earlier_job_taught_is_still_applied():
+    """The knowledge survives and it is not a number: decorative, so the per-kilo zinc card
+    cannot price it, and a fresh job-specific quote is required."""
+    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
+    assert "NOT the zinc/passivate card" in note
+    assert "MISSING:" in note and "ASKED OF:" in note
+
+
 def test_the_table_records_the_method_and_dates_the_evidence():
     """The entry teaches WHAT the finish is and HOW it is priced; the figure beside it is
     dated context. `gbp_per_unit` is deliberately absent from the entry itself, so nothing
@@ -81,9 +99,8 @@ def test_the_table_records_the_method_and_dates_the_evidence():
     assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source"
     assert "last_known_quote" not in spec, "nor a figure by another name"
     import price_register
-    entry = price_register.lookup("HARRODS01", ("7332-01",))
-    assert entry["amount"] == 250.00 and entry["source_date"] == "2026-09-09"
-    assert "plater quote" in entry["source_reference"]
+    assert price_register.lookup("HARRODS01", ("7332-01",)) is None, \
+        "the figure is audit-only and the resolver must not reach it"
 
 
 # ── the work a plated part causes that an unplated one does not ──────────────────────────
@@ -159,7 +176,7 @@ def test_the_callout_survives_the_classifier_naming_it_something_else():
     assert "Harrods01" in text
     assert (named_plate_spec(text) or {}).get("requires_quote") is True
     assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[2] == \
-        "subcontract_plating_named_spec", text
+        "subcontract_plating_quote_needed", text
 
 
 def test_every_spelling_of_the_finish_fields_is_read():
@@ -220,30 +237,6 @@ def a_live_price(monkeypatch):
     return 250.00
 
 
-def test_with_no_live_price_it_prices_as_a_labelled_comparator():
-    """THE POLICY, clause 4 and its closing sentence: "where the source is old, missing or
-    inferred, the estimate still prices the work and explains that basis rather than
-    silently omitting it". A first cut of this returned None, and a plating line at £0
-    understates the sheet by most of the unit on a decorative brass."""
-    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
-    assert unit == 250.00
-    assert method == "subcontract_plating_historical_comparator"
-    assert "not the per-kilo zinc card" in note, "the learned fact survives"
-
-
-def test_every_word_that_stops_it_being_an_unlabelled_standing_rate():
-    """"A previous job's supplier figure may provide a transparent historical comparator,
-    but must not become an UNLABELLED automatic price." The label is the whole difference,
-    so each part of it is pinned."""
-    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("9001-01",))
-    assert "HISTORICAL COMPARATOR" in note      # what it is
-    assert "7332-01" in note                    # whose job it was
-    assert "2026-09-09" in note                 # when it was current
-    assert "Howard Thurley" in note             # who supplied it
-    assert "NOT a current price" in note        # what it is not
-    assert "Nothing in SDI Live answered" in note   # why a better source did not win
-    assert "status confirmed" in note                # and how firm the source was
-    assert "quoted job by job" in note          # what to do about it
 
 
 def test_a_current_price_from_sdis_own_sources_does_price_it(a_live_price):

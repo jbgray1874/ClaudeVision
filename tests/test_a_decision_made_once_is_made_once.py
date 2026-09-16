@@ -68,6 +68,46 @@ _A_REAL_STANDING_RULE = {
 }
 
 
+def test_an_earlier_jobs_figure_reaches_no_new_estimate():
+    """THE RULE IN ITS FINAL FORM. Three corrections landed on this one figure in a day:
+    revoke the customer inheritance; stop it being a chargeable constant; scope it to its
+    own job. Each was right and none was enough, because each still let the number reach a
+    line. James Gray, 16 Sep 2026: "our estimating process is as independent as it can be…
+    it must be impossible for an estimator run to read, display or charge it."
+    """
+    import price_register
+    assert price_register.lookup("HARRODS01", ("7332-01",)) is None
+    for job in (("7332-01",), ("9001-01",), ()):
+        unit, note, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", job)
+        assert unit is None and method == "subcontract_plating_quote_needed", job
+        assert "250" not in note, job
+
+
+def test_what_survives_is_knowledge_and_not_a_number():
+    spec = config.NAMED_PLATE_SPECS["HARRODS01"]
+    assert spec["decorative"] is True, "so the per-kilo zinc card cannot price it"
+    assert spec["requires_quote"] is True, "so a fresh job-specific quote is required"
+    assert not any(isinstance(v, (int, float)) and v > 1 for v in spec.values()), \
+        "no figure of any kind lives in the method entry"
+
+
+def test_a_drawing_naming_the_spec_is_read_and_then_asks():
+    """The pack still outranks everything for IDENTIFICATION — a drawing naming Harrods 01
+    is read, not overruled — and the line then asks for this job's plater price."""
+    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
+              "normalized_finish": "HARRODS 01", "is_assembly_parent": True, "quantity": 1,
+              "material_estimate": {"unit_material_mass_kg": 0.9}},
+             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
+              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
+              "quantity": 1, "description": "plating"}]
+    apply_subcontract_plating(parts, {"customer": "Harrods",
+                                      "job_output_stem": "9001-01"}, 6, parts)
+    _desc = str(parts[1].get("description") or "")
+    assert "Harrods 01" in _desc, "the spec the drawing names is read"
+    assert "NOT PRICED" in _desc and "ASKED OF" in _desc
+    assert "250" not in _desc
+
+
 # ── the revoked entry ────────────────────────────────────────────────────────────────────
 
 def test_no_customer_buys_a_plating_price():
@@ -92,18 +132,6 @@ def test_the_second_harrods_stand_asks_again_on_purpose():
     assert parts[1]["unit_cost_gbp"] != 250.00
 
 
-def test_the_last_quote_is_kept_as_evidence_not_as_a_rate():
-    """Deleting the figure would throw away a real plater price somebody may want to see.
-    It stays, marked as this job's quote, with the question attached."""
-    spec = config.NAMED_PLATE_SPECS["HARRODS01"]
-    assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source at all"
-    assert "last_known_quote" not in spec, "nor a figure by another name"
-    assert spec["requires_quote"] is True and "job by job" in spec["confirm"]
-    # The money is in the register, scoped to the job it was quoted for.
-    import price_register
-    entry = price_register.lookup("HARRODS01", ("7332-01",))
-    assert entry["amount"] == 250.00 and entry["scope"]["value"] == "7332-01"
-
 
 def test_another_customer_inherits_nothing():
     assert inherited_decision("plating_gbp_per_unit", {
@@ -120,23 +148,6 @@ def test_a_drawing_that_states_its_own_process_is_read_not_overruled():
     assert line["cost_source"] == "subcontract_plating_indicative"
     assert line["unit_cost_gbp"] == 15.83
 
-
-def test_a_drawing_naming_the_spec_is_read_and_priced_as_a_comparator():
-    """The pack still outranks everything for IDENTIFICATION — a drawing naming Harrods 01
-    is read, not overruled — and the line is then priced from the labelled comparator rather
-    than left at £0, with the ask attached."""
-    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
-              "normalized_finish": "HARRODS 01", "is_assembly_parent": True, "quantity": 1,
-              "material_estimate": {"unit_material_mass_kg": 0.9}},
-             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
-              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
-              "quantity": 1, "description": "plating"}]
-    apply_subcontract_plating(parts, {"customer": "Harrods",
-                                      "job_output_stem": "9001-01"}, 6, parts)
-    _desc = str(parts[1].get("description") or "")
-    assert "Harrods 01" in _desc, "the spec the drawing names is read"
-    assert "HISTORICAL COMPARATOR" in _desc and "NOT a current price" in _desc
-    assert parts[1].get("unit_cost_gbp") == 250.00
 
 
 # ── it says where it came from, every time ───────────────────────────────────────────────
@@ -264,33 +275,6 @@ from estimator import job_identity_codes, plating_unit_price      # noqa: E402
 _POLICY = config.PLATE_SUBCONTRACT_POLICY
 
 
-def test_no_job_charges_it_as_a_rate_any_more():
-    """Scoping the figure to its own job was the first correction and not the last one:
-    "prices should live in a versioned, attributable price register or live system
-    connector, not as numeric literals in Python configuration". The entry carries no
-    chargeable rate at all now — what reaches the sheet is a labelled comparator, and a
-    figure in this job's answers file outranks it."""
-    # Its OWN job reads it as that job's confirmed quote; every other job as a comparator.
-    # One entry, two answers, decided by SCOPE — not by two copies of the number.
-    _, _, own = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("7332-01",))
-    assert own == "subcontract_plating_named_spec"
-    for job in (("9001-01",), ()):
-        _, _, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", job)
-        assert method == "subcontract_plating_historical_comparator", job
-    assert "gbp_per_unit" not in config.NAMED_PLATE_SPECS["HARRODS01"]
-
-
-def test_another_job_never_inherits_it_SILENTLY():
-    """THE DEFECT, and the exact shape of the fix. Howard revoked the inheritance — "£250.00
-    is from supplier per unit and is independent of any other job" — and the policy says the
-    work is still priced and the basis explained. Both hold at once only because the line
-    says, in terms, that this is another job's figure."""
-    unit, note, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("9001-01",))
-    assert unit == 250.00, "priced, because a £0 plating line understates the sheet"
-    assert method == "subcontract_plating_historical_comparator"
-    assert "HISTORICAL COMPARATOR" in note and "NOT a current price" in note
-    assert "7332-01" in note, "it says whose quote the figure was"
-    assert "job by job" in note
 
 
 def test_the_spec_must_still_be_named_by_the_drawing():

@@ -244,7 +244,10 @@ _alias("SPRY", "lacquer", "lacquering", "varnish", "varnishing", "staining", "st
 _alias("DRIL", "dowelling", "dowel drilling", "boring", "line boring", "hinge boring",
        "system holes")
 _alias("MC J", "morticing", "mortising", "tenoning", "spindle moulding", "planing",
-       "thicknessing")
+       "thicknessing",
+       # The name the route compiler mints when a board drawing calls up saw or
+       # spindle work — Tony Ford's "no machining saw/spindle", 16 Sep 2026.
+       "machining_joinery", "machining joinery", "saw and spindle")
 # BENC is "Bench Work Joinery" -- the joinery bench, which is why metal deburring was moved
 # off it above. Assembly and fitting of a board product is what it is actually for. Only
 # spellings that NAME the material qualify: bare "assembly" is already PACM and must stay

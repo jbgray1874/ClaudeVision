@@ -1804,6 +1804,29 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                 _joinery.add("laminating")
             if re.search(r"\bVENEER(?:ED|ING)?\b", _finish_text):
                 _joinery.add("veneering")
+            # SAW AND SPINDLE — "no machining saw/spindle", Tony Ford on 11908-21. The
+            # department (MC J, "Machines Joinery") has always existed and nothing ever
+            # minted the operation, so 4.67 of his 42 hours had nowhere to land.
+            #
+            # MINTED ONLY ON THE DRAWING'S OWN EVIDENCE, because that is the difference
+            # between reading a route and inventing one. A rebate, groove, housing, mortice,
+            # tenon, moulding or profile is spindle work and the drawing says so — SDI's own
+            # SolidWorks export even carries a REBATE layer, so it is stated in the CAD as
+            # well as in the words. A board part with none of that gets no such line: the
+            # engine does not know that every panel is sawn, and guessing it would put an
+            # hour on every joinery job in the shop.
+            _mcj = re.search(
+                r"\bREBATE[SD]?\b|\bGROOVE[SD]?\b|\bHOUSING[S]?\b|\bMORTICE\b|"
+                r"\bMORTISE\b|\bTENON\b|\bMOULD(?:ED|ING)?\b|\bSPINDLE\b|"
+                r"\bPROFILED?\b|\bMITRE[SD]?\b|\bMITER[SD]?\b",
+                _finish_text)
+            if not _mcj:
+                _layers = " ".join(
+                    str(_l) for _l in ((part.get("normalized_geometry") or {}).get("layers")
+                                       or part.get("dxf_layers") or [])).upper()
+                _mcj = bool(re.search(r"\bREBATE\b|\bGROOVE\b", _layers))
+            if _mcj:
+                _joinery.add("machining_joinery")
             _joinery.add("cnc_routing")
             _joinery.add("handling")
             if sorted(_joinery) != sorted(part.get("textual_operations") or []):
