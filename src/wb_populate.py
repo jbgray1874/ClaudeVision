@@ -344,6 +344,12 @@ CELL_MAP = {
     "labour": {
         "first_row": 96, "last_row": 167,         # 72 slots (+25: BOM widened 2026-07-13)
         "col_operation": 3, "col_desc": 4, "col_qty": 8, "col_throughput": 9,
+        # J and L are the template's own columns: J is the row's hours formula and it reads
+        # L/60, where L is the set-up minutes the template looks up from the operation name
+        # (verified on a produced book: J96 = (...)*$D$6)+((L96/60)). The engine writes L
+        # ONLY to allocate one department set-up across laser rows that nest on one sheet —
+        # and only after checking this row's J really does read this row's L.
+        "col_hours": 10, "col_setup": 12,
     },
 }
 
@@ -2342,6 +2348,73 @@ def _canonical_record_index(
     return estimates, raw
 
 
+def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
+                              lb: Dict[str, int], flags: List[str]) -> None:
+    """ONE NEST, ONE SET-UP.
+
+    The laser rows are one per component (see canonical_labour_groups), and each row takes
+    the FULL department set-up from the template's own lookup — so a five-part nest would
+    book five 10-minute set-ups where the floor loads one program and cuts one sheet.
+    Howard's constraint verbatim: "if multiple components used but don't exceed a single
+    sheet, laser rate would be reduced to not exceed the given set up time".
+
+    So the ONE set-up is allocated across the rows of a nest — parts of the same laser,
+    material and gauge — by wrapping the template's OWN set-up lookup as (lookup)/N on each
+    row. The workbook stays authoritative: the minutes still come from THEIR table, and if
+    the estimators change it every share moves with it. The sum across the nest is (lookup)
+    exactly — one allowance — by construction, not by rounding.
+
+    Written ONLY when this row's own hours formula (col J) demonstrably reads this row's
+    set-up cell (col L), checked against the live template at run time. Where it does not —
+    a template revision, a moved column — nothing is touched and the sheet says so out
+    loud: five set-ups charged honestly beats one charged by luck.
+    """
+    _nest_rows: Dict[str, List[Dict[str, Any]]] = {}
+    for _gv in groups.values():
+        if _gv.get("laser_nest_id") and _gv.get("workbook_row"):
+            _nest_rows.setdefault(str(_gv["laser_nest_id"]), []).append(_gv)
+    for _nid, _members in sorted(_nest_rows.items()):
+        _members.sort(key=lambda _m: _m["workbook_row"])
+        _n = len(_members)
+        for _m in _members:
+            _m["laser_nest_size"] = _n
+        if _n < 2:
+            continue                       # one row, the template's own set-up, untouched
+        # CHECK EVERY ROW BEFORE WRITING ANY. A nest half-allocated would under-charge the
+        # divided rows while the others still carry a full set-up — worse than either
+        # honest state, and invisible on the sheet.
+        _rows_ok, _rows_bad = [], []
+        for _m in _members:
+            _r = int(_m["workbook_row"])
+            _j = ws.cell(row=_r, column=lb["col_hours"]).value
+            _l = ws.cell(row=_r, column=lb["col_setup"]).value
+            if (isinstance(_j, str) and ("L%d" % _r) in _j.replace("$", "")
+                    and isinstance(_l, str) and _l.startswith("=")):
+                _rows_ok.append(_r)
+            else:
+                _rows_bad.append(_r)
+        if not _rows_bad:
+            for _m in _members:
+                _r = int(_m["workbook_row"])
+                _l_cell = ws.cell(row=_r, column=lb["col_setup"])
+                _l_cell.value = "=(%s)/%d" % (str(_l_cell.value)[1:], _n)
+                _m["setup_share"] = ("1/%d of the department set-up "
+                                     "(template's own lookup, divided)" % _n)
+            _flag(f"laser nest {_nid}: {_n} component rows "
+                  f"(sheet rows {_rows_ok}) share ONE department set-up — each row carries "
+                  f"the template's own set-up lookup divided by {_n}, so the nest's total "
+                  f"is exactly one allowance and moves if the estimators change their "
+                  f"table. Components of one material and gauge nest on one sheet "
+                  f"(Howard Thurley, 7332-01).", flags)
+        else:
+            _flag(f"laser nest {_nid}: the rows split per component but the set-up could "
+                  f"NOT be allocated — the template's hours/set-up cells on row(s) "
+                  f"{_rows_bad} are not the shape this build knows (J reading L). EVERY "
+                  f"row is carrying a FULL department set-up: {_n} set-ups charged where "
+                  f"the nest loads one. OVERSTATED, not understated — an estimator must "
+                  f"reduce it on the sheet.", flags)
+
+
 def canonical_labour_groups(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -2449,6 +2522,26 @@ def canonical_labour_groups(
             key = ("canonical-event", decision_id)
         elif wb_op == "Robomac":
             key = ("canonical-event", decision_id)
+        elif wb_op in ("Laser (Metal)", "Laser (Acrylic)"):
+            # ── ONE LABOUR ROW PER COMPONENT ON THE LASER ────────────────────────────
+            #
+            # "Labour rates should be separate line each component as reflect the
+            #  different time per component" — Howard Thurley, 7332-01, and his own sheet
+            # carries FIVE separate LASM rows. Keyed by (op, material, gauge), 7332-01-003
+            # (a 441x10 strap) and -004 (a 15.88 square cap) shared one row at a blended
+            # 441/hr; his figures for the two are 235 and 900 — nearly four to one, and a
+            # single number cannot be checked against either.
+            #
+            # The row splits; the SET-UP does not. Components of one material and gauge
+            # genuinely nest on the same sheet — his constraint exactly: "if multiple
+            # components used but don't exceed a single sheet, laser rate would be reduced
+            # to not exceed the given set up time". So each row carries the nest it
+            # belongs to, and the emit loop allocates the department's ONE set-up across
+            # that nest (see ONE NEST, ONE SET-UP below). Splitting without that half
+            # would book five set-ups where the shop has one — the error he warned about,
+            # worse than the blended row it replaces.
+            key = ("canonical-part-setup", wb_op, material.upper(),
+                   "%g" % thickness, target_id or decision_id)
         else:
             # Compatible leaf events share one tooling setup. Decision identities remain
             # attached individually, so no event disappears in the grouping.
@@ -2484,6 +2577,10 @@ def canonical_labour_groups(
             "assembly_scoped": scope == "assembly",
             "route_sequence": sequence,
         })
+        if isinstance(key, tuple) and key and key[0] == "canonical-part-setup":
+            # The nest this row shares its set-up with: same laser, same material, same
+            # gauge — the tuple that decides whether parts can share a sheet program.
+            group["laser_nest_id"] = "%s|%s|%g" % (wb_op, material.upper(), thickness)
         if decision_id not in group["decision_ids"]:
             group["decision_ids"].append(decision_id)
         if operation not in group["engine_ops"]:
@@ -3461,6 +3558,14 @@ def build_workbook_labour(
                 # estimators' own calculator as the same kind of claim.
                 "rate_basis": g.get("rate_basis"),
                 "part_numbers": list(g.get("parts") or []),
+                # THE NEST IS ROW DATA, NOT A FORMULA TRICK. A split laser row says which
+                # nest it shares its ONE department set-up with, how many rows share it,
+                # and what share this row carries — so the allocation can be audited from
+                # the record, not reverse-engineered from a cell.
+                **({"laser_nest_id": g.get("laser_nest_id"),
+                    "laser_nest_size": g.get("laser_nest_size"),
+                    "setup_share": g.get("setup_share")}
+                   if g.get("laser_nest_id") else {}),
             }
             for g in sorted(_rows, key=lambda g: g["workbook_row"])
         ],
@@ -6050,6 +6155,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # alias and duplicates operations on the client quote.
         g["workbook_row"] = row
         row += 1
+
+    allocate_laser_nest_setup(ws, _groups, lb, flags)
 
     # The canonical route record — built here, after the write loop, so every row carries
     # the sheet row it actually landed on. See build_workbook_labour for why that matters.

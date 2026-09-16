@@ -10333,10 +10333,18 @@ def test_canonical_workbook_groups_price_decisions_not_raw_route_words():
     }
     _groups = canonical_labour_groups(_summary, _estimates, 180)
     _laser = [g for g in _groups.values() if g["wb_op"] == "Laser (Metal)"]
-    eq(len(_laser), 1, "same-gauge leaf decisions share one tooling setup")
-    eq(_laser[0]["qty"], 2.0, "both required leaf events reach that setup")
-    eq(len(_laser[0]["decision_ids"]), 2,
-       "grouping retains both canonical identities")
+    # D-066 (Howard Thurley, 7332-01): "labour rates should be separate line each
+    # component as reflect the different time per component" — his own sheet carries five
+    # separate LASM rows. Same-gauge leaf decisions used to share one blended row here;
+    # now each component gets its own row, and what they SHARE is the nest — one
+    # department set-up allocated across it by allocate_laser_nest_setup, never one each.
+    eq(len(_laser), 2, "one laser row per component, not a blended rate")
+    eq(sorted(g["qty"] for g in _laser), [1.0, 1.0],
+       "each row carries its own component's quantity")
+    eq(len({g["laser_nest_id"] for g in _laser}), 1,
+       "same gauge means ONE nest — the rows share a single department set-up")
+    eq(len([d for g in _laser for d in g["decision_ids"]]), 2,
+       "both canonical identities survive the split")
     _weld = [g for g in _groups.values() if g["wb_op"] == "Weld (CO2)"]
     eq(len(_weld), 1, "assembly welding is one priced event")
     eq(_weld[0]["qty"], 1.0, "participants do not multiply assembly welding")
