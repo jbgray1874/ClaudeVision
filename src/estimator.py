@@ -5619,12 +5619,32 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 float(run_times_min.get(_bb_op, 0.0)) + _bb_min, 2)
             setup_times_min.setdefault(_bb_op, float(_bb.get("setup_min", 0.0)))
             record_operation(part, _bb_op, "override_rule")
+            # AND WHAT THE FIGURE IS BOUNDED BY. Howard gave 40 minutes "based on
+            # experience and for similar size units, time would vary per unit / size", so
+            # the line carries that caveat and this weldment's own measured size, which is
+            # what lets him tell at a glance whether his figure travels to it.
+            _bb_size = ""
+            try:
+                _me = part.get("material_estimate") or {}
+                _l = _safe_float(_me.get("blank_length_mm"))
+                _w = _safe_float(_me.get("blank_width_mm"))
+                _kg = _safe_float(part.get("normalized_weight_kg")
+                                  or _me.get("stated_weight_kg"))
+                if _l and _w:
+                    _bb_size = f" This weldment measures {_l:g} x {_w:g} mm."
+                elif _kg:
+                    _bb_size = f" This weldment weighs about {_kg:g} kg."
+            except Exception:                                    # noqa: BLE001
+                _bb_size = ""
             part.setdefault("review_flags", []).append(
                 f"brushed before plating: {_bb_min:g} min of "
-                f"{_bb_op.replace('_', ' ')} on this weldment before it goes to the "
-                f"platers. THE DRAWING DOES NOT ANNOTATE THIS — it is the shop's practice "
-                f"as stated by the estimator ({_bb.get('source', 'shop figure')}). Confirm "
-                f"it applies to this finish, or take it off")
+                f"{_bb_op.replace('_', ' ')} PER UNIT on this weldment before it goes to "
+                f"the platers. THE DRAWING DOES NOT ANNOTATE THIS — it is the shop's "
+                f"practice as stated by the estimator ({_bb.get('source', 'shop figure')}). "
+                f"AN INDICATIVE FIGURE, NOT A CONSTANT: "
+                f"{_bb.get('basis', 'stated for one job')}, calibrated on "
+                f"{_bb.get('calibrated_on') or 'one stand'}.{_bb_size} Confirm it applies "
+                f"to this finish and to a unit this size, or take it off")
         elif not part.get("_brush_before_plate_flagged"):
             part["_brush_before_plate_flagged"] = True
             part.setdefault("review_flags", []).append(

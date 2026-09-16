@@ -1087,6 +1087,19 @@ BRUSH_BEFORE_PLATE = {
     "setup_min": 0.0,
     "operation": "manual_labour_metal",
     "source": f"SDI shop practice via {shop_stated_source('brush_before_plate_min')}",
+    # BOUNDED BY WHAT HOWARD ACTUALLY SPOKE FOR. His words: "rate was priced based on
+    # experience and for similar size units, time would vary per unit / size." So this is
+    # an INDICATIVE STATED METHOD calibrated on one stand, not a constant of the shop, and
+    # the line says so wherever it lands.
+    #
+    # NO NUMERIC BAND, because inventing one would be worse than having none: nobody has
+    # given us the size 7332-01-101 actually is, so any threshold here would be this
+    # engine's guess wearing Howard's name — the exact fault the register exists to stop.
+    # Instead the caveat travels with the line and the weldment's own measured size is
+    # printed beside it, so the person who CAN judge it is given what they need to.
+    "calibrated_on": SHOP_STATED["weld_calibrated_on_part"],
+    "basis": "experience, for similar-sized units — varies with unit and size",
+    "confirm_outside_similar_size": True,
 }
 
 PLATE_SUBCONTRACT_POLICY = {

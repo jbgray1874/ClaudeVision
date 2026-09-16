@@ -885,46 +885,75 @@ def _source_drawing_names(summary: Dict[str, Any]) -> List[str]:
 
     The office names a pack for the office AND for the product — "0355255 - A4 Table Top
     Graphic Holder - 10975_REV B.pdf" — so when no record in the job can say what the unit
-    is, the drawing file often can. Gathered from wherever the scan recorded them, because
-    different readers file them in different places and a resolver that knows only one of
-    those places is a resolver that works on some packs.
+    is, the drawing file often can.
+
+    READ THE FIELDS THE SCAN ACTUALLY WRITES. The first version of this guessed at plausible
+    key names and found NOTHING on the real 10975-02 record, so the fallback it existed to
+    feed still produced the drawing code. file_scan writes exactly two:
+
+        primary_pdf       {"name": ..., "path": ...}
+        job_source_pdfs   [{"name": ..., "path": ..., "page_count": ...}, ...]
+
+    Both are read here, at the top level and under estimate_summary, because a caller may
+    hand this either the whole record or the estimate half of it. The speculative keys are
+    kept below them — they cost nothing and a differently-shaped record still answers — but
+    the two real ones come first and are what the regression test pins.
     """
     out: List[str] = []
     _seen = set()
 
     def _add(value: Any) -> None:
+        if isinstance(value, dict):
+            value = value.get("name") or value.get("path")
         text = str(value or "").strip()
         if not text:
             return
-        base = re.sub(r"\.(pdf|dxf|dwg|xls[xm]?|step|stp)$", "", text.split("\\")[-1]
-                      .split("/")[-1], flags=re.IGNORECASE).strip()
+        base = re.sub(r"\.(pdf|dxf|dwg|xls[xm]?|step|stp)$", "",
+                      text.replace("\\", "/").split("/")[-1],
+                      flags=re.IGNORECASE).strip()
         if base and base.upper() not in _seen:
             _seen.add(base.upper())
             out.append(base)
 
     if not isinstance(summary, dict):
         return out
-    for key in ("source_files", "pdf_files", "drawing_files", "files_scanned",
-                "input_files", "pdf_path", "source_pdf", "drawing_file"):
-        value = summary.get(key)
-        if isinstance(value, str):
-            _add(value)
-        elif isinstance(value, (list, tuple)):
-            for item in value:
-                _add(item if isinstance(item, str) else (item or {}).get("path")
-                     if isinstance(item, dict) else None)
-    _da = summary.get("document_analysis")
-    if isinstance(_da, dict):
-        for key in ("source_file", "pdf_path", "file", "files"):
-            value = _da.get(key)
-            if isinstance(value, str):
+    _roots = [summary]
+    _es = summary.get("estimate_summary")
+    if isinstance(_es, dict):
+        _roots.append(_es)
+
+    for _root in _roots:
+        # The two the scan really writes, primary first — on a multi-PDF pack the primary
+        # is the sheet the job was identified from.
+        _add(_root.get("primary_pdf"))
+        for _rec in (_root.get("job_source_pdfs") or []):
+            _add(_rec)
+        # And the shapes other readers have used, which cost nothing to try.
+        for key in ("source_pdfs", "source_files", "pdf_files", "drawing_files",
+                    "files_scanned", "input_files", "pdf_path", "primary_pdf_path",
+                    "source_pdf", "drawing_file"):
+            value = _root.get(key)
+            if isinstance(value, (str, dict)):
                 _add(value)
             elif isinstance(value, (list, tuple)):
                 for item in value:
                     _add(item)
-        for page in (_da.get("pages") or []):
+        _da = _root.get("document_analysis")
+        if isinstance(_da, dict):
+            for key in ("source_file", "pdf_path", "file", "files"):
+                value = _da.get(key)
+                if isinstance(value, (str, dict)):
+                    _add(value)
+                elif isinstance(value, (list, tuple)):
+                    for item in value:
+                        _add(item)
+            for page in (_da.get("pages") or []):
+                if isinstance(page, dict):
+                    _add(page.get("source_file") or page.get("source_pdf")
+                         or page.get("file"))
+        for page in (_root.get("pages") or []):
             if isinstance(page, dict):
-                _add(page.get("source_file") or page.get("file"))
+                _add(page.get("source_file") or page.get("source_pdf") or page.get("file"))
     return out
 
 
