@@ -20,6 +20,8 @@ Matched with spaces and punctuation removed, because one finish is written "Harr
 """
 from __future__ import annotations
 
+import pytest
+
 import sys
 from pathlib import Path
 
@@ -36,7 +38,7 @@ POLICY = config.PLATE_SUBCONTRACT_POLICY
 
 def test_every_spelling_on_the_pack_finds_the_spec():
     for text in ("Harrods01", "HARRODS 01", "Harrods-01", "BRASS HARRODS 01 FINISH"):
-        assert (named_plate_spec(text) or {}).get("gbp_per_unit") == 250.00, text
+        assert (named_plate_spec(text) or {}).get("last_known_quote", {}).get("gbp_per_unit") == 250.00, text
 
 
 def test_an_unnamed_finish_names_no_spec():
@@ -46,31 +48,10 @@ def test_an_unnamed_finish_names_no_spec():
 
 # ── priced as a quote, not as a mass ─────────────────────────────────────────────────────
 
-def test_the_named_spec_is_two_hundred_and_fifty_a_stand():
-    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01")
-    assert unit == 250.00
-    assert method == "subcontract_plating_named_spec"
-
-
-def test_it_does_not_move_with_the_mass_or_the_order():
-    """A quoted price per stand is per stand — the kilos and the vat minimum are the zinc
-    card's arithmetic and have nothing to do with it."""
-    a = plating_unit_price(2.4, 6, POLICY, "Harrods 01")[0]
-    b = plating_unit_price(40.0, 500, POLICY, "Harrods 01")[0]
-    assert a == b == 250.00
-
-
-def test_the_line_says_it_is_a_quote_and_whose():
-    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01")
-    assert "quoted price for the named spec" in note
-    assert "Howard Thurley" in note and "7332-01" in note
-    assert "per-kilo" in note
-
-
 # ── everything else is exactly as it was ─────────────────────────────────────────────────
 
 def test_an_unnamed_finish_still_takes_the_mass_rate():
-    unit, note, method = plating_unit_price(2.4, 6, POLICY, "zinc passivate")
+    unit, note, method = plating_unit_price(2.4, 6, POLICY, "zinc passivate", ("7332-01",))
     assert method == "subcontract_plating_indicative"
     assert "INDICATIVE zinc/passivate" in note
     assert unit == 15.83
@@ -86,19 +67,22 @@ def test_no_finish_text_at_all_names_no_process_either():
 
 
 def test_a_withheld_rate_is_still_withheld():
-    unit, note, method = plating_unit_price(2.4, 6, {"gbp_per_kg": None}, "zinc")
+    unit, note, method = plating_unit_price(2.4, 6, {"gbp_per_kg": None}, "zinc", ("7332-01",))
     assert unit is None and method == "estimator_to_price"
 
 
-def test_a_named_spec_prices_even_where_no_mass_resolved():
-    """The mass is the zinc card's input, not the quote's — a named spec does not need it."""
-    unit, _, method = plating_unit_price(0, 6, POLICY, "Harrods 01")
-    assert unit == 250.00 and method == "subcontract_plating_named_spec"
-
-
-def test_the_table_records_where_the_price_came_from():
+def test_the_table_records_the_method_and_dates_the_evidence():
+    """The entry teaches WHAT the finish is and HOW it is priced; the figure beside it is
+    dated context. `gbp_per_unit` is deliberately absent from the entry itself, so nothing
+    can charge from it by reaching one key deeper than it meant to."""
     spec = config.NAMED_PLATE_SPECS["HARRODS01"]
-    assert "plater quote" in spec["source"] and "7332-01" in spec["source"]
+    assert spec["decorative"] is True, "not zinc — this is what stopped the per-kilo card"
+    assert spec["requires_quote"] is True
+    assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source"
+    last = spec["last_known_quote"]
+    assert last["gbp_per_unit"] == 250.00
+    assert last["job"] == "7332-01" and last["on"] == "9 Sep 2026"
+    assert "plater quote" in last["source"]
 
 
 # ── the work a plated part causes that an unplated one does not ──────────────────────────
@@ -155,25 +139,6 @@ def test_the_freight_is_held_per_order_and_shared():
     assert "transport department" in lg["source"].lower()
 
 
-def test_the_freight_is_not_added_to_the_plating_price():
-    """THE LINE HAS TO EQUAL WHAT THE PLATER CHARGES.
-
-    Freight to and from the plater is real money, but folding it into a line labelled
-    "plating" makes that line impossible to check against the plater's own quote — which is
-    the entire reason a named spec is priced as a quote rather than a rate. So the figure is
-    stated in the note and carried on the record for the delivery line, and the plating price
-    stays plating. The two existing plated-weldment tests pin the arithmetic."""
-    unit, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01")
-    assert unit == 250.00, "the plating price is the plater's price and nothing else"
-    assert "freight" not in note.lower()
-    # The statement of what is missing is added where the order quantity is known — the
-    # placeholder pricing pass — and says where the money belongs instead.
-    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
-    assert "NOT INCLUDED here: freight to and from the plater" in src
-    assert "put it on the delivery" in src
-    assert "plater_freight_gbp_per_unit" in src
-
-
 # ── the drawing's own callout, not only the engine's word for it ─────────────────────────
 #
 # THE `or` THAT COST THE WHOLE POINT. _part_finish_text read the normalised fields and
@@ -191,8 +156,9 @@ def test_the_callout_survives_the_classifier_naming_it_something_else():
     part = {"normalized_finish": "zinc plated", "surface_finishes": ["Harrods01"]}
     text = _part_finish_text(part)
     assert "Harrods01" in text
-    assert (named_plate_spec(text) or {}).get("gbp_per_unit") == 250.00
-    assert plating_unit_price(2.4, 6, POLICY, text)[0] == 250.00
+    assert (named_plate_spec(text) or {}).get("last_known_quote", {}).get("gbp_per_unit") == 250.00
+    assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[2] == \
+        "subcontract_plating_quote_needed", text
 
 
 def test_every_spelling_of_the_finish_fields_is_read():
@@ -211,7 +177,7 @@ def test_an_ordinary_plated_part_is_unchanged():
     part = {"normalized_finish": "zinc plated", "surface_finishes": ["ZINC PASSIVATE"]}
     text = _part_finish_text(part)
     assert named_plate_spec(text) is None
-    assert plating_unit_price(2.4, 6, POLICY, text)[0] == 15.83
+    assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[0] == 15.83
 
 
 def test_nothing_is_repeated_when_the_fields_agree():
@@ -225,3 +191,79 @@ def test_nothing_is_repeated_when_the_fields_agree():
 def test_a_part_with_no_finish_reads_empty():
     assert _part_finish_text({}) == ""
     assert _part_finish_text({"surface_finishes": []}) == ""
+
+
+# ── the price is a LOOKUP, not a literal ─────────────────────────────────────────────────
+#
+# James Gray, 16 Sep 2026: "the engine must learn methods, conditions, and evidence, not copy
+# a manual estimate's numbers into the next estimate… prices should live in a versioned,
+# attributable price register or live system connector — not as numeric literals in Python
+# configuration. Code should contain the pricing MECHANISM; data should contain approved
+# rates, dates, scope, source, and expiry."
+#
+# £250 WAS a literal here, attributed and dated, which made it honest and did not make it
+# right: a plater's quote for one stand in September is not a rate. What the entry teaches
+# now is the METHOD — "Harrods 01" is a decorative requirement, so the per-kilo zinc card
+# must not price it, and a plater quotes it per job. The figure is asked of SDI's own
+# sources at run time, exactly as the tape's roll price is.
+
+@pytest.fixture
+def a_live_price(monkeypatch):
+    """SDI's sources answering for the spec — what a connector or the price register does."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "resolve", lambda code, desc=None: (
+        {"gbp": 250.00, "basis": "system", "source": "udef_sqlserver",
+         "label": "SDI Live UDEF", "disagreement": None}
+        if str(code).upper() == "HARRODS01" else
+        {"gbp": None, "basis": None, "source": None, "label": "", "disagreement": None}))
+    return 250.00
+
+
+def test_a_named_spec_is_not_priced_from_config(a_live_price=None):
+    """THE CORRECTION. With nothing in the price sources, the spec is recognised and the
+    line asks — it does not charge a number that lives in source."""
+    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    assert unit is None
+    assert method == "subcontract_plating_quote_needed"
+    assert "NOT the zinc/passivate card" in note, "the learned fact survives"
+    assert "quoted job by job" in note
+
+
+def test_the_last_quote_is_shown_for_reference_and_not_applied():
+    _, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    assert "£250.00" in note and "7332-01" in note and "9 Sep 2026" in note
+    assert "not applied" in note
+
+
+def test_a_current_price_from_sdis_own_sources_does_price_it(a_live_price):
+    unit, note, method = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    assert unit == a_live_price
+    assert method == "subcontract_plating_named_spec"
+    assert "SDI Live UDEF" in note
+    assert "per-kilo" in note, "and it is still not the zinc card"
+
+
+def test_a_live_quote_does_not_move_with_the_mass_or_the_order(a_live_price):
+    """A price per stand is per stand — the kilos and the vat minimum are the zinc card's
+    arithmetic and have nothing to do with it."""
+    a = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))[0]
+    b = plating_unit_price(40.0, 500, POLICY, "Harrods 01", ("7332-01",))[0]
+    assert a == b == a_live_price
+
+
+def test_a_live_quote_needs_no_mass_at_all(a_live_price):
+    """The mass is the zinc card's input, not the quote's."""
+    unit, _, method = plating_unit_price(0, 6, POLICY, "Harrods 01", ("7332-01",))
+    assert unit == a_live_price and method == "subcontract_plating_named_spec"
+
+
+def test_freight_is_never_folded_into_the_plating_price(a_live_price):
+    """THE LINE HAS TO EQUAL WHAT THE PLATER CHARGES, or it cannot be checked against the
+    plater's own quote — which is the entire reason this is priced as a quote."""
+    unit, note, _ = plating_unit_price(2.4, 6, POLICY, "Harrods 01", ("7332-01",))
+    assert unit == a_live_price, "the plating price is the plater's price and nothing else"
+    assert "freight" not in note.lower()
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert "NOT INCLUDED here: freight to and from the plater" in src
+    assert "put it on the delivery" in src
+    assert "plater_freight_gbp_per_unit" in src

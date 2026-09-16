@@ -1126,25 +1126,46 @@ PLATE_SUBCONTRACT_POLICY = {
 #
 # Matched on the finish text with spaces and punctuation removed, because a drawing writes
 # "Harrods01", "HARRODS 01" and "Harrods-01" for one finish.
-# A NAMED SPEC IDENTIFIES THE FINISH. IT DOES NOT CARRY THE PRICE TO THE NEXT JOB.
+# A NAMED SPEC IS A METHOD WE LEARNED. IT IS NOT A PRICE WE HOLD.
 #
-# Howard, 16 Sep: "Plating would be as drawing specific, £250.00 is from supplier per unit
-# and is independent of any other job. Plating jobs priced independently."
+# James Gray, 16 Sep 2026: "the engine must learn methods, conditions, and evidence, not copy
+# a manual estimate's numbers into the next estimate… prices should live in a versioned,
+# attributable price register or live system connector — not as numeric literals in Python
+# configuration. Code should contain the pricing MECHANISM; data should contain approved
+# rates, dates, scope, source, and expiry."
 #
-# Reading the spec off the drawing is drawing evidence and stays. The FIGURE beside it is
-# the last quote we hold for that spec, on a named job and a named date — useful to show an
-# estimator, never a rate to quote from. `priced_per_job` says so, and any line it reaches
-# asks for a fresh plater quote rather than presenting the figure as settled.
+# £250 was a numeric literal in source. It was attributed and dated, which made it honest and
+# did not make it right: a plater's quote for one stand in September is not a rate, and this
+# file is not a price register. Scoping it to its own job (the previous fix) stopped it
+# reaching other jobs and still left the engine charging from a hard-coded number.
+#
+# SO WHAT IS KEPT IS THE KNOWLEDGE, WHICH IS THE PART THAT COST A DAY TO GET:
+#   * "Harrods 01" names a decorative plating requirement, not zinc — so the £/kg
+#     zinc-and-passivate card must NOT price it (that was the original defect, an order of
+#     magnitude out);
+#   * a requirement of this kind is quoted per job by the plater.
+#
+# The price is asked of SDI's own sources at run time, exactly as the tape's roll price is.
+# Where they cannot answer, the line asks for the plater's current figure and SHOWS the last
+# quote we hold as dated context — evidence a person can act on, never money the engine
+# charges. An estimator pricing THIS job puts the figure in this job's answers file, which is
+# where a job-specific quote belongs.
 NAMED_PLATE_SPECS = {
     "HARRODS01": {
-        "gbp_per_unit": 250.00,
         "label": "Brass — Harrods 01",
-        "priced_per_job": True,
-        "quoted_for_job": "7332-01",
-        "source": "plater quote via SDI estimating for 7332-01 (Howard Thurley, 9 Sep 2026)",
-        "confirm": ("plating is quoted job by job (Howard Thurley, 16 Sep 2026) — this is "
-                    "the last figure we hold for this spec, not a rate. Get the plater's "
-                    "price for THIS job"),
+        # The learned facts: what it is, and how it is priced.
+        "decorative": True,          # not zinc — the per-kilo card must not price it
+        "requires_quote": True,      # the plater quotes it per job
+        # Context for the person who has to get that quote. Dated, attributed, and never
+        # charged: `gbp_per_unit` is deliberately NOT a key of this entry.
+        "last_known_quote": {
+            "gbp_per_unit": 250.00,
+            "job": "7332-01",
+            "on": "9 Sep 2026",
+            "source": "plater quote via SDI estimating (Howard Thurley)",
+        },
+        "confirm": ("plating is quoted job by job (Howard Thurley, 16 Sep 2026) — get the "
+                    "plater's price for THIS job, or enter it in this job's answers file"),
     },
 }
 

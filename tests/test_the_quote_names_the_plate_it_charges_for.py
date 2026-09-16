@@ -31,6 +31,8 @@ replace a market figure his own transport department had given him.
 """
 from __future__ import annotations
 
+import pytest
+
 import sys
 from pathlib import Path
 
@@ -118,19 +120,34 @@ def _plating_job(summary, finish="PLATED"):
     return parts[-1]
 
 
-def test_a_quoted_price_lists_every_member():
+@pytest.fixture
+def a_live_price(monkeypatch):
+    """SDI's own sources answering for the spec. The member-list behaviour below belongs to
+    a PRICED per-unit line, and since 16 Sep that price comes from a lookup rather than from
+    a literal in config — so the fixture supplies one."""
+    import stated_prices
+    monkeypatch.setattr(stated_prices, "resolve", lambda code, desc=None: (
+        {"gbp": 250.00, "basis": "system", "source": "udef_sqlserver",
+         "label": "SDI Live UDEF", "disagreement": None}
+        if str(code).upper() == "HARRODS01" else
+        {"gbp": None, "basis": None, "source": None, "label": "", "disagreement": None}))
+
+
+def test_a_quoted_price_lists_every_member(a_live_price):
     # THE DRAWING NAMES THE SPEC. It used to be enough that the customer was Harrods, and
     # Howard revoked that on 16 Sep — plating is drawing-specific and priced job by job. A
     # quoted-price line is reached by the pack naming its own spec, which is what this
     # fixture now does and what the test was always about.
-    line = _plating_job({"customer": "Harrods"}, finish="HARRODS 01")
+    line = _plating_job({"customer": "Harrods", "job_output_stem": "7332-01"},
+                        finish="HARRODS 01")
     assert line["unit_cost_gbp"] == 250.00
     assert "7332-01-001" in line["description"] and "7332-01-008" in line["description"]
     assert "no member is excluded" in line["description"]
 
 
-def test_it_says_why_no_member_is_excluded():
-    line = _plating_job({"customer": "Harrods"}, finish="HARRODS 01")
+def test_it_says_why_no_member_is_excluded(a_live_price):
+    line = _plating_job({"customer": "Harrods", "job_output_stem": "7332-01"},
+                        finish="HARRODS 01")
     assert "the mass is not an input" in line["description"]
 
 

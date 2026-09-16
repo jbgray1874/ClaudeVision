@@ -96,9 +96,10 @@ def test_the_last_quote_is_kept_as_evidence_not_as_a_rate():
     """Deleting the figure would throw away a real plater price somebody may want to see.
     It stays, marked as this job's quote, with the question attached."""
     spec = config.NAMED_PLATE_SPECS["HARRODS01"]
-    assert spec["gbp_per_unit"] == 250.00
-    assert spec["priced_per_job"] is True
-    assert spec["quoted_for_job"] == "7332-01"
+    assert "gbp_per_unit" not in spec, "a chargeable rate must not live in source at all"
+    assert spec["requires_quote"] is True
+    last = spec["last_known_quote"]
+    assert last["gbp_per_unit"] == 250.00 and last["job"] == "7332-01"
     assert "job by job" in spec["confirm"]
 
 
@@ -118,10 +119,20 @@ def test_a_drawing_that_states_its_own_process_is_read_not_overruled():
     assert line["unit_cost_gbp"] == 15.83
 
 
-def test_a_drawing_naming_the_spec_itself_prices_from_the_spec_table():
-    line = _job("Harrods", finish="PLATED Harrods01")
-    assert line["cost_source"] == "subcontract_plating_named_spec"
-    assert line["unit_cost_gbp"] == 250.00
+def test_a_drawing_naming_the_spec_is_read_and_then_asks_its_price():
+    """The pack still outranks everything for IDENTIFICATION — a drawing naming Harrods 01
+    is read, not overruled. What follows is an ask, because the price is not ours to reuse."""
+    parts = [{"part_number": "9001-01-101", "description": "FRAME WELDMENT",
+              "normalized_finish": "HARRODS 01", "is_assembly_parent": True, "quantity": 1,
+              "material_estimate": {"unit_material_mass_kg": 0.9}},
+             {"part_number": "9001-01-101-PLATE", "_plating_placeholder": True,
+              "_plating_weldment": "9001-01-101", "_plating_members": ["9001-01-101"],
+              "quantity": 1, "description": "plating"}]
+    apply_subcontract_plating(parts, {"customer": "Harrods"}, 6, parts)
+    _desc = str(parts[1].get("description") or "")
+    assert "Harrods 01" in _desc, "the spec the drawing names is read"
+    assert "NOT PRICED" in _desc
+    assert parts[1].get("unit_cost_gbp") in (0.0, None)
 
 
 # ── it says where it came from, every time ───────────────────────────────────────────────
@@ -232,3 +243,58 @@ def test_it_delegates_rather_than_copying_the_rule():
     disagreed in the first place."""
     src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
     assert "from wb_populate import client_from_job_folder" in src
+
+
+# ── and the label had to become enforcement ──────────────────────────────────────────────
+#
+# Revoking the customer-keyed entry was not enough. NAMED_PLATE_SPECS still held £250 and
+# plating_unit_price still charged it whenever ANY job's finish said Harrods01: the new
+# priced_per_job / quoted_for_job fields were labels, and the pricing function received no
+# job identity to check them against. Howard's clarification was undone in the one place
+# that charges.
+
+from estimator import job_identity_codes, plating_unit_price      # noqa: E402
+
+_POLICY = {"gbp_per_kg": 2.50, "vat_minimum_gbp": 95.0}
+
+
+def test_not_even_the_job_it_was_quoted_for_prices_from_source():
+    """Scoping the figure to its own job was the first correction and not the last one:
+    James, 16 Sep — "prices should live in a versioned, attributable price register or live
+    system connector, not as numeric literals in Python configuration". So 7332-01 asks too,
+    and its own answers file is where its plater quote belongs."""
+    unit, _, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("7332-01",))
+    assert unit is None
+    assert method == "subcontract_plating_quote_needed"
+
+
+def test_another_job_naming_the_same_spec_is_not_priced_from_it():
+    """THE DEFECT. A future Harrods 01 drawing silently inheriting 7332-01's quote is
+    exactly what Howard revoked: "£250.00 is from supplier per unit and is independent of
+    any other job"."""
+    unit, note, method = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("9001-01",))
+    assert unit is None
+    assert method == "subcontract_plating_quote_needed"
+    assert "NOT PRICED" in note
+    assert "7332-01" in note, "it says whose quote the reference figure was"
+    assert "job by job" in note
+
+
+def test_a_job_we_cannot_identify_is_not_a_match():
+    """The safe direction is to ask for a quote, never to apply somebody else's."""
+    assert plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ())[0] is None
+
+
+def test_the_spec_is_still_identified_even_where_it_is_not_priced():
+    """Reading the spec off the drawing is drawing evidence and survives. What stops is the
+    figure travelling — the estimator is told WHICH plate and asked what it costs here."""
+    _, note, _ = plating_unit_price(2.4, 6, _POLICY, "Harrods 01", ("9001-01",))
+    assert "Harrods 01" in note
+
+
+def test_the_job_is_recognised_however_the_record_spells_it():
+    """The drawing number carries the sheet role, the stem does not, and both are this job."""
+    assert "7332-01" in job_identity_codes(
+        {"document_analysis": {"drawing_number": "7332-01-GA"}})
+    assert "7332-01" in job_identity_codes({"job_output_stem": "7332-01"})
+    assert "7332-01" in job_identity_codes({"job_folder": r"K:\Estimating\Harrods\7332-01"})

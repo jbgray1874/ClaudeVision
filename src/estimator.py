@@ -1478,9 +1478,57 @@ def named_plate_spec_anywhere_on_the_pack(
     return None, "", ""
 
 
+def job_identity_codes(summary: Any) -> Tuple[str, ...]:
+    """Every job code this job answers to — its drawing number, its output stem, its folder.
+
+    Used to decide whether a figure quoted FOR a job belongs to the job in hand. Reuses the
+    confirmations lookup's own reader so "is this the same job?" has one answer in this
+    codebase rather than two that can drift apart.
+    """
+    try:
+        from estimator_confirmed import job_codes as _codes
+    except Exception:                                                # noqa: BLE001
+        return ()
+    out: List[str] = []
+    if not isinstance(summary, dict):
+        return ()
+    for _text in ((summary.get("document_analysis") or {}).get("drawing_number"),
+                  summary.get("drawing_number"), summary.get("job_output_stem"),
+                  str(summary.get("job_folder") or "").replace("\\", "/").split("/")[-1]):
+        for _c in _codes(_text):
+            if _c not in out:
+                out.append(_c)
+    return tuple(out)
+
+
+def _quote_belongs_to_this_job(spec: Dict[str, Any], job_codes_here: Any) -> bool:
+    """Is this named spec's figure a price for the job in hand, or another job's quote?
+
+    Howard Thurley, 16 Sep 2026: "Plating would be as drawing specific, £250.00 is from
+    supplier per unit and is independent of any other job. Plating jobs priced
+    independently." A spec marked `priced_per_job` therefore prices ONLY the job it was
+    quoted for; anywhere else the spec is still identified and the figure is still shown,
+    but as that job's quote and not as this job's price.
+
+    A job we cannot identify is NOT a match — the safe direction is to ask for a quote, not
+    to apply somebody else's.
+    """
+    if not spec.get("priced_per_job"):
+        return True
+    _for = str(spec.get("quoted_for_job") or "").strip()
+    if not _for:
+        return False
+    try:
+        from estimator_confirmed import _same_job_code as _same
+    except Exception:                                                # noqa: BLE001
+        return False
+    return any(_same(_for, _c) for _c in (job_codes_here or ()))
+
+
 def plating_unit_price(mass_kg: Any, order_qty: Any,
                        policy: Dict[str, Any],
-                       finish_text: Any = "") -> Tuple[Optional[float], str, str]:
+                       finish_text: Any = "",
+                       job_codes_here: Any = ()) -> Tuple[Optional[float], str, str]:
     """Per-unit subcontract plating cost from the plated mass, honouring the plater's per-batch
     vat minimum. Returns (unit_gbp or None, note, cost_method). None where no rate is configured
     or no mass resolved — the caller then keeps the line as a blocking 'estimator to price'.
@@ -1491,13 +1539,62 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
     a few pounds on mass. Keyed on the finish the drawing names, so a job calling up no such
     spec is priced exactly as it was."""
     _spec = named_plate_spec(finish_text)
-    if _spec and _safe_float(_spec.get("gbp_per_unit")):
-        _unit = round(float(_spec["gbp_per_unit"]), 2)
-        return (_unit,
-                f"{_spec.get('label') or _spec.get('matched_spec')} — £{_unit:.2f} per unit, "
-                f"a quoted price for the named spec and not the per-kilo rate "
-                f"({_spec.get('source', 'source not recorded')})",
-                "subcontract_plating_named_spec")
+    if _spec:
+        # A NAMED SPEC IS A METHOD, AND THE PRICE IS ASKED OF SDI'S OWN SOURCES.
+        #
+        # "The engine must learn methods, conditions, and evidence, not copy a manual
+        # estimate's numbers into the next estimate" — James Gray, 16 Sep 2026. What this
+        # entry teaches is that "Harrods 01" is a DECORATIVE requirement, so the per-kilo
+        # zinc card must not price it (the original defect, an order of magnitude out), and
+        # that a plater quotes it per job. The figure comes from the price sources at run
+        # time, like the tape's roll price — never from a literal in config.
+        _code = str(_spec.get("matched_spec") or "").strip()
+        _live_gbp, _live_label = None, ""
+        try:
+            import stated_prices as _sp
+            _px = _sp.resolve(_code, _spec.get("label") or "")
+            if _px and _safe_float(_px.get("gbp")):
+                _live_gbp = round(float(_px["gbp"]), 2)
+                _live_label = str(_px.get("label") or "")
+        except Exception:                                            # noqa: BLE001
+            _live_gbp = None
+        if _live_gbp:
+            return (_live_gbp,
+                    f"{_spec.get('label') or _code} — £{_live_gbp:.2f} per unit, the current "
+                    f"price for the named spec and not the per-kilo rate ({_live_label or 'source not named'})",
+                    "subcontract_plating_named_spec")
+        if _spec.get("requires_quote"):
+            # NOT PRICED, AND THE LAST QUOTE SHOWN AS CONTEXT. A figure a person can act on,
+            # never money the engine charges — the whole point of keeping the knowledge and
+            # dropping the literal.
+            _lk = _spec.get("last_known_quote") or {}
+            _lk_bit = ""
+            if _safe_float(_lk.get("gbp_per_unit")):
+                _lk_bit = (f" The last quote we hold is £{float(_lk['gbp_per_unit']):.2f} a "
+                           f"unit for {_lk.get('job') or 'an earlier job'} on "
+                           f"{_lk.get('on') or 'an unrecorded date'} "
+                           f"({_lk.get('source') or 'source not recorded'}) — for reference, "
+                           f"not applied.")
+            return (None,
+                    f"{_spec.get('label') or _code} — a named decorative plating "
+                    f"requirement, NOT the zinc/passivate card. NOT PRICED: "
+                    f"{_spec.get('confirm') or 'plating is quoted job by job'}.{_lk_bit}",
+                    "subcontract_plating_quote_needed")
+        if _safe_float(_spec.get("gbp_per_unit")):
+            _unit = round(float(_spec["gbp_per_unit"]), 2)
+            if not _quote_belongs_to_this_job(_spec, job_codes_here):
+                return (None,
+                        f"{_spec.get('label') or _code} — the spec is identified but NOT "
+                        f"PRICED here. £{_unit:.2f} a unit is the quote for "
+                        f"{_spec.get('quoted_for_job') or 'another job'} "
+                        f"({_spec.get('source', 'source not recorded')}), and "
+                        f"{_spec.get('confirm') or 'plating is quoted job by job'}",
+                        "subcontract_plating_quote_needed")
+            return (_unit,
+                    f"{_spec.get('label') or _code} — £{_unit:.2f} per unit, "
+                    f"a quoted price for the named spec and not the per-kilo rate "
+                    f"({_spec.get('source', 'source not recorded')})",
+                    "subcontract_plating_named_spec")
     rate = (policy or {}).get("gbp_per_kg")
     if rate in (None, ""):
         return None, "no plating rate configured — estimator to price", "estimator_to_price"
@@ -1536,11 +1633,26 @@ def plating_unit_price(mass_kg: Any, order_qty: Any,
     _fin_u = str(finish_text or "").upper()
     if _covers and not any(str(tok).upper() in _fin_u for tok in _covers):
         _named = str(finish_text or "").strip() or "not stated"
+        # THE SPECS WE KNOW, WITH WHAT THEY LAST COST — offered so an estimator can say
+        # "that one" rather than start from the drawing again. The figure is the LAST QUOTE
+        # and reads as one: the entries themselves carry no chargeable rate any more.
+        def _spec_quote(_s):
+            _lk = _s.get("last_known_quote") or {}
+            return _safe_float(_lk.get("gbp_per_unit")) or _safe_float(_s.get("gbp_per_unit"))
+
+        def _spec_where(_s):
+            _lk = _s.get("last_known_quote") or {}
+            _src = _lk.get("source") or _s.get("source") or "source not recorded"
+            _job = _lk.get("job")
+            _on = _lk.get("on")
+            return (f"last quoted {('for ' + _job) if _job else ''}"
+                    f"{(' on ' + _on) if _on else ''} — {_src}").replace("  ", " ").strip()
+
         _cands = "; ".join(
-            f"{(_s.get('label') or _k)} £{float(_s['gbp_per_unit']):.2f} per unit "
-            f"({_s.get('source', 'source not recorded')})"
+            f"{(_s.get('label') or _k)} £{_spec_quote(_s):.2f} per unit "
+            f"({_spec_where(_s)})"
             for _k, _s in (getattr(config, "NAMED_PLATE_SPECS", {}) or {}).items()
-            if _safe_float(_s.get("gbp_per_unit")))
+            if _spec_quote(_s))
         return (None,
                 f"PLATING SPEC NOT IDENTIFIED — the drawing's finish reads {_named!r}, which "
                 f"names a plate but not which plate. The £{float(rate):.2f}/kg card is trade "
@@ -1674,7 +1786,8 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
                     part_estimates, parts if parts is not None else [])
                 if _spec_pack:
                     _finish_text = f"{_finish_text} {_spec_text}".strip()
-            unit, note, method = plating_unit_price(mass, order_qty, policy, _finish_text)
+            unit, note, method = plating_unit_price(
+                mass, order_qty, policy, _finish_text, job_identity_codes(summary))
             if _found_on and method == "subcontract_plating_named_spec":
                 note += (f". The spec is not stated on this weldment or its members — it was "
                          f"read from {_found_on}'s own finish on this pack; confirm it "
@@ -1791,6 +1904,14 @@ def apply_subcontract_plating(part_estimates: List[Dict[str, Any]], summary: Any
             pe["description"] = (
                 f"{_pn_plate} plating — SPEC NOT IDENTIFIED: the drawing names a plate but "
                 f"not which plate. NOT PRICED — confirm the process with the plater").strip()
+        elif method == "subcontract_plating_quote_needed":
+            # THE SPEC IS KNOWN AND THE PRICE IS NOT OURS TO REUSE. Distinct from the
+            # unidentified case on purpose: there the question is "which plate?", here it
+            # is "what does the plater charge for it on THIS job?" — and a description that
+            # confused the two would send an estimator to the drawing instead of the phone.
+            _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
+            pe["description"] = (
+                f"{_pn_plate} plating — {note}").strip()
         elif method == "inherited_estimator_decision":
             _pn_plate = str(pe.get("_plating_weldment") or pe.get("part_number") or "").strip()
             _inh_lbl = str((_inh or {}).get("plating_spec") or "").strip()

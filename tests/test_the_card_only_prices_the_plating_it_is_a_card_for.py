@@ -46,14 +46,14 @@ def test_zinc_and_passivate_are_still_priced_on_the_card():
     """The ordinary job is untouched. This is the whole of what £2.50/kg was ever for."""
     for text in ("zinc passivate", "ZINC PLATE & PASSIVATE", "zinc plated",
                  "GALVANISED", "electro-zinc"):
-        unit, _, method = plating_unit_price(2.4, 6, POLICY, text)
+        unit, _, method = plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))
         assert method == "subcontract_plating_indicative", text
         assert unit == 15.83, text
 
 
 def test_a_bare_plated_is_not_zinc():
     """7332-01's actual reading, off two detail sheets. It names a family and stops."""
-    unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED")
+    unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED", ("7332-01",))
     assert unit is None
     assert method == "subcontract_plating_spec_unidentified"
 
@@ -62,12 +62,16 @@ def test_nor_is_a_plating_the_card_does_not_cover():
     """Nickel and chrome classify as plate and cost multiples of zinc. The config note names
     nickel specifically as not this rate; now the code agrees with the note."""
     for text in ("NICKEL PLATE", "CHROME PLATED", "BRASS PLATE", "Harrods 02"):
-        assert plating_unit_price(2.4, 6, POLICY, text)[0] is None, text
+        assert plating_unit_price(2.4, 6, POLICY, text, ("7332-01",))[0] is None, text
 
 
-def test_a_quoted_spec_still_wins_over_everything():
-    unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED Harrods01")
-    assert unit == 250.00 and method == "subcontract_plating_named_spec"
+def test_a_quoted_spec_still_wins_over_the_zinc_card():
+    """THE ORIGINAL DEFECT, and the part that must never come back: £2.50/kg is a trade
+    zinc card and a decorative brass is a different product, sixteen to one. A named spec
+    stops the card dead — it just no longer charges a figure from source instead."""
+    unit, _, method = plating_unit_price(0.9, 6, POLICY, "PLATED Harrods01", ("7332-01",))
+    assert method == "subcontract_plating_quote_needed"
+    assert unit is None, "and emphatically not the £15.83 the zinc card would have charged"
 
 
 # ── and a blocked line hands over everything needed to settle it ─────────────────────────
@@ -75,14 +79,14 @@ def test_a_quoted_spec_still_wins_over_everything():
 def test_the_candidate_figure_is_carried_not_thrown_away():
     """The card's arithmetic is still worth having — an estimator who knows it IS zinc must
     be able to accept it without recomputing it. It is offered, not charged."""
-    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED")
+    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED", ("7332-01",))
     assert "£15.83" in note
     assert "CANDIDATE and is NOT charged" in note
     assert "£2.50/kg card is trade zinc/passivate" in note
 
 
 def test_the_quoted_specs_on_file_are_offered_beside_it():
-    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED")
+    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED", ("7332-01",))
     assert "Brass — Harrods 01 £250.00 per unit" in note
     assert "Howard Thurley" in note
 
@@ -90,16 +94,16 @@ def test_the_quoted_specs_on_file_are_offered_beside_it():
 def test_the_line_says_what_the_drawing_actually_said():
     """Not "no finish" — the drawing said something, and the something is the reason the
     line exists at all. Quoting it is what lets a person recognise the callout."""
-    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED")
+    _, note, _ = plating_unit_price(0.9, 6, POLICY, "PLATED", ("7332-01",))
     assert "'PLATED'" in note
-    _, note2, _ = plating_unit_price(0.9, 6, POLICY, "")
+    _, note2, _ = plating_unit_price(0.9, 6, POLICY, "", ("7332-01",))
     assert "not stated" in note2
 
 
 def test_an_unconfigured_rate_is_still_its_own_answer():
     """Withholding the rate entirely is a different state from not knowing the process, and
     it keeps its own wording."""
-    unit, _, method = plating_unit_price(2.4, 6, {"gbp_per_kg": None}, "PLATED")
+    unit, _, method = plating_unit_price(2.4, 6, {"gbp_per_kg": None}, "PLATED", ("7332-01",))
     assert unit is None and method == "estimator_to_price"
 
 
@@ -121,7 +125,7 @@ def test_a_spec_on_another_sheet_of_the_same_pack_is_found():
     recs = [{"part_number": "7332-01-101", "normalized_finish": "PLATED"},
             {"part_number": "7332-01-GA", "surface_finishes": ["Harrods01"]}]
     spec, found_on, text = named_plate_spec_anywhere_on_the_pack(recs)
-    assert spec["gbp_per_unit"] == 250.00
+    assert spec["last_known_quote"]["gbp_per_unit"] == 250.00
     assert found_on == "7332-01-GA"                  # named, so the estimator can check it
     assert "Harrods01" in text
 
@@ -145,4 +149,4 @@ def test_the_customer_name_alone_buys_nothing():
 
 def test_a_non_dict_in_the_list_does_not_break_the_search():
     recs = [None, "7332-01-101", 42, {"part_number": "G", "surface_finishes": ["HARRODS 01"]}]
-    assert named_plate_spec_anywhere_on_the_pack(recs)[0]["gbp_per_unit"] == 250.00
+    assert named_plate_spec_anywhere_on_the_pack(recs)[0]["last_known_quote"]["gbp_per_unit"] == 250.00
