@@ -5847,17 +5847,64 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # DXF, an angle callout, a textual fold count — any one of them keeps the op. None of
     # them, and the part is straight and the op comes off, said out loud rather than
     # silently. A part with no tube-bending op on it is untouched.
+    # Howard's ruling closed the loop on -002 — "Line 103 - Tube Bending Op. – Not
+    # Required" — and named the physics: the tube-bender wraps ROUND/OVAL tube around a
+    # former, to a RADIUS. A square leg with 45° callouts is a MITRED cut, not a bend; the
+    # angles describe the saw, and reading them as bend evidence is exactly how -002 booked
+    # two bends on a straight leg. So the section's own shape now speaks: a square/rect
+    # section whose only evidence is angle callouts loses the op, while measured bends, a
+    # radius on a round section, and a plain textual bend statement keep their standing.
     _tube_bend_ops = [o for o in ops if str(o).strip().lower() in
                       ("tube_bending", "tubebend", "tube_bend")]
     if _tube_bend_ops:
-        _bend_evidence = (
-            (bends or 0) > 0
-            or (_safe_int(part.get("bend_count_dxf")) or 0) > 0
-            or len(part.get("angles_deg") or []) > 0
-            or (_safe_int(part.get("fold_count_textual")) or 0) > 0
-            or (_safe_int((part.get("manufacturing_features") or {}).get("bend_count")) or 0) > 0
-        )
-        if not _bend_evidence:
+        _ss_tb = part.get("section_stock") or {}
+        _round_tb = str(_ss_tb.get("profile_form") or "").upper() in (
+            "CHS", "EHS", "OVAL", "ROUND")
+        _square_tb = (not _round_tb) and bool(
+            _safe_float(_ss_tb.get("a")) and _safe_float(_ss_tb.get("b")))
+        # MEASURED means measured. `bends` above folds angle callouts and textual counts
+        # into one figure, so it cannot distinguish a measurement from a word — only a
+        # DXF bend line or the model's own bend count is a measurement here.
+        _measured_tb = (
+            (_safe_int(part.get("bend_count_dxf")) or 0) > 0
+            or (_safe_int((part.get("manufacturing_features") or {}).get("bend_count")) or 0) > 0)
+        _radius_tb = len(part.get("radii_mm") or []) > 0
+        _angles_tb = len(part.get("angles_deg") or []) > 0
+        _worded_tb = (_safe_int(part.get("fold_count_textual")) or 0) > 0
+        if _measured_tb or (_round_tb and _radius_tb):
+            _keep_tb, _why_tb = True, ""
+        elif _square_tb and _angles_tb and not _worded_tb:
+            _keep_tb = False
+            _why_tb = (f"tube bending removed: this is a "
+                       f"{_ss_tb.get('a')}x{_ss_tb.get('b')} square/rect section and the "
+                       f"only bend evidence is angle callouts — on a straight mitred leg "
+                       f"those describe the SAW CUT, not a bend, and the tube-bender "
+                       f"wraps round/oval tube to a radius (Howard Thurley, 7332-01: "
+                       f"'Tube Bending Op. – Not Required'). If it does bend, the drawing "
+                       f"needs a radius or a bend line")
+        elif not (_angles_tb or _worded_tb or _radius_tb):
+            _keep_tb = False
+            _why_tb = ("tube bending removed: nothing on this part states a bend — no "
+                       "bend count, no bend line in a DXF, no radius, no angle callout. "
+                       "The op was read from the drawing text near a tube, and a straight "
+                       "leg does not go on the tube-bender. If it does bend, the drawing "
+                       "needs to say so")
+        else:
+            # KEPT, AND STILL WORTH ASKING ABOUT. The drawing did say something — a bend
+            # word, an angle on a round or unknown section, a radius with no shape to hang
+            # it on — and nothing measured it. A word is weaker evidence than a
+            # measurement, and the tube-bender is £32.84 an hour with a 45-minute set-up,
+            # so the weak case is worth a sentence. It is NOT worth a silent deletion:
+            # removing charged work because one estimator disagreed with one drawing is
+            # how a rule stops describing anything. Charged as read; a person rules.
+            _keep_tb = True
+            _why_tb = (f"tube bending CHARGED on the drawing's word alone: something "
+                       f"states a bend but nothing measures one — no bend line in a DXF, "
+                       f"and the bender needs a round/oval section and a radius "
+                       f"({'round section, no radius' if _round_tb else 'section shape unread'}). "
+                       f"{len(_tube_bend_ops)} tube-bend op(s) at the bender's rate and "
+                       f"set-up. Confirm the leg actually bends, or take the op off")
+        if not _keep_tb:
             ops = [o for o in ops if o not in _tube_bend_ops]
             for _tf in ("textual_operations", "inferred_operations"):
                 if isinstance(part.get(_tf), list):
@@ -5868,28 +5915,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 for _o in _tube_bend_ops:
                     _timing.pop(_o, None)
             part.setdefault("removed_operations", []).extend(_tube_bend_ops)
-            part.setdefault("review_flags", []).append(
-                "tube bending removed: nothing on this part states a bend — no bend count, "
-                "no bend line in a DXF, no angle callout. The op was read from the drawing "
-                "text near a tube, and a straight leg does not go on the tube-bender. If it "
-                "does bend, the drawing needs to say so")
-        elif not ((_safe_int(part.get("bend_count_dxf")) or 0) > 0
-                  or len(part.get("angles_deg") or []) > 0):
-            # KEPT, AND STILL WORTH ASKING ABOUT. The gate above only removes the op where
-            # NOTHING states a bend. 7332-01-002 is the other case: a textual bend statement
-            # and no measurement behind it — no DXF bend line, no angle callout — and the
-            # estimator's answer was "Line 103 - Tube Bending Op. – Not Required."
-            #
-            # A word is weaker evidence than a measurement, and the tube-bender is £32.84 an
-            # hour with a 45-minute set-up, so the weak case is worth a sentence. It is NOT
-            # worth a silent deletion: the drawing did say something, and removing charged
-            # work because one estimator disagreed with one drawing is how a rule stops
-            # describing anything. Charged as read; raised so a person rules on it.
-            part.setdefault("review_flags", []).append(
-                f"tube bending CHARGED on the drawing's word alone: the text states a bend "
-                f"but nothing measures one — no bend line in a DXF, no angle callout. "
-                f"{len(_tube_bend_ops)} tube-bend op(s) at the bender's rate and set-up. "
-                f"Confirm the leg actually bends, or take the op off")
+            part.setdefault("review_flags", []).append(_why_tb)
+        elif _why_tb:
+            part.setdefault("review_flags", []).append(_why_tb)
 
     # ---- ONE BLANK IS CUT OUT ONCE ------------------------------------------------
     #

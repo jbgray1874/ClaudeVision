@@ -89,14 +89,51 @@ def test_a_bend_stated_in_words_only_is_charged_and_raised():
 
 
 def test_a_measured_bend_is_not_second_guessed():
-    """A DXF bend line or an angle callout IS the measurement. Flagging those would put a
-    question on every bent tube in the shop, which is noise, not review."""
-    for ev in ({"bend_count_dxf": 1}, {"angles_deg": [90]},
+    """A DXF bend line or the model's own bend count IS the measurement. Flagging those
+    would put a question on every bent tube in the shop, which is noise, not review.
+    An angle callout is deliberately NOT in this list any more — on 7332-01-002 the 45s
+    described the mitre saw cut, and Howard's answer was 'Not Required'."""
+    for ev in ({"bend_count_dxf": 1},
+               {"manufacturing_features": {"bend_count": 2}},
                {"bend_count_dxf": 2, "angles_deg": [45, 45]}):
         part = _tube(**ev)
         estimate_process_times(part)
         assert "tube_bending" in (part.get("textual_operations") or []), ev
         assert "word alone" not in _flags(part), ev
+
+
+def test_a_mitred_square_leg_with_angle_callouts_gets_no_bend():
+    """HOWARD'S EXACT CASE. 7332-01-002 is a 15.88 square section; its 45° callouts are
+    the mitre cut. The tube-bender wraps round/oval tube to a radius — a square leg whose
+    only evidence is angles comes off, saying what would bring it back."""
+    part = _tube(section_stock={"a": 15.88, "b": 15.88, "t": 1.2},
+                 angles_deg=[45.0, 45.0])
+    estimate_process_times(part)
+    assert "tube_bending" in (part.get("removed_operations") or [])
+    f = _flags(part)
+    assert "mitred" in f and "radius" in f
+    assert "Not Required" in f, "his ruling is cited, so the rule shows its source"
+
+
+def test_a_round_tube_with_a_radius_is_bent_without_a_question():
+    """Round section + radius callout is what the bender exists for — the two things the
+    rule requires, both present, no noise."""
+    part = _tube(section_stock={"a": 12.7, "b": 12.7, "t": 1.2, "profile_form": "CHS"},
+                 radii_mm=[50.0])
+    estimate_process_times(part)
+    assert "tube_bending" in (part.get("textual_operations") or [])
+    assert "word alone" not in _flags(part)
+    assert "removed" not in _flags(part)
+
+
+def test_an_angle_on_a_round_tube_keeps_the_op_and_asks_for_the_radius():
+    """A round tube CAN be what the angle describes — removing it on shape alone would
+    delete real work. It stays, and the ask names what is missing."""
+    part = _tube(section_stock={"a": 12.7, "b": 12.7, "t": 1.2, "profile_form": "CHS"},
+                 angles_deg=[90.0])
+    estimate_process_times(part)
+    assert "tube_bending" in (part.get("textual_operations") or [])
+    assert "round section, no radius" in _flags(part)
 
 
 def test_a_removed_bend_is_not_also_queried():
