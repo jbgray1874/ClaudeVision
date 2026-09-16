@@ -1,29 +1,34 @@
-"""Joinery throughputs come from a joinery job, not from the department next door.
+"""Joinery rates come from a joinery job — and the set-up comes out of them first.
 
 "No edge banding, no machining saw/spindle, no bench work time, CNC setup not amortised"
 — Tony Ford, reviewing the engine's 11908-21 book against his own.
 
 Every joinery throughput the engine held was a GUESS borrowed from a neighbouring
-department, because no joinery job had ever been measured. His sheet is the first
-measurement, and the guesses were not close:
+department, because no joinery job had ever been measured. His Labour tab is the first
+measurement — and it states HOURS PER ORDER, which is not what the engine needs.
 
-    dept   his hours   min/unit   parts/hour      the guess we held
-    CNCJ      4.4167       5.30      11.3208      30   (2.6x too fast)
-    EDGE      4.6667       5.60      10.7143      30   (2.8x too fast)
-    MC J      4.6667       5.60      10.7143      no row at all
-    BENC     25.5000      30.60       1.9608      79   (40.3x too fast)
-    PACJ      2.7500       3.30      18.1818      99   (5.4x too fast)
+THE FIRST ATTEMPT DIVIDED THOSE HOURS BY HIS QUANTITY AND SHIPPED THE RESULT. That buried
+the set-up inside the per-part rate, and the workbook then added its own set-up row on top:
+a faced-board job paid for its set-up twice, and its quantity breaks had nothing left to
+amortise. Which is Tony's "CNC setup not amortised", arriving from the other side.
 
-Bench work is 25.5 of his 42 hours run forty times too fast. That single number is what
-"no bench work time" looks like from the estimator's side, and most of the gap between
-his £57.09 and ours.
+THE EVIDENCE SEPARATES THEM. Subtract the set-up this engine ALREADY holds for each
+department — OPERATION_SETUP_MIN, read off the Estimate template's own rate rows — and every
+one of the five falls on a whole number:
 
-DERIVED, AND IT HAS TO SAY SO. His sheet states HOURS PER ORDER at a quantity of 50; the
-engine needs parts/hour, so each figure is his hours divided by his quantity. That is
-arithmetic on a stated fact, not a stated fact — a per-order element inside those hours
-would inflate the per-part figure, and one job is one job. Both caveats live in the
-provenance, so nothing downstream can print these as though a department had stated a
-rate.
+    dept   his hours   set-up   run hours   RUN RATE      the guess it replaces
+    CNCJ      4.4167     15 m      4.1667   12 /hr        30
+    EDGE      4.6667     30 m      4.1667   12 /hr        30
+    MC J      4.6667     30 m      4.1667   12 /hr        no row at all
+    BENC     25.5000     30 m     25.0000    2 /hr        79   (forty times too fast)
+    PACJ      2.7500     15 m      2.5000   20 /hr        99
+
+Five departments, five exact integers, against a table written from the template long
+before his sheet was read. One would be a coincidence; five is his sheet and this engine
+using one convention — which is what makes this a measurement rather than a curve fit.
+
+STILL A SCOPED PILOT. One job is one job: these apply to the family they were measured on
+and widen when a second job or the department confirms them.
 """
 from __future__ import annotations
 
@@ -35,22 +40,50 @@ os.environ.setdefault("SDI_OFFLINE", "1")
 
 import config                                                         # noqa: E402
 
-# (register key, his stated hours, the guess it replaces)
+# (register key, department code, his stated hours, the guess it replaces)
 _HIS_SHEET = (
-    ("joinery_cnc_parts_per_hour",          4.4167, 30),
-    ("joinery_edge_banding_parts_per_hour", 4.6667, 30),
-    ("joinery_machining_parts_per_hour",    4.6667, None),   # no row exists yet
-    ("joinery_bench_parts_per_hour",       25.5,    79),
-    ("joinery_pack_parts_per_hour",         2.75,   99),
+    ("joinery_cnc_parts_per_hour",          "CNCJ",  4.4167, 30),
+    ("joinery_edge_banding_parts_per_hour", "EDGE",  4.6667, 30),
+    ("joinery_machining_parts_per_hour",    "MC J",  4.6667, None),
+    ("joinery_bench_parts_per_hour",        "BENC", 25.5,    79),
+    ("joinery_pack_parts_per_hour",         "PACJ",  2.75,   99),
 )
 
 
-def test_every_figure_is_his_hours_divided_by_his_quantity():
-    """The arithmetic, reproduced from his sheet rather than trusted."""
+def test_every_rate_is_his_hours_MINUS_SETUP_divided_by_his_quantity():
+    """THE DECOMPOSITION, re-derived from the engine's OWN set-up table rather than from the
+    numbers written beside it — so config's call sites and OPERATION_SETUP_MIN cannot drift
+    apart without this failing."""
     qty = config.SHOP_STATED["joinery_rates_measured_at_quantity"]
     assert qty == 50
-    for key, hours, _ in _HIS_SHEET:
-        assert abs(config.SHOP_STATED[key] - (qty / hours)) < 0.001, key
+    for key, code, hours, _ in _HIS_SHEET:
+        run_h = hours - config.OPERATION_SETUP_MIN[code] / 60.0
+        assert abs(config.SHOP_STATED[key] - (qty / run_h)) < 0.001, key
+
+
+def test_all_five_land_on_whole_numbers_which_is_why_it_is_evidence():
+    """Five departments, five exact integers, against a set-up table written from the
+    template long before Tony's sheet was read. One would be a coincidence; five is the two
+    documents using one convention, and THAT is what makes this a measurement rather than a
+    curve fit."""
+    qty = config.SHOP_STATED["joinery_rates_measured_at_quantity"]
+    for key, code, hours, _ in _HIS_SHEET:
+        rate = qty / (hours - config.OPERATION_SETUP_MIN[code] / 60.0)
+        # 1e-3: his hours are stated to four places on the sheet, so the exact
+        # integer is reached from the exact hours, not from the rounding of them.
+        assert abs(rate - round(rate)) < 1e-3, (key, rate)
+        assert config.SHOP_STATED[key] == round(rate), key
+
+
+def test_the_setup_is_not_buried_in_the_rate():
+    """THE DEFECT THIS REPLACES. Shipping the hours whole buried the set-up inside the
+    per-part rate AND left the workbook adding its own set-up row on top — so a faced-board
+    job paid for its set-up twice and its breaks had nothing left to amortise. Every rate
+    must therefore be FASTER than the hours-whole figure it replaced."""
+    qty = config.SHOP_STATED["joinery_rates_measured_at_quantity"]
+    for key, code, hours, _ in _HIS_SHEET:
+        assert config.SHOP_STATED[key] > qty / hours, key
+    assert "set-up charged separately" in config.SHOP_STATED["joinery_rates_status"]
 
 
 def test_the_job_these_were_measured_on_is_named():
@@ -59,12 +92,13 @@ def test_the_job_these_were_measured_on_is_named():
 
 def test_each_one_is_attributed_to_tony_and_declares_it_is_derived():
     """A figure nobody stated must never print as one somebody did."""
-    for key, _, _ in _HIS_SHEET:
+    for key, _code, _hours, _guess in _HIS_SHEET:
         src = config.shop_stated_source(key)
         assert "Tony Ford" in src and "11908-21" in src, (key, src)
         ev = config.SHOP_STATED_PROVENANCE[key]["evidence"]
         assert ev.startswith("DERIVED by this engine"), (key, ev)
-        assert "setup" in ev, "the per-order caveat has to travel with the figure"
+        assert "set-up" in ev, "the split has to travel with the figure"
+        assert "once per order" in ev, "and so does how set-up is charged"
         assert "one job" in ev, "and so does the sample size"
         assert str(config.SHOP_STATED["joinery_rates_measured_at_quantity"]) in ev
 
@@ -74,7 +108,7 @@ def test_bench_work_was_the_forty_fold_error():
     a future edit that quietly moves it back toward the metal bench figure should fail
     here rather than in an estimator's inbox."""
     bench = config.SHOP_STATED["joinery_bench_parts_per_hour"]
-    assert 1.5 < bench < 2.5, bench
+    assert bench == 2.0, bench
     assert 79 / bench > 30, "the guess it replaces was more than thirty times too fast"
 
 
@@ -149,13 +183,14 @@ def test_the_edging_code_is_named_once():
 # other side: his hours are PER ORDER and contain both run time and whatever setup each
 # department did once. One job is one equation in two unknowns.
 
-def test_setup_is_recorded_as_unknown_not_as_zero():
-    """None, not 0.0. Zero is a claim — that the departments set up instantly — and it is
-    the claim that would silently bake the setup into the per-unit rate."""
-    assert config.SHOP_STATED["joinery_setup_min_per_department"] is None
-    ev = config.SHOP_STATED_PROVENANCE["joinery_setup_min_per_department"]["evidence"]
-    assert "UNKNOWN" in ev
-    assert "ASK TONY" in ev, "an unknown with no question attached never becomes known"
+def test_the_setup_is_known_and_points_at_the_table_that_holds_it():
+    """It WAS recorded as unknown, correctly, when one job looked like one equation in two
+    unknowns. It is not unknown any more: the engine's own set-up table solves it, and the
+    five whole numbers are the proof. A department name, not a number — the minutes live in
+    one place and the workbook charges them once per order."""
+    assert "OPERATION_SETUP_MIN" in config.SHOP_STATED["joinery_setup_source"]
+    assert "joinery_setup_min_per_department" not in config.SHOP_STATED, \
+        "superseded by the decomposition — a stale UNKNOWN reads as an open question"
 
 
 def test_the_figures_declare_their_scope_and_their_status():

@@ -899,44 +899,47 @@ SHOP_STATED = {
     # "No edge banding, no machining saw/spindle, no bench work time, CNC setup not
     # amortised" — Tony, reviewing the engine's book against his. Every joinery throughput
     # the engine held was a GUESS borrowed from a neighbouring department, because no
-    # joinery job had ever been measured. His sheet is the first measurement, and the
-    # guesses were not close:
+    # joinery job had ever been measured. His sheet is the first measurement.
     #
-    #     dept   his hours   min/unit   parts/hour      the guess we held
-    #     CNCJ      4.4167       5.30      11.3208      30   (2.6x too fast)
-    #     EDGE      4.6667       5.60      10.7143      30   (2.8x too fast)
-    #     MC J      4.6667       5.60      10.7143      no row at all
-    #     BENC     25.5000      30.60       1.9608      79   (40.3x too fast)
-    #     PACJ      2.7500       3.30      18.1818      99   (5.4x too fast)
+    # SET-UP AND RUN TIME ARE SEPARATED, AND THE EVIDENCE SEPARATES THEM. His Labour tab
+    # states HOURS PER ORDER at fifty off. Subtract the set-up this engine ALREADY holds for
+    # each department (OPERATION_SETUP_MIN, read off the Estimate template's own rate rows)
+    # and every one of the five falls on a whole number:
     #
-    # Bench work is 25.5 of his 42 hours, run 40x too fast — which is the whole of "no bench
-    # work time" in one number, and most of the gap between his £57.09 and ours.
+    #   dept   his hours   set-up   run hours   RUN RATE
+    #   CNCJ      4.4167     15 m      4.1667   12 /hr
+    #   EDGE      4.6667     30 m      4.1667   12 /hr
+    #   MC J      4.6667     30 m      4.1667   12 /hr
+    #   BENC     25.5000     30 m     25.0000    2 /hr
+    #   PACJ      2.7500     15 m      2.5000   20 /hr
     #
-    # DERIVED, AND SAID SO. His sheet states HOURS PER ORDER at a quantity of 50; the engine
-    # needs parts/hour, so every figure here is his hours divided by his quantity. That is
-    # arithmetic on a stated fact, not a stated fact — the same distinction linebend already
-    # carries. Two things follow and are recorded in the provenance below: a per-order
-    # element (a setup) would inflate the per-part figure, and one job is one job. Confirm
-    # both with Tony and these upgrade from derived to stated.
-    "joinery_cnc_parts_per_hour":          11.3208,
-    "joinery_edge_banding_parts_per_hour": 10.7143,
-    "joinery_machining_parts_per_hour":    10.7143,
-    "joinery_bench_parts_per_hour":         1.9608,
-    "joinery_pack_parts_per_hour":         18.1818,
+    # Five departments, five exact integers, against a set-up table written from the template
+    # long before his sheet was read. That is not a coincidence and it is not a curve fit: it
+    # is his sheet and this engine using one convention, which makes the split EVIDENCE and
+    # not an assumption.
+    #
+    # THE FIRST VERSION OF THIS SHIPPED THE HOURS WHOLE (11.32, 10.71, 10.71, 1.96, 18.18),
+    # which buried the set-up inside the per-part rate AND left the workbook adding its own
+    # set-up row on top — so a faced-board job paid for its set-up twice, and its quantity
+    # breaks had nothing left to amortise. That is Tony's "CNC setup not amortised" arriving
+    # from the other side.
+    #
+    # STILL A SCOPED PILOT. One job is one job: these apply to the family they were measured
+    # on, and widen when a second job or the department confirms them.
+    "joinery_cnc_parts_per_hour":          12.0,
+    "joinery_edge_banding_parts_per_hour": 12.0,
+    "joinery_machining_parts_per_hour":    12.0,
+    "joinery_bench_parts_per_hour":         2.0,
+    "joinery_pack_parts_per_hour":         20.0,
     "joinery_rates_measured_on_job":       "11908-21",
     "joinery_rates_measured_at_quantity":  50,
-    # SETUP CANNOT BE SEPARATED FROM ONE JOB, AND PRETENDING OTHERWISE IS THE DEFECT TONY
-    # REPORTED. His hours per order contain a per-unit run time AND whatever setup each
-    # department did once. One job is one equation in two unknowns: unsolvable, only
-    # askable. None means UNKNOWN — not zero — and the figures above therefore carry the
-    # setup inside them, which overstates the per-unit rate by however much it was. On his
-    # own numbers, half an hour of setup a department moves the pack rate by 22%.
-    "joinery_setup_min_per_department":    None,
-    # Named here so the scope is a fact in the register rather than a sentence in a comment:
-    # these figures apply to the family they were measured on and nothing else, until a
-    # second job or the department itself widens them.
+    # A department name, not a number: each department's minutes already live in
+    # OPERATION_SETUP_MIN and the workbook charges them ONCE PER ORDER, exactly as his sheet
+    # does. This key records that the table was CONFIRMED by the decomposition above rather
+    # than assumed to apply — test_the_joinery_floor_is_measured_not_borrowed re-derives it.
+    "joinery_setup_source":                "config.OPERATION_SETUP_MIN (confirmed by the fit)",
     "joinery_rates_scope":                 "faced/laminated board (MFMDF, MFC)",
-    "joinery_rates_status":                "scoped pilot — provisional",
+    "joinery_rates_status":                "scoped pilot — run rates, set-up charged separately",
 }
 
 # EVERY FIGURE CARRIES ITS OWN PROVENANCE. The register used to close with one shared
@@ -957,18 +960,30 @@ _TONY_11908 = {"stated_by": "Tony Ford (SDI estimating)", "stated_on": "3 Sep 20
                "evidence": "his own 11908-21 estimate sheet, Labour tab"}
 
 
-def _joinery_derivation(code: str, hours: float, what: str) -> str:
+def _joinery_derivation(code: str, hours: float, setup_min: float,
+                        what: str) -> str:
     """The same sentence for every joinery figure, so none of them can overstate itself.
 
-    Each one is his HOURS PER ORDER divided by his quantity. Saying that in the figure's own
-    provenance is the difference between "the shop told us 1.96 parts an hour" — which
-    nobody did — and "the shop told us 25.5 hours for fifty, and we divided"."""
+    Each is his HOURS PER ORDER, minus that department's own set-up, divided by his quantity.
+    Saying so in the figure's own provenance is the difference between "the shop told us 12
+    parts an hour" — which nobody did — and "the shop told us 4.67 hours for fifty, the
+    set-up table says half an hour of that is set-up, and the rest divides to exactly 12".
+
+    `setup_min` is passed in rather than read from OPERATION_SETUP_MIN because that table is
+    defined further down this file and this runs while the register above is being built. It
+    is the SAME figure, and the test re-derives every rate from the table itself, so the two
+    cannot drift apart without the suite saying so.
+    """
     _qty = SHOP_STATED["joinery_rates_measured_at_quantity"]
+    _run_h = hours - setup_min / 60.0
     return (f"DERIVED by this engine: {what} — his Labour tab states {hours:g} hours for "
-            f"{code} across a stated quantity of {_qty} ({hours * 60 / _qty:.2f} min a unit), "
-            f"divided to parts/hour. Not itself a shop statement of a RATE: a per-order "
-            f"element inside those hours (a setup) would inflate the per-part figure, and "
-            f"this is one job. Confirm both with Tony to upgrade it from derived to stated.")
+            f"{code} across a stated quantity of {_qty}. Subtracting this engine's own "
+            f"set-up for {code} ({setup_min:g} min) leaves {_run_h:g} run hours, dividing to "
+            f"exactly {_qty / _run_h:g} parts/hour — and all five joinery departments land "
+            f"on whole numbers against a set-up table written from the template before his "
+            f"sheet was read, so the split is EVIDENCE and not an assumption. Set-up is "
+            f"charged separately, once per order, as his sheet does. Still one job: confirm "
+            f"with Tony to upgrade from derived to stated.")
 SHOP_STATED_PROVENANCE = {
     "weld_min_per_weldment":        dict(_HOWARD_7332, unit="minutes/weldment"),
     "dress_min_per_weldment":       dict(_HOWARD_7332, unit="minutes/weldment"),
@@ -1005,21 +1020,21 @@ SHOP_STATED_PROVENANCE = {
         evidence="his own 0355255 sheet: PACP 30/hour, 'Apply Tape, Bag, Bulk Pack'"),
     "joinery_cnc_parts_per_hour":          dict(
         _TONY_11908, unit="parts/hour",
-        evidence=_joinery_derivation("CNCJ", 4.4167, "the router pass on the board parts")),
+        evidence=_joinery_derivation("CNCJ", 4.4167, 15, "the router pass on the board parts")),
     "joinery_edge_banding_parts_per_hour": dict(
         _TONY_11908, unit="parts/hour",
-        evidence=_joinery_derivation("EDGE", 4.6667, "banding the 23 x 1mm ABS edge")),
+        evidence=_joinery_derivation("EDGE", 4.6667, 30, "banding the 23 x 1mm ABS edge")),
     "joinery_machining_parts_per_hour":    dict(
         _TONY_11908, unit="parts/hour",
-        evidence=_joinery_derivation("MC J", 4.6667, "saw and spindle — an operation the "
+        evidence=_joinery_derivation("MC J", 4.6667, 30, "saw and spindle — an operation the "
                                                      "engine does not yet emit at all")),
     "joinery_bench_parts_per_hour":        dict(
         _TONY_11908, unit="parts/hour",
-        evidence=_joinery_derivation("BENC", 25.5, "bench assembly — 25.5 of his 42 hours, "
+        evidence=_joinery_derivation("BENC", 25.5, 30, "bench assembly — 25.5 of his 42 hours, "
                                                    "and the figure to confirm first")),
     "joinery_pack_parts_per_hour":         dict(
         _TONY_11908, unit="parts/hour",
-        evidence=_joinery_derivation("PACJ", 2.75, "boxing and palletising the tray")),
+        evidence=_joinery_derivation("PACJ", 2.75, 15, "boxing and palletising the tray")),
     "joinery_rates_measured_on_job":       dict(
         _TONY_11908, unit="job number",
         evidence="the one job these joinery figures are measured on"),
@@ -1027,16 +1042,14 @@ SHOP_STATED_PROVENANCE = {
         _TONY_11908, unit="units",
         evidence="the quantity his hours were stated at — the divisor behind every "
                  "joinery parts/hour figure above"),
-    "joinery_setup_min_per_department":    dict(
-        _TONY_11908, unit="minutes/department",
-        evidence="UNKNOWN, and None says so rather than zero. His sheet states hours per "
-                 "order, which contain a per-unit run time and whatever setup each "
-                 "department did once; one job is one equation in two unknowns and cannot "
-                 "be solved, only asked. Until it is asked, the run figures above carry "
-                 "the setup inside them and overstate the per-unit rate by however much "
-                 "of it was setup (on his numbers, 30 min a department moves the pack "
-                 "rate by 22%). ASK TONY: of the hours on your Labour tab, how much is "
-                 "set-up once and how much is per tray?"),
+    "joinery_setup_source":                dict(
+        _TONY_11908, unit="table name",
+        evidence="WHERE the set-up comes from, and that it was CONFIRMED rather than "
+                 "assumed: subtracting config.OPERATION_SETUP_MIN from his stated hours "
+                 "leaves whole-number run rates in all five joinery departments, against a "
+                 "table written from the Estimate template long before his sheet was read. "
+                 "The minutes themselves stay in that one table and the workbook charges "
+                 "them once per order, exactly as his sheet does"),
     "joinery_rates_scope":                 dict(
         _TONY_11908, unit="material family",
         evidence="the family the measurement was taken on — his colour-core laminated "

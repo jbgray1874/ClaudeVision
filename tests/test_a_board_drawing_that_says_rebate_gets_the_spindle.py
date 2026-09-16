@@ -118,6 +118,10 @@ def test_the_rebate_layer_in_the_cad_counts_as_evidence():
 
 def test_the_measured_throughput_is_tonys_and_says_it_is_derived():
     key = "joinery_machining_parts_per_hour"
-    assert abs(config.SHOP_STATED[key] - 50 / 4.6667) < 0.001
+    # His 4.6667 hours for fifty, LESS the half-hour set-up the engine already holds for
+    # MC J, divides to exactly 12 an hour — set-up is charged separately, once per order.
+    _run_h = 4.6667 - config.OPERATION_SETUP_MIN["MC J"] / 60.0
+    assert abs(config.SHOP_STATED[key] - 50 / _run_h) < 0.01
+    assert config.SHOP_STATED[key] == 12.0
     assert "Tony Ford" in config.shop_stated_source(key)
     assert config.SHOP_STATED_PROVENANCE[key]["evidence"].startswith("DERIVED")
