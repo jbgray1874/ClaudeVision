@@ -135,76 +135,144 @@ def test_the_measured_throughput_is_tonys_and_says_it_is_derived():
 # op map sends "assembly" to Packing Joinery — so a tray's assembly event became its PACKING
 # row, and the fitting that produced the tray was charged as boxing it. One event doing two
 # jobs and landing on the wrong one. Tony's sheet has both because both are real.
+#
+# THESE TESTS RUN estimate_part() ITSELF. The first cut re-created the rule's predicate by
+# reading estimator.py's text, which proves the words exist and nothing else — such a test
+# cannot fail when the engine does. What is asserted now is what a book would show: the
+# route the part came back with, the minutes on it, the operation record, and the workbook
+# row those minutes land on.
 
 def _assembly(**over):
     part = {"part_number": "11908-21", "description": "SUNGLASSES TRAY",
-            "normalized_material": "MFMDF", "is_assembly_parent": True,
+            "normalized_material": "MFMDF", "quantity": 50, "is_assembly_parent": True,
             "assembly_children": ["11908-21-01", "11908-21-02", "11908-21-03"]}
     part.update(over)
     return part
 
 
-def _bench_minutes(part):
-    """Run the joinery route rule the way estimate_process_times does."""
-    import re
-    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
-               encoding="utf-8").read()
-    assert "A BOARD ASSEMBLY IS FITTED BEFORE IT IS PACKED" in src
-    mat = str(part.get("normalized_material") or "").upper().replace("_", " ")
-    is_board_asm = (any(w in mat for w in ("MDF", "MFMDF", "MFC", "CHIPBOARD", "PLYWOOD",
-                                           "PLY", "TIMBER", "BIRCH", "VENEER", "LAMINATE"))
-                    and (part.get("is_assembly_parent") or part.get("assembly_children")
-                         or str(part.get("canonical_kind") or "").lower() == "assembly"))
-    if not is_board_asm:
-        return None
-    return 60.0 / config.SHOP_STATED["joinery_bench_parts_per_hour"]
+def _bench(part, qty=50):
+    """estimate_part end to end; returns (the part as estimated, bench minutes or None).
+
+    The PART is handed back, not the estimate record: record_operation and the review
+    flags land on the part itself, and they are half of what these tests exist to see."""
+    import estimator
+    est = estimator.estimate_part(part, job_quantity=qty)
+    rt = (est.get("process_estimate") or {}).get("run_times_min_per_unit") or {}
+    part["process_estimate"] = est.get("process_estimate") or {}
+    return part, rt.get("bench_work")
 
 
-def test_a_board_assembly_is_bench_fitted():
-    assert _bench_minutes(_assembly()) == 30.0
+def _flag_text(est):
+    return " ".join(str(f) for f in (est.get("review_flags") or []))
+
+
+def test_a_faced_board_assembly_is_bench_fitted_at_tonys_measured_rate():
+    est, mins = _bench(_assembly())
+    assert mins == 30.0, mins
+    # the operation record carries it, so the route compiler sees what the sheet charges
+    assert "bench_work" in (est.get("inferred_operations") or []), \
+        est.get("inferred_operations")
+    # and the flag says whose figure it is and that it is a pilot, not a shop constant
+    f = _flag_text(est)
+    assert "SCOPED PILOT" in f and "Tony Ford" in f
+    assert "THE DRAWING DOES NOT ANNOTATE THIS" in f
+    assert "Confirm it applies" in f
 
 
 def test_the_minutes_reproduce_tonys_own_hours():
     """30 minutes a tray across fifty, plus the department's 30-minute set-up charged once,
     is 25.5 hours — which is the figure on his Labour tab, arrived at from the other end."""
-    mins = _bench_minutes(_assembly())
+    _est, mins = _bench(_assembly())
     qty = config.SHOP_STATED["joinery_rates_measured_at_quantity"]
     total_h = (mins * qty) / 60.0 + config.OPERATION_SETUP_MIN["BENC"] / 60.0
     assert abs(total_h - 25.5) < 0.01, total_h
 
 
+def test_his_pilot_rate_does_not_govern_plywood_or_timber():
+    """THE SCOPE GUARD, and the reviewer's exact objection to the first cut: a plywood
+    assembly took Tony's 2-parts-per-hour simply because it had children. His measurement
+    was one faced-board tray. Outside that family the line still EXISTS — the BOM's own
+    structure says the children are fitted — but it takes the house bench allowance and
+    says out loud that his pilot does not govern it."""
+    house = float((config.LABOUR_RULES.get("bench_work") or {}).get("min_per_part", 2.0))
+    for board in ("PLYWOOD", "BIRCH PLY", "TIMBER", "MDF"):
+        est, mins = _bench(_assembly(normalized_material=board))
+        assert mins == house, f"{board}: {mins} — Tony's 30 min must not reach this"
+        f = _flag_text(est)
+        assert "does NOT govern" in f, board
+        assert "SCOPED PILOT" not in f, board
+
+
+def test_a_laminated_mdf_assembly_is_inside_the_scope():
+    """The scope is the FAMILY he measured — faced/laminated board — not one material
+    string. Plain MDF that the material chain costed as MFMDF is the same family."""
+    est, mins = _bench(_assembly(
+        normalized_material="MDF",
+        material_estimate={"costing_material_family": "MFMDF"}))
+    assert mins == 30.0, mins
+    assert "SCOPED PILOT" in _flag_text(est)
+
+
 def test_the_setup_is_not_added_per_part():
     """It is the department's set-up, charged once per order by the workbook. Adding it here
     as well is the double-count that made the first version of these rates wrong."""
-    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
-               encoding="utf-8").read()
-    i = src.index("A BOARD ASSEMBLY IS FITTED BEFORE IT IS PACKED")
-    block = src[i:i + 3200]
-    assert '_st_b["bench_work"]' not in block, "the set-up must not be booked per part"
-    assert "charged once per order" in block
+    est, _mins = _bench(_assembly())
+    st = (est.get("process_estimate") or {}).get("setup_times_min") or {}
+    assert not st.get("bench_work"), st
 
 
 def test_a_metal_or_acrylic_assembly_is_untouched():
     """An acrylic display really is assembled and packed in one PACP pass — that is what
     Howard's "Apply Tape, Bag, Bulk Pack" describes — so no metal or acrylic job moves."""
-    assert _bench_minutes(_assembly(normalized_material="ACRYLIC")) is None
-    assert _bench_minutes(_assembly(normalized_material="MILD STEEL")) is None
+    for mat in ("ACRYLIC", "MILD STEEL"):
+        _est, mins = _bench(_assembly(normalized_material=mat))
+        assert mins is None, f"{mat}: {mins}"
 
 
 def test_a_board_LEAF_gets_no_bench_line():
     """The evidence is the BOM's own structure: a parent with children has to be put
     together. A single panel has nothing to fit."""
-    assert _bench_minutes({"part_number": "11908-21-02", "normalized_material": "MFMDF"}) \
-        is None
+    _est, mins = _bench({"part_number": "11908-21-02", "description": "TRAY BASE",
+                         "normalized_material": "MFMDF", "quantity": 50})
+    assert mins is None, mins
 
 
-def test_the_line_says_it_is_a_scoped_pilot_and_asks():
-    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
-               encoding="utf-8").read()
-    i = src.index("A BOARD ASSEMBLY IS FITTED BEFORE IT IS PACKED")
-    # 4200: the rule's comment, the gate and the whole review flag. A window that clips the
-    # flag would pass while the sentence an estimator reads had been deleted.
-    block = src[i:i + 4200]
-    assert "THE DRAWING DOES NOT ANNOTATE THIS" in block
-    assert "SCOPED PILOT" in block and "confirm it applies" in block
-    assert "shop_stated_source('joinery_bench_parts_per_hour')" in block
+def test_the_minutes_land_on_the_bench_row_not_the_packing_row():
+    """The defect was one event doing two jobs: fitting charged as boxing. The op map is
+    executed here, not read as text — bench_work must name its own workbook row."""
+    import wb_populate
+    assert wb_populate.OP_NAME_MAP_JOINERY["bench_work"] == "Bench Work Joinery"
+    assert wb_populate.OP_NAME_MAP_JOINERY["assembly"] == "Packing Joinery"
+
+
+# ── the collapse keeps the facing ────────────────────────────────────────────────────────
+#
+# Writing the scope guard end-to-end found the fault the source-reading tests hid: the
+# canonical material collapse ("MFMDF" -> "MDF", right for block routing) DISCARDED the one
+# word saying the board is bought pre-faced. So on the real path Tony's rate never applied
+# to anything, and worse, a title block stating MFMDF outright would have needed the
+# laminate proven AGAIN from a finish note or file name before the sheet price could reach
+# it — plain-core money on a faced panel, the 4x under-charge 11908-21 shipped.
+
+def test_a_title_block_that_says_mfmdf_keeps_saying_it():
+    import estimator
+    part = _assembly()
+    estimator.estimate_part(part, job_quantity=50)
+    assert part["normalized_material"] == "MDF", "the canonical family still routes blocks"
+    assert part["_stated_faced_family"] == "MFMDF", "and the facing survives beside it"
+
+
+def test_the_stated_facing_is_promotion_evidence_on_its_own():
+    """A drawing that NAMES the faced family needs no second proof of the laminate."""
+    import estimator
+    fam, why = estimator._faced_board_promotion({"_stated_faced_family": "MFMDF"}, "MDF")
+    assert fam == "MFMDF"
+    assert "drawing's own material field" in why
+
+
+def test_plain_mdf_still_needs_laminate_evidence():
+    """The guard the promotion was built with does not loosen: no facing stated, no
+    laminate evidence, no promotion — plain MDF stays plain MDF."""
+    import estimator
+    fam, _why = estimator._faced_board_promotion({}, "MDF")
+    assert fam is None

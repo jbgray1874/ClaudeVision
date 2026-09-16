@@ -2933,6 +2933,12 @@ def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
     else:
         return None, ""
     evidence: List[str] = []
+    # THE STRONGEST RUNG FIRST: the drawing's own material field NAMED the faced family
+    # (MFMDF, melamine-faced), and the canonical collapse to plain MDF kept that word
+    # beside the part rather than discarding it. A title block that says MFMDF should not
+    # need the laminate found again in a finish note or a file name.
+    if str(part.get("_stated_faced_family") or "").upper() == family:
+        evidence.append(f"the drawing's own material field ({family} stated outright)")
     _ops = {str(o).lower() for o in ((part.get("operations") or [])
                                      + (part.get("textual_operations") or []))}
     if "laminating" in _ops or "laminate" in _ops:
@@ -3938,6 +3944,17 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         part["normalized_material"] = None   # precedence: direct-write ok — removes a non-answer, adds no evidence. The arbitration weighs competing MATERIALS; "refer to another drawing" is not a competing material and there is nothing to weigh it against. Submitting it as a reading would give a cross-reference a rank and let it beat a real one.
         material = None
 
+    # THE COLLAPSE LOSES THE FACING, SO THE FACING IS KEPT BESIDE IT. "MFMDF" contains
+    # "MDF" and canonicalises to plain MDF — right for block routing, and it silently
+    # discards the one word that says the board is bought pre-faced. A drawing that STATES
+    # the faced family must not need laminate evidence found elsewhere on the sheet, and
+    # a scoped rate measured on faced board must be able to see that this IS faced board.
+    _u_facing = str(material or "").upper().replace("_", " ")
+    if "MFMDF" in _u_facing or ("MELAMINE" in _u_facing and "MDF" in _u_facing):
+        part["_stated_faced_family"] = "MFMDF"
+    elif re.search(r"\bMFC\b", _u_facing) or ("MELAMINE" in _u_facing
+                                              and "CHIPBOARD" in _u_facing):
+        part["_stated_faced_family"] = "MFC"
     material = _canonical_material_family(material)
     if material:
         # Propagate the canonical family back onto the part so wb_populate's block routing
@@ -6853,12 +6870,27 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # itself is minted on, not a new inference. Gated to board so no metal or acrylic job
     # moves: an acrylic display really is assembled and packed in one PACP pass, which is
     # what Howard's "Apply Tape, Bag, Bulk Pack" describes.
+    # THE RULE IS GENERIC; THE RATE IS NOT. A multi-part board assembly has to be fitted
+    # before it is packed, whatever the board is — that follows from the BOM's own
+    # structure. Tony's 2/hr came off ONE faced-board tray, and the first cut of this let it
+    # reach plywood, timber and plain MDF simply because they had children. That is the
+    # scoped-pilot-becoming-a-constant fault, in the change made to fix a different one.
+    #
+    # So: inside his scope (faced/laminated board, the family he measured) the line takes his
+    # measured rate. Outside it the line still EXISTS — silence would be the bigger error —
+    # and takes the house bench allowance, saying plainly that it is a general figure and
+    # that his pilot does not govern it.
     _mat_bench = str(part.get("normalized_material") or "").upper().replace("_", " ")
     _is_board_asm = (
         any(_w in _mat_bench for _w in ("MDF", "MFMDF", "MFC", "CHIPBOARD", "PLYWOOD",
                                         "PLY", "TIMBER", "BIRCH", "VENEER", "LAMINATE"))
         and (part.get("is_assembly_parent") or part.get("assembly_children")
              or str(part.get("canonical_kind") or "").lower() == "assembly"))
+    _in_tony_scope = any(_w in _mat_bench for _w in ("MFMDF", "MFC")) or bool(
+        part.get("_laminate_in_board")
+        or str(part.get("_stated_faced_family") or "").upper() in {"MFMDF", "MFC"}
+        or str((part.get("material_estimate") or {}).get("costing_material_family")
+               or "").upper() in {"MFMDF", "MFC"})
     if _is_board_asm and not part.get("bench_work_applied"):
         _rt_b = process.setdefault("run_times_min_per_unit", {})
         _st_b = process.setdefault("setup_times_min", {})
@@ -6867,10 +6899,21 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # throughput guard to correct a figure we already know. Tony's 2/hr is 30 minutes a
         # tray; the set-up is the department's own and is charged once per order, which is
         # why it is NOT added here.
+        _house_min = float((config.LABOUR_RULES.get("bench_work") or {}).get(
+            "min_per_part", 2.0))
         _bench_rate = float((getattr(config, "SHOP_STATED", None) or {}).get(
             "joinery_bench_parts_per_hour") or 0.0)
-        _bench_min = (60.0 / _bench_rate) if _bench_rate > 0 else float(
-            (config.LABOUR_RULES.get("bench_work") or {}).get("min_per_part", 2.0))
+        if _in_tony_scope and _bench_rate > 0:
+            _bench_min = 60.0 / _bench_rate
+            _bench_why = (f"the joinery bench run rate "
+                          f"({config.shop_stated_source('joinery_bench_parts_per_hour')}), "
+                          f"a SCOPED PILOT measured on faced/laminated board")
+        else:
+            _bench_min = _house_min
+            _bench_why = (f"the house bench allowance — this assembly is {_mat_bench or 'board'}, "
+                          f"OUTSIDE the faced/laminated board the "
+                          f"{config.SHOP_STATED.get('joinery_rates_measured_on_job')} pilot "
+                          f"was measured on, so that rate does NOT govern it")
         _rt_b["bench_work"] = round(_rt_b.get("bench_work", 0.0) + _bench_min, 4)
         part["bench_work_applied"] = True
         record_operation(part, "bench_work", "joinery_route_rule")
@@ -6878,10 +6921,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             f"bench fitting: {_bench_min:g} min of Bench Work Joinery on this board "
             f"assembly before it is packed. THE DRAWING DOES NOT ANNOTATE THIS — it is the "
             f"assembly's own structure ({len(part.get('assembly_children') or []) or 'its'} "
-            f"children have to be put together) costed at the joinery bench run rate "
-            f"({config.shop_stated_source('joinery_bench_parts_per_hour')}), with the "
-            f"department's set-up charged once per order. A SCOPED PILOT measured on one "
-            f"job — confirm it applies to an assembly this size")
+            f"children have to be put together) costed at {_bench_why}, with the "
+            f"department's set-up charged once per order. Confirm it applies to an "
+            f"assembly this size")
 
     # Acrylic route, costed the SDI way (canonical model from the M18 workbook). The laser
     # op is recomputed to the SDI acrylic model — load/unload (per sheet ÷ parts nested) +
