@@ -80,7 +80,7 @@ def test_the_brushing_question_is_raised_on_a_plated_part():
             "normalized_material": "MILD_STEEL", "normalized_finish": "PLATED",
             "textual_operations": ["welding", "assembly"], "quantity": 1}
     out = estimate_process_times(part, 6)
-    assert out["run_times_min_per_unit"]["manual_labour_metal"] == 40.0
+    assert out["run_times_min_per_unit"]["brush_before_plate"] == 40.0
     text = _flags(part)
     assert "THE DRAWING DOES NOT ANNOTATE THIS" in text
     assert "40 min" in text
@@ -92,7 +92,7 @@ def test_a_plated_part_that_is_not_the_weldment_still_only_asks():
             "normalized_material": "MILD_STEEL", "normalized_finish": "PLATED",
             "textual_operations": ["laser_cutting"], "quantity": 1}
     out = estimate_process_times(part, 6)
-    assert "manual_labour_metal" not in out["run_times_min_per_unit"]
+    assert "brush_before_plate" not in out["run_times_min_per_unit"]
     text = _flags(part)
     assert "brushes material before it goes to the platers" in text
     assert "Confirm whether this finish needs it" in text

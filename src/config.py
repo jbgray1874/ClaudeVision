@@ -1122,7 +1122,16 @@ BRUSH_BEFORE_PLATE = {
     # is the fault this whole register exists to stop.
     "minutes_per_unit": SHOP_STATED["brush_before_plate_min"],
     "setup_min": 0.0,
-    "operation": "manual_labour_metal",
+    # ITS OWN OPERATION, NOT THE DEPARTMENT'S NAME.
+    #
+    # This read `manual_labour_metal`, which is the DEPARTMENT — deburr, bench work and
+    # insert labour all land there too. The workbook emits one row per department, so
+    # Howard's stated 40 minutes was pooled with every other manual-metal minute on the
+    # job and the row fell back to the corpus default of 79/hr. A stated time cannot
+    # survive being averaged, so it is its own operation with its own row and its own
+    # rate line (HOURLY_RATES_GBP["brush_before_plate"], the same MANM figure). It also
+    # reads as what it is on the sheet, which is what lets him check it.
+    "operation": "brush_before_plate",
     "source": f"SDI shop practice via {shop_stated_source('brush_before_plate_min')}",
     # BOUNDED BY WHAT HOWARD ACTUALLY SPOKE FOR. His words: "rate was priced based on
     # experience and for similar size units, time would vary per unit / size." So this is
@@ -2069,6 +2078,21 @@ HOURLY_RATES_GBP = {
     "assembly": 28.56,               # PACM (Assemble/pack metal)
     "plater_pack": 28.56,            # PACM — the pack OUT to the plater, its own row
                                      # ("Two separate Operations this job" — H. Thurley)
+    # AND THE PACK BACK, WHICH HAD BEEN BORROWING `handling`.
+    #
+    # The split gave the pack-OUT its own operation and left the pack-BACK writing over
+    # run_times_min["handling"] — the department's general allowance, which every other
+    # part on the job also writes. One row, many parts, and the plated part's stated 8
+    # minutes was averaged in with everybody else's generic 2: the sheet showed 30/hr,
+    # which is 2 minutes a unit, not the 7.5/hr the stated figure makes. A stated time
+    # cannot survive being merged into a department aggregate, so it gets its own key and
+    # its own row, exactly as the pack-out does.
+    "plater_final_pack": 28.56,      # PACM — the pack BACK after plating, its own row
+    # Same fault, same shape, on the brushing rule. `manual_labour_metal` is the DEPARTMENT,
+    # shared with deburr, bench work and insert labour, so Howard's stated 40 minutes was
+    # pooled with all of it and the row fell to the corpus default of 79/hr. Its own key,
+    # its own row, at the same MANM rate — and now visible to him as a brushing line.
+    "brush_before_plate": 31.18,     # MANM — brushing before the part goes to the platers
     "assembly_acrylic": 25.43,       # PACP
     "welding": 41.77,                # WELD (CO2)
     "tube": 31.98,                   # TUBE

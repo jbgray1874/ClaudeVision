@@ -31,7 +31,8 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 os.environ.setdefault("SDI_OFFLINE", "1")
 
-from workbook_text_hygiene import needs_repair, repair, scrub_workbook  # noqa: E402
+from workbook_hygiene import (is_broken_formula, needs_repair, repair,  # noqa: E402
+                              scrub_report_text, scrub_workbook)
 
 _SRC = pathlib.Path(__file__).resolve().parent.parent / "src"
 
@@ -113,8 +114,9 @@ def test_a_real_workbook_comes_out_clean_and_says_what_it_changed():
     other = wb.create_sheet("AI Price Provenance")
     other["B2"] = f"{_ROBOT}{_VS16} AI indicative"
 
-    changed, per_sheet = scrub_workbook(wb)
+    changed, per_sheet, broken = scrub_workbook(wb)
 
+    assert broken == []
     assert ws["A1"].value == "Material spec"
     assert ws["A2"].value == "SDI Live UDEF"
     assert ws["A3"].value == f"{_POUND}12.40 {_EMDASH} per unit"
@@ -131,8 +133,8 @@ def test_a_clean_workbook_is_left_completely_alone():
     openpyxl = pytest.importorskip("openpyxl")
     wb = openpyxl.Workbook()
     wb.active["A1"] = f"{_POUND}4.00/kg standard powder"
-    changed, per_sheet = scrub_workbook(wb)
-    assert (changed, per_sheet) == (0, {})
+    changed, per_sheet, broken = scrub_workbook(wb)
+    assert (changed, per_sheet, broken) == (0, {}, [])
 
 
 def test_a_merged_continuation_cell_does_not_kill_the_save():
@@ -143,7 +145,7 @@ def test_a_merged_continuation_cell_does_not_kill_the_save():
     ws = wb.active
     ws["A1"] = f"{_FACTORY} merged heading"
     ws.merge_cells("A1:C1")
-    changed, _ = scrub_workbook(wb)
+    changed, _, _broken = scrub_workbook(wb)
     assert ws["A1"].value == "merged heading"
     assert changed == 1
 
@@ -154,15 +156,85 @@ def test_the_populate_path_runs_the_scrub_before_it_saves():
     """A guard nobody calls is not a guard. The scrub has to happen on the way to
     wb.save(), not merely exist."""
     src = (_SRC / "wb_populate.py").read_text(encoding="utf-8")
-    assert "from workbook_text_hygiene import scrub_workbook" in src
+    assert "from workbook_hygiene import scrub_workbook" in src
     scrub_at = src.index("scrub_workbook(wb)")
     save_at = src.index("wb.save(out_path)")
     assert scrub_at < save_at, "the book is saved before it is checked"
 
 
-def test_the_module_that_enforces_the_glyph_rule_obeys_it():
-    """Named by codepoint, never pasted — so this module can be added to the source-level
-    glyph guard without failing it."""
-    text = (_SRC / "workbook_text_hygiene.py").read_text(encoding="utf-8")
-    offenders = sorted({f"U+{ord(c):04X}" for c in text if ord(c) > 0xFFFF})
-    assert not offenders, offenders
+def test_the_module_that_enforces_the_rule_is_pure_ascii():
+    """An earlier version of this module's docstring CLAIMED its source named every
+    character by escape, while the file carried literal copies of U+FFFD and the variation
+    selector. Both are in the BMP, so a guard that only looks above U+FFFF waved them
+    through — the claim was false and the test could not tell.
+
+    The check is now the whole byte range: a module whose job is to remove characters other
+    files should not contain has no business containing them itself, and the documentation
+    is verified rather than asserted."""
+    raw = (_SRC / "workbook_hygiene.py").read_bytes()
+    offenders = sorted({b for b in raw if b > 0x7F})
+    assert not offenders, (
+        f"non-ASCII bytes in the hygiene module: {[hex(b) for b in offenders]}. Name the "
+        f"character by escape instead of pasting it.")
+
+
+# ── the broken reference ─────────────────────────────────────────────────────────────
+
+def test_a_formula_carrying_a_ref_error_is_recognised():
+    assert is_broken_formula("=LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,"
+                             "'Material Price Break'!#REF!)")
+    assert not is_broken_formula("=LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,"
+                                 "'Material Price Break'!D14:N14)")
+    assert not is_broken_formula("#REF! mentioned in a note, not a formula")
+    assert not is_broken_formula(None) and not is_broken_formula(12.4)
+
+
+def test_the_broken_price_cell_is_blanked_and_named():
+    """J20 on the 7332-01 book: the template's own broken LOOKUP survived on a line the
+    engine believed it had left blank, and M20 inherited the error into the block total.
+    An unpriced line shows a blank."""
+    openpyxl = pytest.importorskip("openpyxl")
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Estimate"
+    ws["J20"] = ("=LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,"
+                 "'Material Price Break'!#REF!)")
+    ws["J21"] = "=LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,'Material Price Break'!D15:N15)"
+
+    changed, _per_sheet, broken = scrub_workbook(wb)
+
+    assert ws["J20"].value is None, "the broken formula is still in the delivered book"
+    assert ws["J21"].value.startswith("=LOOKUP"), "a working formula must not be touched"
+    assert broken == ["Estimate!J20"], (
+        "the address has to be named on the log — the #REF! is the TEMPLATE's fault and "
+        "wants fixing at source, not silently cleaning every run")
+    assert changed == 1
+
+
+def test_the_run_says_the_template_still_carries_it():
+    """Blanking is right for the book in hand and wrong as a habit."""
+    src = (_SRC / "wb_populate.py").read_text(encoding="utf-8")
+    assert "BROKEN TEMPLATE FORMULA blanked" in src
+    assert "wants fixing at source" in src
+
+
+# ── the report, which is the other half of "workbook/report text" ────────────────────
+
+def test_a_replacement_character_is_dropped_from_a_rendered_report():
+    """A browser draws U+FFFD as a black diamond, which is no better than Excel's box."""
+    html = f"<td>Mild Steel{_FFFD} 1.0mm</td>"
+    assert scrub_report_text(html) == "<td>Mild Steel 1.0mm</td>"
+
+
+def test_the_report_pass_does_not_reflow_the_markup():
+    """The whole document is one string here, so collapsing runs of spaces would rewrite
+    the layout the builder produced. Only the damaged characters go."""
+    html = "<div>\n    <span>  spaced  </span>\n</div>"
+    assert scrub_report_text(html) == html
+
+
+def test_the_report_writer_runs_the_pass_before_it_writes():
+    src = (_SRC / "job_report_html.py").read_text(encoding="utf-8")
+    scrub_at = src.index("scrub_report_text(htmlout)")
+    write_at = src.index("Path(out_path).write_text(htmlout")
+    assert scrub_at < write_at, "the report is written before it is cleaned"

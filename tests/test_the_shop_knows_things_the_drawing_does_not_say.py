@@ -321,7 +321,10 @@ def test_a_plated_part_books_two_pack_operations():
     out = estimate_process_times(part, 6)
     rt = out["run_times_min_per_unit"]
     assert rt.get("plater_pack") == 4.0, rt
-    assert rt.get("handling") == 8.0, rt
+    assert rt.get("plater_final_pack") == 8.0, rt
+    assert rt.get("handling") is None, (
+        "the generic allowance must come off — the two stated occasions ARE the "
+        "handling on a plated part, and leaving it charges a third pack")
     assert "plater_pack" in (part.get("inferred_operations") or []), \
         "the op is recorded, so the route compiler carries it to its own row"
     f = _flags(part)

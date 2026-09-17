@@ -6369,7 +6369,27 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 record_operation(part, "plater_pack", "override_rule")
                 run_times_min["plater_pack"] = round(_to_plater, 2)
             if _final > 0:
-                run_times_min["handling"] = round(_final, 2)
+                # ITS OWN OPERATION, FOR THE REASON THE PACK-OUT ALREADY HAS ONE.
+                #
+                # This wrote over run_times_min["handling"] — the department's general
+                # allowance, which every other part on the job also writes. The workbook
+                # emits one row per department, so the plated part's stated 8 minutes was
+                # pooled with everybody else's generic 2 and the row came out at 30/hr,
+                # which IS 2 minutes a unit. The stated figure had been computed correctly
+                # and then averaged away, one link further down than the last four times.
+                #
+                # So the pack BACK is its own operation, exactly as the pack OUT is: its
+                # own key, its own PACM row, its own stated time that nothing can dilute.
+                # The part's generic handling allowance comes off, because the two occasions
+                # Howard described ARE the handling on a plated part — leaving it would
+                # charge a third pack nobody does.
+                if "plater_final_pack" not in ops:
+                    ops = list(ops) + ["plater_final_pack"]
+                    record_operation(part, "plater_final_pack", "override_rule")
+                run_times_min["plater_final_pack"] = round(_final, 2)
+                ops = [o for o in ops if str(o).strip().lower() != "handling"]
+                run_times_min.pop("handling", None)
+                setup_times_min.pop("handling", None)
             if _to_plater + _final > 0:
                 part["plater_pack_applied"] = True
                 part.setdefault("review_flags", []).append(
@@ -7604,6 +7624,21 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # part and never copied here, so the record that carries the folding MONEY had no
         # idea the part was flat, and nothing downstream could compare the two.
         "native_flat_solid": part.get("native_flat_solid"),
+        # THE SUBSTITUTION TRAVELS WITH THE COSTED RECORD, OR IT DOES NOT TRAVEL.
+        #
+        # apply_production_substitutions records the 0.9-to-1.0 rule on the RAW part and
+        # pushes the substitute through source_precedence onto normalized_thickness_mm.
+        # That was its only route to the sheet, and the sheet writes the gauge from the
+        # COSTED record — so if the costed record's gauge came from anywhere else, the
+        # book showed the drawn 0.9 and the whole row costed from it, with nothing on the
+        # sheet to say a substitution had ever been decided. Exactly the wrong-record
+        # shape as the tube-bend ruling: the fact was right and unreachable.
+        #
+        # Both halves come across: what the drawing says, and what production buys.
+        "production_substitution": (dict(part["production_substitution"])
+                                    if isinstance(part.get("production_substitution"), dict)
+                                    else None),
+        "drawn_thickness_mm": part.get("drawn_thickness_mm"),
         # Preserve the evidence which explains the route on the costed record. This nested
         # field is shadow-only during migration: no existing workbook consumer reads it, so
         # adding it cannot alter a price or labour row.

@@ -73,7 +73,7 @@ def test_and_the_part_that_goes_to_a_plater_is_packed_twice():
     """As TWO operations since Howard's 15 Sep ruling ("Two separate Operations this
     job") — 4 out to the plater on its own row, 8 final. The total is the same 12."""
     t = _times(_101())
-    assert t["plater_pack"] == 4.0 and t["handling"] == 8.0
+    assert t["plater_pack"] == 4.0 and t["plater_final_pack"] == 8.0
 
 
 def test_all_three_on_the_one_part_at_once():
@@ -81,7 +81,7 @@ def test_all_three_on_the_one_part_at_once():
     2 / 1 / 2 against 30 / 20 / 12 (the 12 now split 4 + 8 per his ruling)."""
     t = _times(_101())
     assert (t["welding"], t["dress_welds"],
-            t["plater_pack"] + t["handling"]) == (30.0, 20.0, 12.0)
+            t["plater_pack"] + t["plater_final_pack"]) == (30.0, 20.0, 12.0)
 
 
 # ── how the weldment is recognised, and how narrowly ─────────────────────────────────────

@@ -57,13 +57,13 @@ def _times(part):
 # ── brushed before the platers ───────────────────────────────────────────────────────────
 
 def test_a_plated_weldment_is_brushed_and_it_is_costed():
-    assert _times(_weldment())["manual_labour_metal"] == 40.0
+    assert _times(_weldment())["brush_before_plate"] == 40.0
 
 
 def test_it_is_booked_once_not_once_per_member():
     """Six members would be four hours. The consignment is the weldment."""
     t = _times(_weldment(child_parts=["001", "002", "003", "004", "005", "008"]))
-    assert t["manual_labour_metal"] == 40.0
+    assert t["brush_before_plate"] == 40.0
 
 
 def test_a_plated_leaf_is_named_and_not_charged():
@@ -74,13 +74,13 @@ def test_a_plated_leaf_is_named_and_not_charged():
             "normalized_material": "MILD_STEEL", "normalized_finish": "PLATED",
             "textual_operations": ["laser_cutting"], "quantity": 1}
     t = _times(leaf)
-    assert "manual_labour_metal" not in t
+    assert "brush_before_plate" not in t
     assert any("brushes material" in str(f) for f in leaf.get("review_flags") or [])
 
 
 def test_an_unplated_weldment_is_not_brushed():
     """12349-02 is powder coated and goes nowhere near a plater."""
-    assert "manual_labour_metal" not in _times(_weldment(finish="POWDER COATED RAL9005"))
+    assert "brush_before_plate" not in _times(_weldment(finish="POWDER COATED RAL9005"))
 
 
 def test_the_line_says_the_drawing_does_not_say_it():
@@ -97,13 +97,13 @@ def test_it_can_be_switched_back_to_a_flag(monkeypatch):
     reachable because Howard called it a grey area and may rule it out."""
     monkeypatch.setitem(config.BRUSH_BEFORE_PLATE, "enabled", False)
     part = _weldment()
-    assert "manual_labour_metal" not in _times(part)
+    assert "brush_before_plate" not in _times(part)
     assert any("brushes material" in str(f) for f in part.get("review_flags") or [])
 
 
 def test_the_minutes_are_one_config_edit(monkeypatch):
     monkeypatch.setitem(config.BRUSH_BEFORE_PLATE, "minutes_per_unit", 25.0)
-    assert _times(_weldment())["manual_labour_metal"] == 25.0
+    assert _times(_weldment())["brush_before_plate"] == 25.0
 
 
 # ── freight to the platers and back ──────────────────────────────────────────────────────

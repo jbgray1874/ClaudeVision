@@ -2404,6 +2404,23 @@ def generate_report(summary_json_path: str, out_path: Optional[str] = None,
         stem = re.sub(r"[^\w\- ]", "", str(stem)).strip()
         out_dir = Path(summary_json_path).parent
         out_path = str(out_dir / f"{stem}_report.html")
+    # THE SAME QUESTION THE WORKBOOK IS ASKED, AT THIS DELIVERABLE'S OWN BOUNDARY.
+    #
+    # The scrub before wb_populate's save covers the workbook and nothing else, so "remove
+    # the visible replacement characters from workbook/REPORT text" was only half met: the
+    # report is built from the same drawing notes and supplier descriptions, and a byte
+    # that failed to decode upstream arrives here exactly as it arrives there. A browser
+    # draws a replacement character as a black diamond, which is no better than Excel's box.
+    #
+    # scrub_report_text, not repair: the whole document is one string, so collapsing runs of
+    # spaces would reflow the markup. Only the damaged characters are dropped, and the
+    # layout is left exactly as it was built.
+    try:
+        from workbook_hygiene import scrub_report_text
+        htmlout = scrub_report_text(htmlout)
+    except Exception:
+        # A hygiene pass is never worth losing the report over.
+        pass
     Path(out_path).write_text(htmlout, encoding="utf-8")
     return out_path
 

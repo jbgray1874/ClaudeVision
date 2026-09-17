@@ -122,7 +122,7 @@ def test_a_plated_part_is_packed_twice():
     4 min out to the plater on its own row, 8 min final. The same 12 minutes."""
     out = estimate_process_times(_part("zinc plated"))
     rt = out["run_times_min_per_unit"]
-    assert rt["plater_pack"] == 4.0 and rt["handling"] == 8.0
+    assert rt["plater_pack"] == 4.0 and rt["plater_final_pack"] == 8.0
 
 
 def test_a_named_spec_counts_as_plating_even_though_it_names_no_process():
@@ -132,7 +132,7 @@ def test_a_named_spec_counts_as_plating_even_though_it_names_no_process():
     part = _part("Harrods01")
     out = estimate_process_times(part)
     rt = out["run_times_min_per_unit"]
-    assert rt["plater_pack"] + rt["handling"] == 12.0
+    assert rt["plater_pack"] + rt["plater_final_pack"] == 12.0
     assert part.get("plater_pack_applied") is True
 
 

@@ -378,6 +378,7 @@ OP_NAME_MAP = {
     # row title, its own operation so it lands as its own row beside the final pack
     # ("Two separate Operations this job" — Howard Thurley, 7332-01).
     "plater_pack":    "Assemble/pack (Metal)",
+    "plater_final_pack": "Assemble/pack (Metal)",   # the pack BACK — its own row, same bench
     "robomac":        "Robomac",   # WB dept ROBO £31.45/hr — EXACT string or LOOKUP returns 0
     "wire_forming":   "Robomac",
     "tube_cutting":   "Tube",
@@ -418,6 +419,9 @@ OP_NAME_MAP = {
     # shop time was riding on a fallback built for a model's free English. A rule with a
     # named operation belongs in the map, next to the rest.
     "manual_labour_metal": "Manual labour (Metal)",
+    # Brushing before plating: the MANM bench, but its own operation and its own row, so
+    # the shop's stated 40 minutes a unit is never pooled with the rest of manual metal.
+    "brush_before_plate": "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
     "roll":           "Roll",
@@ -3695,10 +3699,14 @@ _STATED_SHOP_TIME_MARKERS = (
      "the welding department's stated weldment allowance (config.WELD_TIME_MODEL)"),
     ("weld_time_is_per_joint", ("welding", "dress_welds"),
      "the welding department's stated per-joint weld time (config.WELD_TIME_MODEL)"),
-    ("plater_pack_applied", ("handling", "assembly", "plater_pack"),
+    # `handling` and `assembly` stay listed although a plated part no longer books either:
+    # the claim has to keep vouching for a book produced before the final pack got its own
+    # operation, or re-opening one would read its stated pack time as a department median.
+    ("plater_pack_applied",
+     ("handling", "assembly", "plater_pack", "plater_final_pack"),
      "the stated pack times for a part that goes out to a plater "
      "(config.PLATING_LOGISTICS)"),
-    ("brush_before_plate_applied", ("manual_labour_metal",),
+    ("brush_before_plate_applied", ("brush_before_plate", "manual_labour_metal"),
      "the shop's stated brushing time before plating (config.BRUSH_BEFORE_PLATE)"),
 )
 
@@ -4807,6 +4815,30 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         length = _safe(_bd["length_mm"])
         width  = _safe(_bd["width_mm"])
         gauge  = _safe(pe.get("normalized_thickness_mm") or me.get("thickness_mm"))
+        # WHAT PRODUCTION BUYS IS WHAT THE SHEET COSTS FROM.
+        #
+        # The gauge above is whichever normalised value reached the costed record, with the
+        # material estimate's own thickness behind it. A confirmed production substitution
+        # ("0.9mm Steel Production use 1mm in Lieu" — Howard Thurley, D-068) is neither of
+        # those: it is a RULING, recorded as one, and on the delivered book it lost to the
+        # drawn 0.9 with nothing on the row to say a substitution had been decided at all.
+        #
+        # Asked from the recorded fact rather than re-derived, so it cannot be defeated by
+        # which record happens to carry a normalised thickness. Only a CONFIRMED rule gets
+        # here — apply_production_substitutions returns early on an unconfirmed one and
+        # costs as drawn — so a cell that changes here is always one a person has ruled on.
+        _sub_rec = pe.get("production_substitution")
+        if isinstance(_sub_rec, dict):
+            _costed = _safe(_sub_rec.get("costed_thickness_mm"))
+            _drawn = _safe(_sub_rec.get("drawn_thickness_mm"))
+            if _costed and _costed > 0 and _costed != gauge:
+                _flag(f"{_pn_g}: gauge on the sheet is {_costed:g} mm, not the drawn "
+                      f"{_drawn:g} mm — confirmed production substitution "
+                      f"{_sub_rec.get('rule_id', '')} ({_sub_rec.get('stated_by', 'production')}, "
+                      f"{_sub_rec.get('stated_on', 'undated')}). The costed record carried "
+                      f"{gauge:g} mm. What production buys is what the row costs from.",
+                      flags)
+                gauge = _costed
         ws.cell(row=row, column=s["col_desc"],   value=f"{pe.get('part_number','')}  {pe.get('description','')}")
         ws.cell(row=row, column=s["col_qty"],    value=int(_safe(pe.get("quantity"), 1)))
         ws.cell(row=row, column=s["col_length"], value=length)
@@ -6432,15 +6464,28 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # drawing note, a supplier description or a module nobody thought to check; the glyph
     # rule is enforced on the value, once, rather than trusted to every writer.
     try:
-        from workbook_text_hygiene import scrub_workbook
-        _fixed, _where = scrub_workbook(wb)
+        from workbook_hygiene import scrub_workbook
+        _fixed, _where, _broken = scrub_workbook(wb)
+        if _broken:
+            # NAMED CELL BY CELL, BECAUSE THIS ONE IS NOT OURS. A #REF! comes from the
+            # blank template: openpyxl's value=None assigns nothing, so a price cell the
+            # engine left blank keeps whatever formula the template held, and one of those
+            # is broken — J20 on 7332-01, with M20 inheriting the error into the block
+            # total. Blanking it is right for the book in hand and wrong as a habit, so the
+            # address is on the log every time until the template itself is repaired.
+            _flag(f"BROKEN TEMPLATE FORMULA blanked in {len(_broken)} cell(s): "
+                  f"{', '.join(_broken)}. Each held a #REF! Excel can never evaluate, and "
+                  f"every cell reading it inherited the error. An unpriced line shows a "
+                  f"blank. THE TEMPLATE STILL CARRIES THIS — it wants fixing at source.",
+                  flags)
         if _fixed:
-            _flag(f"removed {_fixed} character(s) Excel cannot draw from "
+            _flag(f"cleaned {_fixed} cell(s) in "
                   f"{', '.join(f'{k} ({v})' for k, v in sorted(_where.items()))} — "
-                  f"replacement boxes and emoji; the text around them is unchanged.", flags)
-            print(f"   [wb_populate] glyph hygiene: {_fixed} cell(s) repaired {_where}")
+                  f"replacement boxes, emoji and broken references; the text around them "
+                  f"is unchanged.", flags)
+            print(f"   [wb_populate] workbook hygiene: {_fixed} cell(s) repaired {_where}")
     except Exception as _e:
-        _flag(f"could not run the glyph check over the workbook: {_e}", flags)
+        _flag(f"could not run the hygiene check over the workbook: {_e}", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)

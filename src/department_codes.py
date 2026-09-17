@@ -203,11 +203,19 @@ _alias("PACM", "handling", "assembly", "assemble", "assemble/pack (metal)", "pac
        # The pack OUT to the plater — its own operation so a plated part's two packs are
        # two rows ("Two separate Operations this job" — Howard Thurley, 7332-01), booked
        # to the same PACM bench either way.
-       "plater_pack", "pack to plater", "pack for plater")
+       "plater_pack", "pack to plater", "pack for plater",
+       # And the pack BACK, for the same reason: two occasions, two rows, one bench. It
+       # had been borrowing `handling`, which is a department-wide key, so the stated
+       # eight minutes was averaged in with every other part's generic allowance.
+       "plater_final_pack", "final pack", "pack back")
 _alias("PACP", "assemble/pack (acrylic)", "assemble/pack acrylic", "assemble acrylic",
        "acrylic assembly", "acrylic assemble", "carton", "cartoning")
 _alias("PACJ", "packing joinery", "packaging - joinery")
-_alias("MANM", "manual labour (metal)", "manual labour", "manual handling")
+_alias("MANM", "manual labour (metal)", "manual labour", "manual handling",
+       # Brushing before plating: the shop's own stated operation, on the MANM bench. Its
+       # own name rather than the department's, so a stated time cannot be pooled with
+       # deburr and bench work and lost to the corpus median.
+       "brush_before_plate", "brush before plate", "brushing before plating")
 _alias("MANA", "manual labour (acrylic)")
 _alias("SALV", "salvagnini", "panel bender", "panel bending")
 
