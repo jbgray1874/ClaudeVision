@@ -3616,23 +3616,52 @@ def _finalize_scan_summary(
                                                    or _p.get("assembly_children")):
                             _bm_parent = _p
                     if _bm_unit is not None:
-                        # No assembly parent on the record: the first part is the tray as
-                        # far as this job is concerned, and a banded length with nowhere to
-                        # land would be the silent no-op this whole block exists to avoid.
-                        _tgt = _bm_parent or next(
-                            (p for p in (summary["manufacturing_writeup"]["parts"] or [])
-                             if isinstance(p, dict)), None)
+                        # ── WHICH ROW CARRIES THE BANDER ─────────────────────────────
+                        #
+                        # NOT THE ASSEMBLY PARENT. A parent's fabrication route is
+                        # deliberately suppressed — its material and its making belong to
+                        # its children — so an operation stamped there is dropped without a
+                        # word, which is exactly what happened to the 17:18 book: the metres
+                        # were bought, the bander was routed on the parent, and no Edge
+                        # Banding row appeared.
+                        #
+                        # So it goes on the BIGGEST FACED PANEL, which is a real fabricated
+                        # part with a live route and the one most likely to be banded. The
+                        # length is divided by that part's own quantity, because the row
+                        # will multiply by it: five metres a TRAY stays five metres a tray
+                        # however many of that panel go into one.
+                        def _area(_p):
+                            try:
+                                return (float(_p.get("blank_length_mm") or 0)
+                                        * float(_p.get("blank_width_mm") or 0))
+                            except (TypeError, ValueError):
+                                return 0.0
+                        _cands = [
+                            p for p in (summary["manufacturing_writeup"]["parts"] or [])
+                            if isinstance(p, dict) and _area(p) > 0
+                            and not p.get("is_assembly_parent")
+                            and not re.search(r"-GA\b|ASSEMBL",
+                                              str(p.get("part_number") or "").upper())]
+                        _tgt = max(_cands, key=_area) if _cands else None
                         if _tgt is not None:
-                            _tgt["_confirmed_banded_mm"] = float(_bm_unit) * 1000.0
+                            _q_tgt = 1.0
+                            try:
+                                _q_tgt = float(_tgt.get("quantity") or 1) or 1.0
+                            except (TypeError, ValueError):
+                                _q_tgt = 1.0
+                            _tgt["_confirmed_banded_mm"] = (float(_bm_unit) * 1000.0
+                                                            / _q_tgt)
                             _tgt["_confirmed_banded_by"] = _bm_who
                             _tgt.setdefault("textual_operations", []).append("edge_banding")
                             print(f"   [confirmed] {_bm_unit:g} m of banded edge a unit "
                                   f"({_bm_who}) — the ABS is bought by the metre and the "
-                                  f"bander is routed on "
-                                  f"{_tgt.get('part_number')}", flush=True)
+                                  f"bander is routed on {_tgt.get('part_number')} "
+                                  f"({_bm_unit / _q_tgt:g} m x {_q_tgt:g} off = "
+                                  f"{_bm_unit:g} m a unit)", flush=True)
                         else:
                             print("   [confirmed] banded_length_m was given but this job "
-                                  "has no part to carry it — the ruling did nothing",
+                                  "has no fabricated panel to carry the bander — the "
+                                  "metres are bought and the LABOUR did nothing",
                                   flush=True)
                     for _pc in sorted(set(_bm_pp) - _bm_seen):
                         print(f"   [confirmed] banded_length_m names {_pc}, but NO part of "

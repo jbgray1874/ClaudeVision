@@ -190,8 +190,68 @@ def test_a_confirmed_length_routes_the_bander():
     import pathlib
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "file_scan.py"
            ).read_text(encoding="utf-8")
-    assert '_tgt["_confirmed_banded_mm"] = float(_bm_unit) * 1000.0' in src
+    assert '_tgt["_confirmed_banded_mm"] = (float(_bm_unit) * 1000.0' in src
     assert '_tgt.setdefault("textual_operations", []).append("edge_banding")' in src, (
         "the metres are bought and nobody is routed to apply them")
-    assert "the ruling did nothing" in src, (
+    # NOT ON THE ASSEMBLY PARENT. A parent's fabrication route is suppressed by design, so
+    # an operation stamped there is dropped without a word — which is exactly what happened
+    # to the 17:18 book, where the tape was bought and no Edge Banding row appeared.
+    assert 'not p.get("is_assembly_parent")' in src
+    # And divided by the carrier's own quantity, because the row multiplies by it: five
+    # metres a TRAY must stay five metres a tray however many of that panel go into one.
+    assert "/ _q_tgt" in src or "/ _q_tgt)" in src
+    assert "the LABOUR did nothing" in src, (
         "a banded length with nowhere to land must not be a silent no-op")
+
+
+# ── 5 · a rate the department STATED is not a default to be improved on ─────────────
+#
+# The 17:18 book, on the commit that was supposed to close this: Bench at Tony's 2/hr and
+# Machines at his 12/hr — and CNC at 22.5/hr against his 12, and Packing at 75/hr against
+# his 20. One book, two of his rates and two corpus medians in the same block, with nothing
+# on the page saying which was which.
+#
+# The cause is the derived-throughput gate treating a stated rate as a DEFAULT: used only
+# where the derived figure is more than five times away from it. Bench and Machines
+# happened to fall outside that guard and took his numbers; CNC and Packing fell inside it
+# and overwrote him. The rule was already written in this file for stated TIMES — "corpus
+# medians are evidence about jobs in general, a stated time is evidence about this one, and
+# it wins" — and a stated THROUGHPUT is the same fact in the other unit.
+
+def _throughput_gate() -> str:
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
+           ).read_text(encoding="utf-8")
+    start = src.index("A DEPARTMENT'S OWN RATE IS NOT A DEFAULT TO BE IMPROVED ON")
+    return src[start:start + 3000]
+
+
+def test_a_stated_rate_is_used_as_the_rate():
+    block = _throughput_gate()
+    assert "wb_op in _STATED_THROUGHPUT_ROWS" in block
+    assert "throughput = float(default_tp)" in block
+
+
+def test_the_row_says_both_numbers_when_they_disagree():
+    """An estimator who sees 12/hr where the job's own hours imply 22.5 needs to know the
+    engine chose, and why — silently preferring either one is how a rate stops being
+    checkable."""
+    block = _throughput_gate()
+    assert "department STATED" in block
+    assert "this job's own " in block and "hours derive" in block
+
+
+def test_the_guards_are_untouched_for_every_unstated_row():
+    """The ceiling and the floor exist to catch a garbage derivation, not to arbitrate
+    between a median and a measurement. Every row nobody has measured keeps them."""
+    block = _throughput_gate()
+    assert "elif default_tp:" in block, (
+        "the unstated path lost its ceiling/floor guards")
+
+
+def test_the_stated_rows_are_recorded_where_they_are_set():
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
+           ).read_text(encoding="utf-8")
+    assert "_STATED_THROUGHPUT_ROWS.add(_row)" in src
+    assert "_STATED_THROUGHPUT_ROWS: set = set()" in src

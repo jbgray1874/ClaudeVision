@@ -5394,6 +5394,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Work still ran at 30/hr against Tony's measured 2/hr and Packing at 75/hr against his
     # 20/hr, because the question was put to a list the trays were not in. A scoped pilot
     # that cannot see its own scope applies to nothing.
+    # The rows whose default is a figure a DEPARTMENT STATED rather than a corpus median.
+    # See the derived-throughput gate below: a stated rate is not a default to be improved
+    # on, it is the answer.
+    _STATED_THROUGHPUT_ROWS: set = set()
     _faced_board_job = any(
         isinstance(_p, dict) and (
             _p.get("_laminate_in_board")
@@ -5410,6 +5414,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _stated = (getattr(config, "SHOP_STATED", None) or {}).get(_key)
             if _stated:
                 _THROUGHPUT_DEFAULTS[_row] = float(_stated)
+                _STATED_THROUGHPUT_ROWS.add(_row)
     _THROUGHPUT_CEILING_MULTIPLIER = 5   # derived > default × 5 → use default
     # The ceiling above only catches derived throughputs that are too FAST. A derived
     # throughput that is too SLOW sails through — and slow means MORE HOURS, which
@@ -6650,7 +6655,34 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
             if (_rhpu and _rhpu > 0) or (bh and bh > 0):
                 throughput = _derived
-                if default_tp:
+                # ── A DEPARTMENT'S OWN RATE IS NOT A DEFAULT TO BE IMPROVED ON ────────
+                #
+                # The rule is already written forty lines below, for stated TIMES: "corpus
+                # medians are evidence about jobs in general. A stated time is evidence
+                # about this one, and it wins." A stated THROUGHPUT is the same fact in the
+                # other unit, and it was being treated as a fallback — used only when the
+                # derived figure was more than five times away from it.
+                #
+                # 11908-21's 17:18 book is what that costs. Tony measured CNC at 12/hr and
+                # packing at 20/hr; the corpus derived 22.5 and 75, both inside the ×5
+                # guard, so both overwrote him and the sheet booked his job at nearly four
+                # times his own packing rate. Bench and Machines happened to land outside
+                # the guard and took his figures, so ONE BOOK carried two of his rates and
+                # two corpus medians in the same block — which is worse than either, because
+                # nothing on the page says which is which.
+                #
+                # The guards stay exactly as they are for every unstated row: they exist to
+                # catch a garbage derivation, not to arbitrate between a median and a
+                # measurement.
+                if default_tp and wb_op in _STATED_THROUGHPUT_ROWS:
+                    if abs(_derived - float(default_tp)) > 0.01:
+                        _flag(f"'{wb_op}' at {float(default_tp):g}/hr — the rate the "
+                              f"department STATED, not the {_derived:.2f}/hr this job's own "
+                              f"hours derive. A corpus median is evidence about jobs in "
+                              f"general; a measured rate is evidence about this one.",
+                              flags)
+                    throughput = float(default_tp)
+                elif default_tp:
                     _ceiling = default_tp * _THROUGHPUT_CEILING_MULTIPLIER
                     _floor = default_tp / _THROUGHPUT_FLOOR_DIVISOR
                     if _derived > _ceiling:
