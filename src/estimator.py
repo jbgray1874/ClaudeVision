@@ -2175,6 +2175,30 @@ def _sheet_catalogue_token(material: Any) -> Optional[str]:
     return max(words, key=len)
 
 
+def _sheet_catalogue_probes(material: Any) -> List[Tuple[str, Optional[str]]]:
+    """Every name the catalogue might hold this material under, most specific first.
+
+    Each probe is (the word to search a description for, a word the row must ALSO contain
+    or None). The material's own name is always first — a row that says MFMDF is not
+    improved on. The synonyms below it exist because a purchasing system is written by
+    buyers over years and the same board arrives as "Melamine Faced MDF" on one invoice
+    and "MFMDF" on the next.
+
+    The second word is the family guard. "MELAMINE" alone matches melamine-faced chipboard
+    and melamine-faced MDF equally, and one rate answering two questions is the fault this
+    codebase keeps finding.
+    """
+    _own = _sheet_catalogue_token(material)
+    if not _own:
+        return []
+    out: List[Tuple[str, Optional[str]]] = [(_own, None)]
+    _fam = str(material or "").upper().replace(" ", "").replace("_", "").replace("-", "")
+    for _tok, _req in (getattr(config, "BOARD_CATALOGUE_SYNONYMS", {}) or {}).get(_fam, ()):
+        if str(_tok).upper() != _own:
+            out.append((str(_tok).upper(), str(_req).upper() if _req else None))
+    return out
+
+
 def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[float]) -> Optional[Dict[str, Any]]:
     """Live £/m² rate for a plastic sheet material (HIPS etc.) derived from the CURRENT
     UDEF catalogue, so it tracks price changes rather than a stale config table.
@@ -2201,9 +2225,10 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     # the plain-stock filter, the dimension parse, the median, the outlier caps -- is material-
     # agnostic already. One `if` was the whole gate, and a rule that names a material is the
     # thing this engine is not supposed to contain.
-    _token = _sheet_catalogue_token(material)
-    if not _token or thickness_mm is None:
+    _probes = _sheet_catalogue_probes(material)
+    if not _probes or thickness_mm is None:
         return None
+    _token = _probes[0][0]
     try:
         _t_key = round(float(thickness_mm), 1)
     except (TypeError, ValueError):
@@ -2226,26 +2251,37 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     except Exception:
         _SHEET_RATE_CACHE[_cache_key] = None
         return None
+    # EVERY NAME THE CATALOGUE MIGHT HOLD IT UNDER, IN ORDER, AND THE FIRST ONE THAT
+    # ANSWERS WINS. Never pooled: two spellings can be two different boards, and a median
+    # across them would be one rate answering two questions.
+    rates: List[float] = []
+    _used, _needed = _token, None
     try:
         cur = cn.cursor()
-        # PARAMETERISED, not formatted in. The token comes from a material string read off a
-        # drawing, and a drawing is external input like any other.
-        cur.execute(
-            """SELECT [Part code],[Description],[System cost per]
-               FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
-               WHERE [System cost per] > 0 AND [Description] LIKE ?""",
-            (f"%{_token}%",),
-        )
-        rows = cur.fetchall()
+        for _try_token, _require in _probes:
+            # PARAMETERISED, not formatted in. The token comes from a material string read
+            # off a drawing, and a drawing is external input like any other.
+            cur.execute(
+                """SELECT [Part code],[Description],[System cost per]
+                   FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
+                   WHERE [System cost per] > 0 AND [Description] LIKE ?""",
+                (f"%{_try_token}%",),
+            )
+            _rows = cur.fetchall() or []
+            if _require:
+                _rows = [r for r in _rows
+                         if _require in str(r[1] if len(r) > 1 else "").upper()]
+            _r = _plain_stock_rates_gbp_per_m2(_rows, _try_token, _t_key)
+            if _r:
+                rates, _used, _needed = _r, _try_token, _require
+                break
     except Exception:
-        rows = []
+        rates = []
     finally:
         try:
             cn.close()
         except Exception:
             pass
-
-    rates = _plain_stock_rates_gbp_per_m2(rows, _token, _t_key)
 
     if not rates:
         _SHEET_RATE_CACHE[_cache_key] = None
@@ -2256,9 +2292,10 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     return {
         "rate_gbp_per_m2": _median,
         "thickness_mm": _t_key,
-        "material_token": _token,
+        "material_token": _used,
         "sample_count": len(rates),
-        "basis": f"udef_{_token.lower()}_median_live",
+        "basis": (f"udef_{_used.lower()}_median_live" if not _needed else
+                  f"udef_{_used.lower()}_with_{_needed.lower()}_median_live"),
     }
 
 
@@ -2555,30 +2592,15 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         try:
             from indicative_price import resolve_indicative as _rung4
 
-            def _researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
-                """The engine's own web/LLM rung, behind the producer's seam."""
-                from web_ai_price_lookup import lookup_web_ai_price as _look
-                _found = _look({
-                    "description": _brief.get("description"),
-                    "part_code": _brief.get("code"),
-                    "quantity": _brief.get("order_quantity"),
-                }) or {}
-                if not _found.get("found"):
-                    return {}
-                return {
-                    "price_gbp": _found.get("price_gbp"),
-                    "unit": _found.get("unit"),
-                    "source": (_found.get("source_url") or _found.get("source")
-                               or _found.get("search_provider")
-                               or _found.get("llm_provider") or ""),
-                    "quantity_basis": (_found.get("price_basis")
-                                       or _found.get("quantity_basis") or ""),
-                    "origin": _found.get("source_type"),
-                }
-
+            _researcher = _rung4_researcher
             _ind = _rung4(
                 {"code": part.get("part_number"), "description": part.get("description"),
                  "quantity": part.get("quantity"),
+                 # A LINE'S OWN UNIT, WHICH THE BRIEF NEVER USED TO SEE. The edging stub
+                 # carries `unit_of_measure = "m"` and this dict did not pass it on, so the
+                 # brief asked for a price "per each" on a material sold by the metre —
+                 # a fact recorded under one name and read under another, again.
+                 "unit_of_measure": part.get("unit_of_measure"),
                  "mass_kg": part.get("normalized_weight_kg"),
                  "input_origins": part.get("input_origins") or {}},
                 order_qty=int(_safe_float(part.get("job_quantity")) or 1),
@@ -3108,6 +3130,108 @@ def _powder_coated_area_m2(
         "coated_faces_reason": faces_reason,
     }
     return total, detail
+
+
+def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
+    """The engine's own web/LLM rung, behind the producer's seam.
+
+    ONE RESEARCHER, NOT ONE PER CALLER. It was a closure inside the bought-in price chain,
+    which is where it was first needed; a board is not a bought-in and would have got a
+    second copy of it, and two copies of a price source is how two answers to one question
+    start. Everything it does is material-agnostic already.
+    """
+    from web_ai_price_lookup import lookup_web_ai_price as _look
+    _found = _look({
+        "description": _brief.get("description"),
+        "part_code": _brief.get("code"),
+        "quantity": _brief.get("order_quantity"),
+        # WHAT THE LINE IS BOUGHT BY. Edging is sold by the metre and board by the sheet
+        # or the square metre; asked for "one ABS edging" a model prices a REEL, and the
+        # reel price then gets multiplied by the metres. The producer refuses a figure in
+        # the wrong unit, and this is how the researcher is told which unit to answer in
+        # so it does not have to be refused in the first place.
+        "wanted_unit": _brief.get("wanted_unit"),
+        "ask": _brief.get("ask"),
+    }) or {}
+    if not _found.get("found"):
+        return {}
+    return {
+        "price_gbp": _found.get("price_gbp"),
+        "unit": _found.get("unit"),
+        # THE DATE, WHICH NEVER ARRIVED AND WITHOUT WHICH NOTHING COULD EVER BE PRICED.
+        #
+        # The producer requires four things before a researched figure may be used — a
+        # source, the date it was true, what it is per, and the quantity it was found at —
+        # and refuses the price outright if any is missing. That refusal is right and is
+        # the reason rung 4 is allowed to contribute to a total at all.
+        #
+        # The lookup stamps the date on every result it returns, under `price_date`. This
+        # adapter read `as_of`. So the date was present, recorded, correct, and dropped in
+        # the six lines between the two modules — and EVERY researched price this engine
+        # has ever found was refused for want of a date it already had. A fact written
+        # under one name and read under another, again, and this time it made a whole rung
+        # of the ladder inert without a single error anywhere.
+        "as_of": (_found.get("as_of") or _found.get("price_date") or ""),
+        "source": (_found.get("source_url") or _found.get("source")
+                   or _found.get("search_provider")
+                   or _found.get("llm_provider") or ""),
+        "quantity_basis": (_found.get("price_basis")
+                           or _found.get("quantity_basis") or ""),
+        "origin": _found.get("source_type"),
+    }
+
+
+def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float],
+                              part: Dict[str, Any]):
+    """An evidenced researched £/m² for a board nothing else can price, or None.
+
+    James Gray, 17 September 2026: "it's lame not to price the MDF and Tony is sarcastic
+    and will laugh about it."
+
+    He is right, and the reason it read as unpriced was a gap in the ladder rather than a
+    rule. Rung 4 — a researched figure that names its source, its date, what it is per and
+    the arithmetic — was built for BOUGHT-IN lines and wired only into that chain. A board
+    is a material, so it fell off the bottom of the ladder after rung 1 (SDI Live / the
+    UDEF catalogue) missed, and there was nothing below it. Rung 4 is not a property of
+    being a bought-in; it is the last rung, and every line is entitled to it.
+
+    Priced PER SQUARE METRE, because that is the only basis that survives a change of stock
+    size: a £/sheet figure is worthless without the sheet it was for, and the two travel
+    apart. The area is the part's own blank, so the arithmetic is the same one the live
+    catalogue branch does and an estimator compares like with like.
+
+    Returns the producer's own dict (price, evidence, calculation, status) or None. It
+    cannot return a figure without evidence — that refusal is the producer's, and is the
+    whole reason this is allowed to contribute to a total at all.
+    """
+    _l = _safe_float(part.get("blank_length_mm"))
+    _w = _safe_float(part.get("blank_width_mm"))
+    if not _l or not _w or not material:
+        return None
+    _area_m2 = round((_l * _w) / 1_000_000.0, 6)
+    if _area_m2 <= 0:
+        return None
+    _thk = _safe_float(thickness)
+    _desc = (f"{_thk:g}mm {str(material).replace('_', ' ')} board"
+             if _thk else f"{str(material).replace('_', ' ')} board")
+    try:
+        from indicative_price import resolve_indicative as _rung4
+        _out = _rung4(
+            {"code": "", "description": _desc, "quantity": _area_m2,
+             "unit_of_measure": "m2",
+             # THE PROVENANCE OF EVERY INPUT, so the producer's contamination guard can do
+             # its job. The area is measured off the drawing; nothing here came off an
+             # estimator's sheet, and if it ever does the brief is refused rather than
+             # laundered into a researched answer.
+             "input_origins": {"description": "drawing_or_measurement",
+                               "quantity": "drawing_or_measurement"}},
+            order_qty=int(_safe_float(part.get("job_quantity")) or 1),
+            as_of=str(part.get("run_date") or ""),
+            ask=_rung4_researcher,
+        )
+    except Exception:                                            # noqa: BLE001
+        return None
+    return _out if _safe_float((_out or {}).get("price_gbp")) else None
 
 
 def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
@@ -5222,12 +5346,65 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     _board_rate, _board_note = _board_sheet_rate(_cost_family, thickness)
     if _faced_family:
         if not _board_rate:
+            # ── RUNG 4 FOR A BOARD, BECAUSE IT IS THE LAST RUNG AND NOT A BOUGHT-IN'S ──
+            #
+            # James Gray: "it's lame not to price the MDF and Tony is sarcastic and will
+            # laugh about it." He is right. SDI Live was asked (above, for the faced
+            # family) and had nothing; config's own points were withdrawn in D-103 because
+            # they came off an estimator's sheet. That left a real material with a real
+            # measured area reading as unpriced — not because the rules forbid a price,
+            # but because the researched rung had only ever been wired into the bought-in
+            # chain. It is not a property of being a bought-in; it is the bottom of the
+            # ladder, and every line is entitled to it.
+            #
+            # What comes back is an evidenced figure or nothing: a source, a date, what it
+            # is per, the quantity it was found at, and the arithmetic from that figure to
+            # this part. Labelled as rung 4 on every document, exactly as a researched
+            # bought-in is. Where the research cannot produce all of that, the line stays
+            # unpriced and visible — which is the branch below, unchanged.
+            _res = _researched_board_rate_m2(_faced_family, thickness, part)
+            if _res:
+                _res_unit = round(float(_res["price_gbp"]) * (1.0 + float(
+                    getattr(config, "SCRAP_PERCENTAGE", 0.04))), 2)
+                _res_ev = _res.get("evidence") or {}
+                part.setdefault("review_flags", []).append(
+                    f"{_faced_family} at {thickness:g}mm: no SDI Live or catalogue rate, so "
+                    f"this is a RESEARCHED indicative price — "
+                    f"{(_res.get('calculation') or {}).get('working')}, plus scrap, from "
+                    f"{_res_ev.get('source')} as at {_res_ev.get('as_of')} "
+                    f"({_res_ev.get('quantity_basis')}). {_res.get('status')}: confirm "
+                    f"against a current supplier price before it goes out firm.")
+                return {
+                    "material": material, "thickness_mm": thickness,
+                    "blank_length_mm": blank_length, "blank_width_mm": blank_width,
+                    "blank_area_m2": round((blank_length * blank_width) / 1_000_000.0, 4),
+                    "unit_material_mass_kg": None,
+                    "unit_material_cost_gbp": _res_unit,
+                    "cost_per_part_gbp": _res_unit,
+                    "extended_sheet_material_cost_gbp": round(_res_unit * quantity, 2),
+                    "extended_material_cost_gbp": round(_res_unit * quantity, 2),
+                    "powder_consumable": None,
+                    "stock_estimate": select_sheet_size(_faced_family, blank_length,
+                                                        blank_width),
+                    "cost_method": "board_rate_researched",
+                    "costing_material_family": _faced_family,
+                    "scrap_pct": round(float(getattr(config, "SCRAP_PERCENTAGE", 0.04)), 4),
+                    "reliability_flags": ["indicative_price", "llm_indicative"],
+                    "indicative_price": _res,
+                    "note": (f"{_faced_family} researched indicative rate — "
+                             f"{_res_ev.get('source')}, {_res_ev.get('as_of')}"),
+                    "part_confidence_overall": _part_confidence_overall(part),
+                    "part_geometry_reliability": _part_geometry_reliability(part),
+                    "price_source": _build_price_source_metadata(
+                        {}, fallback_source="llm_indicative_researched",
+                        applied=True, applied_basis="GBP_per_m2_researched"),
+                }
             part.setdefault("review_flags", []).append(
                 f"FACED BOARD UNPRICED: no purchased sheet price for {_faced_family} at "
-                f"{thickness:g}mm (config.BOARD_SHEET_PRICE_GBP). NOT costed as plain "
-                f"{material} — that would charge raw-core money for a laminated panel. "
-                f"Give the sheet price and size bought and every job on this board "
-                f"prices itself.")
+                f"{thickness:g}mm, and the researched rung could not produce an evidenced "
+                f"figure either. NOT costed as plain {material} — that would charge "
+                f"raw-core money for a laminated panel. Give the sheet price and size "
+                f"bought and every job on this board prices itself.")
             return {
                 "material": material, "thickness_mm": thickness,
                 "blank_length_mm": blank_length, "blank_width_mm": blank_width,
@@ -9356,10 +9533,25 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         # — SDI Live, the supplier catalogue, a current quote, then a researched figure with
         # its evidence — so a rate the office already holds wins, and where nothing answers
         # the line reads as unpriced with its metres visible.
+        #
+        # AND AN ESTIMATOR CAN SUPPLY THE METRES. James Gray: "confirmed banded metres x
+        # current £/metre... so, we should be able to price in this case." On 11908-21 the
+        # DXFs carry no layer data and no note names an edge, so nothing measurable could
+        # answer — and Tony had already said 5.0 m a tray. That is a physical extent of the
+        # product, not a price, and it outranks everything inferred from the geometry. Two
+        # forms: metres a FINISHED UNIT (which replaces the sum, because it already IS the
+        # sum), or metres per ONE of a named part (which joins the measurement as the
+        # highest-trust rung for that part).
         try:
             from edge_banding import banded_length_mm as _banded_of
             _edge_code = str(getattr(config, "FACED_BOARD_EDGING_CODE", "") or "")
             _spec = dict(getattr(config, "FACED_BOARD_EDGING_SPEC", {}) or {})
+            _bm_dec = ((summary or {}).get("estimator_decisions") or {}).get(
+                "banded_metres") or {}
+            _bm_who = str(((summary or {}).get("estimator_decisions") or {}).get(
+                "decided_by") or "the estimator")
+            _bm_per_part = {str(k).upper(): v
+                            for k, v in (_bm_dec.get("per_part") or {}).items()}
             _edge_mm, _edge_from = 0.0, set()
             for _p in (parts or []):
                 if not isinstance(_p, dict):
@@ -9368,18 +9560,35 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                         or (_p.get("material_estimate") or {}).get(
                             "costing_material_family")):
                     continue
+                _pn_e = str(_p.get("part_number") or "").strip().upper()
+                if _pn_e in _bm_per_part:
+                    _p["_confirmed_banded_mm"] = float(_bm_per_part[_pn_e]) * 1000.0
+                    _p["_confirmed_banded_by"] = _bm_who
                 _v = _banded_of(_p) or {}
                 if _v.get("mm"):
                     _edge_mm += float(_v["mm"]) * float(_safe_float(_p.get("quantity")) or 1)
                     _edge_from.add(str(_v.get("basis") or ""))
             _edge_m = round(_edge_mm / 1000.0, 3)
+            # A PER-UNIT CONFIRMATION IS THE WHOLE ANSWER, NOT A CONTRIBUTION TO IT. Tony's
+            # 5.0 m is the banded edge across every component of one tray, so adding it to
+            # what the parts measured would count the same metres twice.
+            _bm_unit = _bm_dec.get("per_unit")
+            if _bm_unit is not None:
+                _edge_m = round(float(_bm_unit), 3)
+                _edge_from = {"estimator_confirmed"}
             _already = any(str((_x or {}).get("part_number") or "").upper() == _edge_code
                            for _x in (parts or []) if isinstance(_x, dict))
+            # WHERE THE METRES CAME FROM, IN THE WORDS OF WHOEVER SUPPLIED THEM. A
+            # confirmed extent and a measured one are both facts and they are not the same
+            # fact, and a reader deciding whether to trust the line needs to know which.
+            _edge_said = ("confirmed by " + _bm_who
+                          if "estimator_confirmed" in _edge_from
+                          else "measured from the edges the drawing marks as banded")
             if _edge_code and _edge_m > 0 and not _already:
                 _stub = _bought_in_part_stub(
                     _edge_code,
                     (f"{_spec.get('description') or 'ABS edging'} — {_edge_m:g} m a unit, "
-                     f"measured from the edges the drawing marks as banded"),
+                     f"{_edge_said}"),
                     _edge_m)
                 _stub["unit_of_measure"] = "m"
                 _stub["supplier"] = _spec.get("supplier") or ""
@@ -9387,11 +9596,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["_edging_basis"] = sorted(b for b in _edge_from if b)
                 _stub.setdefault("review_flags", []).append(
                     f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
-                    f"({_spec.get('description') or 'ABS edging'}). The METRES are measured "
-                    f"from the edges the drawing marks as banded — not the perimeter. The "
-                    f"RATE is asked of SDI Live and the supplier catalogue; if neither "
-                    f"answers, the line stays visibly unpriced rather than carrying a rate "
-                    f"off an old manual sheet.")
+                    f"({_spec.get('description') or 'ABS edging'}). The METRES are "
+                    f"{_edge_said} — not the perimeter. The RATE is asked of SDI Live and "
+                    f"the supplier catalogue; if neither answers, the line stays visibly "
+                    f"unpriced rather than carrying a rate off an old manual sheet.")
                 parts.append(_stub)
                 if debug:
                     print(f"[DEBUG] Added EDGING line {_edge_code} at {_edge_m:g} m/unit")

@@ -193,7 +193,10 @@ def _mint_block() -> str:
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "estimator.py"
            ).read_text(encoding="utf-8")
     start = src.index("# ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ─")
-    return src[start:start + 4200]
+    # Wide enough to hold the whole block. A slice that ends mid-block does not prove the
+    # code is absent, it proves the slice was short — which is its own small version of the
+    # fault this file is about.
+    return src[start:src.index("# A PLATED weldment goes out to a subcontract plater", start)]
 
 
 def test_the_edging_is_minted_as_a_bom_line():

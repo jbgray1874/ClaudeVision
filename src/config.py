@@ -3088,6 +3088,30 @@ MAX_BOARD_THICKNESS_MM = 75.0
 # a stocked item; a 3mm pine panel is not), and both are separate from the faced family
 # because the facing changes the price and the machining, not the substrate.
 FACED_BOARD_TOKENS = ("MFC", "MFMDF", "MELAMINE", "PRE LAM", "PRELAM", "PRE-LAM")
+
+# ── WHAT SDI LIVE MIGHT CALL THE SAME BOARD ──────────────────────────────────────────
+#
+# James Gray, 17 Sep 2026: "SDI Live will have prices all over the place in it also. SDI
+# does it all the time." A purchasing system is written by buyers over years, and one board
+# arrives under whatever the supplier's invoice called it: MFMDF on one row, "Melamine
+# Faced MDF" on the next, "Egger H1234 ST9 ... FSC 2800x2070x18" on the one after. The
+# catalogue lookup asks with ONE token — the longest word in the material's own name — so a
+# family whose rows are described the trade's way instead of ours reads as having no price,
+# and the line falls to a researched figure when the customer's own money was on file.
+#
+# Each entry is (word to search the description for, word the row must ALSO contain). The
+# second word is what keeps the families apart: "MELAMINE" alone matches melamine-faced
+# CHIPBOARD and melamine-faced MDF equally, and a median across both is one rate answering
+# two questions — the fault this file keeps finding. Tried IN ORDER, most specific first,
+# and the first token that returns rows wins; nothing is ever pooled across probes.
+#
+# Vocabulary, not money: these are names SDI's own catalogue uses, and adding one cannot
+# put a price anywhere. A family that needs another spelling gets a line here.
+BOARD_CATALOGUE_SYNONYMS = {
+    "MFMDF": (("MELAMINE", "MDF"), ("FACED", "MDF"), ("LAMINATED", "MDF")),
+    "MFC":   (("MELAMINE", "CHIPBOARD"), ("FACED", "CHIPBOARD"),
+              ("LAMINATED", "CHIPBOARD")),
+}
 SHEET_BOARD_TOKENS = ("MDF", "PLYWOOD", "PLY", "CHIPBOARD", "OSB", "HARDBOARD")
 SOLID_TIMBER_TOKENS = ("TIMBER", "WOOD", "PINE", "SOFTWOOD", "HARDWOOD", "OAK",
                        "SPRUCE", "BEECH", "BIRCH", "REDWOOD", "WHITEWOOD", "ASH")

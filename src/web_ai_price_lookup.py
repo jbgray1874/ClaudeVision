@@ -164,6 +164,7 @@ def _build_spec_block(
     width_mm: Optional[float] = None,
     weight_kg: Optional[float] = None,
     operations: Optional[List[str]] = None,
+    wanted_unit: Optional[str] = None,
 ) -> str:
     lines = []
     if part_code:
@@ -190,6 +191,16 @@ def _build_spec_block(
     if operations:
         ops_human = [o.replace("_", " ").title() for o in operations[:8]]
         lines.append(f"Manufacturing operations: {', '.join(ops_human)}")
+    # HOW THIS LINE IS BOUGHT. Most parts are bought each and nothing needs saying; ABS
+    # edging is bought by the metre, and a model asked for "the price" of it will price a
+    # REEL. The caller multiplies whatever comes back by the line's quantity — metres — so
+    # a reel price answered here becomes hundreds of pounds of tape on a tray. Asking in
+    # the right unit is cheaper than refusing the answer, which is what happens otherwise.
+    if wanted_unit and str(wanted_unit).strip().lower() not in ("", "each"):
+        _wu = str(wanted_unit).strip()
+        lines.append(f"Sold by: the {_wu}. Give the price PER {_wu.upper()} and set "
+                     f"\"unit\" accordingly. If the listing is for a reel, roll, pack or "
+                     f"coil, divide it down to one {_wu} and say so in price_basis.")
     lines.append("Customer: UK retail/commercial display manufacturer")
     return "\n".join(lines)
 
@@ -384,7 +395,8 @@ def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") 
     spec_block = _build_spec_block(**{
         k: spec.get(k)
         for k in ["material", "description", "thickness_mm", "part_code", "finish",
-                  "colour", "quantity", "length_mm", "width_mm", "weight_kg", "operations"]
+                  "colour", "quantity", "length_mm", "width_mm", "weight_kg", "operations",
+                  "wanted_unit"]
     })
     prompt = _LLM_PROMPT_TEMPLATE.format(spec_block=spec_block)
 
@@ -540,7 +552,8 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
 
     spec_summary = _build_spec_block(**{
         k: spec.get(k)
-        for k in ["material", "description", "thickness_mm", "part_code", "finish", "quantity"]
+        for k in ["material", "description", "thickness_mm", "part_code", "finish", "quantity",
+                  "wanted_unit"]
     })
 
     user_content = (

@@ -94,6 +94,28 @@ _BARRED_ORIGINS = (
     "sdi_estimate", "rag_fallback", "web_indicative",
 )
 
+# WHAT A BOUGHT-IN LINE IS SOLD BY. Most are sold each; edging is sold by the metre, and
+# asking a model for the price of "one ABS edging" gets the price of a REEL — which then
+# gets multiplied by the metres, because the arithmetic below cannot tell that the unit it
+# was handed is not the unit it was answered in. The line already carries its own unit
+# (`unit_of_measure`), so the brief asks in it and the working says it.
+_UNIT_WORDS = {
+    "M": "metre", "MM": "metre", "METRE": "metre", "METER": "metre", "LM": "metre",
+    "LIN M": "metre", "LINEAR METRE": "metre", "MTR": "metre",
+    "KG": "kilogram", "KILO": "kilogram", "KILOGRAM": "kilogram",
+    "M2": "square metre", "M²": "square metre", "SQM": "square metre",
+    "SQ M": "square metre", "SQUARE METRE": "square metre",
+    "L": "litre", "LITRE": "litre", "LITER": "litre",
+    "EA": "each", "EACH": "each", "OFF": "each", "NR": "each", "NO": "each", "PC": "each",
+}
+
+
+def _unit_word(value: Any) -> str:
+    """The word to price this line by — "metre", "kilogram", "each". Never empty."""
+    key = _clean(value).upper().replace(".", "")
+    return _UNIT_WORDS.get(key) or ("each" if not key else key.lower())
+
+
 _COMMERCIAL_CODES = ("PACKAGING", "DELIVERY", "CARRIAGE", "FREIGHT", "HAULAGE")
 _PROCESS_WORDS = ("PLATE", "PLATING", "PLATER", "ANODIS", "ANODIZ", "GALVAN",
                   "POLISH", "PASSIVAT", "ELECTROPLATE")
@@ -155,11 +177,16 @@ def research_brief(line: Any, *, order_qty: int = 1) -> Dict[str, Any]:
     }
 
     if kind == BOUGHT_IN_COMPONENT:
+        _unit = _unit_word(line.get("unit_of_measure"))
         brief["ask"] = (
-            f"Current UK trade unit price for: {desc}. Give the price PER EACH, the pack or "
-            f"break quantity it is sold at, the supplier or listing it comes from, and the "
-            f"date. Do not estimate a 'typical' price: name a real current listing.")
-        brief["wanted_unit"] = "each"
+            f"Current UK trade unit price for: {desc}. Give the price PER {_unit.upper()}, "
+            f"the pack or break quantity it is sold at, the supplier or listing it comes "
+            f"from, and the date. Do not estimate a 'typical' price: name a real current "
+            f"listing."
+            + ("" if _unit == "each" else
+               f" This line is bought by the {_unit}, so a price for a whole reel, roll, "
+               f"pack or coil must be divided down to one {_unit} and the division shown."))
+        brief["wanted_unit"] = _unit
         brief["quantity_needed"] = _num(line.get("quantity")) or 1
     elif kind == COMMERCIAL:
         brief["ask"] = (
@@ -200,8 +227,11 @@ def _calculation(kind: str, unit_price: float, brief: Dict[str, Any],
     if kind == BOUGHT_IN_COMPONENT:
         qty = _num(brief.get("quantity_needed")) or 1
         per_unit = unit_price * qty
+        _unit = _clean(brief.get("wanted_unit")) or "each"
+        _qty_said = f"{qty:g} off" if _unit == "each" else f"{qty:g} {_unit}"
+        _rate_said = "each" if _unit == "each" else f"a {_unit}"
         return {"per_unit_gbp": round(per_unit, 4),
-                "working": (f"{qty:g} off x GBP {unit_price:,.4f} each "
+                "working": (f"{_qty_said} x GBP {unit_price:,.4f} {_rate_said} "
                             f"= GBP {per_unit:,.4f} a unit")}
     if kind == COMMERCIAL:
         per_unit = unit_price / order_qty
@@ -300,6 +330,32 @@ def resolve_indicative(line: Any, *, order_qty: int = 1, as_of: str = "",
                             + ", ".join(_names[g] for g in _gaps)
                             + ". Without it the figure cannot be checked, which is what "
                               "separates it from a number typed into a file.")}
+
+    # ── THE FIGURE MUST BE PER THE UNIT THE LINE IS BOUGHT BY ────────────────────────
+    #
+    # The arithmetic below multiplies the figure by the line's QUANTITY, and the quantity
+    # for an edging line is metres. A researcher that answers with the price of a whole
+    # 100 m reel — perfectly good evidence, correctly sourced and dated — would be
+    # multiplied by 5 and put £2,000 of tape on a tray. Nothing in the evidence block
+    # catches it, because every field is present and true; only the unit disagrees.
+    #
+    # So the units are compared, and a disagreement is a REFUSAL rather than a conversion:
+    # dividing a reel price by a reel length nobody stated would be the engine inventing
+    # the very quantity it is not allowed to invent. The refusal names both units, which
+    # is enough for a person to ask the right question.
+    _want_unit = _clean(brief.get("wanted_unit")) or "each"
+    if brief["kind"] == BOUGHT_IN_COMPONENT and _want_unit != "each":
+        _got_unit = _unit_word(
+            _clean(found.get("unit")).replace("per_", "").replace("per ", "").lstrip("/"))
+        if _got_unit != _want_unit:
+            return {"price_gbp": None, "status": "not priced", "brief": brief,
+                    "evidence": evidence,
+                    "missing": (f"this line is bought by the {_want_unit} and the figure "
+                                f"returned is per {_got_unit}. It is not converted here: "
+                                f"turning a pack, reel or coil price into a per-{_want_unit} "
+                                f"rate needs the length or weight that pack holds, and "
+                                f"nothing has stated it. Ask for the price per "
+                                f"{_want_unit}.")}
 
     calc = _calculation(brief["kind"], unit_price, brief, _num(found.get("minimum_gbp")))
     return {

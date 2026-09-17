@@ -11,12 +11,15 @@
   "estimator_decisions": {
 
     "_why_commercial_excluded": "Delivery is not charged on this job — his deliberate exclusion, not an omission and not a price we have failed to find. The line stays on the sheet at £0 naming whose call it was, which is the difference between a decision and a gap. Without this the run raises a standing 'estimator to price delivery' ask on every rerun and the reader cannot tell it from a genuine hole.",
-    "commercial_excluded": ["DELIVERY"]
+    "commercial_excluded": ["DELIVERY"],
+
+    "_why_banded_length_m": "THE LINE THAT MAKES THE EDGING PRICE. The engine measures an edge to the millimetre and cannot know it takes ABS unless the drawing marks it — and these DXFs carry no layer data and no note names an edge, so nothing measurable can answer. Tony's figure can, because it is a stated physical extent of the product: 'this tray requires 5 metres of 23 x 1mm ABS edging', across every component in one finished tray. That is a job-specific physical measurement recorded with his name and date, not a price copied off a sheet — D-078 has nothing to say about a length. It is REPLACED, not argued with, if the drawing office later marks the banded edges and the geometry can measure them edge by edge. His own historic rate is deliberately NOT here: the rate is a purchase and is asked of SDI Live, the supplier catalogue or evidenced research, per metre.",
+    "banded_length_m": 5.0
   },
 
   "_not_here_deliberately": [
     "NO BOARD PRICE. The 9mm laminated sheet is bought pre-faced and its rate must come from SDI Live, the supplier catalogue or a current quote. A figure lifted off an estimator's own sheet is not a price source (D-078), so the line stays visibly open until a current one arrives.",
-    "NO EDGING RATE. Same rule, same reason. The METRES are the drawing's to answer and the engine now measures them off the edges the drawing marks; the £/m is a purchase.",
+    "NO EDGING RATE. Same rule, same reason. The METRES are the drawing's or Tony's to answer (see banded_metres above); the £/m is a purchase, and is asked of SDI Live, the supplier catalogue or evidenced research in £ PER METRE — a reel price answered per each is refused rather than multiplied by the metres.",
     "NO PACKAGING PRICE. Not ruled out — open. Delivery is excluded above because he excluded it; packaging is not, and must not be made to look decided by sitting next to something that was.",
     "NO THROUGHPUT FIGURES. His hours-per-order at fifty off are in config as SHOP_STATED, scoped to faced/laminated board, where they can be read, argued with and widened by a second job. Copying them here would make one job's measurement look like a ruling about this job alone."
   ]

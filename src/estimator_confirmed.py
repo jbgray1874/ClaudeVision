@@ -554,7 +554,13 @@ _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
                   # stronger one — a person who knows the job, rather than arithmetic over
                   # a nest result the nester may not have produced. Same gauge alone is
                   # never enough, so this names the members explicitly.
-                  "nesting_groups")
+                  "nesting_groups",
+                  # HOW MUCH EDGE TAKES ABS. A LENGTH, not a price: the second of the two
+                  # facts an edging line needs, and the one no catalogue and no language
+                  # model can answer, because which edges are exposed is the product's
+                  # design. The rate still comes from SDI Live, the catalogue, a quote or
+                  # evidenced research — this key is refused a price on purpose.
+                  "banded_metres", "banded_length_m")
 
 
 def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], List[str]]:
@@ -661,6 +667,61 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
             _good = [c for c in _codes if c in _known]
             if _good:
                 out["commercial_excluded"] = _good
+
+    # ── CONFIRMED BANDED METRES ───────────────────────────────────────────────────────
+    #
+    # Tony Ford's "5.0 m a tray". The engine measures an edge to the millimetre and cannot
+    # know it takes ABS unless the drawing marks it (D-104) — and on 11908-21 the DXFs
+    # carry no layer data and the notes name no edges, so nothing could answer. A person
+    # who has read the drawing can, and what they are stating is a PHYSICAL EXTENT of the
+    # product, which is the same class of fact as "the tube bend is not required".
+    #
+    # Two forms, because estimators state it both ways and neither is a guess:
+    #   5.0                      metres per FINISHED UNIT, across every component in it
+    #   {"11908-21-01J": 1.56}   metres per ONE of that part, for each part named
+    #
+    # It is never a price and cannot become one: the rate is asked of SDI Live, the
+    # supplier catalogue, a current quote or evidenced research exactly as for any other
+    # bought-in line. Zero is allowed and MEANS SOMETHING — "this part is not banded" —
+    # which is why it is distinguished from the key being absent.
+    # TWO SPELLINGS, ONE RULING. `banded_length_m` is the name James wrote it in and reads
+    # the most plainly on a hand-typed file; `banded_metres` is the one the first draft
+    # took. Accepting only one of them would make a correctly-stated ruling do nothing,
+    # silently — which is the failure mode every ruling in this file exists to avoid.
+    _bm = block.get("banded_length_m")
+    if _bm is None:
+        _bm = block.get("banded_metres")
+    if _bm is not None:
+        if isinstance(_bm, Mapping):
+            _per_part: Dict[str, float] = {}
+            for _pn, _m in _bm.items():
+                try:
+                    _mv = float(_m)
+                except (TypeError, ValueError):
+                    problems.append(f"estimator_decisions.banded_metres['{_pn}']: expected "
+                                    f"a length in metres — that entry did nothing")
+                    continue
+                if _mv < 0:
+                    problems.append(f"estimator_decisions.banded_metres['{_pn}']: a banded "
+                                    f"length cannot be negative — that entry did nothing")
+                    continue
+                _per_part[str(_pn).strip().upper()] = _mv
+            if _per_part:
+                out["banded_metres"] = {"per_part": _per_part}
+        else:
+            try:
+                _mv = float(_bm)
+            except (TypeError, ValueError):
+                problems.append("estimator_decisions.banded_length_m: expected metres per "
+                                "finished unit (e.g. 5.0), or {part number: metres} — "
+                                "ignored")
+                _mv = None
+            if _mv is not None:
+                if _mv < 0:
+                    problems.append("estimator_decisions.banded_metres: a banded length "
+                                    "cannot be negative — ignored")
+                else:
+                    out["banded_metres"] = {"per_unit": _mv}
 
     _tp = block.get("throughput_per_hour")
     if _tp is not None:

@@ -159,7 +159,10 @@ def test_the_query_is_parameterised():
     import inspect
     src = inspect.getsource(estimator._resolve_board_sheet_rate_gbp_per_m2)
     assert "LIKE ?" in src, "the search token is formatted into the SQL"
-    assert 'f"%{_token}%"' in src or "(f\"%{_token}%\"," in src
+    # The token is now one of several the catalogue might hold the board under, so it is
+    # bound per probe rather than once — still bound, never formatted in.
+    assert 'f"%{_try_token}%"' in src or 'f"%{_token}%"' in src
+    assert "Description] LIKE '%" not in src, "a token was interpolated into the SQL"
 
 
 def _row(desc, cost):

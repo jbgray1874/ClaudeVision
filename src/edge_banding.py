@@ -32,8 +32,27 @@ SO: NO EVIDENCE, NO LENGTH. Where the drawing marks nothing, this returns no ban
 at all and says what it looked for. That is not the engine giving up; it is the difference
 between a fact and an assumption, and an estimator can act on the first.
 
+AND A PERSON WHO KNOWS THE JOB CAN ANSWER IT TOO.
+
+James Gray, 17 September 2026: "confirmed banded metres x current GBP/metre... we can get a
+current GBP/metre from an LLM or from SDI Live... so, we should be able to price in this
+case." He is right, and the missing half was never the money. Tony's "5.0 m a tray" is the
+SECOND fact this line needs, and it is a physical measurement of the product - the same kind
+of statement as "the tube bend is not required", not a price copied off a sheet. An
+estimator's confirmed extent therefore ranks ABOVE everything measured here, because it is
+the one source that knows the design intent rather than inferring it.
+
+    edging = CONFIRMED BANDED METRES x CURRENT GBP/METRE
+
+The metres are the drawing's or the estimator's. The rate is SDI Live, the supplier
+catalogue, a current quote, or evidenced research. Neither half is ever guessed from the
+other, and the perimeter is not a stand-in for either.
+
 WHAT COUNTS AS THE DRAWING SAYING SO, in the order it is trusted:
 
+    0  AN ESTIMATOR'S CONFIRMED EXTENT, from the job's answers file. A person who has read
+       the drawing and knows the product, saying how much edge is banded. Nothing measured
+       overrides it.
     1  A DXF LAYER whose name means edging. Measured directly - the drawing office drew
        exactly the edges that take ABS, so their length IS the answer.
     2  A NOTE OR CALLOUT naming which edges. "ALL ROUND" is a statement, not a default,
@@ -180,6 +199,23 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
     perimeter = round(2.0 * ((_l or 0) + (_w or 0)), 1) if (_l and _w) else 0.0
     out: Dict[str, Any] = {"mm": None, "basis": "", "evidence": "",
                            "drawn_perimeter_mm": perimeter}
+
+    # 0 ── A PERSON WHO KNOWS THE JOB HAS SAID HOW MUCH. Above every measurement below,
+    #      because those infer the design intent and this one states it. It is a LENGTH,
+    #      not a price: the rate still has to come from SDI Live, the catalogue, a quote
+    #      or evidenced research, exactly as it does on any other bought-in line.
+    _confirmed = part.get("_confirmed_banded_mm")
+    try:
+        _confirmed = float(_confirmed) if _confirmed is not None else None
+    except (TypeError, ValueError):
+        _confirmed = None
+    if _confirmed is not None and _confirmed > 0:
+        _who = _clean(part.get("_confirmed_banded_by")) or "the estimator"
+        out.update(mm=round(_confirmed, 1), basis="estimator_confirmed",
+                   evidence=(f"{_confirmed / 1000.0:g} m confirmed by {_who} in the job's "
+                             f"answers file — a stated physical extent, which outranks "
+                             f"anything inferred from the geometry"))
+        return out
 
     # 1 ── A LAYER OF ITS OWN. The drawing office drew exactly the banded edges, so their
     #      measured length IS the answer and nothing has to be inferred from a word.
