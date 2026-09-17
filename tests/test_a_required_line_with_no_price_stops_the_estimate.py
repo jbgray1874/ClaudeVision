@@ -83,13 +83,15 @@ def test_a_zero_is_treated_as_no_price_not_as_a_free_part():
     assert not verdict["releasable"]
 
 
-def test_the_verdict_tells_the_reader_what_to_do_not_only_what_is_wrong():
-    """An incomplete estimate that says only 'incomplete' gets released by somebody in a
-    hurry."""
+def test_the_list_says_what_would_answer_each_line():
+    """Not what the reader should feel about it. James: "we don't need disclaimers.. the
+    estimator will make any necessary changes before it gets sent out." The useful half is
+    which lines are open and what would close them."""
     verdict = assess_release([dict(_FOUR[0], price_gbp=None)])
-    assert "NOT RELEASABLE" in verdict["headline"]
-    assert "must not be read as a unit price" in verdict["headline"]
-    assert "free issue, not required, excluded" in verdict["what_to_do"]
+    assert verdict["headline"] == "1 required line(s) carry no price"
+    assert "SDI Live" in verdict["what_to_do"]
+    assert "must not" not in verdict["headline"], (
+        "the refusal wording is back — it has been removed twice now")
 
 
 # ── and pass when something priced them ──────────────────────────────────────────────
@@ -107,7 +109,7 @@ def test_all_four_priced_is_releasable():
                               for i in _FOUR])
     assert verdict["releasable"]
     assert verdict["lines_blocking"] == 0
-    assert "RELEASABLE" in verdict["headline"]
+    assert verdict["headline"] == "every required line is priced or ruled"
 
 
 # ── rung 4: the evidence is the admission ticket ─────────────────────────────────────
@@ -195,82 +197,20 @@ def test_a_gate_that_cannot_run_fails_closed():
     assert '"releasable": False' in block
 
 
-def test_the_report_leads_with_the_block_rather_than_the_total():
-    """James: "It must never show a normal-looking £108.89 unit price that quietly excludes
-    four required costs." So the reader meets the verdict before the number."""
+def test_no_deliverable_refuses_to_render_over_an_open_line():
+    """THE THING THAT KEEPS COMING BACK. A red block on the quote was removed once for
+    making the page unreadable; a hard refusal to render replaced it and was removed again.
+    The estimator takes responsibility for what goes out. This test is here so the next
+    person — including me — finds out immediately."""
     import pathlib
-    src = (pathlib.Path(__file__).resolve().parent.parent / "src" /
-           "estimate_explained.py").read_text(encoding="utf-8")
-    assert "NOT RELEASABLE" in src
-    assert src.index("NOT RELEASABLE") < src.index("This job is priced ")
+    root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    for name in ("client_quote_html.py", "estimate_explained.py"):
+        src = (root / name).read_text(encoding="utf-8")
+        assert "NOT RELEASABLE" not in src, name
+        assert "NotReleasable" not in src, name
 
 
-# ── the quote, which is the one document that leaves the building ────────────────────
-#
-# The 14:06 six-off run went out at £127.86 a unit and £767.17 an order with plating,
-# plater freight, packaging and delivery all at £0.00 — four required costs silently
-# excluded from a page a customer would have read as a price. It even listed "Tube bending
-# and forming" among what was included, on a leg Howard had ruled has no bend.
-#
-# The gate had already decided. The REPORT consulted it and the QUOTE never asked.
-
-def _blocked_summary():
-    return {"data_sufficiency": {"release": {
-        "releasable": False,
-        "headline": "NOT RELEASABLE - 4 required line(s) carry no price.",
-        "what_to_do": "Price each line below.",
-        "blocking": [{"code": "PACKAGING", "why": "no price from any rung"},
-                     {"code": "DELIVERY", "why": "no price from any rung"}],
-    }}}
-
-
-def test_a_blocked_estimate_cannot_be_rendered_as_a_quotation():
-    import client_quote_html
-    import pytest as _pytest
-    with _pytest.raises(client_quote_html.NotReleasable):
-        client_quote_html.build_quote_html(_blocked_summary(), job_stem="7332-01")
-
-
-def test_the_refusal_names_the_lines_that_block_it():
-    import client_quote_html
-    try:
-        client_quote_html.build_quote_html(_blocked_summary(), job_stem="7332-01")
-    except client_quote_html.NotReleasable as exc:
-        assert "PACKAGING" in str(exc) and "DELIVERY" in str(exc)
-    else:
-        raise AssertionError("it rendered")
-
-
-def test_it_raises_rather_than_rendering_a_page_with_a_banner():
-    """A quotation that is wrong about the money has no safe rendering. A banner at the top
-    of an otherwise normal-looking page is an invitation to scroll past — and this file
-    already records that a previous banner was removed for making the page unreadable."""
-    import pathlib
-    src = (pathlib.Path(__file__).resolve().parent.parent / "src" /
-           "client_quote_html.py").read_text(encoding="utf-8")
-    assert "raise NotReleasable(" in src
-    assert src.index("raise NotReleasable(") < src.index("job_number, rev, product ="), (
-        "the gate must be asked before the page is laid out, not after")
-
-
-def test_the_refusal_is_written_to_a_file_whose_name_says_so():
-    """A run that merely failed to produce a quote looks, from a folder listing, exactly
-    like one that has not finished — and last run's quote for the same job is still sitting
-    there ready to be attached to an email by mistake."""
-    import pathlib
-    src = (pathlib.Path(__file__).resolve().parent.parent / "src" /
-           "client_quote_html.py").read_text(encoding="utf-8")
-    assert "_quote_NOT-RELEASABLE.html" in src
-    assert "NO QUOTE WRITTEN" in src
-
-
-def test_a_releasable_estimate_still_quotes():
-    """The control. If it refused everything the gate would be a wall, not a gate."""
-    import client_quote_html
-    html = client_quote_html.build_quote_html(
-        {"data_sufficiency": {"release": {"releasable": True}}}, job_stem="7332-01")
-    assert "<" in html and len(html) > 200
-
+# ── and the pad the 14:06 book actually carried ──────────────────────────────────────
 
 def test_the_ai_market_figure_off_the_1406_book_does_not_count_as_answered():
     """The felt pad came back at £0.22 from the pre-existing web/AI rung, labelled "AI

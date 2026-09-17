@@ -1,12 +1,13 @@
-"""A required line with no price stops the estimate. It never quietly totals as zero.
+"""Which required lines carry no price. A list of facts, not a verdict on the estimate.
 
 James Gray, 18 September 2026, on the 7332-01 six-off book:
 
     "we should have a price for everything.. why would a price be 0 when we have so many
      layers including llm"
 
-    "the estimate must be blocked as incomplete, not totalled with a zero... It must never
-     show a normal-looking £108.89 unit price that quietly excludes four required costs."
+    "we don't need disclaimers.. the estimator will make any necessary changes before it
+     gets sent out.. this obsession needs to stop. I keep insisting that this is not
+     necessary but it keeps slipping back in."
 
     "an LLM indicative price may contribute to the estimate total. It must be a genuine
      fourth pricing rung, with independent research or a reproducible calculation; source
@@ -14,7 +15,7 @@ James Gray, 18 September 2026, on the 7332-01 six-off book:
      required' label... If that evidence cannot be produced, the line makes the estimate
      incomplete and blocks release. It never becomes £0."
 
-WHY A GATE RATHER THAN A PRICE.
+WHY A LIST RATHER THAN A REFUSAL.
 
 Withdrawing the typed commodity prices (D-095) was right and, on its own, made the problem
 WORSE: the felt pad went from a wrong price to no price, and no price reaches the sheet as
@@ -23,11 +24,16 @@ pad costs something; the plating costs something; the freight costs something. A
 that adds up as though they cost nothing is not incomplete-looking, it is WRONG-looking,
 and it looks exactly like a finished one.
 
-So the rule is about what the engine is willing to PUBLISH, not about what it can price.
+AND THEN THIS MODULE OVERREACHED. It began by refusing to render a quotation at all and
+telling the reader the total must not be sent to a customer. That is not a control; it is
+declining to produce the artefact and hoping the reader supplies the judgement anyway. The
+estimator takes responsibility for what goes out, knows perfectly well which lines are
+open — they are named on the sheet and in the report — and does not need to be told twice
+in red. The refusal is gone; the list of open lines, which is the useful half, stays.
 
     A ZERO IS ONLY EVER VALID when the line is free-issued, not required, or deliberately
     excluded by an estimator decision. Those three are decisions somebody made. Everything
-    else is an unanswered question, and an unanswered question blocks.
+    else is an unanswered question, and this module's job is to name it — not to act on it.
 
 THE FOUR RUNGS, AND WHAT COUNTS AS AN ANSWER.
 
@@ -46,8 +52,8 @@ admissible. `evidence_gaps` below is deliberately specific about which of those 
 because "no evidence" is not something an estimator can act on.
 
 WHAT THIS MODULE DOES NOT DO. It does not price anything and it does not decide the rungs'
-order; the pricing path does that. It reads the finished estimate and answers one question:
-is this releasable. Kept separate so the answer cannot be quietly weakened by a change made
+order; the pricing path does that. It reads the finished estimate and lists the lines
+nothing answered. Kept separate so that list cannot be quietly weakened by a change made
 for some other reason inside the pricing chain.
 """
 from __future__ import annotations
@@ -141,12 +147,13 @@ def line_is_answered(line: Any) -> bool:
 
 
 def assess_release(lines: Any, *, job: Any = "") -> Dict[str, Any]:
-    """Is this estimate releasable, and if not, exactly which lines stop it.
+    """Which lines nothing has answered, named.
 
     `lines` is any iterable of dicts carrying at least a description and a price; the
-    keys this reads are documented on `line_is_answered`. The verdict is deliberately
-    blunt - releasable or not - because "mostly priced" is the state that produced a
-    normal-looking total with four costs missing from it.
+    keys this reads are documented on `line_is_answered`. `releasable` is a plain fact
+    about the lines - every one answered, or not - and nothing downstream refuses to render
+    on the strength of it. What it is FOR is the estimator's eye: these are the lines to
+    look at before this goes anywhere.
     """
     blocking: List[Dict[str, Any]] = []
     answered = 0
@@ -175,19 +182,29 @@ def assess_release(lines: Any, *, job: Any = "") -> Dict[str, Any]:
         "lines_blocking": len(blocking),
         "blocking": blocking,
         "headline": (
-            "RELEASABLE - every required line is priced or ruled"
+            "every required line is priced or ruled"
             if releasable else
-            f"NOT RELEASABLE - {len(blocking)} required line(s) carry no price. This "
-            f"estimate is INCOMPLETE: its total excludes real costs and must not be read "
-            f"as a unit price or sent to a customer."
+            f"{len(blocking)} required line(s) carry no price"
         ),
-        # The reader's instruction, not a description of the state. An incomplete estimate
-        # that says only "incomplete" gets released by somebody in a hurry.
+        # WHAT IS MISSING, NOT WHAT THE READER SHOULD FEEL ABOUT IT.
+        #
+        # This block used to say the estimate must not be read as a unit price or sent to a
+        # customer, and the quote refused to render at all. James, 18 Sep: "we don't need
+        # disclaimers.. the estimator will make any necessary changes before it gets sent
+        # out.. this obsession needs to stop. I keep insisting that this is not necessary
+        # but it keeps slipping back in."
+        #
+        # He is right, and this file already recorded him removing the same thing once
+        # before — "The estimator takes responsibility. remove this sort of alarming
+        # disclaimer." A document that tells a professional not to trust it is not a
+        # control; it is declining to produce the artefact and hoping the reader supplies
+        # the judgement anyway. The estimator knows which lines are open, because they are
+        # listed by name on the sheet and in the report. That is the useful half, and it is
+        # all that is kept.
         "what_to_do": (
             "" if releasable else
-            "Price each line below from SDI Live, a supplier catalogue or a current quote, "
-            "or record an evidenced indicative figure (source, date, unit basis, quantity "
-            "basis). If a line genuinely costs nothing, say why - free issue, not required, "
-            "excluded - and that is an answer. A blank is not."
+            "Price each line from SDI Live, a supplier catalogue or a current quote, or "
+            "record an evidenced indicative figure (source, date, unit basis, quantity "
+            "basis)."
         ),
     }

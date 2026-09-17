@@ -2130,28 +2130,6 @@ def build(workbook: Path, scan_json: Optional[Path],
                 .replace("*", "").strip().upper().startswith("NOT PRICED")
             ]
             _n_await = len(_awaiting_rows)
-            # RELEASE FIRST, CONFIDENCE SECOND. A reader who is told the job is "priced
-            # except for N lines" has been told about confidence; what they need first is
-            # whether the number below is the price of the thing at all. James: "It must
-            # never show a normal-looking £108.89 unit price that quietly excludes four
-            # required costs."
-            _rel = (sufficiency.get("release") or {}) \
-                if isinstance(sufficiency.get("release"), dict) else {}
-            if _rel and not _rel.get("releasable", True):
-                add(f"> ## NOT RELEASABLE")
-                add(">")
-                add(f"> **{_rel.get('headline', 'Required lines carry no price.')}**")
-                add(">")
-                add(f"> {_rel.get('what_to_do', '')}")
-                add("")
-                _blocking = [b for b in (_rel.get("blocking") or []) if isinstance(b, dict)]
-                if _blocking:
-                    add("| Line | What it is | Owner | Why it blocks |")
-                    add("|---|---|---|---|")
-                    for _b in _blocking:
-                        add(f"| {_fmt(_b.get('code'))} | {_clip(_b.get('description'), 44)} "
-                            f"| {_fmt(_b.get('owner'))} | {_b.get('why', '')} |")
-                    add("")
             add(f"> **This job is priced "
                 + (f"except for {_n_await} line(s) still awaiting a current price, and "
                    f"some of what IS priced is read rather than measured.** "

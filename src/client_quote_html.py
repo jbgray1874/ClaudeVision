@@ -1280,44 +1280,8 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     return _number, _rev, (_title or _project or _number)
 
 
-class NotReleasable(RuntimeError):
-    """This estimate must not become a customer-facing quotation yet.
-
-    Raised rather than rendered, because a quotation that is wrong about the money has no
-    safe rendering: a banner at the top of an otherwise normal-looking page is an
-    invitation to scroll past. The caller writes the refusal in its place — the estimate is
-    still on the sheet and still explained in the report, and simply not yet a quote.
-    """
-
-
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                      manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
-    # ── A QUOTE IS THE ONE DOCUMENT THAT LEAVES THE BUILDING ──────────────────────────
-    #
-    # The 14:06 six-off run went out at £127.86 a unit and £767.17 an order with plating,
-    # plater freight, packaging and delivery all at £0.00 — four required costs, silently
-    # excluded, on a page a customer would have read as a price. The release gate had
-    # already decided that estimate was not releasable; the REPORT said so and the quote
-    # never asked. A gate the most dangerous renderer does not consult is not a gate.
-    #
-    # Asked first, before anything is laid out, and it RAISES rather than returning a
-    # marked-up page: a quotation that is wrong about the money has no safe rendering, and
-    # a banner at the top of one is an invitation to scroll past. The caller catches this
-    # and writes the refusal instead — the estimate is still on the sheet, still explained
-    # in the report, and simply not yet a quote.
-    _rel = ((summary.get("data_sufficiency") or {}).get("release")
-            or ((summary.get("estimate_summary") or {}).get("data_sufficiency") or {})
-            .get("release") or {})
-    if isinstance(_rel, dict) and _rel and not _rel.get("releasable", True):
-        _lines = "; ".join(
-            f"{b.get('code') or '?'} ({b.get('why') or 'no price'})"
-            for b in (_rel.get("blocking") or []) if isinstance(b, dict)
-        ) or "required lines carry no price"
-        raise NotReleasable(
-            f"{_rel.get('headline', 'This estimate is not releasable.')} "
-            f"Blocking: {_lines}. "
-            f"{_rel.get('what_to_do', '')}".strip())
-
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
@@ -1762,32 +1726,9 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
         os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"})
 
     stem = job_stem or summary.get("job_output_stem") or jp.stem
-    try:
-        html_str = build_quote_html(summary, job_stem=stem,
-                                    manual_workbook=manual_workbook, customer=customer)
-    except NotReleasable as _nr:
-        # THE REFUSAL IS THE DELIVERABLE, and it is written to a file whose NAME says so.
-        # A run that simply failed to produce a quote looks, from a folder listing, exactly
-        # like a run that has not finished — and the previous quote for the same job is
-        # still sitting there ready to be attached to an email by mistake.
-        out_dir_p = Path(out_dir) if out_dir else jp.parent
-        out_dir_p.mkdir(parents=True, exist_ok=True)
-        safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
-        out_path = out_dir_p / f"{safe}_quote_NOT-RELEASABLE.html"
-        out_path.write_text(
-            "<!doctype html><meta charset='utf-8'>"
-            "<title>Not releasable</title>"
-            "<style>body{font:16px/1.6 system-ui,sans-serif;max-width:46rem;margin:8vh auto;"
-            "padding:0 1.5rem;color:#111}h1{font-size:1.4rem}code{background:#f2f2f2;"
-            "padding:.1rem .3rem}</style>"
-            "<h1>No quotation was produced for this estimate</h1>"
-            f"<p>{_esc(str(_nr))}</p>"
-            "<p>The estimate itself is complete on the workbook and explained in the job "
-            "report. What is missing is a price for the lines named above, and until one "
-            "of them has a source this total is not the price of the thing.</p>",
-            encoding="utf-8")
-        print(f"   [deliverables] NO QUOTE WRITTEN — {_nr}", flush=True)
-        return str(out_path)
+    html_str = build_quote_html(summary, job_stem=stem,
+                                manual_workbook=manual_workbook,
+                                customer=customer)
     if _llm_only:
         print("   [deliverables] client quote written — this run read the pack with the vision "
               "model alone, so the file is named _quote_LLM-ONLY.html. The page itself is "
