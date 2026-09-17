@@ -181,3 +181,123 @@ def test_the_rows_carry_the_operation_so_the_stated_lookup_can_find_them():
     group = next(iter(groups.values()))
     assert "plater_final_pack" in [str(o).strip().lower()
                                    for o in (group.get("engine_ops") or [])]
+
+
+# ── two plated parts, one finished stand ─────────────────────────────────────────────
+#
+# James, 18 Sep: "The canonical test uses one target. The saved job has plater_pack and
+# plater_final_pack each on both 008 and 101. Therefore the grouped rows will carry
+# quantity 2, and the shown throughput will not simply be 15/hr and 7.5/hr. The route must
+# first state whether the 4- and 8-minute actions are once per finished stand or once per
+# plated component."
+#
+# Right, and the one-target test could not have seen it. The two graders had also been
+# disagreeing about this without anybody noticing: the legacy loop forces qty 1 for the
+# pack DEPARTMENTS, the canonical grouper takes the accumulated group quantity — same job,
+# same rule, two answers, and the canonical one is the road 7332-01 travels.
+#
+# The basis is now declared per operation rather than inferred from the department.
+
+_OTHER = "7332-01-008"
+
+
+def _summary_two_plated(decisions) -> dict:
+    payload = {
+        "nodes": [{"part_number": _PART, "qty_per_unit": 1},
+                  {"part_number": _OTHER, "qty_per_unit": 1}],
+        "decisions": list(decisions),
+    }
+    return {
+        "canonical_route_shadow": payload,
+        "estimate_summary": {"canonical_route_shadow": payload},
+        "parts": [{"part_number": _PART, "normalized_material": "MILD STEEL",
+                   "normalized_thickness_mm": 1.0},
+                  {"part_number": _OTHER, "normalized_material": "MILD STEEL",
+                   "normalized_thickness_mm": 1.0}],
+    }
+
+
+def _decision_on(part: str, op: str, decision_id: str, sequence=None) -> dict:
+    return {"decision_id": decision_id, "operation": op, "status": "required",
+            "target_id": part, "participants": [part], "scope": "part",
+            "sequence": sequence, "qty_per_unit": 1}
+
+
+def _two_plated_groups():
+    pes = _part_estimates() + [{
+        "part_number": _OTHER, "description": "BRACKET",
+        "normalized_material": "MILD STEEL", "normalized_thickness_mm": 1.0,
+        "quantity": 1,
+        "material_estimate": {"material": "MILD STEEL", "thickness_mm": 1.0},
+    }]
+    decisions = [
+        _decision_on(_PART, "plater_pack", "d-po-101", sequence=90),
+        _decision_on(_OTHER, "plater_pack", "d-po-008", sequence=90),
+        _decision_on(_PART, "plater_final_pack", "d-pb-101", sequence=90),
+        _decision_on(_OTHER, "plater_final_pack", "d-pb-008", sequence=90),
+    ]
+    return wb_populate.canonical_labour_groups(
+        _summary_two_plated(decisions), pes, order_qty=6)
+
+
+def test_two_plated_parts_still_make_exactly_two_pack_rows():
+    groups = _two_plated_groups()
+    assert len(groups) == 2, groups
+    assert sorted(str(k[-1]) for k in groups) == ["plater_final_pack", "plater_pack"]
+
+
+def test_both_parts_are_recorded_on_the_row_they_share():
+    """The occasion is one; the participants are two, and the row has to say so or nobody
+    can check the basis."""
+    for group in _two_plated_groups().values():
+        assert sorted(group["parts"]) == sorted([_OTHER, _PART]), group
+
+
+def test_each_row_is_marked_as_one_occasion_for_the_finished_unit():
+    """The flag the emit loop reads to choose the quantity. Without it the group's own
+    accumulated qty is 2 and the throughput doubles."""
+    groups = _two_plated_groups()
+    for group in groups.values():
+        assert group["stated_once_per_finished_unit"] is True, group
+        assert group["assembly_scoped"] is True, (
+            "a figure stated per finished unit is assembly-scoped in fact, whatever scope "
+            "the individual decisions carry")
+
+
+def test_the_group_really_did_accumulate_two_and_is_overridden_deliberately():
+    """The control, and the point of the whole fix: the quantity IS 2 on the group, and the
+    emit loop must choose 1 anyway because the shop's figure is per finished unit. If the
+    group had accumulated 1 this test would be proving nothing."""
+    for group in _two_plated_groups().values():
+        assert group["qty"] == 2, (
+            "two plated parts each take the operation — that is the input the emit loop "
+            "has to override, not a number to fix here")
+
+
+def test_the_basis_is_declared_not_inferred_from_the_department():
+    """A rule whose minutes really are per component must be able to say so and be
+    believed, and the answer must not depend on which department it bills to."""
+    assert wb_populate.stated_time_is_once_per_finished_unit("plater_pack")
+    assert wb_populate.stated_time_is_once_per_finished_unit("plater_final_pack")
+    assert wb_populate.stated_time_is_once_per_finished_unit("brush_before_plate")
+    assert not wb_populate.stated_time_is_once_per_finished_unit("handling")
+    assert not wb_populate.stated_time_is_once_per_finished_unit("laser_cutting")
+    assert config.STATED_TIME_OPERATIONS["plater_pack"] == config.PER_FINISHED_UNIT
+
+
+def test_both_graders_ask_the_same_question_about_quantity():
+    """The fault that produced this one: the legacy loop answered by DEPARTMENT and the
+    canonical grouper did not answer at all."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert src.count("stated_time_is_once_per_finished_unit(") >= 3, (
+        "the basis must be recorded by BOTH graders and read by the emit loop")
+    assert 'if _stated_once:' in src and '_qty = 1' in src
+
+
+def test_the_run_names_the_parts_when_one_occasion_covers_several():
+    """Howard has to be able to overrule this. A quantity chosen silently cannot be."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "booked ONCE for the finished unit, not once per" in src
+    assert "config.STATED_TIME_OPERATIONS" in src

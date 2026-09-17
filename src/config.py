@@ -1298,11 +1298,36 @@ NAMED_PLATE_SPECS = {
 # WHAT BELONGS HERE: an operation whose minutes come from a person or a department, named
 # in this file, rather than from the corpus or a geometric driver. Adding a row is how a
 # new stated rule stays visible; it is not a list of "important" operations.
-STATED_TIME_OPERATIONS = (
-    "brush_before_plate",     # 40 min/unit — Howard Thurley via production, 16 Sep 2026
-    "plater_pack",            # 4 min/unit  — pack OUT to the plater
-    "plater_final_pack",      # 8 min/unit  — pack BACK after plating
-)
+# AND EACH ONE SAYS WHAT ITS MINUTES ARE PER, BECAUSE THE ROUTE HAS TO STATE IT.
+#
+# James, 18 Sep: "The route must first state whether the 4- and 8-minute actions are once
+# per finished stand or once per plated component."
+#
+# It matters as soon as more than one part is plated, which 7332-01 is: 008 and 101 both
+# go to the platers, so the estimator mints the pack stages on BOTH and the canonical
+# grouper adds their quantities. The row then books two occasions of a figure that was
+# given as one, and the throughput reads 30/hr where the stated 4 minutes makes 15.
+#
+# PER_FINISHED_UNIT is the answer for all three, and the figures themselves say so. Howard
+# was asked outright — "is the 40 minutes per stand, or once for the whole consignment?" —
+# and answered "40 Minutes was given by production for one unit". The pack times came the
+# same way, against the engine's own per-unit line. A stand is packed for the platers once,
+# whatever it has inside it; it is not packed once per bracket.
+#
+# So the basis is DECLARED rather than inferred, one occasion per finished unit is booked
+# however many components participate, and the run names the participating parts so the
+# shop can say otherwise. If they do, one word here changes it.
+PER_FINISHED_UNIT = "per_finished_unit"
+PER_COMPONENT = "per_component"
+
+STATED_TIME_OPERATIONS = {
+    # 40 min/unit — Howard Thurley via production, 16 Sep 2026
+    "brush_before_plate": PER_FINISHED_UNIT,
+    # 4 min/unit — pack OUT to the plater
+    "plater_pack": PER_FINISHED_UNIT,
+    # 8 min/unit — pack BACK after plating
+    "plater_final_pack": PER_FINISHED_UNIT,
+}
 
 PLATING_LOGISTICS = {
     "pack_for_plater_min": float(os.getenv(

@@ -2683,7 +2683,14 @@ def canonical_labour_groups(
             "engine_ops": [],
             "decision_ids": [],
             "canonical_route": True,
-            "assembly_scoped": scope == "assembly",
+            # A stated figure given PER FINISHED UNIT is one occasion for the job, however
+            # many components take it — so the row is assembly-scoped in fact, whatever
+            # scope the individual decisions carry. Recorded on the group because the emit
+            # loop is where the quantity is chosen, and it must not have to re-derive this.
+            "assembly_scoped": (scope == "assembly"
+                                or stated_time_is_once_per_finished_unit(operation)),
+            "stated_once_per_finished_unit":
+                stated_time_is_once_per_finished_unit(operation),
             "route_sequence": sequence,
         })
         if isinstance(key, tuple) and key and key[0] == "canonical-part-setup":
@@ -3560,6 +3567,29 @@ def is_stated_time_operation(op: Any) -> bool:
         str(o).strip().lower()
         for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())
     }
+
+
+def stated_time_is_once_per_finished_unit(op: Any) -> bool:
+    """Is this stated figure minutes per FINISHED UNIT, or minutes per component?
+
+    The question only bites when more than one component takes the operation, which is
+    exactly 7332-01: 008 and 101 are both plated, so the estimator mints the pack stages on
+    both and the canonical grouper ADDS their quantities. The row then books two occasions
+    of a figure that was given as one.
+
+    The two graders already disagreed about this without anybody noticing. The legacy loop
+    forces qty 1 for the pack departments; the canonical grouper takes the accumulated
+    group quantity. Same job, same rule, two answers — and the canonical one is the road
+    7332-01 travels.
+
+    Declared per operation in config rather than inferred from the department, so a rule
+    whose minutes really are per component can say so and be believed.
+    """
+    _basis = (getattr(config, "STATED_TIME_OPERATIONS", {}) or {})
+    if not isinstance(_basis, dict):
+        return False
+    return str(_basis.get(str(op or "").strip().lower()) or "").strip().lower() == \
+        str(getattr(config, "PER_FINISHED_UNIT", "per_finished_unit")).strip().lower()
 
 
 def labour_group_key(op: Any, wb_op: str, part_number: str,
@@ -5877,6 +5907,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # those of the first part to land here, which for a one-row-per-job
                 # department is an accident of ordering.
                 "group_key": key,
+                # The same declared basis the canonical grouper records, so the quantity
+                # question gets ONE answer whichever road the job travels. This path used
+                # to answer it by department (_PACK_OPS below), which is right for the two
+                # pack stages by luck and silent for brushing.
+                "stated_once_per_finished_unit":
+                    stated_time_is_once_per_finished_unit(op),
                 "qty": 0, "bh": 0.0, "parts": [], "bends": 0, "holes": 0,
                 # The ENGINE operation(s) behind this row. The group key carries the mapped
                 # DEPARTMENT name, so it cannot answer "what operation is this" — reading it
@@ -6079,7 +6115,29 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # (When the parts themselves carry POWDER, they are coated individually before
         #  assembly and the per-part count is right — so this only applies to the
         #  assembly-level case.)
-        if g.get("canonical_route"):
+        # ONE OCCASION FOR THE JOB, HOWEVER MANY COMPONENTS TAKE IT.
+        #
+        # The two graders disagreed here and nobody noticed: the legacy branch below forces
+        # qty 1 for the pack departments, while the canonical branch takes the accumulated
+        # group quantity — and 7332-01 travels the canonical road with TWO plated parts,
+        # 008 and 101. The estimator mints the pack stages on both, the group adds them,
+        # and the row books two occasions of a figure Howard gave as one: 30/hr where the
+        # stated 4 minutes makes 15.
+        #
+        # Asked from the declared basis rather than from the department, so it answers the
+        # same on both paths and a rule whose minutes really are per component still gets
+        # its per-component quantity.
+        _stated_once = bool(g.get("stated_once_per_finished_unit"))
+        if _stated_once:
+            _qty = 1
+            _parts_in = [p for p in (g.get("parts") or []) if p]
+            if len(_parts_in) > 1:
+                _flag(f"'{wb_op}' booked ONCE for the finished unit, not once per "
+                      f"component: {len(_parts_in)} parts take it ({', '.join(_parts_in)}) "
+                      f"and the shop's figure is stated per unit. If this operation really "
+                      f"happens once per component, say so and the basis changes in one "
+                      f"place (config.STATED_TIME_OPERATIONS).", flags)
+        elif g.get("canonical_route"):
             _qty = int(_safe(g.get("qty"), 1) or 1)
         else:
             _qty = 1 if (wb_op in _PACK_OPS
