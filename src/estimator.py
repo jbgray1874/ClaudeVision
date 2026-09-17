@@ -2538,6 +2538,80 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 "matched_part_code": None,
             }
 
+    # ── RUNG 4: A RESEARCHED PRICE, WITH ITS EVIDENCE ─────────────────────────────────
+    #
+    # The commodity table above is empty now (D-095): every figure in it was somebody
+    # working a number out once and typing it into the source. This is what replaces it —
+    # and the difference is not the label, because that table called itself INDICATIVE too.
+    # The difference is that what comes back from here can be CHECKED: it names its source,
+    # the date it was true, what it is per, the quantity it was found at, and the
+    # arithmetic from that figure to the money on this line.
+    #
+    # If the research cannot produce all of that, NOTHING is returned. The line stays
+    # unpriced, the release gate refuses to publish, and the workbook says which source
+    # would have answered it. That is the whole contract: a price or a named gap, never a
+    # zero and never a figure nobody can check.
+    if best_price is None:
+        try:
+            from indicative_price import resolve_indicative as _rung4
+
+            def _researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
+                """The engine's own web/LLM rung, behind the producer's seam."""
+                from web_ai_price_lookup import lookup_web_ai_price as _look
+                _found = _look({
+                    "description": _brief.get("description"),
+                    "part_code": _brief.get("code"),
+                    "quantity": _brief.get("order_quantity"),
+                }) or {}
+                if not _found.get("found"):
+                    return {}
+                return {
+                    "price_gbp": _found.get("price_gbp"),
+                    "unit": _found.get("unit"),
+                    "source": (_found.get("source_url") or _found.get("source")
+                               or _found.get("search_provider")
+                               or _found.get("llm_provider") or ""),
+                    "quantity_basis": (_found.get("price_basis")
+                                       or _found.get("quantity_basis") or ""),
+                    "origin": _found.get("source_type"),
+                }
+
+            _ind = _rung4(
+                {"code": part.get("part_number"), "description": part.get("description"),
+                 "quantity": part.get("quantity"),
+                 "mass_kg": part.get("normalized_weight_kg"),
+                 "input_origins": part.get("input_origins") or {}},
+                order_qty=int(_safe_float(part.get("job_quantity")) or 1),
+                as_of=str(part.get("run_date") or ""),
+                ask=_researcher,
+            )
+        except Exception:                                        # noqa: BLE001
+            _ind = {}
+        _ind_price = _safe_float((_ind or {}).get("price_gbp"))
+        if _ind_price is not None and _ind_price > 0:
+            return {
+                "result": {"selected": {
+                    "source": (_ind.get("evidence") or {}).get("source"),
+                    "price": _ind_price,
+                    "review_required": True,
+                    "review_reason": _ind.get("status"),
+                    "metadata": {
+                        "pricing_mode": "llm_indicative",
+                        "evidence": _ind.get("evidence"),
+                        "calculation": _ind.get("calculation"),
+                        "label": _ind.get("label"),
+                    },
+                }},
+                "applied_unit_cost": _ind_price,
+                "matched_part_code": None,
+            }
+        # Not priced, and WHY is worth keeping: it is what the workbook shows instead of a
+        # number, and what tells an estimator which source to go and get.
+        if _ind and _ind.get("missing"):
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number') or part.get('description') or 'this line'}: "
+                f"NOT PRICED — {_ind['missing']}")
+
     # The remembered zero, if that is genuinely all the catalogue had to say. Returned with
     # its own result and code so the line reads exactly as it did before this rung learned
     # to keep looking.
