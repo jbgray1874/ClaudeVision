@@ -6696,13 +6696,36 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                          or (summary.get("document_analysis") or {}).get(
                                              "bom_rows") or []) if isinstance(r, dict))
         if _lam_parts and not _bom_says_edging:
-            _edge_m = 0.0
+            # ── WHICH EDGES, THEN HOW LONG. NEVER THE PERIMETER BY DEFAULT ────────────
+            #
+            # This measured 2*(L+W) of every faced part and offered it as "the drawn edge
+            # metreage". On 11908-21 that is several times Tony's own 5 m, because his 5 m
+            # is the EXPOSED edges and the rest of the tray is not banded. A number that
+            # large, sitting in an estimate labelled as edging, is most of a material line.
+            #
+            # James: "identify the banded edges from a DXF layer, edge callout, note, hatch
+            # or detail; measure only those edges... Geometry can measure an edge precisely,
+            # but cannot know it needs ABS unless the drawing marks it."
+            #
+            # So the perimeter is still computed — as a CEILING an estimator can see — and
+            # the banded length comes from the drawing or does not come at all.
+            _banded_mm, _peri_mm, _bases, _why = 0.0, 0.0, set(), []
+            try:
+                from edge_banding import banded_length_mm as _banded_of
+            except Exception:                                    # noqa: BLE001
+                _banded_of = None
             for _p in _lam_parts:
-                _l = _safe(_p.get("blank_length_mm")) or 0
-                _w = _safe(_p.get("blank_width_mm")) or 0
-                _q = _safe(_p.get("quantity")) or 1
-                _edge_m += 2.0 * (float(_l) + float(_w)) / 1000.0 * float(_q)
-            if _edge_m > 0:
+                _q = float(_safe(_p.get("quantity")) or 1)
+                _v = _banded_of(_p) if _banded_of else {}
+                _peri_mm += float(_v.get("drawn_perimeter_mm") or 0.0) * _q
+                if _v.get("mm"):
+                    _banded_mm += float(_v["mm"]) * _q
+                    _bases.add(str(_v.get("basis") or ""))
+                elif _v.get("evidence"):
+                    _why.append(f"{_p.get('part_number') or 'part'}: {_v['evidence']}")
+            _edge_m = round(_banded_mm / 1000.0, 2)
+            _peri_m = round(_peri_mm / 1000.0, 2)
+            if _edge_m > 0 or _peri_m > 0:
                 # AND THE RATE WE HOLD, so the ask is one number to fill rather than a
                 # specification to write out. Asked of the system first and the estimators'
                 # own register second, exactly as the tape is — a line priced from the
@@ -6723,15 +6746,33 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 except Exception:                                # noqa: BLE001
                     _edge_rate = ""
                 _inputs.append({
-                    "kind": "material_unstated", "part": "EDGING",
+                    "kind": ("material_measured" if _edge_m > 0
+                             else "material_unstated"),
+                    "part": "EDGING",
                     "where": "faced-board parts",
-                    "what": (f"EDGING NOT STATED — the laminated parts have "
-                             f"{_edge_m:.1f} m of drawn edges per unit (every edge; "
-                             f"visible edges will be less). The pack does not name an "
-                             f"edging spec, so nothing is priced."
-                             + (_edge_rate or
-                                " State the spec and the banded metres (e.g. 23 x 1mm ABS "
-                                "at £/m) and it prices by length, like any roll goods.")),
+                    "what": (
+                        # MEASURED: the drawing marked the edges and the engine measured
+                        # exactly those. This is a length, not a question.
+                        (f"EDGING {_edge_m:.2f} m a unit, measured from the edges the "
+                         f"drawing marks as banded ({', '.join(sorted(b for b in _bases if b))}). "
+                         f"The parts' full drawn perimeter is {_peri_m:.2f} m — shown as "
+                         f"the ceiling, NOT as the banded length, because only the marked "
+                         f"edges take ABS. Spec {getattr(config, 'FACED_BOARD_EDGING_CODE', 'EDGE23X1ABS')}."
+                         + (_edge_rate or " The rate is asked of SDI Live or the supplier "
+                                          "catalogue; until one answers, the line is "
+                                          "explicitly unpriced rather than guessed."))
+                        if _edge_m > 0 else
+                        # NOT MEASURED: the drawing has not said which edges. The perimeter
+                        # is reported so the scale is visible, and it is not offered as the
+                        # answer — Tony's own 5 m is a fraction of it.
+                        (f"EDGING NOT ESTABLISHED — the faced parts have {_peri_m:.2f} m of "
+                         f"drawn perimeter a unit, which is a CEILING and not a banded "
+                         f"length: only the exposed edges take ABS. Nothing on the drawing "
+                         f"says which. "
+                         + (" ".join(_why[:3]) if _why else "")
+                         + " Mark the banded edges on an EDGEBAND layer, or name them in a "
+                           "note (e.g. 'ABS edge, 2 long edges'), and the engine measures "
+                           "them itself."))
                 })
     except Exception:                                            # noqa: BLE001
         pass

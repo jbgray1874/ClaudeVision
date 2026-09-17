@@ -232,7 +232,7 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     name = Path(str(path_like)).name
     result: Dict[str, Any] = {
         "file": name, "readable": False, "reader": "ezdxf",
-        "entity_counts": {}, "layers": [], "unsupported": [],
+        "entity_counts": {}, "layers": [], "length_mm_by_layer": {}, "unsupported": [],
         "units": "unstated", "units_known": False,
         "entities_are_raster_only": False,
         "extent_length": None, "extent_width": None,
@@ -285,6 +285,16 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
     unsupported: collections.Counter = collections.Counter()
     length_total = 0.0
     length_partial = False
+    # LENGTH PER LAYER, because a total cannot answer "how much of this is banded".
+    #
+    # The drawing office marks the edges that take ABS on a layer of their own. Measuring
+    # the whole perimeter and calling it the banded length is the mistake this exists to
+    # avoid — Tony's own 5 m on 11908-21 is a fraction of the trays' perimeter, because
+    # only the exposed edges are banded. Geometry can measure an edge to the millimetre; it
+    # cannot know the edge needs ABS unless the drawing says so. So the lengths are kept
+    # BY LAYER and the decision about which layer means "banded" is made where the drawing
+    # is read, not here.
+    length_by_layer: collections.Counter = collections.Counter()
 
     for entity in entities:
         kind = entity.dxftype()
@@ -339,7 +349,11 @@ def probe_dxf(path_like: Any) -> Dict[str, Any]:
             unsupported[f"{kind} (length)"] += 1
         else:
             length_total += segment * scale
+            if layer:
+                length_by_layer[layer] += segment * scale
 
+    result["length_mm_by_layer"] = {k: round(v, 3)
+                                    for k, v in length_by_layer.most_common()}
     result["entity_counts"] = dict(counts.most_common())
     result["layers"] = sorted(layers)
     result["dimension_entities"] = counts.get("DIMENSION", 0)
