@@ -1281,6 +1281,29 @@ NAMED_PLATE_SPECS = {
 #
 # EVERY FIGURE HERE IS KEYED ON PLATING BEING PRESENT, which is what makes it safe: a job
 # with no plated part reaches none of it. 12349-02 has no plating and cannot be touched.
+# OPERATIONS WHOSE TIME A DEPARTMENT STATED, AND WHICH THEREFORE CANNOT SHARE A ROW.
+#
+# Giving each stated rule its own operation was only half the job. The workbook groups
+# labour by the DISPLAYED DEPARTMENT TITLE — `("Assemble/pack (Metal)", "", "")` for a
+# one-row-per-job department, or (title, material, gauge) otherwise — so two operations
+# that map to the same title collapse into one row BEFORE the stated-time lookup ever runs.
+# The pack out and the pack back both read "Assemble/pack (Metal)"; brushing reads "Manual
+# labour (Metal)" and would pool with any other manual-metal work at the same gauge. The
+# stated figure is then not overridden by a median so much as never asked for.
+#
+# So the grouping key keeps the ENGINE OPERATION for anything listed here, while the row
+# still shows the department's own title and bills at the department's own rate — which is
+# what the estimators' template and rate card expect to see.
+#
+# WHAT BELONGS HERE: an operation whose minutes come from a person or a department, named
+# in this file, rather than from the corpus or a geometric driver. Adding a row is how a
+# new stated rule stays visible; it is not a list of "important" operations.
+STATED_TIME_OPERATIONS = (
+    "brush_before_plate",     # 40 min/unit — Howard Thurley via production, 16 Sep 2026
+    "plater_pack",            # 4 min/unit  — pack OUT to the plater
+    "plater_final_pack",      # 8 min/unit  — pack BACK after plating
+)
+
 PLATING_LOGISTICS = {
     "pack_for_plater_min": float(os.getenv(
         "PLATER_PACK_MIN", SHOP_STATED["plater_pack_min"])),
@@ -2088,6 +2111,7 @@ HOURLY_RATES_GBP = {
     # cannot survive being merged into a department aggregate, so it gets its own key and
     # its own row, exactly as the pack-out does.
     "plater_final_pack": 28.56,      # PACM — the pack BACK after plating, its own row
+    # (see STATED_TIME_OPERATIONS below — these three must never share a workbook row)
     # Same fault, same shape, on the brushing rule. `manual_labour_metal` is the DEPARTMENT,
     # shared with deburr, bench work and insert labour, so Howard's stated 40 minutes was
     # pooled with all of it and the row fell to the corpus default of 79/hr. Its own key,

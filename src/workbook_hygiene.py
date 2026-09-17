@@ -53,7 +53,7 @@ already said the thing; inventing a word for it would put this engine's wording 
 an estimator reads as the shop's.
 
 THE SOURCE OF THIS MODULE IS PURE ASCII, and a test asserts it. Every character it removes
-is named by chr(0xNNNN), never pasted -- including U+FFFD and the variation selectors, which
+is named by chr(0xNNNN), never pasted -- including U+FFFD and the variation selectors, which are
 in the BMP and so would slip past a test that only looks above U+FFFF. An earlier version of
 this docstring claimed as much while the file itself carried literal copies of them; the
 claim is now true and checked rather than asserted.

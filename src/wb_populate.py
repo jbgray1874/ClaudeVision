@@ -3527,6 +3527,62 @@ def _clear_or_set(ws, row: int, column: int, value: Any) -> None:
     ws.cell(row=row, column=column).value = value
 
 
+def labour_group_key(op: Any, wb_op: str, part_number: str,
+                     material: Any, thickness: Any,
+                     per_part_ops: Any = (), one_row_per_job: Any = ()) -> tuple:
+    """Which workbook row this operation shares, and with what.
+
+    A NAMED FUNCTION SO THE TEST CAN DRIVE THE DECISION ITSELF. The first version of this
+    rule lived inline in the emit loop, which meant the only way to test it was to rebuild
+    the same branch in the test file and assert against that — a mirror, which passes
+    whether or not the engine agrees with it. That is the fault the whole register keeps
+    finding in another guise: two copies of one fact.
+
+    Four ways a row is shared, in priority order:
+
+      A STATED TIME       keys on the OPERATION. Every other key below is a DEPARTMENT, and
+                          wb_op is the department's displayed title — so the pack OUT and
+                          the pack BACK, both "Assemble/pack (Metal)", merged into one row
+                          BEFORE the stated-time lookup ever ran, and brushing pooled with
+                          deburr and bench work at the same gauge. The stated figure was
+                          not overridden by a median; it was never asked for. The row still
+                          shows the department's title and bills at its rate.
+      PER PART            one set-up per part (a wire form is re-tooled for each).
+      ONE ROW PER JOB     one set-up for the whole job.
+      OTHERWISE           one set-up per tooling change: department, material, gauge.
+    """
+    _op = str(op or "").strip().lower()
+    _stated = {str(o).strip().lower()
+               for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())}
+    if _op in _stated:
+        return (wb_op, "", _op)
+    if wb_op in (per_part_ops or ()):
+        return (wb_op, part_number, "")
+    if wb_op in (one_row_per_job or ()):
+        return (wb_op, "", "")
+    return (wb_op, str(material), "%g" % (_safe(thickness) or 0))
+
+
+def _ours_by_shape(formula: Any) -> bool:
+    """Did THIS engine write that price formula, or was it already in the template?
+
+    Told apart by shape rather than by remembering, because remembering is what failed: a
+    row the loop never reached keeps the template's formula and no record says so. The
+    break-priced formula this module writes always wraps its LOOKUP in an IF that asks
+    whether the break row was filled:
+
+        =IF('Material Price Break'!D14="",0,LOOKUP($D$6,...))      ours
+        =LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,...#REF!)    the template's
+
+    A bare LOOKUP in a price cell is therefore the blank template still speaking on a row
+    the engine has claimed — which is the whole fault, whether or not it says #REF! today.
+    """
+    if not isinstance(formula, str) or not formula.startswith("="):
+        return False
+    _f = formula.replace(" ", "").upper()
+    return _f.startswith("=IF(") and "LOOKUP($D$6" in _f
+
+
 def _flag(msg: str, flags: List[str]):
     flags.append(msg)
     print(f"   [wb_populate] ⚠ {msg}")
@@ -4713,6 +4769,56 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _mark_input_cell(ws, row, b["col_price"])
         row += 1
 
+    # ── EVERY BOM PRICE CELL IS THE ENGINE'S, OR IT IS DELIBERATELY BLANK ──────────────
+    #
+    # "It must never produce #REF!" — and blanking it in the final hygiene scrub was the
+    # wrong answer to the right complaint. That pass exists to catch what nobody could
+    # enumerate; using it here HID a broken reference instead of deciding what the line
+    # should say, and on the one line it hid, an explicitly unresolved plating cost would
+    # have become a blank contributing zero with nothing to explain itself.
+    #
+    # The decision belongs where the intent is known, which is here. A row the engine put a
+    # line on gets one of exactly three things in its price cell:
+    #
+    #     a number             the line is priced
+    #     a formula WE wrote   the line prices off the break table
+    #     nothing              the line is awaiting a price, and says so in its description
+    #
+    # A template formula surviving in that cell is none of the three. It is the blank
+    # template still speaking on a row the engine has claimed — which is how J20 shipped
+    # carrying 'Material Price Break'!#REF! with M20 inheriting it into the block total.
+    # So the cell is cleared and the line is MADE to say what it is, rather than left to be
+    # tidied later. The row is named on the log either way: a broken template reference is
+    # not our bug and wants fixing at source.
+    _stranded: List[str] = []
+    for _r in range(b["first_row"], min(row, b["last_row"] + 1)):
+        _code_c = ws.cell(row=_r, column=b["col_code"]).value
+        _desc_c = ws.cell(row=_r, column=b["col_desc"]).value
+        if not (_code_c or _desc_c):
+            continue                      # no line here; the template's own row, untouched
+        _price_c = ws.cell(row=_r, column=b["col_price"])
+        _pv = _price_c.value
+        if _pv is None or not isinstance(_pv, str):
+            continue                      # blank, or a number — both are decisions
+        if not _pv.startswith("="):
+            continue
+        if _ours_by_shape(_pv):
+            continue                      # a formula this run wrote
+        _stranded.append(f"{_r}{' (#REF!)' if '#REF!' in _pv else ''}")
+        _clear_or_set(ws, _r, b["col_price"], None)
+        _mark_input_cell(ws, _r, b["col_price"])
+        _awaiting = "AWAITING A CURRENT PRICE"
+        if _awaiting not in str(_desc_c or ""):
+            ws.cell(row=_r, column=b["col_desc"],
+                    value=f"{str(_desc_c or '')[:150]}  —  {_awaiting}"[:200])
+    if _stranded:
+        _flag(f"BOM price cells left holding a TEMPLATE formula on rows the engine had "
+              f"claimed: {', '.join(_stranded)}. Each is now blank and its line reads "
+              f"AWAITING A CURRENT PRICE, which is what an unresolved cost should show — "
+              f"never a broken reference, and never a silent zero. A row marked #REF! is "
+              f"the blank template's own broken formula and wants repairing at source.",
+              flags)
+
     # Itemise every spilled BOM line on a dedicated sheet so nothing is hidden behind the
     # consolidated overflow row. Failure-isolated: a sheet-write error never breaks the run.
     if _bom_overflow_parts:
@@ -5557,6 +5663,12 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # Grouping these into one row UNDER-charges — the failure mode we cannot see.
     _PER_PART_OPS = {"Robomac"}
 
+    # Read from config so the list of stated rules lives in ONE place — the same place the
+    # rules themselves do. A rule added there without a row here would merge silently,
+    # which is the fault this exists to stop.
+    _STATED_TIME_OPS = {str(o).strip().lower()
+                        for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())}
+
     _groups = (
         canonical_labour_groups(
             summary,
@@ -5707,12 +5819,24 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     and _all_fabricated_are_wire):
                 wb_op = "Spotweld"
 
-            if wb_op in _PER_PART_OPS:
-                key = (wb_op, _pn, "")         # one setup PER PART (per wire form)
-            elif wb_op in _ONE_ROW_PER_JOB:
-                key = (wb_op, "", "")          # one setup for the whole job
-            else:
-                key = (wb_op, str(_mat), "%g" % (_thk or 0))   # one setup per tooling change
+            # A STATED TIME KEEPS ITS OWN ROW, BECAUSE EVERY KEY BELOW IS A DEPARTMENT.
+            #
+            # wb_op is the DISPLAYED TITLE, so two different operations that bill to the
+            # same bench group together: the pack OUT and the pack BACK are both
+            # "Assemble/pack (Metal)", and brushing is "Manual labour (Metal)" alongside
+            # deburr and bench work at the same gauge. They merged HERE, before the
+            # stated-time lookup further down ever ran — so giving each rule its own
+            # operation fixed the naming and left the rows collapsing exactly as before.
+            # The stated figure was not overridden by a median; it was never asked for.
+            #
+            # The operation goes in the key and nothing else changes: the row still shows
+            # the department's title and bills at the department's rate, which is what the
+            # template and the rate card expect. Strictly NARROWER than the grouping it
+            # replaces — a stated operation can only ever be split out of a group it would
+            # have shared, never merged into one it would not.
+            key = labour_group_key(op, wb_op, _pn, _mat, _thk,
+                                   per_part_ops=_PER_PART_OPS,
+                                   one_row_per_job=_ONE_ROW_PER_JOB)
 
             g = _groups.setdefault(key, {
                 "wb_op": wb_op, "material": _mat, "thickness": _thk,
