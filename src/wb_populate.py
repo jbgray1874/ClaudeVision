@@ -2602,7 +2602,24 @@ def canonical_labour_groups(
         scope = str(decision.get("scope") or "part").lower()
         sequence = _safe(decision.get("sequence"))
         qty = _safe(decision.get("qty_per_unit"), 1) or 1
-        if operation == "hardware_insertion":
+        if is_stated_time_operation(operation):
+            # A STATED TIME REFUSES TO SHARE A ROW ON THIS PATH TOO.
+            #
+            # Every key below this line is a DEPARTMENT plus its tooling: wb_op is the
+            # displayed title, so the pack OUT and the pack BACK — both "Assemble/pack
+            # (Metal)" at the same material and sequence — land on one row, and brushing
+            # pools with any other manual-metal work at the same gauge. The stated figure
+            # is then not overridden by a median so much as never asked for, because the
+            # stated-time lookup runs per ROW, after this.
+            #
+            # The sequence-less fallback at the bottom of the chain makes it worse rather
+            # than better: a decision with no sequence deliberately JOINS an existing
+            # department group. For a stated rule that is the merge, made on purpose.
+            #
+            # Keyed on the operation, so one stated rule is one row for the job. The row
+            # still carries the department's title and bills at the department's rate.
+            key = ("canonical-stated", wb_op, str(operation).strip().lower())
+        elif operation == "hardware_insertion":
             key = ("canonical-event", decision_id)
         elif operation == "powder_coating":
             # One colour/booth setup can carry several separately identified coated
@@ -3527,6 +3544,24 @@ def _clear_or_set(ws, row: int, column: int, value: Any) -> None:
     ws.cell(row=row, column=column).value = value
 
 
+def is_stated_time_operation(op: Any) -> bool:
+    """Is this an operation whose minutes a person or a department gave us?
+
+    ONE PREDICATE, TWO GROUPERS. The workbook has two labour paths — the legacy loop and
+    `canonical_labour_groups` under route cutover — and they build different key SHAPES for
+    the same question. The first version of this rule went into the legacy loop only, which
+    is not the path 7332-01 takes: its summary carries a canonical route shadow and the
+    cutover defaults on, so the fix was real, tested, and on the wrong road.
+
+    The key shapes can differ. What must not differ is which operations refuse to share a
+    row, so that decision is asked here and nowhere else.
+    """
+    return str(op or "").strip().lower() in {
+        str(o).strip().lower()
+        for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())
+    }
+
+
 def labour_group_key(op: Any, wb_op: str, part_number: str,
                      material: Any, thickness: Any,
                      per_part_ops: Any = (), one_row_per_job: Any = ()) -> tuple:
@@ -3552,9 +3587,7 @@ def labour_group_key(op: Any, wb_op: str, part_number: str,
       OTHERWISE           one set-up per tooling change: department, material, gauge.
     """
     _op = str(op or "").strip().lower()
-    _stated = {str(o).strip().lower()
-               for o in (getattr(config, "STATED_TIME_OPERATIONS", ()) or ())}
-    if _op in _stated:
+    if is_stated_time_operation(_op):
         return (wb_op, "", _op)
     if wb_op in (per_part_ops or ()):
         return (wb_op, part_number, "")
