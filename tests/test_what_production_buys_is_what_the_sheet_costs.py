@@ -112,7 +112,11 @@ def test_the_sheet_steel_writer_costs_from_what_production_buys():
     import pathlib
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
            ).read_text(encoding="utf-8")
-    start = src.index('_sub_rec = pe.get("production_substitution")')
+    # The SHEET STEEL writer's copy. The canonical labour grouper asks the same
+    # ruling for the row DESCRIPTION and appears earlier in the file, so indexing the
+    # first occurrence lands on that one and tests nothing about the gauge cell.
+    start = src.index('_sub_rec = pe.get("production_substitution")',
+                      src.index("# WHAT PRODUCTION BUYS IS WHAT THE SHEET COSTS FROM."))
     block = src[start:start + 1400]
     assert "gauge = _costed" in block, "the cell is not actually changed"
     assert "What production buys is what the row costs from." in block, (

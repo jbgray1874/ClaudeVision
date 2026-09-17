@@ -347,7 +347,10 @@ def test_the_plater_pack_reaches_its_own_department_row():
     assert department_codes.code_for("plater_pack") == "PACM"
     desc = wb.labour_row_description("Assemble/pack (Metal)", "MILD STEEL", None,
                                      ["7332-01-101"], work_ops=["plater_pack"])
-    assert "pack to plater" in desc
+    assert "pack to plater" in desc.lower(), desc
+    assert "1 of 2" in desc, (
+        "three PACM rows and only one labelled is not auditable — each pack row now "
+        "says which of the two plating stages it is, or that it is neither")
     plain = wb.labour_row_description("Assemble/pack (Metal)", "MILD STEEL", None,
                                       ["7332-01-101"], work_ops=["handling"])
     assert "pack to plater" not in plain, "the final pack keeps the plain title"

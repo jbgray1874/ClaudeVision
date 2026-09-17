@@ -244,6 +244,6 @@ def test_an_estimators_own_operations_off_ruling_reaches_the_route():
     src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "estimator.py"
            ).read_text(encoding="utf-8")
     start = src.index('_off = (part.get("_estimator_operations_off") or [])')
-    block = src[start:start + 1400]
+    block = src[start:start + 2600]
     assert 'part.setdefault("operations_ruled_out", {})' in block
     assert 'part.setdefault("removed_operations", [])' in block

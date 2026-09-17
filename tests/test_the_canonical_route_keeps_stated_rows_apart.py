@@ -301,3 +301,90 @@ def test_the_run_names_the_parts_when_one_occasion_covers_several():
                encoding="utf-8").read()
     assert "booked ONCE for the finished unit, not once per" in src
     assert "config.STATED_TIME_OPERATIONS" in src
+
+
+# ── an estimator-confirmed nesting group shares one set-up ───────────────────────────
+#
+# James, 18 Sep, settling it: "For 7332-01-003 and -004, share one 10-minute laser set-up.
+# Howard's explicit statement is the proof for this job. Keep separate laser rows and their
+# own cutting rates. For every other job, shared set-up requires either a proven combined
+# nest or an estimator-confirmed nesting group. SAME GAUGE ALONE IS NEVER ENOUGH."
+#
+# The arithmetic proof needs `parts_per_sheet`, which the nester did not produce on 7332-01
+# — so 003 and 004 each kept a full 10-minute set-up and the job booked 20 minutes where
+# the shop runs one program. A person who knows the job is the other proof, and the
+# stronger one. It arrives in the job's own answers file so it governs this drawing only.
+
+def _summary_with_groups(groups) -> dict:
+    return {"estimator_decisions": {"nesting_groups": groups}}
+
+
+def test_a_confirmed_group_covering_both_parts_is_recognised():
+    assert wb_populate._confirmed_nesting_group(
+        _summary_with_groups({"003 and 004 on one program":
+                              ["7332-01-003", "7332-01-004"]}),
+        ["7332-01-003", "7332-01-004"]) == "003 and 004 on one program"
+
+
+def test_a_third_component_not_in_the_group_is_not_covered():
+    """A ruling about 003 and 004 says nothing about a part that merely shares their
+    gauge. "Same gauge alone is never enough"."""
+    assert wb_populate._confirmed_nesting_group(
+        _summary_with_groups({"003 and 004": ["7332-01-003", "7332-01-004"]}),
+        ["7332-01-003", "7332-01-004", "7332-01-005"]) == ""
+
+
+def test_no_answers_file_means_no_confirmed_group():
+    """The control. Without it, every job would silently share set-ups."""
+    assert wb_populate._confirmed_nesting_group({}, ["7332-01-003", "7332-01-004"]) == ""
+    assert wb_populate._confirmed_nesting_group(
+        _summary_with_groups({}), ["7332-01-003"]) == ""
+
+
+def test_the_match_is_case_and_whitespace_tolerant():
+    """An estimator typing part numbers by hand should not have a ruling silently ignored
+    over a trailing space — the fault that made operations_off do nothing."""
+    assert wb_populate._confirmed_nesting_group(
+        _summary_with_groups({"g": [" 7332-01-003 ", "7332-01-004"]}),
+        ["7332-01-003", "7332-01-004"]) == "g"
+
+
+def test_the_grouper_consults_it_only_when_the_arithmetic_has_not_already_proven_it():
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
+           ).read_text(encoding="utf-8")
+    assert "_confirmed_nesting_group(summary" in src
+    assert "if _confirmed and not _proven:" in src, (
+        "a confirmed group must not overwrite a nest result that already decided the "
+        "question — it is the second proof, not a louder one")
+
+
+def test_the_answers_file_key_is_accepted_by_the_validator():
+    """A key the validator does not know is reported as 'that line did nothing', which is
+    how a ruling gets silently ignored."""
+    import estimator_confirmed
+    assert "nesting_groups" in estimator_confirmed._DECISION_KEYS
+
+
+def test_a_group_of_one_is_rejected_because_it_shares_nothing():
+    import estimator_confirmed
+    out, problems = estimator_confirmed._read_decisions(
+        {"estimator_decisions": {"nesting_groups": {"solo": ["7332-01-003"]}}}, "x")
+    assert "nesting_groups" not in out
+    assert any("at least two parts" in p for p in problems)
+
+
+def test_the_example_answers_file_carries_howards_two_rulings_and_no_price():
+    """The example is what the next person copies. It used to teach a policy breach —
+    plating_gbp_per_unit: 250.0, Howard's own figure off his own sheet."""
+    import json
+    import pathlib
+    doc = json.loads((pathlib.Path(__file__).resolve().parent.parent / "docs" /
+                      "7332-01_confirmed.example.json").read_text(encoding="utf-8"))
+    dec = doc["estimator_decisions"]
+    assert dec["operations_off"]["7332-01-002"] == ["tube_bending"]
+    assert dec["nesting_groups"]["003 and 004 on one program"] == [
+        "7332-01-003", "7332-01-004"]
+    assert "plating_gbp_per_unit" not in dec, (
+        "a price typed into the answers file is still a price typed into a file")
+    assert "250" not in json.dumps(dec)

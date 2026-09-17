@@ -548,7 +548,13 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
 # homes answer two different questions: "how does SDI work" and "what did we decide about
 # this stand".
 _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
-                  "throughput_per_hour", "commercial_excluded")
+                  "throughput_per_hour", "commercial_excluded",
+                  # An estimator-confirmed nesting group: {name: [part numbers]}. The
+                  # second of the two proofs that let a laser set-up be shared, and the
+                  # stronger one — a person who knows the job, rather than arithmetic over
+                  # a nest result the nester may not have produced. Same gauge alone is
+                  # never enough, so this names the members explicitly.
+                  "nesting_groups")
 
 
 def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], List[str]]:
@@ -595,6 +601,37 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                     clean_off[str(code).strip().upper()] = names
             if clean_off:
                 out["operations_off"] = clean_off
+
+    # ── AN ESTIMATOR-CONFIRMED NESTING GROUP ──────────────────────────────────────────
+    #
+    # {name: [part numbers]}. The second proof that lets one laser set-up be shared, and
+    # the stronger one: arithmetic over a nest result needs `parts_per_sheet`, which the
+    # nester does not always produce, while a person who knows the job always can.
+    # Members are named explicitly because "same gauge alone is never enough".
+    _nest = block.get("nesting_groups")
+    if _nest is not None:
+        if not isinstance(_nest, Mapping):
+            problems.append("estimator_decisions.nesting_groups: expected an object of "
+                            "{group name: [part numbers]} — ignored")
+        else:
+            clean_nest: Dict[str, List[str]] = {}
+            for _name, _members in _nest.items():
+                if isinstance(_members, str):
+                    _members = [_members]
+                if not isinstance(_members, (list, tuple)):
+                    problems.append(f"estimator_decisions.nesting_groups['{_name}']: "
+                                    f"expected a list of part numbers — that entry did "
+                                    f"nothing")
+                    continue
+                _pns = [str(m).strip().upper() for m in _members if str(m).strip()]
+                if len(_pns) < 2:
+                    problems.append(f"estimator_decisions.nesting_groups['{_name}']: a "
+                                    f"nesting group needs at least two parts to share a "
+                                    f"set-up — that entry did nothing")
+                    continue
+                clean_nest[str(_name).strip()] = _pns
+            if clean_nest:
+                out["nesting_groups"] = clean_nest
 
     # "Delivery is not required" — a commercial line an estimator has RULED OUT for this
     # job. The line stays on the sheet at a deliberate £0 naming whose call it was;

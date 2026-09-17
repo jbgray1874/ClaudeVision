@@ -1571,9 +1571,24 @@ def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None
     # A plated part packs TWICE and the two rows share one department title, so the
     # plater row says which pack it is — otherwise "Assemble/pack (Metal)" twice reads
     # as a double-charge. The final pack keeps the plain title every other job has.
-    if (str(wb_op).startswith("Assemble/pack")
-            and any(str(o).lower() == "plater_pack" for o in (work_ops or ()))):
-        _rd += " [pack to plater — the part goes out for plating and is packed again]"
+    #
+    # AND THE OTHER TWO SAY WHICH THEY ARE TOO. Naming only the pack OUT left the six-off
+    # book with three "Assemble/pack (Metal)" rows of which one was labelled — so the
+    # 7.5/hr row could not be told from the generic one except by arithmetic, and Howard
+    # cannot audit a row he has to reverse-engineer. James: "the 7.5/hr row is not labelled
+    # as 'final pack after plating', and there is also a generic PACM row. That needs
+    # clearer descriptions before Howard can audit it confidently."
+    if str(wb_op).startswith("Assemble/pack"):
+        _ops_l = {str(o).lower() for o in (work_ops or ())}
+        if "plater_pack" in _ops_l:
+            _rd += (" [1 of 2 — PACK TO PLATER: the part goes out for plating and is "
+                    "packed again on return]")
+        elif "plater_final_pack" in _ops_l:
+            _rd += (" [2 of 2 — FINAL PACK AFTER PLATING: the part comes back from the "
+                    "plater and is packed for despatch]")
+        elif _ops_l:
+            _rd += (" [general assembly and pack — NOT a plating pack stage; this is the "
+                    "job's own bench work]")
     return _rd
 
 
@@ -2531,6 +2546,29 @@ def canonical_labour_groups(
                 _proven, _why = False, (f"the order needs {_fraction:.2f} sheets — past "
                                         f"one sheet, Howard's one-set-up condition is not "
                                         f"met and each row keeps its own")
+            # ── AN ESTIMATOR-CONFIRMED NESTING GROUP IS ALSO PROOF ────────────────────
+            #
+            # James, 18 Sep: "For 7332-01-003 and -004, share one 10-minute laser set-up.
+            # Howard's explicit statement is the proof for this job... For every other job,
+            # shared set-up requires either a proven combined nest or an estimator-confirmed
+            # nesting group. SAME GAUGE ALONE IS NEVER ENOUGH."
+            #
+            # The arithmetic above is one kind of proof and it needs `parts_per_sheet`,
+            # which the nester does not always produce — on 7332-01 it did not, so 003 and
+            # 004 each kept a full 10-minute set-up and the job booked 20 minutes where the
+            # shop runs one program. A person who knows the job is the other kind of proof,
+            # and it is the stronger one. It arrives in the job's own answers file, so it
+            # governs THIS drawing and no other, and it is recorded as HIS ruling rather
+            # than as something the engine worked out.
+            _confirmed = _confirmed_nesting_group(summary, [
+                str(p).strip().upper()
+                for _g in _members for p in (_g.get("parts") or [])
+            ])
+            if _confirmed and not _proven:
+                _proven, _why = True, (
+                    f"estimator-confirmed nesting group: {_confirmed}. Not derived — a "
+                    f"person who knows the job stated these components share one program, "
+                    f"which is the condition Howard set for one set-up")
             for _g in _members:
                 _g["laser_nest_proven"] = _proven
                 _g["laser_nest_evidence"] = _why
@@ -2569,6 +2607,18 @@ def canonical_labour_groups(
             or (pe.get("material_estimate") or {}).get("thickness_mm"),
             0,
         ) or 0
+        # ONE GAUGE ON THE WHOLE SHEET. The Sheet Steel row for 008 reads 1.0 mm — the
+        # confirmed production substitution — while its laser row read "0.9mm MILD STEEL"
+        # off whichever thickness reached this record, so the book contradicted itself
+        # about the same part and an estimator could not tell which gauge was costed. The
+        # substitution is a RULING and it is asked here for the same reason the material
+        # writer asks it: what production buys is what the sheet says.
+        _sub_rec = pe.get("production_substitution") or (raw_part or {}).get(
+            "production_substitution")
+        if isinstance(_sub_rec, dict):
+            _costed_mm = _safe(_sub_rec.get("costed_thickness_mm"))
+            if _costed_mm and _costed_mm > 0:
+                thickness = _costed_mm
         stock_form = str(
             (pe.get("material_estimate") or {}).get("stock_form") or ""
         ).lower()
@@ -3549,6 +3599,32 @@ def _clear_or_set(ws, row: int, column: int, value: Any) -> None:
     #REF! on a line the engine believed it had left blank.
     """
     ws.cell(row=row, column=column).value = value
+
+
+def _confirmed_nesting_group(summary: Any, part_numbers: Any) -> str:
+    """The estimator's own name for a nesting group these parts all belong to, or "".
+
+    Read from the job's answers file (`estimator_decisions.nesting_groups`), so it governs
+    one drawing and never travels. EVERY member of the laser group must be named in the
+    same confirmed group: a ruling about 003 and 004 says nothing about a third component
+    that happens to share their gauge, and "same gauge alone is never enough".
+    """
+    try:
+        _dec = ((summary or {}).get("estimator_decisions") or {}) \
+            if isinstance(summary, dict) else {}
+        _groups = _dec.get("nesting_groups") or {}
+        if not isinstance(_groups, dict):
+            return ""
+        _want = {str(p).strip().upper() for p in (part_numbers or []) if str(p).strip()}
+        if not _want:
+            return ""
+        for _name, _members in _groups.items():
+            _have = {str(m).strip().upper() for m in (_members or [])}
+            if _want and _want.issubset(_have):
+                return str(_name)
+    except Exception:                                                # noqa: BLE001
+        return ""
+    return ""
 
 
 def is_stated_time_operation(op: Any) -> bool:

@@ -639,10 +639,56 @@ def _assess_estimate_data_sufficiency(
             flush=True,
         )
 
+    # ── AND SEPARATELY: IS IT RELEASABLE ──────────────────────────────────────────────
+    #
+    # Two different questions, and conflating them is what let a normal-looking unit price
+    # ship with four required costs missing from it. THIS function asks how much of the
+    # total rests on a measurement — it is about CONFIDENCE, and its honest answer can be
+    # "priced, and thin in these places". The release gate asks whether every required line
+    # has an answer at all — it is about COMPLETENESS, and its only honest answers are yes
+    # and no.
+    #
+    # A thin estimate is publishable with its doubts named. An incomplete one is not
+    # publishable at any confidence, because the number it shows is not the price of the
+    # thing. James: "It must never show a normal-looking £108.89 unit price that quietly
+    # excludes four required costs."
+    _release: Dict[str, Any] = {}
+    try:
+        from release_gate import assess_release
+        _release = assess_release(
+            [
+                {
+                    "code": _pe.get("part_number"),
+                    "description": _pe.get("description"),
+                    "price_gbp": ((_pe.get("material_estimate") or {})
+                                  .get("applied_unit_price_gbp")
+                                  or (_pe.get("cost_breakdown") or {}).get("material")),
+                    "required": not bool(_pe.get("_not_required")),
+                    "zero_reason": _pe.get("zero_reason"),
+                    "rung": ((_pe.get("material_estimate") or {}).get("price_source")
+                             or {}).get("source_type"),
+                    "evidence": ((_pe.get("material_estimate") or {}).get("price_source")
+                                 or {}).get("evidence"),
+                    "owner": _pe.get("price_owner"),
+                }
+                for _pe in (part_estimates or []) if isinstance(_pe, dict)
+            ]
+        )
+    except Exception as _e:                                          # noqa: BLE001
+        # A gate that cannot run must not silently pass the job. Saying so is the answer.
+        _release = {"schema": "estimate_release_gate.v1", "releasable": False,
+                    "blocking": [], "lines_blocking": 0,
+                    "headline": f"NOT RELEASABLE — the release gate could not run ({_e}). "
+                                f"An estimate nobody checked is not an estimate that passed."}
+
     return {
         "schema": "estimate_data_sufficiency.v1",
         "status": status,
         "message": msg,
+        # Carried here so every reader of the sufficiency block — workbook, report, quote —
+        # reaches the same verdict without each one re-deriving it.
+        "release": _release,
+        "releasable": bool(_release.get("releasable")),
         # NOT SUPPRESSED ANY MORE, AND STILL DECLARED. The invariant that insists a weak
         # number reaches the reader marked and reasoned accepts `provisional` in place of the
         # suppression, so removing the blank total costs nothing that was protecting anybody.
@@ -878,7 +924,20 @@ def _part_ops(part: Dict[str, Any]) -> List[str]:
     # no other. The removal is recorded on the part, never silent.
     _off = (part.get("_estimator_operations_off") or [])
     if _off:
-        _keep = [o for o in ops if str(o).strip().lower() not in _off]
+        # TWO SPELLINGS, ONE LETTER, AND THE RULING DOES NOTHING.
+        #
+        # The engine emits `tubebend` on the route and `tube_bending` in its own words, and
+        # the example answers file spells it the second way. An estimator who copies that
+        # file and rules the operation off gets no error and no effect — the strongest
+        # evidence there is, silently discarded over an underscore. This is the same fault
+        # that once made the tube-bender work for nothing, in the input layer instead of
+        # the rate table.
+        #
+        # Matched on the letters, so any spelling of the same word answers to the ruling.
+        def _spelling(_o: Any) -> str:
+            return "".join(ch for ch in str(_o).lower() if ch.isalnum())
+        _off_keys = {_spelling(o) for o in _off}
+        _keep = [o for o in ops if _spelling(o) not in _off_keys]
         if len(_keep) != len(ops):
             _gone = [o for o in ops if o not in _keep]
             part.setdefault("removed_operations", []).extend(_gone)
