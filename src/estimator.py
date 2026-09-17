@@ -5319,6 +5319,55 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                        if _inferred_blank else
                        "A part with cut-outs weighs less than its rectangle and the stock is "
                        "still bought at full size, so confirm which the weight describes."))
+    # ── THE TITLE BLOCK AND THE BLANK DISAGREE, AND NOBODY IS TOLD ──────────────────
+    #
+    # James Gray, 17 Sep 2026, on 401912-02: "If the engine prints a different steel mass,
+    # flag it against 1.7 kg — do not silently overwrite the title block."
+    #
+    # The gate above fires only on a WILD disagreement — outside half to three times — and
+    # says nothing at all inside that band. 401912-02 sits squarely inside it: a 460 x 356.6
+    # blank of 2 mm CR4 is 2.57 kg and the title block says 1.7 kg, a ratio of 0.66. No
+    # flag, no choice recorded, and the material silently costed from the lighter figure.
+    #
+    # Both numbers are usually right and they are NOT the same quantity. A stated weight is
+    # the FINISHED part; the blank is what is BOUGHT. On a part with a big window the
+    # difference is the cut-out, which is paid for and thrown away — so costing the net
+    # weight under-buys the steel by exactly the size of the hole. On a part with no
+    # cut-outs they should agree, and a gap means something is wrong with one of them.
+    #
+    # Nothing is overwritten here and nothing changes price: the engine says which figure
+    # it used, what the other one was, and what the difference means. An estimator can then
+    # settle in five seconds a question that is invisible today.
+    if (stated_weight_kg is not None and stated_weight_kg > 0
+            and blank_length and blank_width and thickness):
+        _chk_dens = (MATERIAL_DENSITY_KG_PER_M3.get(material)
+                     or MATERIAL_DENSITY_KG_PER_M3.get((material or "").upper()))
+        _chk_blank = ((blank_length * blank_width / 1_000_000.0) * (thickness / 1000.0)
+                      * float(_chk_dens)) if _chk_dens else 0.0
+        _tol = float((getattr(config, "MATERIAL_PRICE_POLICY", {}) or {}).get(
+            "stated_weight_blank_report_tolerance", 0.10))
+        if _chk_blank > 0 and abs(stated_weight_kg - _chk_blank) > _chk_blank * _tol:
+            part["stated_weight_vs_blank"] = {
+                "stated_weight_kg": round(float(stated_weight_kg), 3),
+                "blank_implied_kg": round(_chk_blank, 3),
+                "blank_length_mm": blank_length, "blank_width_mm": blank_width,
+                "costed_from": "stated_weight",
+            }
+            part.setdefault("review_flags", []).append(
+                f"MASS: the drawing states {float(stated_weight_kg):g} kg and the "
+                f"{blank_length:g} x {blank_width:g} x {thickness:g} mm blank implies "
+                f"{_chk_blank:.2f} kg. The material on this line is costed from the STATED "
+                f"{float(stated_weight_kg):g} kg. "
+                + ("A part with cut-outs weighs less than its blank and the stock is still "
+                   "bought at full size, so if the difference is the window then the blank "
+                   "is what this job buys and the line is light by "
+                   f"{(_chk_blank - float(stated_weight_kg)):.2f} kg."
+                   if stated_weight_kg < _chk_blank else
+                   "The stated weight is HEAVIER than the blank, which a flat part cannot "
+                   "be — confirm the gauge and the blank size.")
+                + " The title block is not overwritten; confirm which figure this job "
+                  "should buy.")
+
     if stated_weight_kg is not None and stated_weight_kg > 0:
         applied_price_per_kg = external_price.get("applied_price_per_kg")
         fallback_price_per_kg = _price_per_kg_for_material(part, material)
