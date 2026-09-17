@@ -19,6 +19,12 @@ venv/
 # ── Output data (VERY IMPORTANT) ─────────────────────────────────────────
 output/
 *.json
+# THE WEEKLY PARITY RESULT IS THE EXCEPTION, for the same reason the report PDFs are: it is
+# written to be read on another machine, and week on week it is the record of whether the
+# engine is converging on the estimators' own sheets. Scoped to reports/parity-*.json so a
+# job's own output JSON is still refused everywhere. It holds no manual-estimate figure —
+# tools/parity_workbooks.py writes variances, never the other side's pounds.
+!reports/parity-*.json
 *.jsonl
 *.log
 *.txt

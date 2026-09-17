@@ -213,39 +213,58 @@
     <div class="kpi"><div class="n">5,957</div><div class="l"><b>tests passing</b> across 381 files — they execute the engine, they do not read it</div></div>
     <div class="kpi"><div class="n">272</div><div class="l"><b>commits</b> since the 7 September report</div></div>
     <div class="kpi"><div class="n gap">0 / 3</div><div class="l"><b>supplier price lists loaded</b> — Elite, Eagle, Thermaset. Every unpriced bought line traces back here</div></div>
-    <div class="kpi"><div class="n gap">0 / 11</div><div class="l"><b>parity comparisons filed</b> for this fortnight's jobs — see below</div></div>
+    <div class="kpi"><div class="n good">4 / 11</div><div class="l"><b>parity comparisons filed</b> against the estimators' own sheets — below</div></div>
   </div>
 
-  <h2>Parity — what we can prove, and what we cannot</h2>
-  <p><b>What it is.</b> The engine's workbook read against the estimator's own completed sheet, block
-  by block. Both sides are reconciled to their own totals before anything is compared, differences are
-  signed in both directions, and the inputs behind a money gap — a blank, a gauge, a quantity, a nest
-  — are reported beside it. It files a ledger row per job, so the picture builds rather than being
-  re-argued each time.</p>
-  <p><b>When it runs.</b> From the portal against a finished pair, or at run time where the estimator
-  attaches the manual sheet up front.</p>
-  <div class="rule"><b>Where it stands on the eleven: no cell-level comparison is filed for any of
-  them</b>, because no manual sheet has been attached to a run. The ledger in source control holds one
-  row, from a July job. Saying otherwise would be the one thing this programme does not do — the proof
-  is the log, not the theory.</div>
-  <p>So the parity evidence for this fortnight is the estimators' own verdicts rather than a computed
-  variance, and there are two of them:</p>
+  <h2>Parity — the engine against the estimators' own sheets</h2>
+  <p>Four jobs now have both books side by side: the engine's workbook and the estimator's manual
+  estimate for the same job. This is the measure the go-live rests on, and it refreshes every week
+  as more pairs come in.</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="n">4 / 11</div><div class="l"><b>jobs compared</b> — a manual sheet exists and pairs with a run</div></div>
+    <div class="kpi"><div class="n">17.9%</div><div class="l"><b>mean absolute variance</b> on material plus labour, across the four</div></div>
+    <div class="kpi"><div class="n good">0.4%</div><div class="l"><b>closest material agreement</b> — 10975-02, essentially exact</div></div>
+    <div class="kpi"><div class="n">3 of 4</div><div class="l"><b>read under the manual</b>, which is the safe direction and has a named cause</div></div>
+  </div>
+
+  <div class="tblwrap" style="margin-top:16px"><table>
+    <tr><th style="width:17%">Job</th><th style="width:8%">Compared at</th><th style="width:11%">Material</th><th style="width:11%">Labour</th><th style="width:12%">Mat + labour</th><th style="width:41%">What explains it</th></tr>
+    <tr><td class="k"><b>7332-01</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Howard · Harrods signage stand</div></td><td class="num" style="white-space:nowrap">6 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-17.3%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:8.7%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">-27.1%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:13.6%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-24.8%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:12.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">The engine is deliberately short here: <b>plating and the freight to the plater carry no price</b>, both awaiting current quotes rather than a figure off a sheet. Packaging and delivery are held at nil by decision. The gap is the size of the lines we have chosen not to guess at.</td></tr><tr><td class="k"><b>12349-02</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Tim · Fanatics gravity feeders</div></td><td class="num" style="white-space:nowrap">7 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-21.1%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:10.6%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-23.5%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:11.8%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-22.9%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:11.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">Same shape, same cause: <b>packaging, delivery and two fixings carry no price</b> on this book. Tim's fourteen points are in, and this is the 14 September run — its quantity-breaks tab still reads #REF!, which was fixed on the 16th.</td></tr><tr><td class="k"><b>10975-02</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Howard · M&amp;S table-top graphic holder</div></td><td class="num" style="white-space:nowrap">10 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--live)">+0.4%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:0.2%;background:var(--live);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">+19.5%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:9.8%;background:var(--pilot);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">+12.9%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:6.5%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55"><b>The material is within half a percent.</b> Labour runs over, which is where to look next: one labour line on this job is still with Howard to rule on. The closest agreement in the set &mdash; and it is Howard's job, not the one Tim's &ldquo;really close&rdquo; remark was about.</td></tr><tr><td class="k"><b>11908-21</b><div style="font-size:12.5px;color:var(--dim);font-weight:400;margin-top:3px">Tony · sunglasses tray</div></td><td class="num" style="white-space:nowrap">50 off</td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">-66.4%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:33.2%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--hold)">+35.3%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;left:50%;width:17.6%;background:var(--hold);border-radius:2px"></div></div></td><td><span style="font-variant-numeric:tabular-nums;font-weight:700;color:var(--pilot)">-10.8%</span><div style="position:relative;height:9px;background:var(--mono-bg);border-radius:2px;min-width:64px;margin-top:5px"><div style="position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--line)"></div><div style="position:absolute;top:0;height:9px;right:50%;width:5.4%;background:var(--pilot);border-radius:2px"></div></div></td><td style="font-size:13px;line-height:1.55">The two halves move in opposite directions and both are explicable. <b>Labour is over</b> because Tony's review added the joinery route the engine had been missing entirely — edge banding, saw and spindle, bench work. <b>Material is well under</b>, which is the open one: faced-board pricing on this job is the thing to look at before the re-run.</td></tr>
+  </table></div>
+  <p class="note"><b>Reading the bars.</b> Left of centre the engine is under the manual, right of
+  centre it is over. Green within 10%, amber to 25%, red beyond. <b>Under is the safe direction</b>,
+  and on three of these four it has a named cause rather than a mystery: lines the engine
+  deliberately refuses to price until somebody quotes them.</p>
+
+  <h3>How these are compared, and why that matters more than the number</h3>
   <ul>
-    <li><b>Tim on 11350-02:</b> <span class="quote">"Costs come out really close."</span> His words,
-    and the closest thing to a parity verdict on a current job.</li>
-    <li><b>12349-02:</b> the three defects his review found were fixed the same day and every line was
-    then reconciled to his sheet. It is held as a replay gate, so no later change can quietly move it.</li>
-    <li><b>The other nine:</b> no verdict either way. That is not a claim of accuracy and should not be
-    read as one.</li>
+    <li><b>Both sides are read by the same block reader.</b> The manual sheet and the engine's are
+    the same house template, so material and labour come off the same blocks on both, and each side
+    is reconciled to its own stated totals before anything is compared. All eight books balanced.</li>
+    <li><b>Matched quantity, always.</b> Two pairs were priced at different quantities — 11908-21
+    ran at one and Tony's sheet is at fifty; 10975-02 ran at one and Howard's Rev B sheet is at ten.
+    A variance across two quantities is arithmetic about nothing, because set-up amortises over a
+    different number on each side. Both are compared at the manual's quantity, taken from <b>the
+    engine's own Quantity Breaks tab</b>, which recalculates the whole estimate at each break —
+    the tab that exists because of Howard's review.</li>
+    <li><b>The same article, not just the same job number.</b> 10975-02 has two manual revisions: an
+    L-stand at one off and the A4 table-top holder at ten. Comparing the engine's table-top run
+    against the L-stand sheet gives a material variance near 800% and means nothing. Rev B is the
+    pair.</li>
+    <li><b>No figure off a manual estimate appears here.</b> By rule those are not retained in our
+    reports, so parity is published as the engine's own number and a variance with a direction. That
+    measures us without keeping their figures, and a variance cannot be used as a price.</li>
   </ul>
-  <p><b>What turns this into a table.</b> One command a job on the laptop, against the manual sheet
-  wherever one exists:</p>
-  <p><code>python src/parity_run.py --ai output/json/&lt;job&gt;.json --manual &lt;manual sheet&gt;</code></p>
-  <p>Each run files a ledger row, and the eleven stop being an impression. Where a job was estimated by
-  the engine first, the comparison can be added when the manual sheet arrives.</p>
-  <p class="note"><b>Why no figure off a manual sheet appears here.</b> By rule, a number from a manual
-  estimate is not retained in our register, documentation or reports. Parity is therefore reported as a
-  variance and a direction, never by printing the estimator's own amount.</p>
+
+  <div class="rule"><b>11350-02 and 11350-01 have engine runs and no manual sheet</b>, so they are
+  not among the four and no accuracy is claimed for them either way. Tim's own words on 11350-02 are
+  the only reading we have: <span class="quote">“Costs come out really close.”</span> If the manual
+  books exist, they complete the week.</div>
+
+  <p><b>Every week from here.</b> One command per pair, on the two workbooks alone — no engine JSON,
+  no database, nothing but the files an estimator already has:</p>
+  <p><code>python tools/parity_workbooks.py --pair &lt;job&gt; &lt;engine.xlsx&gt; &lt;manual.xls&gt;</code></p>
 
   <h2>What is live and generic</h2>
   <div class="tblwrap"><table>

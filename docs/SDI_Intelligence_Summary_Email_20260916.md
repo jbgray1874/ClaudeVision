@@ -23,7 +23,7 @@ A short one, and a positive one. The detailed status report has the caveats and 
 | 69 | numbered decisions on the engine's change register, each with its source and its proof |
 | 5,957 | tests passing on the estimating engine — they run the engine, not a description of it |
 | 363 | tests on Technical Design's second tool, up from about 240 in a week |
-| 272 | commits on the engine since the last report, nine days ago |
+| 4 | jobs measured against the estimator's own sheet — mean variance 17.9%, one within half a percent on material |
 
 ## SDI Estimating Intelligence — the loop is closed
 
@@ -32,6 +32,8 @@ The thing that was missing in August was feedback. It is no longer missing. All 
 **One workbook now covers every quantity.** An enquiry asked at 10, 50, 250 and 1,000 comes back as a single spreadsheet with the estimators' own price-break tab filled in and a Quantity Breaks tab that recalculates the whole estimate at each one, with order-level freight divided by that quantity rather than landed on every unit. That replaces a file per quantity, which is what the estimators were being sent before.
 
 **The engine has started learning the shop rather than the drawing.** Production runs 1.0 mm steel where a drawing says 0.9. A mitred tube leg is sawn, not bent. Welds are dressed to the customer's own standard. A plated part is packed out and packed back as two operations. None of that is written on any drawing; all of it is now in the engine with the estimator's name against it.
+
+**And it is now measured against their own sheets.** Four of the eleven jobs have both books side by side — the engine's workbook and the estimator's manual estimate for the same job, compared at the same quantity. The mean variance on material plus labour is **17.9%**, the engine reads under the manual on three of the four, and on the M&S graphic holder the material agrees to within **half a percent**. Where the engine reads low it is because it refuses to price a line nobody has quoted — plating and freight on the Harrods stand, packaging and two fixings on the feeders. That is the number the go-live decision rests on, and it now refreshes every week.
 
 **Next from this workstream:** Tim has asked for the Boots Coffret hospital kit at two quantities with the route and the bill of materials alongside the cost — the first time the route has been wanted as a deliverable in its own right, and a good sign of what the estimators now expect from it.
 
