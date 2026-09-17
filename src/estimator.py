@@ -9303,6 +9303,66 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if debug:
             print("[DEBUG] Added Packaging + Delivery placeholder lines (unpriced, flagged)")
 
+        # ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ───────────────────────────────
+        #
+        # Tony Ford, 11908-21: "Not all materials calculated no ABS edging Allowed." The
+        # engine had been MEASURING the edges and raising an estimator-input ask. That is
+        # not what he asked for and it is not what an estimate is: edging is material that
+        # gets bought by the metre, so it belongs in the bill of materials with a code, a
+        # quantity and a price — "a distinct length-priced line".
+        #
+        # The QUANTITY is metres, and it comes from edge_banding: only the edges the
+        # drawing marks, never the perimeter (D-104). No marked edges, no line — an edging
+        # line on a part nobody bands would be the perimeter mistake with a price on it.
+        #
+        # The PRICE is not set here. It flows through the same chain as any other bought-in
+        # — SDI Live, the supplier catalogue, a current quote, then a researched figure with
+        # its evidence — so a rate the office already holds wins, and where nothing answers
+        # the line reads as unpriced with its metres visible.
+        try:
+            from edge_banding import banded_length_mm as _banded_of
+            _edge_code = str(getattr(config, "FACED_BOARD_EDGING_CODE", "") or "")
+            _spec = dict(getattr(config, "FACED_BOARD_EDGING_SPEC", {}) or {})
+            _edge_mm, _edge_from = 0.0, set()
+            for _p in (parts or []):
+                if not isinstance(_p, dict):
+                    continue
+                if not (_p.get("_laminate_in_board")
+                        or (_p.get("material_estimate") or {}).get(
+                            "costing_material_family")):
+                    continue
+                _v = _banded_of(_p) or {}
+                if _v.get("mm"):
+                    _edge_mm += float(_v["mm"]) * float(_safe_float(_p.get("quantity")) or 1)
+                    _edge_from.add(str(_v.get("basis") or ""))
+            _edge_m = round(_edge_mm / 1000.0, 3)
+            _already = any(str((_x or {}).get("part_number") or "").upper() == _edge_code
+                           for _x in (parts or []) if isinstance(_x, dict))
+            if _edge_code and _edge_m > 0 and not _already:
+                _stub = _bought_in_part_stub(
+                    _edge_code,
+                    (f"{_spec.get('description') or 'ABS edging'} — {_edge_m:g} m a unit, "
+                     f"measured from the edges the drawing marks as banded"),
+                    _edge_m)
+                _stub["unit_of_measure"] = "m"
+                _stub["supplier"] = _spec.get("supplier") or ""
+                _stub["_edging_line"] = True
+                _stub["_edging_basis"] = sorted(b for b in _edge_from if b)
+                _stub.setdefault("review_flags", []).append(
+                    f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
+                    f"({_spec.get('description') or 'ABS edging'}). The METRES are measured "
+                    f"from the edges the drawing marks as banded — not the perimeter. The "
+                    f"RATE is asked of SDI Live and the supplier catalogue; if neither "
+                    f"answers, the line stays visibly unpriced rather than carrying a rate "
+                    f"off an old manual sheet.")
+                parts.append(_stub)
+                if debug:
+                    print(f"[DEBUG] Added EDGING line {_edge_code} at {_edge_m:g} m/unit")
+        except Exception as _edge_exc:                           # noqa: BLE001
+            print(f"   [edging] line could not be built "
+                  f"({type(_edge_exc).__name__}: {_edge_exc}) — no edging line on this "
+                  f"job", flush=True)
+
         # A PLATED weldment goes out to a subcontract plater, not SDI's own powder booth, so it
         # carries a plating LINE priced on the plated steel mass — never a P.Coat row (the powder
         # gate already rules powder out on a plated part) and never the £0 it read before. One

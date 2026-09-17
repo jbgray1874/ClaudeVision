@@ -179,3 +179,66 @@ def test_the_line_says_which_of_the_two_states_it_is_in():
     assert "EDGING NOT ESTABLISHED" in src
     assert "measured from the edges the" in src
     assert "ceiling" in src
+
+
+# ── and it becomes a MATERIAL LINE, not a question ───────────────────────────────────
+#
+# James: "have we applied edging though?" — and the answer was no. Measuring the banded
+# metres and raising an estimator-input ask is not what Tony asked for and is not what an
+# estimate is. Edging is material bought by the metre, so it belongs in the bill of
+# materials with a code, a quantity and a price: "a distinct length-priced line".
+
+def _mint_block() -> str:
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "estimator.py"
+           ).read_text(encoding="utf-8")
+    start = src.index("# ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ─")
+    return src[start:start + 4200]
+
+
+def test_the_edging_is_minted_as_a_bom_line():
+    block = _mint_block()
+    assert "_bought_in_part_stub(" in block
+    assert "parts.append(_stub)" in block
+
+
+def test_its_quantity_is_metres_from_the_marked_edges():
+    """Not the perimeter, and not a count of parts. The line is bought by the metre."""
+    block = _mint_block()
+    assert 'from edge_banding import banded_length_mm as _banded_of' in block
+    assert '_stub["unit_of_measure"] = "m"' in block
+    assert "_edge_m = round(_edge_mm / 1000.0, 3)" in block
+
+
+def test_no_marked_edges_means_no_line_at_all():
+    """An edging line on a part nobody bands is the perimeter mistake with a price on it."""
+    block = _mint_block()
+    assert "if _edge_code and _edge_m > 0 and not _already:" in block
+
+
+def test_it_carries_the_spec_and_the_supplier_identity():
+    block = _mint_block()
+    assert 'getattr(config, "FACED_BOARD_EDGING_CODE"' in block
+    assert '_stub["supplier"] = _spec.get("supplier")' in block
+
+
+def test_the_price_is_not_set_here():
+    """It flows through the same chain as any bought-in — SDI Live, catalogue, quote, then
+    an evidenced researched figure. Setting a rate at the mint site is how a manual-sheet
+    number gets in through the back door."""
+    block = _mint_block()
+    for banned in ("unit_cost_gbp", "unit_material_cost_gbp", "price_gbp"):
+        assert banned not in block, (
+            f"the edging mint sets {banned} — the rate belongs to the pricing chain")
+
+
+def test_it_says_where_the_metres_came_from_and_where_the_rate_must_not():
+    block = _mint_block()
+    assert "not the perimeter" in block
+    assert "off an old manual sheet" in block
+
+
+def test_a_failure_to_build_it_is_not_silent():
+    """A missing edging line looks exactly like a part that is not banded."""
+    block = _mint_block()
+    assert "[edging] line could not be built" in block
