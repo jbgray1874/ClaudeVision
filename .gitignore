@@ -42,12 +42,12 @@ output/
 # sizes, and are worthless if they cannot be reviewed in a diff like any other statement
 # of fact. Named narrowly so the blanket rule still holds everywhere else.
 !tools/jobs/*.json
-# AND THE ONES WRITTEN AS RULINGS. Same kind of file, same reasoning, a second folder —
-# `docs/answers/` is where a job's confirmed decisions are drafted for an estimator to
-# copy to the share, and the blanket rule silently kept every one of them out of the
-# repository. D-102 records 7332-01's answers file as delivered; it was never in a commit,
-# so nobody outside the container that wrote it could have it. A ruling that cannot be
-# reviewed in a diff is not a record of anything.
+# A JOB'S RULINGS NOW LIVE IN config.JOB_DECISIONS, NOT IN A FILE HERE. "config needs to
+# be in config files. not json files lying around and being copied manually around" —
+# James Gray, 17 Sep 2026. A decision arrives with a pull, diffs like any other statement
+# of fact, and cannot differ between two machines. The exception below stays only so that a
+# stray answers file somebody drops in `docs/answers/` is VISIBLE in review rather than
+# silently ignored; the engine still reads one written beside the drawings on the share.
 !docs/answers/*.json
 
 # ── Input data (drawings, spreadsheets) ──────────────────────────────────

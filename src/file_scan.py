@@ -3498,34 +3498,43 @@ def _finalize_scan_summary(
         # that no file exists and this is one skipped line; the file is written only for a
         # pack whose sheets the readers cannot handle.
         import estimator_confirmed as _ec
-        _ec_path = _ec.find_corrections_file(
-            job_folder, pdf_path,
-            (summary.get("document_analysis") or {}).get("drawing_number")
-            or summary.get("drawing_number"))
+        _ec_drawing = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number"))
+        _ec_path = _ec.find_corrections_file(job_folder, pdf_path, _ec_drawing)
+        _ec_data, _ec_problems = ({}, [])
         if _ec_path:
             _ec_data, _ec_problems = _ec.load_corrections(_ec_path)
+        # AND THE RULINGS THE REPOSITORY ALREADY HOLDS, WHICH NOBODY HAS TO COPY ANYWHERE.
+        # config.JOB_DECISIONS is the home for a decision about a job; a file beside the
+        # drawings is still read and merged on top of it, with every overlap reported.
+        _ec_data, _ec_cfg_problems = _ec.merge_config_decisions(
+            _ec_data, _ec_drawing, getattr(pdf_path, "name", pdf_path), job_folder)
+        _ec_problems = list(_ec_problems) + list(_ec_cfg_problems)
+        _ec_src = (_ec_path.name if _ec_path
+                   else str(_ec_data.get("path") or "config.JOB_DECISIONS"))
+        if _ec_path or _ec_data.get("estimator_decisions"):
             for _p in _ec_problems:
                 print(f"   [confirmed] NOT APPLIED — {_p}", flush=True)
             _ec_rep = _ec.apply_estimator_confirmed(
                 summary["manufacturing_writeup"]["parts"], _ec_data)
             if _ec_rep["stamped"]:
                 print(f"   [confirmed] {_ec_rep['stamped']} part(s), "
-                      f"{_ec_rep['fields']} field(s) taken from {_ec_path.name} — confirmed "
+                      f"{_ec_rep['fields']} field(s) taken from {_ec_src} — confirmed "
                       f"by {_ec_data.get('confirmed_by') or 'an estimator'} "
                       f"(estimator_confirmed rank; nothing outranks it)", flush=True)
             if _ec_rep.get("agreed"):
                 # An agreement writes nothing, and a working file that logs nothing looks
                 # broken — say that the answer arrived and what it did: closed the question.
-                print(f"   [confirmed] {_ec_rep['agreed']} figure(s) in {_ec_path.name} "
+                print(f"   [confirmed] {_ec_rep['agreed']} figure(s) in {_ec_src} "
                       f"AGREE with what the files already said — "
                       f"{_ec_data.get('confirmed_by') or 'an estimator'}'s confirmation is "
                       f"recorded and the open question it answers is closed", flush=True)
             for _code in _ec_rep["unmatched"]:
-                print(f"   [confirmed] {_code} is in {_ec_path.name} but NO part of this job "
+                print(f"   [confirmed] {_code} is in {_ec_src} but NO part of this job "
                       f"carries that number — the line did nothing. Check the code",
                       flush=True)
             summary.setdefault("document_analysis", {})["estimator_confirmed"] = {
-                "file": str(_ec_path), "report": _ec_rep,
+                "file": str(_ec_path) if _ec_path else _ec_src, "report": _ec_rep,
                 "problems": _ec_problems,
                 "confirmed_by": _ec_data.get("confirmed_by"),
                 "confirmed_on": _ec_data.get("confirmed_on"),
@@ -3544,9 +3553,9 @@ def _finalize_scan_summary(
                     _dec,
                     decided_by=_ec_data.get("confirmed_by") or "an estimator",
                     decided_on=_ec_data.get("confirmed_on") or "",
-                    decided_in=_ec_path.name)
+                    decided_in=_ec_src)
                 print(f"   [confirmed] {len(_dec)} estimator DECISION(S) from "
-                      f"{_ec_path.name}: {', '.join(sorted(_dec))} — "
+                      f"{_ec_src}: {', '.join(sorted(_dec))} — "
                       f"{_ec_data.get('confirmed_by') or 'an estimator'}'s call, applied as "
                       f"theirs and recorded as theirs", flush=True)
                 # An operation taken off is a per-PART decision, so it is stamped on the

@@ -1111,6 +1111,89 @@ SHOP_STATED_PROVENANCE = {
 }
 
 
+# ── WHAT A PERSON DECIDED ABOUT A PARTICULAR JOB ─────────────────────────────────────
+#
+# James Gray, 17 Sep 2026: "config needs to be in config files. not json files lying
+# around and being copied manually around."
+#
+# The rulings above are how SDI WORKS — the weld allowance, the joinery rates, the sheet
+# sizes. These are what a person DECIDED about one job: Howard's tube bend, Tony's delivery
+# exclusion and his five metres of edging. Both are statements of fact that outrank anything
+# the engine derives, and both belong in a file that is versioned, diffable and arrives with
+# a pull.
+#
+# THEY USED TO LIVE IN A JSON FILE COPIED BY HAND TO THE SHARE. That mechanism had three
+# faults and every one of them bit: the file was invisible to `git` (7332-01's rulings were
+# recorded as delivered and were never in a commit, so nobody outside the container that
+# wrote them could have them); a run with no file applied no rulings and said nothing; and a
+# ruling could differ between two machines with nothing to compare. A decision nobody can
+# diff is not a record.
+#
+# Keyed by the DRAWING NUMBER, matched on the job code, so `11908-21` governs 11908-21 and
+# its GA and no other job — the same scoping the file had. The block is the estimator's own
+# `estimator_decisions` shape and is validated through exactly the same reader, so a
+# malformed entry is reported rather than silently ignored.
+#
+# PRICES ARE STILL REFUSED HERE. A figure typed into this dict would read on the sheet
+# exactly like one the engine sourced. What belongs here is what a person KNOWS and the
+# drawings do not say: a length, an operation that is not required, a line that is
+# deliberately not charged, a rate the department measured.
+#
+# A job-folder `<drawing>_confirmed.json` is still read where one exists — an estimator at
+# the share may write one — and it is merged ON TOP of this, key by key, with every overlap
+# printed. Nothing has to be copied anywhere for these to apply.
+JOB_DECISIONS = {
+    "7332-01": {
+        "confirmed_by": "Howard Thurley",
+        "confirmed_on": "2026-09-15",
+        "note": "From his 15 September reply to the 9 September review. Two rulings, both "
+                "of which the engine had recorded as questions and kept charging until a "
+                "person answered them.",
+        "estimator_decisions": {
+            # "Line 103 - Tube Bending Op. - Not Required." The drawing's own text mentions
+            # a bend, so the engine charges it and asks rather than deleting charged work on
+            # one reading — that gate is deliberate, and this is the answer it waited for.
+            "operations_off": {"7332-01-002": ["tube_bending"]},
+            # "if multiple components used but don't exceed a single sheet, laser rate would
+            # be reduced to not exceed the given set up time." The nester produced no
+            # parts-per-sheet for these two, so each row kept a full 10-minute set-up and the
+            # job booked 20 minutes where the shop runs one program. Members are named
+            # explicitly because same gauge alone is never enough.
+            "nesting_groups": {"003 and 004 on one laser program":
+                               ["7332-01-003", "7332-01-004"]},
+            # "Line 96 - Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95
+            # p/hour." He runs the department; 252 was a corpus median off thirteen lines.
+            "throughput_per_hour": {"Laser (Acrylic)": 95},
+        },
+        # No plating price and no plater freight price. Both are real costs and both are
+        # open, but a figure off his own sheet is not a price source (D-078) — they need a
+        # current quote. The lines stay on the estimate naming what they are.
+    },
+    "11908-21": {
+        "confirmed_by": "Tony Ford",
+        "confirmed_on": "2026-09-17",
+        "note": "From his review of the 11908-21 estimate. Two rulings; the rest of his "
+                "review was engine defects, not decisions, and belongs in the code.",
+        "estimator_decisions": {
+            # Delivery is not charged on this job — his deliberate exclusion, not an
+            # omission and not a price we have failed to find. The line stays on the sheet
+            # at £0 naming whose call it was, which is the difference between a decision
+            # and a gap. PACKAGING is deliberately NOT here: it is open, not ruled out, and
+            # must not be made to look decided by sitting next to something that was.
+            "commercial_excluded": ["DELIVERY"],
+            # "This tray requires 5 metres of 23 x 1mm ABS edging" — metres per FINISHED
+            # TRAY, across every component in it. These DXFs carry no edging layer and no
+            # note names an edge, so nothing measurable can answer; he can, and what he is
+            # stating is a physical extent of the product rather than a price. Replaced,
+            # not argued with, if the drawing office later marks the banded edges.
+            "banded_length_m": 5.0,
+            # His own historic per-metre rate is deliberately absent: the rate is a
+            # purchase, asked of SDI Live, the supplier catalogue or evidenced research.
+        },
+    },
+}
+
+
 def shop_stated_source(key: str) -> str:
     """Who stated this figure, when, and for which job — for THIS figure, never a shared
     header. The sentence every consumer prints beside the number."""

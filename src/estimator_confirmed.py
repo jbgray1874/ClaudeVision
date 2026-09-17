@@ -356,6 +356,100 @@ def find_corrections_file(job_folder: Any, pdf_path: Any = None,
     return None
 
 
+def decisions_from_config(*names: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """The rulings this job carries in `config.JOB_DECISIONS`, or ({}, []).
+
+    James Gray, 17 Sep 2026: "config needs to be in config files. not json files lying
+    around and being copied manually around."
+
+    A ruling is a statement of fact by a person who knows the job, and it belongs where
+    every other statement of fact this engine holds lives: in a versioned file that arrives
+    with a pull. The JSON-beside-the-drawings mechanism is still read — an estimator at the
+    share may write one — but nothing has to be copied for a ruling to apply.
+
+    Matched on the JOB CODE, through the same comparison the file lookup uses, so an entry
+    for `11908-21` governs 11908-21 and its GA and no other job. Validated through the same
+    `_read_decisions`, so a malformed entry is reported rather than silently ignored — the
+    fault a hand-written file has every time.
+    """
+    problems: List[str] = []
+    try:
+        import config as _cfg
+        table = getattr(_cfg, "JOB_DECISIONS", {}) or {}
+    except Exception:                                            # noqa: BLE001
+        return {}, problems
+    if not isinstance(table, Mapping):
+        return {}, ["config.JOB_DECISIONS must be an object of {drawing: rulings} — ignored"]
+
+    mine: List[str] = []
+    for text in names:
+        for code in job_codes(text):
+            if code not in mine:
+                mine.append(code)
+    if not mine:
+        return {}, problems
+
+    hits = [(str(k), v) for k, v in table.items()
+            if any(_same_job_code(theirs, ours)
+                   for theirs in job_codes(k) for ours in mine)]
+    if not hits:
+        return {}, problems
+    if len(hits) > 1:
+        # TWO ENTRIES FOR ONE JOB IS NOT A MERGE. Nothing is guessed between them, exactly
+        # as two matching files are refused rather than combined.
+        return {}, [f"config.JOB_DECISIONS holds {len(hits)} entries matching this job "
+                    f"({', '.join(k for k, _ in hits)}) — nothing is guessed between them. "
+                    f"Name one of them for the drawing"]
+    key, raw = hits[0]
+    if not isinstance(raw, Mapping):
+        return {}, [f"config.JOB_DECISIONS['{key}'] must be an object — ignored"]
+    decisions, _dp = _read_decisions(raw, f"config.JOB_DECISIONS['{key}']")
+    problems.extend(_dp)
+    if not decisions:
+        return {}, problems
+    return {
+        "confirmed_by": str(raw.get("confirmed_by") or "").strip(),
+        "confirmed_on": str(raw.get("confirmed_on") or "").strip(),
+        "note": str(raw.get("note") or "").strip(),
+        "parts": {},
+        "estimator_decisions": decisions,
+        "path": f"config.JOB_DECISIONS['{key}']",
+    }, problems
+
+
+def merge_config_decisions(file_data: Any, *names: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """config's rulings, with a job-folder file's own merged ON TOP of them, key by key.
+
+    The file wins where both answer the same question, because a person who has just written
+    one beside the drawings is answering later than the repository — and every overlap is
+    REPORTED rather than silently resolved, so nobody has to guess which of two answers the
+    run used.
+    """
+    cfg_data, problems = decisions_from_config(*names)
+    file_data = dict(file_data or {})
+    if not cfg_data:
+        return file_data, problems
+    if not file_data.get("estimator_decisions") and not file_data.get("parts"):
+        return cfg_data, problems
+
+    merged = dict(cfg_data.get("estimator_decisions") or {})
+    _file_dec = dict(file_data.get("estimator_decisions") or {})
+    _both = sorted(set(merged) & set(_file_dec))
+    merged.update(_file_dec)
+    if _both:
+        problems.append(
+            f"{', '.join(_both)}: ruled in BOTH {cfg_data['path']} and the job-folder "
+            f"answers file. The file's answer is the one applied — reconcile them, because "
+            f"two answers to one question is not a record of anything")
+    out = dict(file_data)
+    out["estimator_decisions"] = merged
+    for _k in ("confirmed_by", "confirmed_on", "note"):
+        if not str(out.get(_k) or "").strip():
+            out[_k] = cfg_data.get(_k) or ""
+    out["config_path"] = cfg_data["path"]
+    return out, problems
+
+
 def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
     """Read and validate the file. Returns (parsed, problems); problems are for the operator.
 
@@ -372,9 +466,21 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
     if not isinstance(raw, Mapping):
         return {}, [f"{path}: the top level must be an object, not {type(raw).__name__}"]
 
+    # A FILE WITH NO `parts` IS NOT AN EMPTY FILE. It was written before decisions existed,
+    # when a readings block was the only thing a file could carry, and it threw away every
+    # decisions-only file whole — the entire ruling, silently, with one line saying "nothing
+    # to apply" about a file that had plenty. 11908-21's answers file is exactly that shape:
+    # a delivery exclusion and a banded length, and no readings at all, because Tony had no
+    # dimension to correct. The two blocks are independent by design (see below), so a file
+    # may carry either, both, or — reported — neither.
     parts_in = raw.get("parts")
-    if not isinstance(parts_in, Mapping):
-        return {}, [f"{path}: no 'parts' object — nothing to apply"]
+    if parts_in is not None and not isinstance(parts_in, Mapping):
+        return {}, [f"{path}: 'parts' must be an object of {{part: fields}}, not "
+                    f"{type(parts_in).__name__} — nothing was applied"]
+    if parts_in is None and not isinstance(raw.get("estimator_decisions"), Mapping):
+        return {}, [f"{path}: neither a 'parts' object nor an 'estimator_decisions' object "
+                    f"— nothing to apply"]
+    parts_in = parts_in if isinstance(parts_in, Mapping) else {}
 
     clean: Dict[str, Dict[str, Any]] = {}
     for code, spec in parts_in.items():

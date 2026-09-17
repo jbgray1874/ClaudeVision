@@ -110,21 +110,20 @@ def test_either_spelling_carries_the_same_ruling():
     assert a == b == {"banded_metres": {"per_unit": 5.0}}
 
 
-def test_tonys_own_ruling_parses_clean_off_the_real_file():
-    """The file an estimator copies to the job folder — not a shape written to pass."""
+def test_tonys_own_ruling_parses_clean_out_of_config():
+    """The ruling the run will actually read — in config.JOB_DECISIONS, arriving with a
+    pull, not a shape written here to pass."""
     import json
-    import pathlib
+    import config
     import estimator_confirmed as ec
-    path = (pathlib.Path(__file__).resolve().parent.parent
-            / "docs" / "answers" / "11908-21_confirmed.json")
-    out, problems = ec._read_decisions(json.loads(path.read_text(encoding="utf-8")),
-                                       str(path))
+    got, problems = ec.decisions_from_config("11908-21")
+    out = got["estimator_decisions"]
     assert out["banded_metres"] == {"per_unit": 5.0}
     assert out["commercial_excluded"] == ["DELIVERY"]
     assert problems == []
-    # AND NO PRICE IN IT. Tony's £0.35/m is his own historic figure; the metres are a
+    # AND NO PRICE IN IT. His own historic per-metre figure is his; the metres are a
     # measurement of the product and the rate is a purchase.
-    assert "0.35" not in path.read_text(encoding="utf-8")
+    assert "0.35" not in json.dumps(config.JOB_DECISIONS["11908-21"])
 
 
 def test_a_negative_length_is_refused_and_named():

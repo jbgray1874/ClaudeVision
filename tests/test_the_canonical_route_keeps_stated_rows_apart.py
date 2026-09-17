@@ -437,14 +437,12 @@ def test_no_floor_configured_leaves_the_formula_exactly_as_it_was():
 # ── and Howard's rulings, in the form the live run reads ─────────────────────────────
 
 def test_the_job_answers_file_parses_with_no_complaints():
-    """Written out for the runner to pick up. If the engine reports a problem with it, the
-    ruling silently did nothing — which is how the tube bend survived two reruns."""
-    import json
-    import pathlib
+    """Held in config.JOB_DECISIONS, where a decision arrives with a pull rather than being
+    copied to the share by hand. If the engine reports a problem with it, the ruling
+    silently did nothing — which is how the tube bend survived two reruns."""
     import estimator_confirmed
-    raw = json.loads((pathlib.Path(__file__).resolve().parent.parent / "docs" / "answers" /
-                      "7332-01_confirmed.json").read_text(encoding="utf-8"))
-    out, problems = estimator_confirmed._read_decisions(raw, "7332-01_confirmed.json")
+    got, problems = estimator_confirmed.decisions_from_config("7332-01")
+    out = got.get("estimator_decisions") or {}
     assert problems == [], problems
     assert out["operations_off"]["7332-01-002"] == ["tube_bending"]
     assert out["nesting_groups"]["003 and 004 on one laser program"] == [
@@ -468,9 +466,7 @@ def test_the_answers_file_carries_no_price():
     """Plating and plater freight are real costs and both are open — and a figure off
     Howard's own sheet is not a price source."""
     import json
-    import pathlib
-    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "answers" /
-            "7332-01_confirmed.json").read_text(encoding="utf-8")
-    doc = json.loads(text)
-    assert "plating_gbp_per_unit" not in doc["estimator_decisions"]
-    assert "250" not in json.dumps(doc["estimator_decisions"])
+    import config
+    dec = (config.JOB_DECISIONS["7332-01"].get("estimator_decisions") or {})
+    assert "plating_gbp_per_unit" not in dec
+    assert "250" not in json.dumps(dec)
