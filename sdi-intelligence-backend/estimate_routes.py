@@ -228,6 +228,7 @@ class Run:
     # Said once. The command echo arrives on one line, but the guard reads every progress
     # line, and a warning repeated down the log stops being read.
     breaks_warned: bool = False
+    qty_warned: bool = False
     # AND THE REASON, KEPT SEPARATELY FROM `error`. /complete assigns `run.error = req.error`
     # unconditionally — the runner's own verdict, which on this path is None, because the
     # engine exited 0 and the runner has nothing to complain about. Holding the reason only in
@@ -641,6 +642,38 @@ def _check_the_engine_was_told(run: "Run", text: str) -> None:
     # it incomplete, and killing a good hour of work over four variant workbooks would be a
     # worse outcome than the one being reported. But it must not pass in silence either: the
     # only symptom is files that are not there, and nobody counts files they did not get.
+    # ── AND THE QUANTITY ITSELF, WHICH IS THE WHOLE ESTIMATE ─────────────────────────
+    #
+    # The breaks are variant workbooks; the ORDER QUANTITY is the estimate. Set-up is
+    # amortised over it, batch economics turn on it, and every labour line is divided by
+    # it — a job priced at 1 off when 50 were asked for is not incomplete, it is wrong,
+    # and it is wrong in a way that looks entirely normal on the page.
+    #
+    # 11908-21 was asked for 50 and produced FOUR consecutive books at D6 = 1. Nobody
+    # could see why, because an absent flag leaves no trace: the page said 50, the claim
+    # said 50, and the only evidence was a cell in a workbook that reads 1 whether it was
+    # told nothing or told one. That is the same shape as the missing --quantity-breaks
+    # recorded above, on the number that matters most.
+    #
+    # The echo is the ground truth about what the engine was told, so it is asked. Said,
+    # not stopped: the run may still be wanted, and killing it would lose the hour.
+    if int(run.units or 0) > 1 and not run.qty_warned:
+        _want = f"--order-qty {int(run.units)}"
+        if "--order-qty" not in line:
+            run.qty_warned = True
+            run.line(f"WARNING — this run asked for {int(run.units)} off and the engine "
+                     f"was NOT told the quantity. It will cost at the quantity it infers, "
+                     f"usually 1, and every set-up will be amortised over that instead of "
+                     f"{int(run.units)}. The estimate will look ordinary and be wrong. The "
+                     f"usual cause is a runner started before this flag existed — it holds "
+                     f"the module it loaded at start, and git pull does not reload it.")
+        elif _want not in line:
+            run.qty_warned = True
+            run.line(f"WARNING — this run asked for {int(run.units)} off and the engine "
+                     f"was told a DIFFERENT quantity (the command echo does not contain "
+                     f"'{_want}'). Check the runner before reading the unit cost: the two "
+                     f"numbers are amortising the same set-ups over different batches.")
+
     if run.quantity_breaks and "--quantity-breaks" not in line and not run.breaks_warned:
         run.breaks_warned = True
         run.line("WARNING — this run asked for "
