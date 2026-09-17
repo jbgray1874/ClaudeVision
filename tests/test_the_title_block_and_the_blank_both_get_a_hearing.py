@@ -65,9 +65,22 @@ def test_it_names_both_numbers():
     assert "2.58 kg" in said, said
 
 
-def test_it_says_which_one_costed_the_line():
-    """A reader who cannot tell which of two numbers was used has been told nothing."""
+def test_the_measured_blank_buys_the_steel():
+    """"Steel cost from nested blank area, with 1.7 kg only a sanity check." That is the
+    transaction: a laser part is nested on a sheet and you pay for its share of that sheet,
+    cut-out and all. Costing the finished weight is buying back the hole."""
     part = _divider()
+    out = estimator.estimate_material(part)
+    said = " ".join(str(f) for f in part.get("review_flags", []))
+    assert "costed from the MEASURED BLANK" in said
+    assert part["stated_weight_vs_blank"]["costed_from"] == "blank"
+    assert "stated_weight" not in str(out.get("cost_method") or "")
+
+
+def test_without_a_measured_flat_the_printed_weight_still_wins():
+    """The control on the other half, and the reason this is scoped. A blank read off a
+    drawing image is the weaker of the two facts, and that behaviour is unchanged."""
+    part = _divider(geometry_source="pdf_vision")
     estimator.estimate_material(part)
     said = " ".join(str(f) for f in part.get("review_flags", []))
     assert "costed from the STATED" in said
@@ -81,7 +94,7 @@ def test_it_says_what_the_difference_means_and_how_big_it_is():
     estimator.estimate_material(part)
     said = " ".join(str(f) for f in part.get("review_flags", []))
     assert "0.88 kg" in said, said
-    assert "bought at full size" in said
+    assert "scrap that was paid for" in said
 
 
 def test_the_record_carries_both_for_the_report_to_read():
@@ -136,13 +149,11 @@ def test_a_part_with_no_blank_to_check_against_says_nothing():
     assert not any("MASS:" in str(f) for f in part.get("review_flags", []))
 
 
-def test_the_price_is_unchanged_by_the_report():
-    """It reports and nothing else: the same figure comes out with the flag as without it.
-    A message that moves money is not a message."""
-    quiet = _divider(dxf_weight_kg=2.57)
-    loud = _divider()
-    _q = estimator.estimate_material(quiet)
-    _l = estimator.estimate_material(loud)
-    # Both price from their own stated weight, as they always did — 1.7 kg is cheaper than
-    # 2.57 kg and that is the behaviour being reported on, not changed.
-    assert _q.get("cost_method") == _l.get("cost_method")
+def test_a_part_whose_figures_agree_is_costed_exactly_as_before():
+    """The change is scoped to a DISAGREEMENT. Where the weight and the blank say the same
+    thing there is nothing to arbitrate and nothing moves."""
+    part = _divider(dxf_weight_kg=2.57)
+    out = estimator.estimate_material(part)
+    assert "stated_weight_vs_blank" not in part
+    assert out.get("unit_material_cost_gbp") is not None or out.get(
+        "cost_per_part_gbp") is not None

@@ -5347,26 +5347,49 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         _tol = float((getattr(config, "MATERIAL_PRICE_POLICY", {}) or {}).get(
             "stated_weight_blank_report_tolerance", 0.10))
         if _chk_blank > 0 and abs(stated_weight_kg - _chk_blank) > _chk_blank * _tol:
+            # ── A MEASURED BLANK BUYS THE STEEL; THE WEIGHT CHECKS IT ────────────────
+            #
+            # James Gray, 401912-02: "Steel cost from nested blank area, with 1.7 kg only a
+            # sanity check." That is the transaction. A laser part is nested on a sheet and
+            # you pay for its share of that sheet, cut-out and all — the window is scrap
+            # you bought. Costing the finished weight is buying back the hole.
+            #
+            # Scoped to a MEASURED flat pattern, and deliberately. Where the blank came
+            # from a DXF it is the stronger fact and the weight is the check. Where there
+            # is no DXF the blank is PDF vision, often garbled, and the printed weight is
+            # the stronger fact — that is the existing behaviour above and it stays.
+            _dxf_blank = (str(part.get("geometry_source") or "").lower() in (
+                "dxf_flat_pattern", "dxf", "dxf_flat") or _has_native_flat(part))
+            _from = "blank" if _dxf_blank else "stated_weight"
             part["stated_weight_vs_blank"] = {
                 "stated_weight_kg": round(float(stated_weight_kg), 3),
                 "blank_implied_kg": round(_chk_blank, 3),
                 "blank_length_mm": blank_length, "blank_width_mm": blank_width,
-                "costed_from": "stated_weight",
+                "costed_from": _from,
             }
             part.setdefault("review_flags", []).append(
                 f"MASS: the drawing states {float(stated_weight_kg):g} kg and the "
                 f"{blank_length:g} x {blank_width:g} x {thickness:g} mm blank implies "
-                f"{_chk_blank:.2f} kg. The material on this line is costed from the STATED "
-                f"{float(stated_weight_kg):g} kg. "
-                + ("A part with cut-outs weighs less than its blank and the stock is still "
-                   "bought at full size, so if the difference is the window then the blank "
-                   "is what this job buys and the line is light by "
-                   f"{(_chk_blank - float(stated_weight_kg)):.2f} kg."
+                f"{_chk_blank:.2f} kg. The material on this line is costed from "
+                + (f"the MEASURED BLANK ({_chk_blank:.2f} kg), because a nested part is "
+                   f"bought as its share of a sheet and the cut-out is scrap that was paid "
+                   f"for. The stated weight is the finished part and is kept as the check "
+                   f"it is — the two differ by "
+                   f"{abs(_chk_blank - float(stated_weight_kg)):.2f} kg."
+                   if _dxf_blank else
+                   f"the STATED {float(stated_weight_kg):g} kg, because there is no "
+                   f"measured flat pattern and a blank read off a drawing image is the "
+                   f"weaker of the two.")
+                + (" A part with cut-outs weighs less than its blank, which is the ordinary "
+                   "reason for a gap this way round."
                    if stated_weight_kg < _chk_blank else
-                   "The stated weight is HEAVIER than the blank, which a flat part cannot "
+                   " The stated weight is HEAVIER than the blank, which a flat part cannot "
                    "be — confirm the gauge and the blank size.")
-                + " The title block is not overwritten; confirm which figure this job "
-                  "should buy.")
+                + " The title block is not overwritten.")
+            if _dxf_blank:
+                # Costing falls through to the blank-area path below. The figure itself is
+                # untouched on the record — it is a fact about the part, not about the price.
+                stated_weight_kg = None
 
     if stated_weight_kg is not None and stated_weight_kg > 0:
         applied_price_per_kg = external_price.get("applied_price_per_kg")
