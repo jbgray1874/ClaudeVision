@@ -42,6 +42,13 @@ output/
 # sizes, and are worthless if they cannot be reviewed in a diff like any other statement
 # of fact. Named narrowly so the blanket rule still holds everywhere else.
 !tools/jobs/*.json
+# AND THE ONES WRITTEN AS RULINGS. Same kind of file, same reasoning, a second folder —
+# `docs/answers/` is where a job's confirmed decisions are drafted for an estimator to
+# copy to the share, and the blanket rule silently kept every one of them out of the
+# repository. D-102 records 7332-01's answers file as delivered; it was never in a commit,
+# so nobody outside the container that wrote it could have it. A ruling that cannot be
+# reviewed in a diff is not a record of anything.
+!docs/answers/*.json
 
 # ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/

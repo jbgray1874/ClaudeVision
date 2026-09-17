@@ -1,0 +1,39 @@
+{
+  "_what_this_is": "Howard Thurley's rulings on 7332-01, in the form the engine reads. COPY THIS FILE beside the staged drawings as 7332-01_confirmed.json — the run picks up *_confirmed.json from the job folder. It governs 7332-01 and no other job: the file is named for the drawing.",
+
+  "_where_it_goes": "\\\\sdi-dc01\\shareddata$\\Shared\\Estimating\\Completed\\AI Estimating\\AISheets\\SDIIntelligenceAISheet\\harrods\\7332-01\\7332-01_confirmed.json",
+
+  "confirmed_by": "Howard Thurley",
+  "confirmed_on": "2026-09-15",
+  "note": "From his 15 September reply to the 9 September review. Two rulings, both of which the engine had recorded as questions and kept charging until a person answered them.",
+
+  "_parts_is_for": "WHAT THE DRAWING SAYS. Sizes, gauges, materials, quantities. Prices are refused in this half on purpose: a price typed here would read on the sheet exactly like one the engine sourced.",
+  "parts": {
+    "7332-01-008": {
+      "thickness_mm": 1.0,
+      "basis": "read",
+      "read_from": "'0.9mm Steel Production use 1mm in Lieu' — Howard Thurley, 15 Sep 2026. The standing substitution rule already does this; the block is here so the ruling is explicit on the job rather than only in config."
+    }
+  },
+
+  "_decisions_is_for": "WHAT WE DECIDED. Applied as HIS call, carrying his name onto the line, and reported as his — never as something the engine worked out.",
+  "estimator_decisions": {
+
+    "_why_operations_off": "'Line 103 - Tube Bending Op. - Not Required.' The drawing's own text mentions a bend, so the engine charges it and asks rather than deleting charged work on one reading — that gate is deliberate. This is the answer it was waiting for. Spelling does not matter: tubebend, tube_bending and Tube Bend all reach the same operation.",
+    "operations_off": {
+      "7332-01-002": ["tube_bending"]
+    },
+
+    "_why_nesting_groups": "'if multiple components used but don't exceed a single sheet, laser rate would be reduced to not exceed the given set up time.' The engine's own nest result could not prove it — the nester produced no parts-per-sheet for these two — so each row kept a full 10-minute set-up and the job booked 20 minutes where the shop runs one program. This is the second proof the engine accepts, and the stronger one. Members are named explicitly because same gauge alone is never enough.",
+    "nesting_groups": {
+      "003 and 004 on one laser program": ["7332-01-003", "7332-01-004"]
+    },
+
+    "_why_throughput": "'Line 96 - Laser Rate Acrylic Comparison AI 252 p/hour Manual Estimate 95 p/hour.' He runs the department; 252 was a corpus median off thirteen historical lines.",
+    "throughput_per_hour": {
+      "Laser (Acrylic)": 95
+    }
+  },
+
+  "_not_here_deliberately": "No plating price and no plater freight price. Both are real costs and both are open, but a figure off his own sheet is not a price source (D-078) — they need a current quote. The lines stay on the estimate naming what they are and who owns them."
+}

@@ -4373,9 +4373,44 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # A live catalogue rate is the strongest reason to enter this branch that exists. It is
     # cached per material and gauge, so asking early costs one lookup per pair, not one per
     # part.
-    _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(material, thickness)
+    # ── THE BOARD IS PROMOTED BEFORE ANY CATALOGUE IS ASKED ─────────────────────────
+    #
+    # THE FACED-BOARD PROMOTION WAS UNREACHABLE ON EVERY JOB THAT HAD A CORE RATE.
+    #
+    # It lives four hundred lines below, under "FACED BOARD: PRICED BY THE SHEET", and
+    # its rule is written there: once promoted a part may NOT fall back to the bare
+    # core's money. That was enforced against the £/kg path and against nothing else.
+    # The line immediately below asks the live UDEF catalogue for a £/m² on the material
+    # as read — and the catalogue has plain 9mm MDF — so the branch that follows PRICED
+    # THE PART AND RETURNED, and the promotion never ran at all.
+    #
+    # 11908-21 is what that costs, in Tony Ford's own words: a laminated tray costed as
+    # raw MDF at £43.12 on a 3050 x 1525 sheet, when the board is bought pre-faced at
+    # 3080 x 1220. And because `_laminate_in_board` is stamped by the promotion, the
+    # whole faced-board pilot downstream went with it — the scoped joinery rates his
+    # review supplied (bench, packing, edge banding) never saw a faced-board job, so the
+    # sheet ran on the unmeasured department guesses he had just corrected. One
+    # unreachable branch, and four of his findings.
+    #
+    # So the question is asked HERE, once, in front of every pricing path, and the
+    # catalogue is asked about the board SDI actually buys. A faced family with a live
+    # rate is the best answer this engine can give — rung 1, current, checkable. A faced
+    # family with none must not be handed the core's rate instead: it falls through to
+    # the faced block below and reaches the sheet as a visible unpriced line.
+    _faced_family, _faced_why = _faced_board_promotion(part, material)
+    if _faced_family:
+        part["_laminate_in_board"] = True
+        part["_faced_board_family"] = _faced_family
+        part.setdefault("review_flags", []).append(
+            f"{material} + LAMINATED is bought pre-faced as {_faced_family} — evidence: "
+            f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
+            f"shop operation.")
+    _cost_family = _faced_family or material
+    _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(_cost_family, thickness)
     if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2 or _live_sheet_rate)
-            and blank_length and blank_width):
+            and blank_length and blank_width
+            # A promoted board with no rate of its own does not borrow the core's.
+            and not (_faced_family and not _live_sheet_rate)):
         _acr_area_m2 = (float(blank_length) * float(blank_width)) / 1_000_000.0
         _scrap = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
 
@@ -4403,7 +4438,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # The sheet price is the RATE across a whole sheet -- the same arithmetic the
             # acrylic branch does -- and the nest comes from the one function that answers
             # "how many parts per sheet", so this cannot drift from the block it feeds.
-            _hips_sheet_est = select_sheet_size(material, blank_length, blank_width, part=part)
+            # NESTED ON THE SHEET THE MONEY BUYS. A promoted board is bought as the faced
+            # family, and the faced family's stock sizes are not the core's: Tony's 9mm
+            # laminated board comes 3080 x 1220, plain MDF 3050 x 1525. Nesting the rate on
+            # the core's sheet is the same understatement as dividing one sheet's price by
+            # another sheet's yield — it was his "wrong sheet size" finding.
+            _hips_sheet_est = select_sheet_size(_cost_family, blank_length, blank_width,
+                                                part=part)
             if (_hips_sheet_est or {}).get("rotated"):
                 # THE BLANK IS WRITTEN TURNED, so the workbook's own fixed-orientation nest
                 # reaches the better yield by its own arithmetic. Howard's 0355255 line 84:
@@ -4438,8 +4479,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "sheet_fraction_per_part": (round(_acr_area_m2 / _hips_sheet_area_m2, 6)
                                             if _hips_sheet_area_m2 else None),
                 "nesting_rule": (_hips_sheet_est.get("nesting_rule")
-                                 or _costed_facts.nesting_rule_for(material)),
+                                 or _costed_facts.nesting_rule_for(_cost_family)),
                 "cost_method": "sheet_rate_live_udef",
+                # THE FAMILY THE MONEY WAS FOR. wb_populate's scoped joinery rates and the
+                # workbook's block routing both read this; without it a promoted board
+                # prices as faced and then runs on plain-MDF department rates.
+                "costing_material_family": _cost_family,
                 "part_confidence_overall": _part_confidence_overall(part),
                 "part_geometry_reliability": _part_geometry_reliability(part),
                 "reliability_flags": [],
@@ -5034,12 +5079,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # returned plain-MDF kilo money before the faced-board promotion below ever ran: the
     # weight was right and the price basis still wrong. The weight stays on the record;
     # only its PRICING is declined, and the sheet-yield branch prices the purchased board.
-    if stated_weight_kg is not None:
-        try:
-            if _faced_board_promotion(part, material)[0]:
-                stated_weight_kg = None
-        except Exception:                                            # noqa: BLE001
-            pass
+    if stated_weight_kg is not None and _faced_family:
+        stated_weight_kg = None
     # Plausibility gate: a DXF/PDF "stated weight" is trusted only when it agrees with the
     # blank-based mass (area x thickness x density). Bad unit conversions produce weights that
     # are wildly too small (e.g. 0.0007 kg for a ~2.3 kg peg) or too large (the 1450 title-block
@@ -5175,15 +5216,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     # drawing's own evidence (see _faced_board_promotion), and once promoted the part may
     # NOT fall back to the bare core's £/kg — plain-MDF money on a laminated panel is the
     # 4x under-charge 11908-21 shipped, wearing a real-looking price.
-    _faced_family, _faced_why = _faced_board_promotion(part, material)
-    _cost_family = _faced_family or material
+    # ASKED ONCE, ABOVE. The promotion now runs in front of the live-catalogue branch (the
+    # only place it could be overtaken), and `_faced_family` / `_cost_family` carry its
+    # answer down here. Asking again would double the evidence flag on every faced part.
     _board_rate, _board_note = _board_sheet_rate(_cost_family, thickness)
     if _faced_family:
-        part["_laminate_in_board"] = True
-        part.setdefault("review_flags", []).append(
-            f"{material} + LAMINATED is bought pre-faced as {_faced_family} — evidence: "
-            f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
-            f"shop operation.")
         if not _board_rate:
             part.setdefault("review_flags", []).append(
                 f"FACED BOARD UNPRICED: no purchased sheet price for {_faced_family} at "
