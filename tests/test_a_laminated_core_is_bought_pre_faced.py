@@ -67,18 +67,19 @@ def test_the_tray_base_prices_off_the_laminated_sheet():
             "blank_width_mm": 390.0, "quantity": 2,
             "textual_operations": ["laminating"]}
     out = estimator.estimate_material(part)
-    assert out.get("cost_method") == "board_sheet_yield", out.get("cost_method")
+    # THE IDENTITY SURVIVES THE PRICE BEING WITHDRAWN (D-103). Tony's own £172 is no
+    # longer in config — it was his figure off his own estimate — but everything the
+    # engine had to work out to USE it is still right: the board is a pre-faced laminate,
+    # it belongs to the MFMDF family and not to plain MDF, and the sheet it is bought as
+    # is a 3080x1220. Those are what his "wrong sheet size" complaint was about, and they
+    # do not depend on knowing the money.
     assert out.get("costing_material_family") == "MFMDF"
-    assert out.get("sheet_price_gbp") == 172.0, \
-        "the 9mm point is Tony Ford's stated Lawcris price, dated and INDICATIVE"
     assert part.get("_laminate_in_board") is True
     assert any("bought pre-faced" in f for f in part.get("review_flags", []))
-    # and NOT the plain-MDF kilo money the 08:04 book shipped (£43.12/sheet)
-    assert (out.get("unit_material_cost_gbp") or 0) > 3.0, out
-    # the yield is computed on the sheet the £172 actually buys — never on a stocked
-    # size the money was not paid for
-    assert (out.get("stock_estimate") or {}).get("candidate_sheet_size_mm") == \
-        [3080.0, 1220.0], out.get("stock_estimate")
+    assert out.get("cost_method") == "faced_board_unpriced", out.get("cost_method")
+    assert not out.get("sheet_price_gbp"), (
+        "a price typed into config is back — the 9mm point was Tony's own figure off his "
+        "own sheet, which is what D-078 forbids")
 
 
 def test_a_modelled_weight_does_not_put_the_board_back_on_core_kilos():
@@ -93,8 +94,13 @@ def test_a_modelled_weight_does_not_put_the_board_back_on_core_kilos():
             "dxf_weight_kg": 1.03,
             "textual_operations": ["laminating"]}
     out = estimator.estimate_material(part)
-    assert out.get("cost_method") == "board_sheet_yield", out.get("cost_method")
-    assert out.get("sheet_price_gbp") == 172.0
+    # THE PROTECTION THIS TEST EXISTS FOR IS UNCHANGED BY THE PRICE GOING. A modelled
+    # weight must not send a pre-faced board back to plain-MDF kilo money — £43.12 a
+    # sheet against a board that is bought laminated. It must land on the purchased-sheet
+    # basis, and where that basis has no money yet it says so by name rather than
+    # quietly reverting to the wrong one.
+    assert out.get("cost_method") == "faced_board_unpriced", out.get("cost_method")
+    assert "kg" not in str(out.get("cost_method") or "").lower()
 
 
 def test_a_plain_board_with_a_weight_still_prices_by_its_weight():

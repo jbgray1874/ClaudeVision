@@ -45,12 +45,13 @@ def test_dibond_looks_itself_up_in_the_catalogue():
     assert estimator._sheet_catalogue_token("DIBOND 3.0mm WHITE") == "DIBOND"
 
 
-def test_dibond_has_a_per_sheet_fallback_rate():
-    rate, note = estimator._board_sheet_rate("DIBOND", 3.0)
-    assert rate == 165.0 and "3mm" in note
-    # a between-gauge value interpolates on SDI's own points, never extrapolates
-    rate4, _ = estimator._board_sheet_rate("DIBOND", 4.0)
-    assert rate4 == 210.0
+def test_dibond_carries_its_sheet_size_and_no_invented_rate():
+    """The rates here were "PROVISIONAL ... mid trade" — nobody's figure at all — and went
+    with the rest under D-103. The SHEET SIZE stays: it is what the supplier sells, the
+    yield is computed on it, and it is right whatever the price turns out to be."""
+    assert estimator._board_sheet_rate("DIBOND", 3.0)[0] is None
+    assert estimator._board_sheet_rate("DIBOND", 4.0)[0] is None
+    assert config.BOARD_SHEET_PRICE_GBP["DIBOND"][3.0]["sheet_mm"] == (3050, 1500)
 
 
 def test_dibond_carries_its_physical_facts():

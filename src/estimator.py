@@ -3182,8 +3182,22 @@ def _board_sheet_rate(material: Optional[str], thickness: Optional[float]):
         return None, ""
     # A point may be a plain price, or {"gbp": …, "sheet_mm": (L, W)} when the size the
     # price was PAID FOR matters — _board_priced_sheet_mm reads the size; this reads money.
-    points = sorted((float(t), float(p["gbp"] if isinstance(p, dict) else p))
-                    for t, p in table.items())
+    # A WITHDRAWN POINT IS NOT A POINT. Every price in this table was withdrawn on
+    # 18 Sep 2026 (D-103): the 9mm figure was off Tony's own estimate and the Dibond ones
+    # were a mid-trade guess. What remains is the material families and the SHEET SIZES,
+    # which are specification rather than money and which his other complaint depended on.
+    # A point with no money is skipped here so the line falls to the rungs that can answer
+    # — and with no points at all this returns None, which is the honest answer.
+    points = []
+    for t, p in table.items():
+        _gbp = p.get("gbp") if isinstance(p, dict) else p
+        if _gbp is None:
+            continue
+        try:
+            points.append((float(t), float(_gbp)))
+        except (TypeError, ValueError):
+            continue
+    points.sort()
     for _t, _p in points:
         if abs(_t - thk) < 0.51:
             return _p, f"observed at {_t:g}mm"

@@ -2976,32 +2976,45 @@ SCRAP_PERCENTAGE = 0.04
 #
 # These are indicative and dated, not firm. The price_not_firm invariant already says so on
 # every sheet, and it should keep saying so until Tim confirms the current rate.
+# ── EVERY PRICE IN THIS TABLE IS WITHDRAWN, 18 SEP 2026 ───────────────────────────────
+#
+# Tony Ford, 11908-21 at 50 off: "Wrong sheet size for Laminated board. Wrong price for
+# board." And James, setting the rule for his rerun: "We will learn Tony's methods and
+# timings from his sheet, but NOT transplant his prices. Current SDI Live/supplier/LLM
+# evidence remains the pricing source."
+#
+# This table convicted itself in its own comment. The 9mm point read "£172.00 a 3080x1220
+# sheet ... stated by Tony Ford in his own estimate for 0359967 at the 50-off rate" — a
+# number off an estimator's sheet, which is what D-078 forbids and what D-095 withdrew
+# from the commodity table. The Dibond points were worse: "PROVISIONAL ... mid trade",
+# which is nobody's figure at all.
+#
+# WHAT IS KEPT, AND IT ANSWERS TONY'S OTHER POINT. The material families and the SHEET
+# SIZES stay. A sheet size is a SPECIFICATION — what the supplier actually sells — not a
+# price, and getting it wrong was his separate complaint: £172 buys a 3080x1220, and
+# dividing any money by a 2800x2070's yield understates every part on the job. The size
+# has to survive for the yield to be right whatever the price turns out to be.
+#
+# The quantity breaks his sheet carries (1 / 50 / 100 / 250 / 500) are a METHOD worth
+# having and are recorded in the register; they are not five more prices to type here.
 BOARD_SHEET_PRICE_GBP = {
-    # material -> {thickness_mm: GBP per full sheet}
-    "MFC":       {18.0: 58.55, 36.0: 84.54},
-    # 9mm: £172.00 a 3080x1220 sheet of "MDF laminated both sides" (colour core), Lawcris,
-    # stated by Tony Ford in his own estimate for 0359967 (11908-21 Sunglasses Tray,
-    # 16 Sep 2026) at the 50-off rate. His sheet carries the supplier's own quantity breaks
-    # — 173 / 172 / 168 / 165 / 163 at 1 / 50 / 100 / 250 / 500 — which this table cannot
-    # yet hold; the register records them until a per-line supplier-break mechanism exists.
-    # CAUTION ON INTERPOLATION: the 9mm point is a PREMIUM colour-core laminate and the
-    # 18/36mm points are the Egger Davos Oak MFC — a thickness between 9 and 18 would
-    # interpolate DOWNWARD across two different products. The label _board_sheet_rate
-    # prints quotes both ends, so a falling curve is visible, INDICATIVE, and Tony's to
-    # overrule — but treat any 10-17mm faced-board price from this table with suspicion.
-    # The dict form carries the SHEET SIZE the price was paid for: £172 buys a
-    # 3080x1220, and dividing it by a 2800x2070's yield would understate every part.
-    "MFMDF":     {9.0: {"gbp": 172.00, "sheet_mm": (3080, 1220)},
-                  18.0: 58.55, 36.0: 84.54},
-    "CHIPBOARD": {18.0: 58.55, 36.0: 84.54},
-    # DIBOND / ACM — PROVISIONAL, per full 3050x1500 (4.575 m2) sheet, ~£36/m2 at 3mm and
-    # ~£46/m2 at 4mm (mid trade). CONFIRM against SDI's own Dibond buy price and replace these
-    # two lines — then every Dibond job prices itself from the real number. Priced by the sheet
-    # and nested like any board, so a small panel is charged its share, not a whole sheet.
-    "DIBOND":    {3.0: 165.0, 4.0: 210.0},
-    "ALUPANEL":  {3.0: 165.0, 4.0: 210.0},
-    "REYNOBOND":  {3.0: 165.0, 4.0: 210.0},
-    "ETALBOND":  {3.0: 165.0, 4.0: 210.0},
+    # material -> {thickness_mm: {"gbp": <withdrawn>, "sheet_mm": (L, W) where known}}
+    "MFC":       {18.0: {"gbp": None}, 36.0: {"gbp": None}},
+    # 9mm colour-core laminate, bought as a 3080x1220. The SIZE is the supplier's; the
+    # money is asked of SDI Live, the supplier catalogue, or a researched figure with its
+    # evidence — and until one answers, the line says so rather than carrying a guess.
+    "MFMDF":     {9.0: {"gbp": None, "sheet_mm": (3080, 1220)},
+                  18.0: {"gbp": None}, 36.0: {"gbp": None}},
+    "CHIPBOARD": {18.0: {"gbp": None}, 36.0: {"gbp": None}},
+    # DIBOND / ACM, sold as a 3050x1500. The rates here were a mid-trade guess and are gone.
+    "DIBOND":    {3.0: {"gbp": None, "sheet_mm": (3050, 1500)},
+                  4.0: {"gbp": None, "sheet_mm": (3050, 1500)}},
+    "ALUPANEL":  {3.0: {"gbp": None, "sheet_mm": (3050, 1500)},
+                  4.0: {"gbp": None, "sheet_mm": (3050, 1500)}},
+    "REYNOBOND": {3.0: {"gbp": None, "sheet_mm": (3050, 1500)},
+                  4.0: {"gbp": None, "sheet_mm": (3050, 1500)}},
+    "ETALBOND":  {3.0: {"gbp": None, "sheet_mm": (3050, 1500)},
+                  4.0: {"gbp": None, "sheet_mm": (3050, 1500)}},
 }
 
 # ── WHAT EACH CUSTOMER'S SHEET CHARGES ON TOP, BY NAME ───────────────────────────────

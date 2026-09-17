@@ -4767,8 +4767,12 @@ def test_a_stated_joinery_finish_becomes_the_work_it_names():
     _ng = _measured.get("normalized_geometry") or {}
     eq(_ng.get("blank_length_mm"), 1434.0, "the measured blank survives re-interpretation")
     eq(_ng.get("blank_width_mm"), 748.0, "in both dimensions")
-    eq((_est_mat(_measured) or {}).get("cost_method"), "board_sheet_yield",
-       "so the panel is still priced by the sheet rather than falling to no geometry")
+    # The point of this assertion is that re-interpreting the finish does not LOSE the
+    # measured blank — it used to fall to "no geometry", which is a different failure from
+    # having no price. With the board rates withdrawn (D-103) the method is no_price, and
+    # what matters is that the geometry above survived to be priced the moment a rate does.
+    eq((_est_mat(_measured) or {}).get("cost_method"), "no_price",
+       "unpriced for want of a RATE, not for want of the geometry checked above")
 
     # A STEEL PART IS UNTOUCHED. The gate is about board, and a powder-coated bracket must
     # not acquire joinery operations because the word EDGE appears somewhere on the sheet.
@@ -5673,41 +5677,46 @@ def test_the_merge_runs_on_the_population_the_sheet_renders():
        "the merge runs before the canonical graph is compiled")
 
 
-def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
-    """12422-24's material total was GBP 1.75 with a 1434 x 748 x 28 MFC panel at zero —
-    about 5% of what the job really costs in material.
+def test_a_board_sheet_rate_is_asked_for_rather_than_typed_in():
+    """12422-24's material total was GBP 1.75 with a 1434 x 748 x 28 MFC panel at zero, and
+    the answer was to put the shop's own purchase prices into config. That was right about
+    where the money comes from and wrong about where it lives.
 
-    The price was not missing. It was in the building. The historical corpus, built from the
-    estimators' own priced workbooks, carries cost_per_sheet_gbp on 27 real MFC purchases,
-    and description_normaliser already names the code: MFC046 = "Egger H3131 ST12 Natural
-    Davos Oak FSC MFC 2800x2070x19mm sheet". Two thicknesses of that same board appear at
-    known prices, eighteen months apart, from jobs that were quoted and won.
+    A price frozen in a source file cannot be dated, cannot be seen to go stale, and cannot
+    be told apart on a sheet from one we sourced this morning. Tony's "wrong price for
+    board" landed on exactly that: the 9mm point was his own figure off his own estimate.
+    All of them are withdrawn (D-103); the corpus of real purchases they came from is still
+    there to be QUERIED, with a date attached.
 
-    A web search returns a B&Q pre-cut strip and a list price that commits nobody. This is
-    what the shop paid.
-
-    INTERPOLATED BETWEEN PURCHASES, NEVER EXTRAPOLATED BEYOND THEM. Between two real points
-    is an estimator's own arithmetic on the shop's own numbers. Past the last real point is a
-    guess that looks derived, so it is refused and the line stays visibly unpriced."""
+    THE ARITHMETIC IS STILL THE ARITHMETIC, so it is still tested — against points injected
+    here rather than against frozen data. Between two real purchases is an estimator's own
+    sum on the shop's own numbers; past the last one is a guess wearing derivation's
+    clothes, and it stays refused."""
     from estimator import _board_sheet_rate, estimate_material
     import config
 
-    eq(_board_sheet_rate("MFC", 18.0)[0], 58.55, "an observed thickness is used as observed")
-    eq(_board_sheet_rate("MFC", 36.0)[0], 84.54, "at both ends of the range")
+    eq(_board_sheet_rate("MFC", 18.0)[0], None, "no price is typed into config any more")
+    eq(_board_sheet_rate("MFC", 36.0)[0], None, "at either end")
 
-    _rate, _how = _board_sheet_rate("MFC", 28.0)
-    eq(_rate, 72.99, "28mm sits between the two and is interpolated between them")
-    ok("interpolated" in _how and "18" in _how and "36" in _how,
-       "and says which two purchases it came from, so an estimator can check the arithmetic")
+    _saved = config.BOARD_SHEET_PRICE_GBP
+    try:
+        config.BOARD_SHEET_PRICE_GBP = {
+            "MFC": {18.0: {"gbp": 58.55}, 36.0: {"gbp": 84.54}}}
+        eq(_board_sheet_rate("MFC", 18.0)[0], 58.55, "an observed thickness is used as observed")
+        _rate, _how = _board_sheet_rate("MFC", 28.0)
+        eq(_rate, 72.99, "28mm sits between the two and is interpolated between them")
+        ok("interpolated" in _how and "18" in _how and "36" in _how,
+           "and says which two purchases it came from, so the arithmetic can be checked")
+        eq(_board_sheet_rate("MFC", 50.0)[0], None, "a thickness above every purchase is refused")
+        eq(_board_sheet_rate("MFC", 12.0)[0], None, "and below every purchase too")
+    finally:
+        config.BOARD_SHEET_PRICE_GBP = _saved
 
-    # BEYOND THE HISTORY, NOTHING. Nothing SDI has bought says what a 50mm board costs, and
-    # a straight line past the last real point is invention wearing derivation's clothes.
-    eq(_board_sheet_rate("MFC", 50.0)[0], None, "a thickness above every purchase is refused")
-    eq(_board_sheet_rate("MFC", 12.0)[0], None, "and below every purchase too")
     eq(_board_sheet_rate("MILD STEEL", 2.0)[0], None, "steel is not a board and has no sheet rate")
 
-    # THE PANEL, END TO END. Sheet price / parts per sheet / scrap — the manual estimate's
-    # own method, not a per-kg conversion of a transaction that never happens by the kilo.
+    # AND THE PANEL, END TO END: with no price the board is UNPRICED BY NAME, not silently
+    # converted to a per-kilo mass it never had. That distinction is the whole reason the
+    # sheet-yield method exists.
     _panel = {"part_number": "12422-24-01J", "normalized_material": "MFC", "quantity": 1,
               "normalized_thickness_mm": 28.0, "flat_pattern_detected": True,
               "normalized_geometry": {
@@ -5715,42 +5724,7 @@ def test_a_board_is_priced_from_what_the_shop_has_actually_paid():
                   "bounding_box_flat_mm": {"length": 1434.0, "width": 748.0, "height": 28.0},
                   "geometry_source": "dxf_flat_pattern"}}
     _res = estimate_material(_panel) or {}
-    eq(_res.get("cost_method"), "board_sheet_yield", "board is costed as a sheet, not a mass")
     eq(_res.get("unit_material_mass_kg"), None, "and carries no mass it never had")
-    ok(37.0 < float(_res.get("unit_material_cost_gbp") or 0) < 39.0,
-       f"the panel is about GBP 38, not zero (got {_res.get('unit_material_cost_gbp')})")
-
-    # AND THE KEYS THE WORKBOOK ACTUALLY READS. The Other Sheet block computes
-    # Cost Per Part = (cost_per_sheet / parts_per_sheet) x (1+scrap), so a blank
-    # cost-per-sheet is GBP 0 however well the part cost was derived. It reads
-    # `sheet_price_gbp`, or reconstructs from a TOP-LEVEL `parts_per_sheet` — and this
-    # record published neither, so the engine held the panel at GBP 37.95 while the sheet
-    # showed zero and the material total stayed at GBP 1.75. Built, and not wired.
-    eq(_res.get("sheet_price_gbp"), 72.99, "the sheet price the template divides")
-    eq(_res.get("parts_per_sheet"), 2, "and the yield it divides by")
-    _sp, _pps, _sc = (_res["sheet_price_gbp"], _res["parts_per_sheet"],
-                      _res.get("scrap_pct") or 0.04)
-    ok(abs((_sp / _pps) * (1 + _sc) - float(_res["cost_per_part_gbp"])) < 0.01,
-       "and the template's own arithmetic reproduces the part cost from them")
-    from pathlib import Path as _P2
-    _wb_src = (_P2(__file__).resolve().parents[1] / "src" / "wb_populate.py").read_text(
-        encoding="utf-8")
-    ok('me.get("sheet_price_gbp")' in _wb_src,
-       "which is the key the Other Sheet block reads")
-
-    # IT IS INDICATIVE AND SAYS SO. A price from history is reproducible; reproducible is not
-    # firm, and the sheet must keep saying that until an estimator confirms the rate.
-    ok("indicative_price" in (_res.get("reliability_flags") or []),
-       "the record carries the indicative marker the price_not_firm check reads")
-    ok(any("confirm the current rate" in str(f) for f in (_panel.get("review_flags") or [])),
-       "and the estimator is told to confirm it")
-
-    # NO PER-KG RATE WAS INVENTED ALONGSIDE IT. The sheet path is how board is bought; a
-    # per-kg entry would let the mass path price it at a number nobody pays.
-    for _m in ("MFC", "MFMDF", "CHIPBOARD"):
-        ok(_m not in config.MATERIAL_PRICE_GBP_PER_KG,
-           f"{_m} is priced by the sheet only")
-
 
 def test_faced_board_is_not_nested_on_a_steel_sheet():
     """12422-24's material total is GBP 1.75 and its largest single item is a
