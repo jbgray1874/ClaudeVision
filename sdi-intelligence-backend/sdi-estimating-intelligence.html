@@ -221,13 +221,13 @@
   .sdinav-body{ flex:1; }
   .sdinav-toggle{
     display:flex; align-items:center; gap:9px; width:100%;
-    padding:10px 16px; border:0; border-top:1px solid var(--line,var(--line));
-    background:transparent; color:var(--muted,var(--muted)); cursor:pointer;
+    padding:10px 16px; border:0; border-top:1px solid var(--line);
+    background:transparent; color:var(--muted); cursor:pointer;
     font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
     position:sticky; bottom:0; transition:.16s;
   }
-  .sdinav-toggle:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
-  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand,var(--brand)); outline-offset:-2px; }
+  .sdinav-toggle:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand); outline-offset:-2px; }
   body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
   .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
   body.nav-collapsed .sdinav-toggle .chev{ transform:rotate(180deg); }
@@ -238,13 +238,17 @@
   .wrap{ margin-left:0 !important; margin-right:auto !important; }
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
-    background:var(--panel,var(--panel)); border-right:1px solid var(--line,var(--line));
+    background:var(--panel); border-right:1px solid var(--line);
     z-index:900; padding-bottom:24px;
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,var(--brand));
-    color:var(--bg); font-weight:900; font-size:17px; display:flex; align-items:center;
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand);
+    /* #000, as the portal's own .mark b uses, and NOT the near-black palette literal:
+       the mark sits on amber in both themes, so its ink is not theme-dependent, and a
+       palette literal here is one no [data-theme] rule can reach. The pages had been
+       hand-corrected for that once already and re-running this file undid it. */
+    color:#000; font-weight:900; font-size:17px; display:flex; align-items:center;
     justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
   /* we.are.sdi, served by /api/brand/logo from the SAME folder the client quote reads. The
      lettered .sdinav-mark above is only the fallback for a page opened off the share, where
@@ -253,19 +257,19 @@
   .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:12.5px;
     letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
-    color:var(--dim,var(--dim)); display:block; }
+    color:var(--dim); display:block; }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
-    text-transform:uppercase; color:var(--dim,var(--dim)); padding:16px 16px 6px; }
-  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,var(--muted));
+    text-transform:uppercase; color:var(--dim); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted);
     text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
   .sdinav .sdinav-ext{ opacity:.55; font-size:.9em; }
-  .sdinav a.sdinav-item:hover{ color:var(--ink,var(--ink)); background:var(--tint); }
-  .sdinav a.sdinav-item.is-here{ color:var(--ink,var(--ink)); border-left-color:var(--brand,var(--brand));
+  .sdinav a.sdinav-item:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink); border-left-color:var(--brand);
     background:#ffffff0a; font-weight:600; }
   @media (max-width:900px){
     body{ padding-left:0; }
     .sdinav{ position:static; width:auto; height:auto; border-right:0;
-      border-bottom:1px solid var(--line,var(--line)); }
+      border-bottom:1px solid var(--line); }
   }
 </style>
 
@@ -283,6 +287,7 @@
   <a class="sdinav-item" href="/#aisvc-technical-design">SDI Technical Design Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-drawing-search">SDI Drawing Search Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-client-briefing">SDI Client Briefing Intelligence</a>
+  <a class="sdinav-item" href="/#aisvc-x3">SDI Sage X3 Data Migration</a>
   <a class="sdinav-item" href="/#aisvc-brief">SDI Brief &amp; Concept Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-omniverse">SDI Immersive Design Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-dfm">SDI Design for Manufacture Intelligence</a>
@@ -298,7 +303,6 @@
   <a class="sdinav-item" href="/#aisvc-voice">SDI Voice Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-brighthr">SDI People Data Intelligence · BrightHR</a>
   <a class="sdinav-item" href="/#aisvc-wearesdi">SDI Web Intelligence</a>
-  <a class="sdinav-item" href="/#aisvc-x3">SDI ERP Intelligence · Sage X3</a>
   <a class="sdinav-item" href="/#aisvc-obs">SDI Recording Intelligence · OBS</a>
   <a class="sdinav-item" href="/#aisvc-tech-radar">SDI Tech Radar Intelligence</a>
   <a class="sdinav-item" href="/#aisvc-roadmap">SDI AI Roadmap</a>
@@ -313,7 +317,7 @@
   <a class="sdinav-item" href="/#golive">Go-Live Guide</a>
   <a class="sdinav-item" href="/#testing">Testing</a>
   <div class="sdinav-grp">Govern</div>
-  <a class="sdinav-item" href="/#architecture">SDI Estimating Intelligence Architecture</a>
+  <a class="sdinav-item" href="/#architecture">Architecture</a>
   <a class="sdinav-item" href="/#rnd">R&amp;D Capture</a>
   <a class="sdinav-item" href="/#servers">Servers</a>
   <a class="sdinav-item" href="/#programme">AI Programme</a>
@@ -325,8 +329,7 @@
   <span>Collapse</span>
 </button>
 </nav>
-<script>
-(function(){
+<script>(function(){
   var b=document.body, t=document.getElementById("sdinav-toggle"), K="sdi.nav.collapsed";
   if(!t) return;
   document.querySelectorAll(".sdinav-item").forEach(function(a){

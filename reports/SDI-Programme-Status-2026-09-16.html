@@ -363,7 +363,8 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
     <a href="#w2"><b>03</b> Workstream 2 &mdash; SDI Technical Design Intelligence</a>
     <a href="#w3"><b>04</b> Workstream 3 &mdash; SDI Creative Design Intelligence</a>
     <a href="#server"><b>05</b> The shared workstation</a>
-    <a href="#open"><b>06</b> Open across the programme</a>
+    <a href="#x3"><b>06</b> Sage X3 data migration &mdash; all data by 30 Oct</a>
+    <a href="#open"><b>07</b> Open across the programme</a>
   </nav>
 
   <!-- ══════════════════════════════════════════════════════════════════
@@ -1085,9 +1086,133 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
     </div>
   </section>
 
+
+  <!-- ══════════════════════════════════════════════════════════════════
+       06 — SAGE X3 DATA MIGRATION. Folded in on 17 Sep 2026 because it is the
+       nearest hard date in front of the business and it reads the same SDI Live
+       tables the estimating engine does. The ERP go-live is 4 Jan 27 and is not
+       ours; the data migration under it is.
+       ══════════════════════════════════════════════════════════════════ -->
+  <section>
+    <h2 id="x3"><span class="n">06</span> Sage X3 data migration</h2>
+
+    <div class="wsband" style="border-left-color:var(--blue)">
+      <div><div class="k">Status</div><div class="v">Plan, gated</div></div>
+      <div><div class="k">Owner</div><div class="v">J. Gray</div></div>
+      <div><div class="k">With</div><div class="v">Acuity &middot; the data owners</div></div>
+      <div class="r">ALL DATA IN X3<br><b>FRIDAY 30 OCTOBER 2026</b><br>
+        <span class="dim">the ERP itself goes live 4 Jan 27</span></div>
+    </div>
+
+    <p class="subhead">The Access database behind SDI Live moves to Sage X3. <b>Eleven X3 templates
+    are covered by built extract views over eighteen core source tables.</b> Everything else in the
+    roughly three hundred tables, and the Crystal Reports layer above them, gets a stated disposition
+    even where that disposition is &ldquo;not migrated&rdquo; &mdash; because a table with no
+    decision against it is how one survives a migration by accident. The full consolidated view, with
+    every row count and the week-by-week plan, is on the portal at
+    <b>#aisvc-x3</b>; this section is what the programme needs to know.</p>
+
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th>Category</th><th>Templates</th><th>Volume</th></tr></thead>
+        <tbody>
+          <tr><td>Products and items</td><td class="ref">ITM, ITF</td><td class="ref bold">41,330 each</td></tr>
+          <tr><td>Bills of material</td><td class="ref">BOMP</td><td class="ref bold">61,648 lines &middot; 14,581 parents</td></tr>
+          <tr><td>Customers and sales</td><td class="ref">BPC, SOH</td><td class="ref bold">500 &middot; 1,159 open orders</td></tr>
+          <tr><td>Suppliers and purchasing</td><td class="ref">BPS, POH</td><td class="ref bold">1,218 &middot; 1,166 open orders</td></tr>
+          <tr><td>Finance &mdash; AR, AP, general ledger</td><td class="ref">BICX, BISX, GAS</td><td class="ref bold">843 &middot; 2,151 &middot; trial balance</td></tr>
+          <tr><td>Stock</td><td class="ref">SMR</td><td class="ref bold">~40,000</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="minihead">The data, by heading</h3>
+    <div class="grid2">
+      <div class="item ok"><h3>Good &mdash; in scope and mapped</h3>
+        <p>18 core tables behind the eleven templates. Extract views built and proven.</p></div>
+      <div class="item"><h3>Duplicates &mdash; dropped</h3>
+        <p>29 tables, about 3.5M rows. Dated backups and _2/_3/_4 variants, removed from scope
+        rather than cleansed.</p></div>
+      <div class="item"><h3>Do not migrate</h3>
+        <p>Around forty tables: system, log, audit, API staging, transient MRP. Reference data
+        (currencies, countries, units, VAT) is confirmed or rebuilt, not copied.</p></div>
+      <div class="item"><h3>Archive &mdash; not to X3</h3>
+        <p>About 3.1M rows of audit and quote history, and the ledger detail behind the openings.
+        Cold storage, and available to the estimating engine as comparables.</p></div>
+    </div>
+
+    <div class="callout warnbox">
+      <h3>The cleansing is real work, and it has names against it</h3>
+      <p><b>20,724 items carry a blank description</b> &mdash; half the catalogue, and the single
+      biggest piece. Behind it: 36,650 items at a zero base price (expected on raw and sub-assembly
+      lines, so it is the finished goods among them that matter), a decision on 23,082 sales-order
+      lines with a blank status, 66 duplicate part records, 74 customers with no postcode, 40
+      customer and 34 supplier category or tax mismatches, and 51 BOM orphans.</p>
+      <p>Every one has an owner: finance with the FD, products and stock, engineering for the BOMs,
+      credit control, procurement, the sales order manager and the stock controller. <b>These are
+      record-level actions, not sign-offs</b>, and three weeks is tight at that volume.</p>
+    </div>
+
+    <h3 class="minihead">Three weeks to cutover</h3>
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th>Week</th><th>What happens</th><th>Ends</th></tr></thead>
+        <tbody>
+          <tr><td class="ref bold">Mon 12 &ndash; Fri 16 Oct</td>
+              <td><b>Mobilise.</b> Owner assigned per data area; classification locked per table;
+              the three third-party items cleared; <b>the UDEF column-definition analysis run</b>;
+              <b>the Crystal Reports inventory opened</b>; parity and QA over the eleven views.</td>
+              <td class="ref">the gate</td></tr>
+          <tr><td class="ref bold">Mon 19 &ndash; Fri 23 Oct</td>
+              <td><b>Cleanse</b>, in parallel by owner, against the counts above.</td>
+              <td class="ref">data fit to load</td></tr>
+          <tr><td class="ref bold">Mon 26 &ndash; Fri 30 Oct</td>
+              <td><b>Trial load, dress rehearsal, cutover.</b> Master data Mon, transactions Tue,
+              a full timed rehearsal against a frozen snapshot Wed, cutover Thursday evening,
+              go / no-go Friday morning with the FD signing the trial balance, the stock value,
+              AR and AP and the order totals.</td>
+              <td class="ref">all data in X3</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="subhead" style="margin-top:10px"><b>A note on the calendar.</b> The plan as first
+    drafted ran &ldquo;13&ndash;17, 20&ndash;24, 27&ndash;31 October&rdquo; with a Friday 30 October
+    cutover and a go / no-go on Friday 31st. 13 October 2026 is a Tuesday and 31 October is a
+    Saturday, so those could not all be true. The three working weeks that end on a Friday 30 October
+    cutover are the ones above.</p>
+
+    <div class="callout">
+      <h3>End of October is a target with a gate, not a commitment</h3>
+      <p><b>Three things have to hold and two of them do not hold today.</b> The third-party items
+      must clear in week one &mdash; the sign convention blocks the final AR and AP extracts, and
+      without non-production access and the product-category confirmation the trial load cannot run.
+      The cleansing has to actually happen. And only one trial-load cycle fits where the original
+      plan had two plus a rehearsal, so there is no safety net for a structural surprise.</p>
+      <p><b>The recommendation is an explicit decision point at the end of week one:</b> if those
+      three are not confirmed by <b>Friday 16 October</b>, the date rebaselines to mid-November. That
+      is cheaper than defending a date into a failed cutover, by a distance.</p>
+    </div>
+
+    <div class="callout plainbox">
+      <h3>Three things genuinely not known</h3>
+      <ul class="plain">
+        <li><b>The Crystal Reports inventory does not exist.</b> They are .rpt files rather than
+        tables, so nothing about them is in the table dump. Nothing migrates &mdash; each report is
+        rebuilt in X3 reporting or retired &mdash; but each needs identifying, its source tables
+        tracing and an owner. Opened in week one, <b>due by end of October</b>.</li>
+        <li><b>The UDEF family has not been analysed.</b> Some of those tables are custom fields on
+        live records and belong in X3 user fields; others are staging and drop. The column-definition
+        query is a week-one task and the decision is field by field, because deciding without it
+        would be guessing.</li>
+        <li><b>Routings and works orders: in scope, or still parked?</b> They are not among the
+        eleven. If they are now wanted for October that is a scope addition and it changes both the
+        disposition list and the load waves. <b>This needs an answer before the plan is final.</b></li>
+      </ul>
+    </div>
+  </section>
   <!-- ══════════════════════════════════════════════════════════════════ -->
   <section>
-    <h2 id="open"><span class="n">06</span> Open across the programme</h2>
+    <h2 id="open"><span class="n">07</span> Open across the programme</h2>
     <p class="subhead">Ordered by what it costs to leave alone. Items carried from 7 September keep
     their wording where nothing has changed; items closed since are listed last, so a reader can
     see the list shrink as well as grow.</p>
@@ -1109,6 +1234,15 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
       quotes are what Yogesh names as outstanding. Until it exists, designers and estimators do not
       get test access to the Technical Design tools.</p>
       <div class="why"><b>All three workstreams.</b> The one item on every critical path.</div>
+    </div>
+
+    <div class="item" style="border-left-color:var(--crit)">
+      <h3>Sage X3: three third-party items, by Friday 16 October<span class="pill p-stop">Gate</span></h3>
+      <p>The sign convention, non-production environment access and the product-category
+      confirmation. They gate the whole October data migration: without them the trial load cannot
+      run in the final week, and the date rebaselines to mid-November. Also needed before the plan
+      is final: <b>the answer on whether routings and works orders are in scope</b>.</p>
+      <div class="why"><b>Sage X3.</b> Owner: Acuity, chased by James Gray. Section 06.</div>
     </div>
 
     <div class="item" style="border-left-color:var(--crit)">
@@ -1221,7 +1355,7 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
 
   <footer>
     SDI PROGRAMME STATUS · COMBINED REPORT · ISSUE 3 · ISSUED 16 SEPTEMBER 2026 · SUPERSEDES 7 SEPTEMBER 2026<br>
-    SOURCES · SDI INTELLIGENCE COMMIT HISTORY 7 – 16 SEP AND CHANGE REGISTER D-016 TO D-078 · ESTIMATOR REVIEWS FROM HOWARD THURLEY (10 AND 15 SEP), TONY FORD (8 SEP) AND TIM WILKES (4 AND 9 SEP) · YOGESH KUMAR STATUS 11 SEP · MUHAMMAD YAZIR WEEKLY UPDATE · SHARED WORKSTATION CAPITAL REQUEST 3 SEP<br>
+    SOURCES · SDI INTELLIGENCE COMMIT HISTORY 7 – 16 SEP AND CHANGE REGISTER D-016 TO D-078 · ESTIMATOR REVIEWS FROM HOWARD THURLEY (10 AND 15 SEP), TONY FORD (8 SEP) AND TIM WILKES (4 AND 9 SEP) · YOGESH KUMAR STATUS 11 SEP · MUHAMMAD YAZIR WEEKLY UPDATE · SHARED WORKSTATION CAPITAL REQUEST 3 SEP &middot; SDI LIVE TABLE EXTRACT AND MIGRATION ANALYSIS<br>
     ESTIMATING GO-LIVE TARGET · SEPTEMBER / OCTOBER 2026 — DECIDED ON REVIEWS RETURNED FROM THE PARALLEL RUN<br>
     SDI DISPLAYS · LOUGHBOROUGH · WE.ARE.SDI
   </footer>

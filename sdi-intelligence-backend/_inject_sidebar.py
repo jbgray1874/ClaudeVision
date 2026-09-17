@@ -15,6 +15,7 @@ Idempotent: running it twice replaces the block rather than stacking a second co
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -47,28 +48,35 @@ _LOGO_FALLBACK_URI = (
 # the two drift apart in silence.
 #
 # Each links to the portal's own deep link for that service: /#aisvc-<id>.
-AI_SERVICES = [
-    ("estimating", "Estimating"),
-    ("brief", "AI Brief Capture &amp; Concept Design"),
-    ("omniverse", "Design Omniverse · Immersive"),
-    ("dfm", "AI Design for Manufacture"),
-    ("scheduling", "AI Production Scheduling"),
-    ("manufacture", "AI Manufacture &amp; Robotics"),
-    ("inspection", "AI Quality Inspection"),
-    ("md-agent", "MD Agent · Chief of Staff"),
-    ("sales-agent", "Sales Intelligence Agent"),
-    ("design-agent", "Design Support Agent"),
-    ("production-agent", "Production Control Agent"),
-    ("finance-agent", "Finance Intelligence Agent"),
-    ("chatbots", "ChatBots · Customer &amp; Internal"),
-    ("voice", "AI Voice Agents"),
-    ("brighthr", "BrightHR Ingestion → InVentry"),
-    ("wearesdi", "WeAreSDI · Public-Site AI Layer"),
-    ("x3", "Sage X3 Acceleration Program"),
-    ("obs", "OBS Studio · Live Recording"),
-    ("tech-radar", "AI Tech Radar"),
-    ("roadmap", "AI Roadmap"),
-]
+def _services_from_the_portal():
+    """The AI Services menu, read from the portal that defines it.
+
+    THIS WAS A HAND-KEPT COPY AND IT DRIFTED, exactly as the check below had been warning. By
+    17 Sep 2026 the portal carried SDI Technical Design Intelligence, SDI Drawing Search
+    Intelligence and SDI Client Briefing Intelligence and this file did not, so both estimating
+    pages shipped a menu three services short of the portal's -- and the entry they did share,
+    Sage X3, was under an older name.
+
+    A check that tells you two lists disagree is worth less than not having two lists. The
+    portal's SERVICES array is the definition; this reads it, in order, so a service added
+    there appears here the next time the injector runs and there is nothing to remember.
+    """
+    portal = HERE / "sdi-intelligence-portal.html"
+    text = portal.read_text(encoding="utf-8")
+    body = text[text.index("const SERVICES=["):]
+    out = []
+    for sid, name in re.findall(r"\{id:'([a-z0-9_-]+)',\s*name:'((?:[^'\\]|\\.)*)'", body):
+        # The portal writes its names with JS escapes (\u00b7 for a middle dot). The sidebar is
+        # HTML, so they are decoded here rather than pasted through as literal backslashes.
+        out.append((sid, re.sub(r"\\u([0-9a-fA-F]{4})",
+                                lambda m: chr(int(m.group(1), 16)), name).replace("&", "&amp;")))
+    if not out:                                     # a parse that finds nothing is a bug, not an empty menu
+        raise SystemExit("could not read SERVICES from the portal -- refusing to write an empty "
+                         "AI Services menu")
+    return out
+
+
+AI_SERVICES = _services_from_the_portal()
 
 # Every entry outside this pair of pages goes to the portal and names the view it wants.
 NAV = [
@@ -125,13 +133,13 @@ CSS = """
   .sdinav-body{ flex:1; }
   .sdinav-toggle{
     display:flex; align-items:center; gap:9px; width:100%;
-    padding:10px 16px; border:0; border-top:1px solid var(--line,#26262b);
-    background:transparent; color:var(--muted,#9b9ba3); cursor:pointer;
+    padding:10px 16px; border:0; border-top:1px solid var(--line);
+    background:transparent; color:var(--muted); cursor:pointer;
     font-family:inherit; font-size:11.5px; letter-spacing:.04em; text-align:left;
     position:sticky; bottom:0; transition:.16s;
   }
-  .sdinav-toggle:hover{ color:var(--ink,#f0efec); background:#ffffff08; }
-  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand,#e8a33d); outline-offset:-2px; }
+  .sdinav-toggle:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav-toggle:focus-visible{ outline:2px solid var(--brand); outline-offset:-2px; }
   body.nav-collapsed .sdinav-toggle{ justify-content:center; padding:10px 0; }
   .sdinav-toggle .chev{ width:14px; height:14px; flex:none; transition:transform .18s; }
   body.nav-collapsed .sdinav-toggle .chev{ transform:rotate(180deg); }
@@ -142,13 +150,17 @@ CSS = """
   .wrap{ margin-left:0 !important; margin-right:auto !important; }
   .sdinav{
     position:fixed; left:0; top:0; bottom:0; width:var(--sdinav-w); overflow-y:auto;
-    background:var(--panel,#121214); border-right:1px solid var(--line,#26262b);
+    background:var(--panel); border-right:1px solid var(--line);
     z-index:900; padding-bottom:24px;
   }
   .sdinav-brand{ display:flex; align-items:center; gap:10px; padding:18px 16px 16px;
     text-decoration:none; color:inherit; }
-  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand,#e8a33d);
-    color:#0d0d0f; font-weight:900; font-size:17px; display:flex; align-items:center;
+  .sdinav-mark{ width:30px; height:30px; border-radius:7px; background:var(--brand);
+    /* #000, as the portal's own .mark b uses, and NOT the near-black palette literal:
+       the mark sits on amber in both themes, so its ink is not theme-dependent, and a
+       palette literal here is one no [data-theme] rule can reach. The pages had been
+       hand-corrected for that once already and re-running this file undid it. */
+    color:#000; font-weight:900; font-size:17px; display:flex; align-items:center;
     justify-content:center; font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); }
   /* we.are.sdi, served by /api/brand/logo from the SAME folder the client quote reads. The
      lettered .sdinav-mark above is only the fallback for a page opened off the share, where
@@ -157,19 +169,19 @@ CSS = """
   .sdinav-brand b{ font-family:var(--disp,'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif); font-size:12.5px;
     letter-spacing:.02em; display:block; line-height:1.15; white-space:nowrap; }
   .sdinav-brand span{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.14em;
-    color:var(--dim,#6a6a72); display:block; }
+    color:var(--dim); display:block; }
   .sdinav-grp{ font-family:var(--mono,monospace); font-size:9.5px; letter-spacing:.16em;
-    text-transform:uppercase; color:var(--dim,#6a6a72); padding:16px 16px 6px; }
-  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted,#9b9ba3);
+    text-transform:uppercase; color:var(--dim); padding:16px 16px 6px; }
+  .sdinav a.sdinav-item{ display:block; padding:8px 16px; color:var(--muted);
     text-decoration:none; font-size:13.5px; border-left:2px solid transparent; }
   .sdinav .sdinav-ext{ opacity:.55; font-size:.9em; }
-  .sdinav a.sdinav-item:hover{ color:var(--ink,#f0efec); background:#ffffff08; }
-  .sdinav a.sdinav-item.is-here{ color:var(--ink,#f0efec); border-left-color:var(--brand,#e8a33d);
+  .sdinav a.sdinav-item:hover{ color:var(--ink); background:#ffffff08; }
+  .sdinav a.sdinav-item.is-here{ color:var(--ink); border-left-color:var(--brand);
     background:#ffffff0a; font-weight:600; }
   @media (max-width:900px){
     body{ padding-left:0; }
     .sdinav{ position:static; width:auto; height:auto; border-right:0;
-      border-bottom:1px solid var(--line,#26262b); }
+      border-bottom:1px solid var(--line); }
   }
 </style>
 """
@@ -238,24 +250,13 @@ def _markup(current: str) -> str:
 
 
 def _check_services_match_the_portal() -> None:
-    """The portal builds its AI Services links from a JavaScript array; this file lists them by
-    hand. Two lists of the same thing drift, and the failure is silent — entries quietly missing
-    from one page. Compare them and say so, loudly, rather than shipping a shorter menu."""
-    import re
-    portal = HERE / "sdi-intelligence-portal.html"
-    if not portal.exists():
-        return
-    found = re.findall(r"id:'([a-z0-9_-]+)',\s*name:'(?:[^'\\]|\\.)*'",
-                       portal.read_text(encoding="utf-8"))
-    theirs, ours = set(found), {sid for sid, _ in AI_SERVICES}
-    if theirs and theirs != ours:
-        missing, extra = sorted(theirs - ours), sorted(ours - theirs)
-        print("  ! AI Services list is out of step with the portal:")
-        if missing:
-            print(f"      missing here : {', '.join(missing)}")
-        if extra:
-            print(f"      not in portal: {', '.join(extra)}")
-        print("      Update AI_SERVICES in this file, then re-run.")
+    """Kept as a guard rather than a comparison. AI_SERVICES is now READ from the portal, so
+    the two cannot disagree; what can still go wrong is the parse silently matching nothing
+    after somebody reformats that array. Print what was read, so a menu that lost its services
+    is visible in the run rather than in the browser."""
+    print(f"  AI Services read from the portal: {len(AI_SERVICES)} "
+          f"({', '.join(sid for sid, _ in AI_SERVICES[:4])}, ...)")
+
 
 
 def main() -> None:

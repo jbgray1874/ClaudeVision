@@ -58,6 +58,12 @@ It came off hold on 4 September and Muhammad has picked it back up. It is worth 
 
 Honestly early — two briefs have been through it, both Muhammad's own. What it needs is time with Jonathan on real briefs, and that is the only thing holding it.
 
+## Sage X3 — the data migration, and the nearest hard date we have
+
+Worth stating beside the four, because it lands before any of them. **All data in Sage X3 by Friday 30 October**, ahead of the ERP's own go-live in January. Eleven X3 templates are covered by built extract views over eighteen core source tables — products, bills of material, customers and open sales orders, suppliers and open purchase orders, the AR, AP and general ledger openings, and stock. The rest of the roughly three hundred tables in SDI Live, and the Crystal Reports layer above them, are being given a stated disposition rather than left to survive by accident.
+
+**It is a target with a gate.** Three third-party items have to clear by **Friday 16 October**, and the cleansing behind it is real record-level work with named owners — 20,724 items carry a blank description, which is half the catalogue. If those three are not confirmed in the first week the date rebaselines to mid-November, which is a great deal cheaper than defending a date into a failed cutover. The full plan, every row count and the disposition of every table is on the portal.
+
 ## The KTP presentation
 
 **Muhammad and I are preparing it now.** It will carry the plans for each workstream and live demonstrations of what is already running — the estimating engine on a real drawing pack, the drawing library on 32,422 sheets, the Document Manager tools, and the client briefing template. Everything in it is working software rather than a proposal, which is the strongest position we could be presenting from.

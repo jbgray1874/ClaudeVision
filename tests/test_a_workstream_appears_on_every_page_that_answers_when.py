@@ -186,6 +186,9 @@ def test_the_nodes_run_in_date_order():
         # took the slot Client Briefing's ~NOV 2026 node held until that project went on hold.
         "29 SEP 2026": _dt.date(2026, 9, 29),
         "SEPT / OCT 2026": _dt.date(2026, 9, 30),   # the target window opens end-Sept
+        # The Sage X3 DATA MIGRATION, added 17 Sep 2026. Distinct from the ERP go-live below
+        # and deliberately earlier: all data lands in X3 before the business runs on it.
+        "30 OCT 2026": _dt.date(2026, 10, 30),
         "~NOV 2026": _dt.date(2026, 11, 1),
         "4 JAN 2027": _dt.date(2027, 1, 4),
     }
@@ -366,6 +369,12 @@ def test_the_summary_sentence_counts_the_cards_below_it():
     # manufacturing card deliberately has no number, because a 4 in the second slot reads as
     # a mistake rather than as an ordering.
     cards = len(re.findall(r"border-top:3px solid var\(--", panel))
-    assert cards == 4, f"expected four workstream cards, found {cards}"
+    # FIVE SINCE 17 SEP 2026: the Sage X3 data migration joined the four. It is not an SDI
+    # Intelligence workstream — the ERP is the business's programme — but it carries the
+    # nearest hard date on the page and reads the same SDI Live tables the estimating engine
+    # does, so a dashboard without it is one somebody keeps a second list beside.
+    assert cards == 5, f"expected five cards, found {cards}"
     assert "fourth" in intro, (
         "the summary paragraph does not account for the fourth card directly beneath it")
+    assert "Sage X3" in intro, (
+        "the summary paragraph does not account for the Sage X3 card directly beneath it")
