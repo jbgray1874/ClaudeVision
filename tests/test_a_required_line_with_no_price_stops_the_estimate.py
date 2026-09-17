@@ -203,3 +203,82 @@ def test_the_report_leads_with_the_block_rather_than_the_total():
            "estimate_explained.py").read_text(encoding="utf-8")
     assert "NOT RELEASABLE" in src
     assert src.index("NOT RELEASABLE") < src.index("This job is priced ")
+
+
+# ── the quote, which is the one document that leaves the building ────────────────────
+#
+# The 14:06 six-off run went out at £127.86 a unit and £767.17 an order with plating,
+# plater freight, packaging and delivery all at £0.00 — four required costs silently
+# excluded from a page a customer would have read as a price. It even listed "Tube bending
+# and forming" among what was included, on a leg Howard had ruled has no bend.
+#
+# The gate had already decided. The REPORT consulted it and the QUOTE never asked.
+
+def _blocked_summary():
+    return {"data_sufficiency": {"release": {
+        "releasable": False,
+        "headline": "NOT RELEASABLE - 4 required line(s) carry no price.",
+        "what_to_do": "Price each line below.",
+        "blocking": [{"code": "PACKAGING", "why": "no price from any rung"},
+                     {"code": "DELIVERY", "why": "no price from any rung"}],
+    }}}
+
+
+def test_a_blocked_estimate_cannot_be_rendered_as_a_quotation():
+    import client_quote_html
+    import pytest as _pytest
+    with _pytest.raises(client_quote_html.NotReleasable):
+        client_quote_html.build_quote_html(_blocked_summary(), job_stem="7332-01")
+
+
+def test_the_refusal_names_the_lines_that_block_it():
+    import client_quote_html
+    try:
+        client_quote_html.build_quote_html(_blocked_summary(), job_stem="7332-01")
+    except client_quote_html.NotReleasable as exc:
+        assert "PACKAGING" in str(exc) and "DELIVERY" in str(exc)
+    else:
+        raise AssertionError("it rendered")
+
+
+def test_it_raises_rather_than_rendering_a_page_with_a_banner():
+    """A quotation that is wrong about the money has no safe rendering. A banner at the top
+    of an otherwise normal-looking page is an invitation to scroll past — and this file
+    already records that a previous banner was removed for making the page unreadable."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" /
+           "client_quote_html.py").read_text(encoding="utf-8")
+    assert "raise NotReleasable(" in src
+    assert src.index("raise NotReleasable(") < src.index("job_number, rev, product ="), (
+        "the gate must be asked before the page is laid out, not after")
+
+
+def test_the_refusal_is_written_to_a_file_whose_name_says_so():
+    """A run that merely failed to produce a quote looks, from a folder listing, exactly
+    like one that has not finished — and last run's quote for the same job is still sitting
+    there ready to be attached to an email by mistake."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" /
+           "client_quote_html.py").read_text(encoding="utf-8")
+    assert "_quote_NOT-RELEASABLE.html" in src
+    assert "NO QUOTE WRITTEN" in src
+
+
+def test_a_releasable_estimate_still_quotes():
+    """The control. If it refused everything the gate would be a wall, not a gate."""
+    import client_quote_html
+    html = client_quote_html.build_quote_html(
+        {"data_sufficiency": {"release": {"releasable": True}}}, job_stem="7332-01")
+    assert "<" in html and len(html) > 200
+
+
+def test_the_ai_market_figure_off_the_1406_book_does_not_count_as_answered():
+    """The felt pad came back at £0.22 from the pre-existing web/AI rung, labelled "AI
+    market indication (RS Components +2 more)". It names something like a source and
+    nothing else: no date, no unit basis, no quantity basis. Under the rung-4 standard it
+    is not a price, and the estimate blocks rather than totalling it."""
+    pad = {"code": "P/P", "description": "BLACK FELT PAD", "price_gbp": 0.22,
+           "rung": "web_ai_fallback",
+           "evidence": {"source": "RS Components +2 more (AI-indicative - verify)"}}
+    assert not line_is_answered(pad)
+    assert not assess_release([pad])["releasable"]
