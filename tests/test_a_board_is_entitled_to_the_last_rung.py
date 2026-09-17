@@ -93,6 +93,8 @@ class _Research:
 def _no_catalogue(monkeypatch):
     monkeypatch.setattr(estimator, "_resolve_board_sheet_rate_gbp_per_m2",
                         lambda *_a, **_k: None)
+    # The researched rate is cached for the life of a RUN, not the life of the process.
+    monkeypatch.setattr(estimator, "_RESEARCHED_BOARD_RATE_CACHE", {})
 
 
 def test_a_researched_rate_prices_the_board(monkeypatch):
@@ -178,7 +180,50 @@ def test_a_researched_board_price_still_cannot_come_off_an_estimators_sheet(monk
     assert out["cost_method"] == "faced_board_unpriced"
 
 
-# ── 3 · the date, which never arrived ────────────────────────────────────────────────
+# ── 3 · one board, one rate, one lookup ──────────────────────────────────────────────
+
+def test_three_parts_off_one_sheet_are_researched_once(monkeypatch):
+    """11908-21 cuts three parts from the same 9mm board. Three calls would be waste;
+    three ANSWERS would be a sheet showing one material at three different rates."""
+    _no_catalogue(monkeypatch)
+    spy = _Research(price_gbp=24.50, unit="per_m2", source="https://example.co.uk",
+                    quantity_basis="per m2", as_of="2026-09-17")
+    monkeypatch.setattr(estimator, "_rung4_researcher", spy)
+    a = estimator.estimate_material(_tray())
+    b = estimator.estimate_material(_tray(part_number="11908-21-02J",
+                                          blank_length_mm=400.0, blank_width_mm=30.0))
+    assert len(spy.briefs) == 1, f"researched {len(spy.briefs)} times for one board"
+    # One rate, two areas — the money is recomputed for each blank.
+    assert a["cost_per_part_gbp"] != b["cost_per_part_gbp"]
+    assert b["cost_method"] == "board_rate_researched"
+
+
+def test_a_board_nothing_can_price_is_not_researched_once_per_part(monkeypatch):
+    _no_catalogue(monkeypatch)
+    spy = _Research()
+    monkeypatch.setattr(estimator, "_rung4_researcher", spy)
+    estimator.estimate_material(_tray())
+    estimator.estimate_material(_tray(part_number="11908-21-02J"))
+    assert len(spy.briefs) == 1
+
+
+def test_the_office_can_turn_the_researched_rung_off(monkeypatch):
+    """`enable_web_ai_fallback` is how a run is kept from reaching outside. A caller that
+    ignores it makes the switch a lie."""
+    import config
+    monkeypatch.setattr(config, "FALLBACK_PRICING_POLICY",
+                        dict(config.FALLBACK_PRICING_POLICY,
+                             enable_web_ai_fallback=False))
+    called = []
+    import web_ai_price_lookup as w
+    monkeypatch.setattr(w, "lookup_web_ai_price",
+                        lambda _s: called.append(_s) or {"found": False})
+    assert estimator._rung4_researcher({"description": "9mm MFMDF board",
+                                        "wanted_unit": "square metre"}) == {}
+    assert not called, "the lookup ran with the fallback switched off"
+
+
+# ── 4 · the date, which never arrived ────────────────────────────────────────────────
 #
 # The producer requires a source, a date, a unit basis and a quantity basis before a
 # researched figure may be used, and refuses the price outright if any is missing. The

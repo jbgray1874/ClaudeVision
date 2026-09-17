@@ -1119,6 +1119,11 @@ def _lookup_catalogue_tube_price(
 # re-query UDEF for every HIPS part. Keyed by rounded thickness; value is £/m².
 _SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
 
+# The researched £/m² for a board, by family and gauge, for the life of the run. Three parts
+# cut from one sheet must not be researched three times and must not come back with three
+# different rates for the same board — see `_researched_board_rate_m2`.
+_RESEARCHED_BOARD_RATE_CACHE: Dict[Tuple[str, Optional[float]], Optional[Dict[str, Any]]] = {}
+
 # Words that qualify a sheet rather than name it. "3MM CLEAR PETG SHEET" is PETG; searching
 # the catalogue for CLEAR or SHEET would match half of it.
 _NOT_A_MATERIAL_WORD = frozenset({
@@ -3140,6 +3145,14 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
     second copy of it, and two copies of a price source is how two answers to one question
     start. Everything it does is material-agnostic already.
     """
+    # THE POLICY SWITCH MEANS WHAT IT SAYS, FROM EVERY CALLER. `enable_web_ai_fallback` is
+    # how the office turns the researched rung off — for a run that must not reach outside,
+    # or while a provider is misbehaving — and a caller that ignores it makes the switch a
+    # lie. The bought-in chain honoured it upstream; the board path reaches this function
+    # directly, so the check belongs here, where both arrive.
+    if not (getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}).get(
+            "enable_web_ai_fallback", True):
+        return {}
     from web_ai_price_lookup import lookup_web_ai_price as _look
     _found = _look({
         "description": _brief.get("description"),
@@ -3214,6 +3227,32 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     _thk = _safe_float(thickness)
     _desc = (f"{_thk:g}mm {str(material).replace('_', ' ')} board"
              if _thk else f"{str(material).replace('_', ' ')} board")
+    # ONE BOARD, ONE RATE, ONE LOOKUP.
+    #
+    # 11908-21 has three parts cut from the same 9mm sheet. Researched per part, that is
+    # three calls to a language model about one board — and, worse than the waste, three
+    # ANSWERS. A sheet showing the same material at three different £/m² is not a rounding
+    # difference an estimator can wave through; it is visibly incoherent, and it would be
+    # this engine's own doing. Cached on the FAMILY AND THE GAUGE, which is what the rate
+    # is a property of, for the life of the run.
+    _rate_key = (str(material).upper(), round(float(_thk), 1) if _thk else None)
+    if _rate_key in _RESEARCHED_BOARD_RATE_CACHE:
+        _hit = _RESEARCHED_BOARD_RATE_CACHE[_rate_key]
+        if not _hit:
+            return None
+        # The rate is per square metre and this part has its own area, so the MONEY is
+        # recomputed for this blank — only the researched RATE is shared.
+        _unit = _safe_float(_hit.get("unit_price_gbp"))
+        if _unit is None:
+            return None
+        _out = dict(_hit)
+        _out["price_gbp"] = round(_unit * _area_m2, 4)
+        _out["calculation"] = {
+            "per_unit_gbp": round(_unit * _area_m2, 4),
+            "working": (f"{_area_m2:g} square metre x GBP {_unit:,.4f} a square metre "
+                        f"= GBP {_unit * _area_m2:,.4f} a unit (rate already researched "
+                        f"for this board on this run)")}
+        return _out
     try:
         from indicative_price import resolve_indicative as _rung4
         _out = _rung4(
@@ -3230,8 +3269,15 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
             ask=_rung4_researcher,
         )
     except Exception:                                            # noqa: BLE001
+        _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = None
         return None
-    return _out if _safe_float((_out or {}).get("price_gbp")) else None
+    if not _safe_float((_out or {}).get("price_gbp")):
+        # A MISS IS CACHED TOO. Without it, a board nothing can price is researched again
+        # for every part cut from it — the slowest possible way to learn the same thing.
+        _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = None
+        return None
+    _RESEARCHED_BOARD_RATE_CACHE[_rate_key] = _out
+    return _out
 
 
 def _faced_board_promotion(part: Dict[str, Any], material: Optional[str]):
