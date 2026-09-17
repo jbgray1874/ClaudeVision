@@ -765,6 +765,14 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
     try:
         from build_stamp import build_stamp_line as _build_stamp_line
         _build_txt = f"   |   Build: {_build_stamp_line()}"
+        # AND ON THE BOOK, NOT ONLY IN THE CONSOLE. The stamp proved a run was made by
+        # older code than the checkout — a day after the run, from a header nobody reads
+        # until something is already wrong. A book costed by a stale process says so on its
+        # own face, because the book is what gets read and forwarded.
+        from build_stamp import stale_process_warning as _stale
+        _st = _stale()
+        if _st:
+            _build_txt += f"   |   ⚠ {_st}"
     except Exception:                                            # noqa: BLE001
         _build_txt = ""
     cell(2, 1,

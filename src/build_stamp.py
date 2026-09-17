@@ -39,6 +39,49 @@ from typing import Any, Dict, Optional
 _SRC = Path(__file__).resolve().parent
 _CACHE: Optional[Dict[str, Any]] = None
 
+# WHEN THIS PROCESS READ THE ENGINE OFF THE DISK.
+#
+# One clock read at import, which is when the modules around it are being imported too. It
+# is the only fact that can answer the question the stamp could not: not "is the checkout
+# current" — git answers that — but "is the code this process is RUNNING the code that is
+# on the disk now". A long-lived runner imports once and then serves runs for hours; a pull
+# in the middle changes every file and none of the imported modules, and nothing anywhere
+# says so. The workbook's own stamp told us afterwards, which is better than nothing and
+# still a round trip too late.
+_IMPORTED_AT = __import__("time").time()
+
+
+def source_changed_since_import() -> Optional[str]:
+    """A sentence naming the newest source file edited since this process imported, or None.
+
+    THE STALE-RUNNER CASE, WHICH THE COMMIT ALONE CANNOT SEE. `git rev-parse` reports the
+    checkout as it is NOW; the modules in memory are as they were at import. Pull while a
+    runner is up and the two disagree silently — every fix in the pull is on the disk, none
+    of it is in the process, and the run produces the old numbers with a straight face.
+
+    Compared on MTIME rather than on the digest, because the digest says only THAT the
+    source differs and this says WHEN it started differing, which is what distinguishes
+    "somebody is editing" from "you pulled after this process started". One stat per module
+    at the start of a run.
+    """
+    newest, newest_at = None, 0.0
+    for p in _SRC.rglob("*.py"):
+        if "__pycache__" in p.parts:
+            continue
+        try:
+            _m = p.stat().st_mtime
+        except OSError:
+            continue
+        if _m > newest_at:
+            newest, newest_at = p, _m
+    # A second of slack: a file written in the same moment the process started is this
+    # process's own doing, not somebody else's pull.
+    if newest is None or newest_at <= _IMPORTED_AT + 1.0:
+        return None
+    return (f"{newest.name} (and possibly others) changed on disk "
+            f"{(newest_at - _IMPORTED_AT) / 60.0:.0f} minute(s) AFTER this process imported "
+            f"the engine")
+
 
 def _git(*args: str) -> str:
     """One git question, or "" — never an exception and never a hang.
@@ -131,8 +174,59 @@ def build_stamp_line() -> str:
     return line
 
 
+def stale_process_warning() -> Optional[str]:
+    """The run is about to be costed by code older than the checkout it was told to use.
+
+    Two independent tells, either of which is enough:
+
+      the source changed on disk AFTER this process imported it — a pull into a runner that
+      was already up, which is the case that cost 11908-21 two rounds of assessment;
+
+      git HEAD is not the commit this process stamped — the same thing seen from the other
+      side, and the one a reader can act on, because it names both commits.
+
+    It does not guess and it does not stop the run: it says what is true, in the one place
+    somebody is certainly looking, before any number is produced. The remedy is one line and
+    it is in the message, because a warning that describes a problem without naming its fix
+    gets read as noise.
+    """
+    bits = []
+    try:
+        _changed = source_changed_since_import()
+    except Exception:                                                # noqa: BLE001
+        _changed = None
+    if _changed:
+        bits.append(_changed)
+    try:
+        _stamped = (build_stamp() or {}).get("commit") or ""
+        _now = _git("rev-parse", "--short=7", "HEAD")
+        if _stamped and _now and _stamped != _now:
+            bits.append(f"this process stamped {_stamped}; the checkout is now {_now}")
+    except Exception:                                                # noqa: BLE001
+        pass
+    if not bits:
+        return None
+    return ("STALE ENGINE — this run is being costed by code older than the checkout. "
+            + "; ".join(bits)
+            + ". Nothing in the pull is in this process. Stop the runner and start it "
+              "again, then check this line says the commit you expect before reading a "
+              "single number.")
+
+
 def print_build_stamp() -> None:
     try:
         print(f"   [build] engine source: {build_stamp_line()}", flush=True)
     except Exception:                                                # noqa: BLE001
         pass
+    try:
+        _warn = stale_process_warning()
+    except Exception:                                                # noqa: BLE001
+        _warn = None
+    if _warn:
+        # Loud, and above the run rather than inside it. A stale engine invalidates every
+        # number that follows, so it is not a footnote.
+        print("", flush=True)
+        print("   " + "=" * 76, flush=True)
+        print(f"   [build] {_warn}", flush=True)
+        print("   " + "=" * 76, flush=True)
+        print("", flush=True)
