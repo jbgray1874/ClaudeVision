@@ -3581,6 +3581,63 @@ def _finalize_scan_summary(
                         print(f"   [confirmed] operations_off names {_pc}, but NO part of "
                               f"this job carries that number — the line did nothing. Check "
                               f"the code", flush=True)
+                # ── A CONFIRMED BANDED LENGTH IS ALSO A ROUTE FACT ───────────────────
+                #
+                # It buys metres of ABS — the material line already reads it — AND it says
+                # somebody runs the bander. The 16:39 book bought the tape and charged
+                # nobody to apply it, which is the same half-a-line the perimeter fix was
+                # criticised for: measured, and not applied.
+                #
+                # Stamped on the PART, in millimetres, so the labour rule can time the
+                # work against the length that is actually banded rather than against the
+                # perimeter it was using — the default D-104 outlawed for the material and
+                # left standing in the labour rule beside it.
+                #
+                # A per-unit figure is the whole tray's banded edge, so it goes on the
+                # assembly parent, which is the one row that represents the tray. A
+                # per-part figure goes on the parts it names.
+                _bm_dec = _dec.get("banded_metres") or {}
+                _bm_pp = {str(k).upper(): v
+                          for k, v in (_bm_dec.get("per_part") or {}).items()}
+                _bm_unit = _bm_dec.get("per_unit")
+                _bm_who = _ec_data.get("confirmed_by") or "the estimator"
+                if _bm_pp or _bm_unit is not None:
+                    _bm_seen, _bm_parent = set(), None
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _bm_pp:
+                            _p["_confirmed_banded_mm"] = float(_bm_pp[_pc]) * 1000.0
+                            _p["_confirmed_banded_by"] = _bm_who
+                            _p.setdefault("textual_operations", []).append("edge_banding")
+                            _bm_seen.add(_pc)
+                        if _bm_parent is None and (_p.get("is_assembly_parent")
+                                                   or _p.get("assembly_children")):
+                            _bm_parent = _p
+                    if _bm_unit is not None:
+                        # No assembly parent on the record: the first part is the tray as
+                        # far as this job is concerned, and a banded length with nowhere to
+                        # land would be the silent no-op this whole block exists to avoid.
+                        _tgt = _bm_parent or next(
+                            (p for p in (summary["manufacturing_writeup"]["parts"] or [])
+                             if isinstance(p, dict)), None)
+                        if _tgt is not None:
+                            _tgt["_confirmed_banded_mm"] = float(_bm_unit) * 1000.0
+                            _tgt["_confirmed_banded_by"] = _bm_who
+                            _tgt.setdefault("textual_operations", []).append("edge_banding")
+                            print(f"   [confirmed] {_bm_unit:g} m of banded edge a unit "
+                                  f"({_bm_who}) — the ABS is bought by the metre and the "
+                                  f"bander is routed on "
+                                  f"{_tgt.get('part_number')}", flush=True)
+                        else:
+                            print("   [confirmed] banded_length_m was given but this job "
+                                  "has no part to carry it — the ruling did nothing",
+                                  flush=True)
+                    for _pc in sorted(set(_bm_pp) - _bm_seen):
+                        print(f"   [confirmed] banded_length_m names {_pc}, but NO part of "
+                              f"this job carries that number — the line did nothing",
+                              flush=True)
         else:
             # A FILE THAT DID NOTHING MUST NOT DO IT SILENTLY.
             #

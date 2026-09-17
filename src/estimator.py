@@ -6683,7 +6683,36 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if "edge_banding" in ops:
         eb_rule = LABOUR_RULES.get("edge_banding") or {}
         setup_times_min["edge_banding"] = round(float(eb_rule.get("setup_min", 3.0)), 2)
-        edge_mm = 2.0 * ((blank_length_pm or 0.0) + (blank_width_pm or 0.0))
+        # THE EDGES THAT ARE BANDED, NOT THE FOUR THAT EXIST.
+        #
+        # D-104 outlawed the perimeter as the banded LENGTH and this line — the labour
+        # beside it, timing the same work — kept using 2*(L+W). On Tony's tray that is
+        # 1.56 m a part against his 5 m for the whole assembly: the material was fixed and
+        # the minutes went on being charged against a length nobody bands.
+        #
+        # Same order of trust as the material: a confirmed extent first, then whatever the
+        # drawing marks, and the perimeter only where the drawing SAYS all round. Where
+        # nothing establishes a length the perimeter is still used — the bander is running,
+        # the work is real, and a floor is better than nothing — but it is flagged as the
+        # ceiling it is rather than presented as a measurement.
+        try:
+            from edge_banding import banded_length_mm as _eb_banded
+            _eb = _eb_banded(part) or {}
+        except Exception:                                            # noqa: BLE001
+            _eb = {}
+        edge_mm = _safe_float(_eb.get("mm")) or 0.0
+        if edge_mm <= 0:
+            edge_mm = 2.0 * ((blank_length_pm or 0.0) + (blank_width_pm or 0.0))
+            if edge_mm > 0:
+                part.setdefault("review_flags", []).append(
+                    f"EDGE BANDING TIMED ON THE PERIMETER ({edge_mm:g} mm): nothing on this "
+                    f"part says which edges are banded, so the time is a CEILING and not a "
+                    f"measurement. Mark the banded edges on the drawing, or confirm the "
+                    f"metres, and the minutes follow the length.")
+        else:
+            part.setdefault("review_flags", []).append(
+                f"Edge banding timed on {edge_mm / 1000.0:g} m of banded edge "
+                f"({_eb.get('basis')}) — not the perimeter.")
         sec_per_mm = float(eb_rule.get("sec_per_mm_edge", 0.08))
         run_sec = max(float(eb_rule.get("min_run_min", 4.0)) * 60.0, edge_mm * sec_per_mm)
         run_times_min["edge_banding"] = round(run_sec / 60.0, 2)

@@ -2592,12 +2592,63 @@ def canonical_labour_groups(
 
         candidate_ids = list(dict.fromkeys(
             [target_id] + participants))
+
+        # ── A RULING IS THE LAST GATE BEFORE A LABOUR ROW, ON THIS ROAD TOO ───────────
+        #
+        # The legacy grader has asked this question for a long time, in the words of its
+        # own comment: "an operation a MEASUREMENT ruled out is not a missing row — it is
+        # an answered question... this is the last gate before a labour row, and it is the
+        # one that spends money". The canonical grader never asked it.
+        #
+        # 11908-21's 16:39 book is what that costs. The board was promoted, the laminate
+        # was ruled out with the reason recorded on all three trays — the report prints it
+        # in full, "laminating removed from the route: this board is bought PRE-FACED" —
+        # and the Estimate sheet still carried Glue at £18.43, because the decision graph
+        # was compiled before the ruling existed and nothing re-read it at render time.
+        #
+        # That is D-102 exactly, one road over: the tube bend came back because the ruling
+        # was written under a name the route readers did not use; this one is written under
+        # the right name at a time the canonical reader had already stopped listening. A
+        # ruling has to be honoured wherever a row is MADE, not only where it is compiled.
+        _ruled_on = [
+            _p for _p in candidate_ids
+            if operation in {
+                str(_k).strip().lower()
+                for _k in ((estimates.get(_p) or {}).get("operations_ruled_out")
+                           or (raw.get(_p) or {}).get("operations_ruled_out") or {})}
+        ]
+        # Every participant must be ruled out before the row goes: a ruling about one part
+        # does not cancel a group that is doing the work for others.
+        if _ruled_on and len(_ruled_on) == len([
+                _p for _p in candidate_ids if _p in estimates or _p in raw]):
+            _why_ruled = ""
+            for _p in _ruled_on:
+                _src = ((estimates.get(_p) or {}).get("operations_ruled_out")
+                        or (raw.get(_p) or {}).get("operations_ruled_out") or {})
+                for _k, _v in _src.items():
+                    if str(_k).strip().lower() == operation:
+                        _why_ruled = str(_v or "")
+                        break
+                if _why_ruled:
+                    break
+            print(f"   [route] {operation} NOT charged on {', '.join(_ruled_on)} — ruled "
+                  f"out: {_why_ruled[:200]}", flush=True)
+            continue
+
         representative_id = next(
             (item for item in candidate_ids if item in estimates), "")
         pe = estimates.get(representative_id) or {}
         raw_part = raw.get(representative_id) or {}
+        # THE FAMILY THE MONEY WAS FOR, NOT ONLY THE WORD ON THE DRAWING. A promoted board
+        # is bought, nested and priced as MFMDF while `normalized_material` stays "MDF" —
+        # correctly, because that IS what the drawing says. But every row then reads "9mm
+        # MDF", so three separate readers of the 16:39 book concluded the engine was still
+        # costing raw MDF when it was not, and the argument cost more than the defect would
+        # have. A sheet that will not say which board it costed cannot be checked.
         material = str(
-            pe.get("normalized_material")
+            (pe.get("material_estimate") or {}).get("costing_material_family")
+            or (raw_part.get("material_estimate") or {}).get("costing_material_family")
+            or pe.get("normalized_material")
             or (pe.get("material_estimate") or {}).get("material")
             or raw_part.get("normalized_material")
             or ""
@@ -5330,13 +5381,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # family the old guesses stand, still marked UNMEASURED, because an honest "we do not
     # know" beats another department's number wearing joinery's name. The scope widens when
     # a second job or the department confirms, not before.
+    # ── ASKED OF THE BOARD PARTS, WHICH IS WHERE THE BOARD IS ────────────────────────
+    #
+    # This asked `bom_parts` only, and a board panel is never in `bom_parts`: the router
+    # eighty lines up sends anything `_is_board` with a measurable blank to `board_parts`,
+    # which is the whole point of having an Other Sheet block. So the one list that could
+    # not contain a faced board was the only list consulted, and the test came back False on
+    # every faced-board job there has ever been.
+    #
+    # 11908-21's 16:39 book is the proof: the promotion fired, the trays carry
+    # `costing_material_family: MFMDF`, the laminate was ruled out of the route — and Bench
+    # Work still ran at 30/hr against Tony's measured 2/hr and Packing at 75/hr against his
+    # 20/hr, because the question was put to a list the trays were not in. A scoped pilot
+    # that cannot see its own scope applies to nothing.
     _faced_board_job = any(
         isinstance(_p, dict) and (
             _p.get("_laminate_in_board")
             or str((_p.get("material_estimate") or {}).get("costing_material_family")
                    or "").upper() in {"MFMDF", "MFC"}
             or str(_p.get("normalized_material") or "").upper() in {"MFMDF", "MFC"})
-        for _p in (bom_parts or []))
+        for _p in (list(bom_parts or []) + list(board_parts or [])))
     if _faced_board_job:
         for _row, _key in (("CNC Joinery",        "joinery_cnc_parts_per_hour"),
                            ("Edge Banding",       "joinery_edge_banding_parts_per_hour"),
