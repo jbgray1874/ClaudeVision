@@ -6388,6 +6388,46 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         elif _why_tb:
             part.setdefault("review_flags", []).append(_why_tb)
 
+    # ---- THE LAMINATE IS IN THE BOARD, SO IT IS NOT ALSO A SHOP OPERATION ----------
+    #
+    # THE SHOP DOES NOT LAMINATE; THE MERCHANT DOES — and the moment the board is promoted
+    # to its faced family, the facing has been PAID FOR IN THE SHEET PRICE. The route still
+    # carried `laminating`, which department_codes sends to GLUE, so 11908-21's 15:50 book
+    # charged it twice: once inside whatever the board costs, and again as £18.43 a unit of
+    # glue labour at 40/hr with a half-hour set-up. Both lines are individually plausible,
+    # which is what makes the double survive a reading.
+    #
+    # Scoped to the promotion and nothing else. A part that really IS laminated in the shop
+    # — a core the shop lays up itself — has no `_laminate_in_board` stamp and keeps its
+    # operation and its glue time exactly as before.
+    #
+    # THE EVIDENCE IS DELIBERATELY LEFT ON THE PART. The tube-bend gate above strips
+    # `textual_operations` as well; this must not, because `_faced_board_promotion` reads
+    # that very list to decide the part is faced at all. Stripping it would delete the
+    # reason the board was promoted, and a second costing pass would un-promote the part
+    # and put it back on raw-core money. The route readers — wb_populate and route_compiler
+    # — honour `operations_ruled_out`, so the ruling travels by the name they read.
+    if part.get("_laminate_in_board"):
+        _lam_words = ("laminating", "lamination", "laminate", "laying_up", "lay_up")
+        _lam_ops = [o for o in ops if str(o).strip().lower() in _lam_words]
+        if _lam_ops:
+            _why_lam = (
+                "laminating removed from the route: this board is bought PRE-FACED, so the "
+                "lamination is in the sheet price and charging it again as glue labour "
+                "bills the same facing twice. The operation stays on the record as the "
+                "evidence that the board is faced — it is the route that is cancelled, not "
+                "the reading. If the shop really does lay this panel up itself, the board "
+                "is not pre-faced and the material line is the thing to correct.")
+            ops = [o for o in ops if o not in _lam_ops]
+            for _timing in (setup_times_min, run_times_min):
+                for _o in _lam_ops:
+                    _timing.pop(_o, None)
+            part.setdefault("removed_operations", []).extend(_lam_ops)
+            _ruled_lam = part.setdefault("operations_ruled_out", {})
+            for _o in _lam_ops:
+                _ruled_lam.setdefault(_o, _why_lam)
+            part.setdefault("review_flags", []).append(_why_lam)
+
     # ---- ONE BLANK IS CUT OUT ONCE ------------------------------------------------
     #
     # Laser and CNC router are two ways of cutting the SAME profile out of the SAME sheet.
