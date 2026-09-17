@@ -409,6 +409,15 @@ OP_NAME_MAP = {
     "spray":          "Wet Spray",
     "bench_work":     "Manual labour (Metal)",
     "hardware_insertion": "Manual labour (Metal)",
+    # THE METAL TWIN, WHICH WAS THE ONLY ONE MISSING. OP_NAME_MAP_ACRYLIC has carried
+    # "manual_labour_acrylic" since the acrylic split, and the metal map never gained its
+    # opposite number — so the two rules that emit this key, the shop's brushing before
+    # plating (config.BRUSH_BEFORE_PLATE) and MANM insert labour, reached the sheet only
+    # through the last-resort department_codes lookup at the bottom of _wb_op_name. That
+    # path resolves it today, which is why the row appears at all; it also means a stated
+    # shop time was riding on a fallback built for a model's free English. A rule with a
+    # named operation belongs in the map, next to the rest.
+    "manual_labour_metal": "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
     "roll":           "Roll",
@@ -6416,6 +6425,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             wb.calculation = CalcProperties(fullCalcOnLoad=True)
         except Exception:
             _flag("could not set fullCalcOnLoad — estimator may need to press F9.", flags)
+
+    # ── Last look before it is anybody's book ──────────────────────────────
+    # Asked here because here is the only point EVERY populated workbook passes through,
+    # whatever wrote the cell. A replacement character or an emoji can arrive from a
+    # drawing note, a supplier description or a module nobody thought to check; the glyph
+    # rule is enforced on the value, once, rather than trusted to every writer.
+    try:
+        from workbook_text_hygiene import scrub_workbook
+        _fixed, _where = scrub_workbook(wb)
+        if _fixed:
+            _flag(f"removed {_fixed} character(s) Excel cannot draw from "
+                  f"{', '.join(f'{k} ({v})' for k, v in sorted(_where.items()))} — "
+                  f"replacement boxes and emoji; the text around them is unchanged.", flags)
+            print(f"   [wb_populate] glyph hygiene: {_fixed} cell(s) repaired {_where}")
+    except Exception as _e:
+        _flag(f"could not run the glyph check over the workbook: {_e}", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)

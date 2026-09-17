@@ -2098,8 +2098,43 @@ def build(workbook: Path, scan_json: Optional[Path],
             _ratio = _money(sufficiency.get("credible_cost_ratio"))
             _fab = sufficiency.get("fabricated_part_count")
             _with = sufficiency.get("parts_with_dxf")
-            add(f"> **This job is priced in full, and some of it is read rather than "
-                f"measured.** "
+            # "PRICED IN FULL" IS A CLAIM, AND IT HAS TO BE TRUE.
+            #
+            # This paragraph was written about a different gap — geometry READ off a view
+            # rather than measured — and it opened by asserting the money was complete so
+            # that the reader worried about the right thing. Then D-078 made deliberately
+            # unpriced lines normal: plating, freight, packaging and delivery stay visibly
+            # awaiting a current price rather than carrying a figure off anybody's sheet.
+            # On 7332-01 that is four lines, and the report still opened by telling Howard
+            # the job was priced in full. The engine was contradicting its own policy in
+            # its own report, which is worse than either answer on its own.
+            #
+            # Counted the way the tables below count, from the same _price_source that
+            # writes each line's verdict, so the sentence and the rows cannot disagree.
+            # Called without `record`, because the recording pass belongs to the table that
+            # renders the line, not to a count taken over its shoulder.
+            # COUNTED OFF `bom`, WHICH IS THE LIST THE PRICE TABLE ITSELF WALKS.
+            #
+            # `material_rows` is the reconciliation summary — one row per block, carrying a
+            # description and a total — and asking it for price sources returns nothing,
+            # silently, because none of its rows has a code. A sentence that counts a
+            # different list from the table under it is how a report ends up disagreeing
+            # with itself, which is the fault being fixed here, not a new one to introduce.
+            #
+            # Called without `record`: the recording pass belongs to the table that renders
+            # each line, not to a count taken over its shoulder.
+            _awaiting_rows = [
+                _r for _r in bom
+                if _r.get("code")
+                and str(_price_source(_r, provenance, steel) or "")
+                .replace("*", "").strip().upper().startswith("NOT PRICED")
+            ]
+            _n_await = len(_awaiting_rows)
+            add(f"> **This job is priced "
+                + (f"except for {_n_await} line(s) still awaiting a current price, and "
+                   f"some of what IS priced is read rather than measured.** "
+                   if _n_await else
+                   "in full, and some of it is read rather than measured.** ")
                 + (f"Of the {_gbp(sufficiency.get('document_total_provisional_gbp'))} it "
                    f"assembled, **{_ratio:.0%} rests on figures it considers credible** — the "
                    f"rest on geometry read off a view, or on prices it could not verify. "
@@ -2107,8 +2142,14 @@ def build(workbook: Path, scan_json: Optional[Path],
                 + (f"{_with} of {_fab} fabricated part(s) have a DXF; the others were sized "
                    f"from the drawing rather than measured. "
                    if _fab else "")
-                + "Every line is costed and the unit cost is a real figure — it is what the "
-                  "sheet's own cells add up to. What follows is which lines rest on a "
+                + ("The unit cost is a real figure — it is what the sheet's own cells add "
+                   "up to — but it is NOT the finished price: the lines above that say "
+                   "they are awaiting a rate carry no money at all, so this total can only "
+                   "go up when they are priced. "
+                   if _n_await else
+                   "Every line is costed and the unit cost is a real figure — it is what "
+                   "the sheet's own cells add up to. ")
+                + "What follows is which lines rest on a "
                   "reading rather than a measurement, so they can be checked first rather "
                   "than the whole estimate being doubted.")
             add("")

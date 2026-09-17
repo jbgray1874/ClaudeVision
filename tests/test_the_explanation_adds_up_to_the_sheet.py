@@ -528,3 +528,70 @@ def test_it_will_not_guess_the_document_when_a_pack_holds_several(tmp_path):
     row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | CROSS MEMBERS"))
     assert "not recorded · p.6 (detail)" in row
     assert "ONE.PDF" not in row
+
+
+# ── "priced in full" is a claim, and D-078 made it a false one ───────────────────────
+#
+# James, on the 7332-01 six-off rerun: "Correct report wording so an estimate with
+# awaiting-price lines never says 'priced in full.'"
+#
+# This paragraph was written about a DIFFERENT gap — geometry read off a view rather than
+# measured — and it opened by asserting the money was complete so the reader would worry
+# about the right thing. Then D-078 made a deliberately unpriced line normal: plating,
+# freight, packaging and delivery stay visibly awaiting a current price rather than
+# carrying a figure off an estimator's sheet. On 7332-01 that is four lines, and the
+# report still opened by telling Howard the job was priced in full — the engine
+# contradicting its own pricing policy inside its own report.
+
+def _workbook_with_an_unpriced_line(tmp_path: Path) -> Path:
+    """The same sheet, plus one coded BOM line that nothing holds a rate for.
+
+    A real one: a code the pack names, no supplier and no price — which is exactly the
+    shape of the plating and freight lines the policy leaves open."""
+    path = _workbook(tmp_path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Estimate"]
+    ws.cell(13, 3, "DBR60 TICKET STRIP")
+    ws.cell(13, 8, "DBR60")
+    ws.cell(13, 11, 2)          # a quantity, and deliberately no price in column J
+    wb.save(path)
+    return path
+
+
+def test_a_job_with_an_awaiting_price_line_is_not_called_priced_in_full(tmp_path):
+    text = handover_note.build(_workbook_with_an_unpriced_line(tmp_path),
+                               _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    assert "priced in full" not in section, (
+        "the report claims complete pricing on a job with a line awaiting a rate")
+    assert "still awaiting a current price" in section
+
+
+def test_it_says_how_many_lines_are_waiting_rather_than_merely_hedging(tmp_path):
+    """A hedge tells the estimator to distrust everything. A count tells them what to go
+    and look at."""
+    text = handover_note.build(_workbook_with_an_unpriced_line(tmp_path),
+                               _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    assert "except for 1 line(s) still awaiting a current price" in section
+
+
+def test_the_unit_cost_is_still_called_real_but_no_longer_called_finished(tmp_path):
+    """The total IS what the sheet's cells add up to — that part was never in doubt. What
+    it is not is the finished price, and the direction is knowable: it can only go up."""
+    text = handover_note.build(_workbook_with_an_unpriced_line(tmp_path),
+                               _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    assert "the unit cost is a real figure" in section.replace("The unit cost", "the unit cost")
+    assert "it is NOT the finished price" in section
+    assert "can only go up when they are priced" in section
+    assert "Every line is costed" not in section
+
+
+def test_a_job_with_every_line_priced_still_says_so(tmp_path):
+    """The control, and the reason this is conditional rather than a blanket hedge: when
+    the money really is complete, saying so is the useful answer."""
+    text = handover_note.build(_workbook(tmp_path), _insufficient(tmp_path))
+    section = text.split("## Drawings the pack does not contain")[1]
+    assert "priced in full, and some of it is read rather than measured" in section
+    assert "awaiting a current price" not in section

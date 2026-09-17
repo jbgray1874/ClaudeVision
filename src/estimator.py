@@ -5996,6 +5996,22 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 for _o in _tube_bend_ops:
                     _timing.pop(_o, None)
             part.setdefault("removed_operations", []).extend(_tube_bend_ops)
+            # AND THE RULING HAS TO TRAVEL, OR THE SHEET RE-ADDS WHAT THIS JUST REMOVED.
+            #
+            # Stripping ops/textual/inferred and the timings cleans the COSTED record. The
+            # route is a different record: wb_populate.route_operations_by_part rebuilds the
+            # operation list from summary["parts"], and route_compiler builds its claims from
+            # the same place. Both already honour one name for a ruling — operations_ruled_out
+            # — and this gate was writing another, removed_operations. Two names for one fact,
+            # so the leg came back to the sheet with its Tubebend intact: TBEN at its own rate
+            # with a 45-minute set-up, on a straight leg, after the engine had ruled it out.
+            #
+            # Recorded under the name the readers actually read, with the reason attached so
+            # the cancellation can be explained rather than merely obeyed. removed_operations
+            # stays as the human-facing list it always was; this is the machine-facing one.
+            _ruled = part.setdefault("operations_ruled_out", {})
+            for _o in _tube_bend_ops:
+                _ruled.setdefault(_o, _why_tb)
             part.setdefault("review_flags", []).append(_why_tb)
         elif _why_tb:
             part.setdefault("review_flags", []).append(_why_tb)
