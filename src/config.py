@@ -665,9 +665,35 @@ COMMERCIAL_LINE_ASK_MARKET = False
 #   estimator reading a provisional can see whose number it is without opening this file. A
 #   provisional whose origin is unrecorded is indistinguishable from one somebody invented,
 #   which is the difference between a figure worth confirming and a figure worth deleting.
+#
+# ── EVERY PRICE IN THIS TABLE IS WITHDRAWN, 18 SEP 2026 ───────────────────────────────
+#
+# James, on the 7332-01 six-off book: "P/P felt pads priced from config. Four pads at £0.20
+# each; report calls them indicative. Remove the literal entirely. Retain the BOM identity
+# and quantity, but hold it as awaiting a current SDI Live/supplier source."
+#
+# The whole table falls under that, not only the felt pad. Read the entries above and the
+# sources say it themselves: "derived from a retail pack", "market rate ... no supplier
+# quote on file", "provisional set when 11762-17 surfaced the line". Every one is a number
+# somebody worked out once and typed here, which is precisely what D-078 forbids —
+# "unless there is a re-useable / understandable calculation we can't use it". Being
+# labelled INDICATIVE on the sheet does not make it a price; it makes it a guess wearing a
+# disclaimer, and it has been reaching estimates as money.
+#
+# WHAT IS KEPT AND WHY. The keys, labels and sources stay: they are the line's IDENTITY —
+# what the item is, how it is recognised in a description, and what was once believed about
+# it. That costs nothing and it is what lets the next rung search for the right thing. Only
+# the money goes.
+#
+# WHAT HAPPENS INSTEAD. standard_commodity_price skips any entry whose price is not above
+# zero, so the line falls through to the rungs that can actually answer: the current SDI
+# Live / UDEF rate, the supplier catalogue, an identified current quote, and then the
+# researched indicative figure — dated, labelled, with its evidence kept. If none of those
+# can answer, the line is not worth a made-up number: it is an unpriced required line, and
+# the estimate says so rather than totalling around it.
 STANDARD_COMMODITY_PRICE_GBP = {
     "PALLET": {
-        "price_gbp": 12.00,
+        "price_gbp": None,   # WITHDRAWN under D-078 — see the note above
         "label": "standard 1200x1000 UK pallet (new) — PROVISIONAL, confirm new/recon and "
                  "whether an ISPM-15 heat-treated stamp is needed for export",
         "source": "market rate for a new 1200x1000 UK pallet — no supplier quote on file",
@@ -677,7 +703,7 @@ STANDARD_COMMODITY_PRICE_GBP = {
     # match it and the line read as £0.00. Both tokens are required so this prices the
     # perforated-panel clip only, not any part that merely says "CLIP". Per-each provisional.
     "PERFO+CLIP": {
-        "price_gbp": 1.20,
+        "price_gbp": None,   # WITHDRAWN under D-078 — see the note above
         "label": "perforated-panel plastic locking clip — PROVISIONAL per-each, confirm "
                  "against a supplier quote or add the item to the purchasing catalogue",
         "source": "provisional set when 11762-17 surfaced the line — no supplier quote on file",
@@ -690,7 +716,7 @@ STANDARD_COMMODITY_PRICE_GBP = {
     # anything the drawing marks as a purchased part. No bench-fitting uplift: the assembly
     # labour already covers sticking them on. Tim confirms or overwrites.
     "FELT+PAD": {
-        "price_gbp": 0.20,
+        "price_gbp": None,   # WITHDRAWN under D-078 — see the note above
         "label": "Self-adhesive felt pad 25 mm (INDICATIVE) — confirm against a supplier quote",
         "source": "derived from a retail pack (~£3.50 per 16 ≈ £0.22 each), held at £0.20 as a "
                   "trade indication — no supplier quote on file",
@@ -714,13 +740,13 @@ STANDARD_COMMODITY_PRICE_GBP = {
     # These go the moment a fastener price file is loaded — a real catalogue rate wins over a
     # provisional at every rung above this one.
     "WOOD+SCREW": {
-        "price_gbp": 0.03,
+        "price_gbp": None,   # WITHDRAWN under D-078 — see the note above
         "label": "wood screw, small gauge — trade (rate given for 3.5 x 19 mm); confirm for "
                  "materially larger gauges",
         "source": "SDI trade rate, James Gray (SDI estimating), 14 Sep 2026",
     },
     "BUTTON+HEAD": {
-        "price_gbp": 0.08,
+        "price_gbp": None,   # WITHDRAWN under D-078 — see the note above
         "label": "socket button head screw, small metric — trade (rate given for M4 x 10 mm, "
                  "black); confirm for materially larger sizes",
         "source": "SDI trade rate, James Gray (SDI estimating), 14 Sep 2026",
