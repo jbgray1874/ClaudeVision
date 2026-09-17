@@ -13,7 +13,7 @@ everywhere, needs no server, no VPN and no rendering policy, and it prints.
 So the HTML stays the working format (it is what the artifact publishes and what a browser opens
 from disk), and this produces the thing you actually send to somebody.
 
-    python tools/reports/render_report_pdf.py reports/SDI-Programme-Status-2026-08-27.html
+    python tools/reports/render_report_pdf.py reports/SDI-Intelligence-Programme-Status-2026-08-27.html
 
 WHAT IT FORCES, AND WHY EACH ONE MATTERS.
 

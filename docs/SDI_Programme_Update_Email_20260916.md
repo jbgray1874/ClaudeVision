@@ -70,7 +70,7 @@ Six short demo videos with write-ups now cover the SolidWorks COM API, the file-
 | SDI Client Briefing Intelligence | http://10.0.0.5:8071/#aisvc-client-briefing |
 | AI Programme · AI Roadmap | http://10.0.0.5:8071/#programme · http://10.0.0.5:8071/#roadmap |
 
-Attached: SDI Programme Status, issue 3 (PDF) · SDI Estimating Intelligence — change register (decisions D-016 to D-082) · the estimators' reviews and replies for 0355255 / 10975-02, 7332-01 and 11908-21 · Yogesh Kumar status 11 Sep · Muhammad Yazir weekly update and project plan.
+Attached: SDI Intelligence Programme Status, issue 3 (PDF) · SDI Estimating Intelligence — change register (decisions D-016 to D-082) · the estimators' reviews and replies for 0355255 / 10975-02, 7332-01 and 11908-21 · Yogesh Kumar status 11 Sep · Muhammad Yazir weekly update and project plan.
 
 Happy to walk either of you through any of it.
 

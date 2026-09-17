@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SDI Programme Status</title>
+<title>SDI Intelligence Programme Status</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Sans+3:ital,wght@0,400;0,600;0,700;1,400&display=swap">
@@ -294,7 +294,7 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
     <div class="titleblock">
       <div>
         <div class="eyebrow">Combined status report &middot; issue 3</div>
-        <h1>SDI Programme Status<span>Three workstreams · one calendar · the loop closed</span></h1>
+        <h1>SDI Intelligence Programme Status<span>Three workstreams · one calendar · the loop closed</span></h1>
       </div>
       <div class="stamp">
         <div>ISSUED &nbsp;<b>16 SEP 2026</b></div>
@@ -1104,112 +1104,278 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
         <span class="dim">the ERP itself goes live 4 Jan 27</span></div>
     </div>
 
-    <p class="subhead">The Access database behind SDI Live moves to Sage X3. <b>Eleven X3 templates
-    are covered by built extract views over eighteen core source tables.</b> Everything else in the
-    roughly three hundred tables, and the Crystal Reports layer above them, gets a stated disposition
-    even where that disposition is &ldquo;not migrated&rdquo; &mdash; because a table with no
-    decision against it is how one survives a migration by accident. The full consolidated view, with
-    every row count and the week-by-week plan, is on the portal at
-    <b>#aisvc-x3</b>; this section is what the programme needs to know.</p>
+    <p class="subhead">The Access database behind SDI Live moves to <b>Sage X3</b>. Eleven X3 templates
+    are covered by built extract views drawing on eighteen core source tables; everything else in the
+    roughly three hundred tables &mdash; and the Crystal Reports layer sitting on top of them &mdash;
+    needs a stated disposition even where that disposition is &ldquo;not migrated&rdquo;, because a
+    table with no decision against it is how one survives a migration by accident. This section is the
+    consolidated view.</p>
 
-    <div class="tablewrap">
-      <table class="rev">
-        <thead><tr><th>Category</th><th>Templates</th><th>Volume</th></tr></thead>
-        <tbody>
-          <tr><td>Products and items</td><td class="ref">ITM, ITF</td><td class="ref bold">41,330 each</td></tr>
-          <tr><td>Bills of material</td><td class="ref">BOMP</td><td class="ref bold">61,648 lines &middot; 14,581 parents</td></tr>
-          <tr><td>Customers and sales</td><td class="ref">BPC, SOH</td><td class="ref bold">500 &middot; 1,159 open orders</td></tr>
-          <tr><td>Suppliers and purchasing</td><td class="ref">BPS, POH</td><td class="ref bold">1,218 &middot; 1,166 open orders</td></tr>
-          <tr><td>Finance &mdash; AR, AP, general ledger</td><td class="ref">BICX, BISX, GAS</td><td class="ref bold">843 &middot; 2,151 &middot; trial balance</td></tr>
-          <tr><td>Stock</td><td class="ref">SMR</td><td class="ref bold">~40,000</td></tr>
-        </tbody>
-      </table>
+    <div class="callout goodbox">
+      <h3>Two dates, and they do not conflict</h3>
+      <p><b>All data in X3 by Friday 30 October 2026.</b> The ERP itself goes live <b>4 January
+      2027</b>, which is the date on the programme timeline in section 01 and is not SDI
+      Intelligence's to move. The migration finishes first on purpose, so the business loads a system
+      it has already proved rather than proving one during cutover.</p>
+      <p><b>Where these figures come from.</b> The row counts and dispositions are the SDI Live
+      extract and the analysis run against it. Where a number is derived or approximate the table says
+      so, and the three things not yet known are listed at the end rather than filled in with a guess.</p>
     </div>
 
-    <h3 class="minihead">The data, by heading</h3>
-    <div class="grid2">
-      <div class="item ok"><h3>Good &mdash; in scope and mapped</h3>
-        <p>18 core tables behind the eleven templates. Extract views built and proven.</p></div>
-      <div class="item"><h3>Duplicates &mdash; dropped</h3>
-        <p>29 tables, about 3.5M rows. Dated backups and _2/_3/_4 variants, removed from scope
-        rather than cleansed.</p></div>
-      <div class="item"><h3>Do not migrate</h3>
-        <p>Around forty tables: system, log, audit, API staging, transient MRP. Reference data
-        (currencies, countries, units, VAT) is confirmed or rebuilt, not copied.</p></div>
-      <div class="item"><h3>Archive &mdash; not to X3</h3>
-        <p>About 3.1M rows of audit and quote history, and the ledger detail behind the openings.
-        Cold storage, and available to the estimating engine as comparables.</p></div>
-    </div>
-
-    <div class="callout warnbox">
-      <h3>The cleansing is real work, and it has names against it</h3>
-      <p><b>20,724 items carry a blank description</b> &mdash; half the catalogue, and the single
-      biggest piece. Behind it: 36,650 items at a zero base price (expected on raw and sub-assembly
-      lines, so it is the finished goods among them that matter), a decision on 23,082 sales-order
-      lines with a blank status, 66 duplicate part records, 74 customers with no postcode, 40
-      customer and 34 supplier category or tax mismatches, and 51 BOM orphans.</p>
-      <p>Every one has an owner: finance with the FD, products and stock, engineering for the BOMs,
-      credit control, procurement, the sales order manager and the stock controller. <b>These are
-      record-level actions, not sign-offs</b>, and three weeks is tight at that volume.</p>
-    </div>
-
-    <h3 class="minihead">Three weeks to cutover</h3>
+    <h3 class="minihead">Mapped to Sage X3 &mdash; eleven templates, eighteen source tables</h3>
+    <p class="subhead" style="margin-top:-4px">Built extract views, proven against the source, grouped
+    by the category an owner would recognise rather than by template code.</p>
     <div class="tablewrap">
       <table class="rev phases">
-        <thead><tr><th>Week</th><th>What happens</th><th>Ends</th></tr></thead>
+        <thead><tr><th style="width:12%">Sage template</th><th style="width:26%">What it carries</th><th style="width:38%">Source table(s)</th><th style="width:24%">Rows</th></tr></thead>
         <tbody>
-          <tr><td class="ref bold">Mon 12 &ndash; Fri 16 Oct</td>
-              <td><b>Mobilise.</b> Owner assigned per data area; classification locked per table;
-              the three third-party items cleared; <b>the UDEF column-definition analysis run</b>;
-              <b>the Crystal Reports inventory opened</b>; parity and QA over the eleven views.</td>
-              <td class="ref">the gate</td></tr>
-          <tr><td class="ref bold">Mon 19 &ndash; Fri 23 Oct</td>
-              <td><b>Cleanse</b>, in parallel by owner, against the counts above.</td>
-              <td class="ref">data fit to load</td></tr>
-          <tr><td class="ref bold">Mon 26 &ndash; Fri 30 Oct</td>
-              <td><b>Trial load, dress rehearsal, cutover.</b> Master data Mon, transactions Tue,
-              a full timed rehearsal against a frozen snapshot Wed, cutover Thursday evening,
-              go / no-go Friday morning with the FD signing the trial balance, the stock value,
-              AR and AP and the order totals.</td>
-              <td class="ref">all data in X3</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Products / items</td></tr>
+          <tr><td class="ref"><b>ITM</b></td><td>Products</td><td class="ref" style="white-space:normal">STK_STOCK + ASC_PMA_TBL</td><td class="ref bold" style="white-space:normal">41,330</td></tr>
+          <tr><td class="ref"><b>ITF</b></td><td>Product sites</td><td class="ref" style="white-space:normal">STK_STOCK + ASC_PMA_TBL</td><td class="ref bold" style="white-space:normal">41,330</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Bills of material</td></tr>
+          <tr><td class="ref"><b>BOMP</b></td><td>Bills of material</td><td class="ref" style="white-space:normal">ASC_BOM_TBL</td><td class="ref bold" style="white-space:normal">61,648 lines<br>14,581 parents</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Customers / sales</td></tr>
+          <tr><td class="ref"><b>BPC</b></td><td>Customers</td><td class="ref" style="white-space:normal">SL_ACCOUNTS + ASC_SL_ADDRESSES + SL_TERMS</td><td class="ref bold" style="white-space:normal">500</td></tr>
+          <tr><td class="ref"><b>SOH</b></td><td>Open sales orders</td><td class="ref" style="white-space:normal">ASC_COR_TBL</td><td class="ref bold" style="white-space:normal">1,159<br>&pound;13,535,254</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Suppliers / purchasing</td></tr>
+          <tr><td class="ref"><b>BPS</b></td><td>Suppliers</td><td class="ref" style="white-space:normal">PL_ACCOUNTS + PL_ADDRESSES</td><td class="ref bold" style="white-space:normal">1,218</td></tr>
+          <tr><td class="ref"><b>POH</b></td><td>Open purchase orders</td><td class="ref" style="white-space:normal">ASC_POR_TBL</td><td class="ref bold" style="white-space:normal">1,166<br>&pound;5,675,222</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Finance &middot; ledgers</td></tr>
+          <tr><td class="ref"><b>BICX</b></td><td>Open accounts receivable</td><td class="ref" style="white-space:normal">SL_TRANSACTIONS</td><td class="ref bold" style="white-space:normal">843<br>~&pound;6.68M net</td></tr>
+          <tr><td class="ref"><b>BISX</b></td><td>Open accounts payable</td><td class="ref" style="white-space:normal">PL_TRANSACTIONS</td><td class="ref bold" style="white-space:normal">2,151<br>&pound;5,125,595</td></tr>
+          <tr><td class="ref"><b>GAS</b></td><td>General ledger trial balance</td><td class="ref" style="white-space:normal">SL_PL_NL_DETAIL</td><td class="ref bold" style="white-space:normal">derived<br>nets to ~0</td></tr>
+          <tr><td colspan="4" style="padding:13px 0 4px;font-family:var(--mono);font-size:9.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--amber)">Stock</td></tr>
+          <tr><td class="ref"><b>SMR</b></td><td>Stock opening balances</td><td class="ref" style="white-space:normal">STK_STOCK + ASC_LOT_TBL</td><td class="ref bold" style="white-space:normal">~40,000</td></tr>
         </tbody>
       </table>
     </div>
-    <p class="subhead" style="margin-top:10px"><b>A note on the calendar.</b> The plan as first
-    drafted ran &ldquo;13&ndash;17, 20&ndash;24, 27&ndash;31 October&rdquo; with a Friday 30 October
-    cutover and a go / no-go on Friday 31st. 13 October 2026 is a Tuesday and 31 October is a
-    Saturday, so those could not all be true. The three working weeks that end on a Friday 30 October
-    cutover are the ones above.</p>
+    <div class="callout warnbox" style="margin-top:14px">
+      <h3>Routings are not in the eleven</h3>
+      <p>Works-order routings were parked earlier in the programme. <b>If they are now in scope for the
+      October go-live that is a scope addition</b>, and it changes both the disposition table below and
+      the load waves in week three. This needs an answer before the plan is final.</p>
+    </div>
+
+    <h3 class="minihead">Every other table, and what happens to it</h3>
+    <p class="subhead" style="margin-top:-4px">Roughly three hundred source tables were analysed.
+    Nothing is left without a disposition.</p>
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th style="width:14%">Group</th><th style="width:38%">What is in it</th><th style="width:12%">Volume</th><th style="width:36%">Disposition</th></tr></thead>
+        <tbody>
+          <tr><td><b>Core mapped</b></td>
+            <td>The eighteen source tables behind the eleven templates above</td>
+            <td class="ref bold" style="white-space:normal">18 tables</td>
+            <td><b style="color:var(--good)">MIGRATE</b> &mdash; built and proven</td></tr>
+          <tr><td><b>UDEF family</b></td>
+            <td>SDI's own additions to the Access schema. Populated: UDEF_WO_SHORTAGE_FROM_ORC (13,453),
+            UDEF_COR_DATE_HIS_TBL (9,790), UDEF_ASC_ORC_ITEMS_T (4,810), UDEF_div_PL (490),
+            UDEF_ASC_SOR_TBL_SC (449), UDEF_ASCSORTBL_68530446 (324), UDEF_TEMP_SL_COUNTRY (230), plus
+            dated UDEF_ASC_DVY_TBL_* and UDEF_ASC_POR_TBL_* variants and UDEF_tab_Generic* config
+            (0&ndash;4 rows)</td>
+            <td class="ref bold" style="white-space:normal">~30k rows</td>
+            <td><b style="color:var(--amber)">REVIEW</b> &mdash; some are custom fields on live records
+            and belong in X3 user fields, others are staging or temp and drop. <b>Not yet analysed</b>;
+            week-one task</td></tr>
+          <tr><td><b>Other ASC operational</b></td>
+            <td>Works orders ASC_WOR_TBL (53k), ASC_WKK_TBL (231k), job costing ASC_JBC_TBL (233k),
+            kitting ASC_KIT_TBL (270k), deliveries ASC_DVY_TBL (144k), invoice detail ASC_INV_TBL
+            (82k), planning ASC_PLN_TBL / ASC_MRP_*, capacity ASC_CAP_TBL (71k), labour ASC_LTU_TBL
+            (814k) and ASC_TBI_TBL (64k)</td>
+            <td class="ref bold" style="white-space:normal">~1.9M rows</td>
+            <td><b style="color:var(--amber)">DISPOSITION NEEDED</b> &mdash; each is migrate, rebuild
+            natively in X3, archive or drop. Tied to the routings question above</td></tr>
+          <tr><td><b>Finance detail and history</b></td>
+            <td>SL_PL_NL_DETAIL (1.2M), NL_TRANSACTIONS (244k), sales and purchase transaction and
+            allocation history</td>
+            <td class="ref bold" style="white-space:normal">~1.5M rows</td>
+            <td><b>ARCHIVE</b> &mdash; the openings cross as GAS; the history does not follow</td></tr>
+          <tr><td><b>Audit and quote history</b></td>
+            <td>ASC_HIS_TBL (1.6M) and the quote-history family</td>
+            <td class="ref bold" style="white-space:normal">~1.6M rows</td>
+            <td><b>ARCHIVE</b> &mdash; cold storage, and available to the estimating engine as
+            comparables rather than to X3</td></tr>
+          <tr><td><b>Duplicates</b></td>
+            <td>_2 / _3 / _4 variants and dated backups of live tables</td>
+            <td class="ref bold" style="white-space:normal">29 tables<br>~3.5M rows</td>
+            <td><b style="color:var(--ink-3)">DROPPED</b> &mdash; confirmed, already out of scope</td></tr>
+          <tr><td><b>System, config and reference</b></td>
+            <td>SYS_*, MetaData.*, Diagnostics.*, language labels, error logs, Workspace.*, UITest.*,
+            sfdc.*, AIEstimating.*</td>
+            <td class="ref bold" style="white-space:normal">~40+ tables</td>
+            <td><b style="color:var(--ink-3)">DO NOT MIGRATE</b> &mdash; rebuilt natively or
+            irrelevant. Reference data (currencies, countries, units of measure, VAT) is confirmed or
+            rebuilt, not copied</td></tr>
+          <tr><td><b>Crystal Reports</b></td>
+            <td>The reporting layer sitting on the Access database. These are <b>.rpt files, not
+            tables</b>, so they were never in the table dump</td>
+            <td class="ref bold" style="white-space:normal">inventory<br>not captured</td>
+            <td><b style="color:var(--amber)">REBUILD OR RETIRE</b> &mdash; nothing migrates; each
+            report is identified, its source tables traced, then rebuilt in X3 reporting or retired
+            with an owner. <b>Register is a placeholder until the inventory exists.</b> Due by end of
+            October</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="minihead">Data quality, by number</h3>
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th>Heading</th><th>Number</th><th>What it means</th></tr></thead>
+        <tbody>
+          <tr><td><b>Good data</b> &mdash; in scope and mapped</td><td class="ref bold" style="white-space:normal">18 tables<br>&rarr; 11 templates</td><td>Extract views built and proven against the source</td></tr>
+          <tr><td><b>Duplicates</b> &mdash; dropped</td><td class="ref bold" style="white-space:normal">29 tables<br>~3.5M rows</td><td>Dated backups and _2/_3/_4 variants; removed from scope, not cleansed</td></tr>
+          <tr><td><b>Do not migrate</b></td><td class="ref bold" style="white-space:normal">~40+ tables</td><td>System, log, audit, API staging and transient MRP</td></tr>
+          <tr><td><b>Archive</b> &mdash; not to X3</td><td class="ref bold" style="white-space:normal">~3.1M rows</td><td>Audit and quote history, and the ledger detail behind the openings</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="subhead" style="margin-top:14px"><b>And the record-level issues, which are the ones that
+    take people's time.</b> These are not sign-offs.</p>
+    <div class="tablewrap">
+      <table class="rev">
+        <thead><tr><th>Record-level issue</th><th>Count</th><th>Owner and action</th></tr></thead>
+        <tbody>
+          <tr><td><b>Items with a blank description</b> &mdash; half the catalogue</td><td class="ref bold" style="white-space:normal">20,724</td><td><b>Biggest open issue.</b> Products / stock. Real record-level work</td></tr>
+          <tr><td>Items with a zero base price</td><td class="ref bold" style="white-space:normal">36,650</td><td>Expected for raw and sub-assembly lines; the finished goods among them are what need checking</td></tr>
+          <tr><td>Sales-order lines with a blank COR_ORDER_STATUS</td><td class="ref bold" style="white-space:normal">23,082</td><td>Sales order manager &mdash; one decision, then it applies to all of them</td></tr>
+          <tr><td>Duplicate part-master records</td><td class="ref bold" style="white-space:normal">66</td><td>Products / stock</td></tr>
+          <tr><td>Customer category or tax mismatches</td><td class="ref bold" style="white-space:normal">40</td><td>Credit control</td></tr>
+          <tr><td>Supplier category or tax mismatches</td><td class="ref bold" style="white-space:normal">34</td><td>Accounts payable / procurement</td></tr>
+          <tr><td>Customers with a blank postcode</td><td class="ref bold" style="white-space:normal">74</td><td>Credit control</td></tr>
+          <tr><td>BOM orphans</td><td class="ref bold" style="white-space:normal">51</td><td>Engineering &mdash; non-blocking, but confirm the active set</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="minihead">The plan &mdash; three weeks to all data in X3</h3>
+    <div class="gantt-frame">
+      <div class="gantt-title">Working back from a Friday 30 October cutover</div>
+      <div class="gantt-scroll">
+        <div class="gantt">
+          <div class="months" aria-hidden="true">
+            <span style="left:0%">MON 12 &ndash; FRI 16 OCT</span>
+            <span style="left:33.3%">MON 19 &ndash; FRI 23 OCT</span>
+            <span style="left:66.6%">MON 26 &ndash; FRI 30 OCT</span>
+          </div>
+          <div class="gridlines" aria-hidden="true">
+            <i style="left:33.3%"></i><i style="left:66.6%"></i>
+          </div>
+          <div class="row"><div class="lbl"><b>W1</b> &middot; Mobilise, classify, own</div>
+            <div class="track"><div class="bar prog" style="left:0%;width:33.3%"></div></div>
+            <div class="rowend">GATE</div></div>
+          <div class="row"><div class="lbl"><b>W2</b> &middot; Cleanse, by owner</div>
+            <div class="track"><div class="bar prog" style="left:33.3%;width:33.3%"></div></div>
+            <div class="rowend">FIT TO LOAD</div></div>
+          <div class="row"><div class="lbl"><b>W3</b> &middot; Load, rehearse, cut over</div>
+            <div class="track"><div class="bar done" style="left:66.6%;width:33.4%"></div>
+              <div class="mile" style="left:100%"></div></div>
+            <div class="rowend">30 OCT</div></div>
+          <div class="row"><div class="lbl">Crystal Reports inventory</div>
+            <div class="track"><div class="bar pend" style="left:0%;width:100%"></div></div>
+            <div class="rowend">END OCT</div></div>
+          <div class="row"><div class="lbl">UDEF field analysis</div>
+            <div class="track"><div class="bar pend" style="left:0%;width:33.3%"></div></div>
+            <div class="rowend">W1</div></div>
+        </div>
+      </div>
+      <div class="gantt-key">
+        <span><i class="k-prog"></i>Mobilise and cleanse</span>
+        <span><i class="k-done"></i>Load and cut over</span>
+        <span><i class="k-pend"></i>Runs alongside</span>
+        <span><i class="k-mile"></i>All data in X3</span>
+      </div>
+    </div>
+
+    <div class="tablewrap">
+      <table class="rev phases">
+        <thead><tr><th>Week 1 &middot; Mon 12 &ndash; Fri 16 Oct</th><th>Owner</th></tr></thead>
+        <tbody>
+          <tr><td>Confirm and assign a business owner for every data area</td><td class="who">James Gray</td></tr>
+          <tr><td>Lock the classification per table &mdash; good, duplicate, bad, do not migrate</td><td class="who">James Gray + owners</td></tr>
+          <tr><td><b>Clear the three outstanding third-party items</b> &mdash; the sign convention (which blocks the final BICX and BISX extracts), non-production environment access, and the product-category confirmation, plus multi-site</td><td class="who">Acuity</td></tr>
+          <tr><td><b>UDEF analysis</b> &mdash; run the column-definition query across the populated UDEF family, then decide field by field: a custom field on a live record (map into an X3 user field) or staging and temp (drop)</td><td class="who">James Gray</td></tr>
+          <tr><td><b>Open the Crystal Reports inventory</b> &mdash; capture the .rpt filenames, the reports-menu export or the folder listing, and start the register</td><td class="who">James Gray + report owners</td></tr>
+          <tr><td>Run parity and QA over the eleven built views; apply any fixes</td><td class="who">James Gray</td></tr>
+          <tr><td>Chart of accounts confirmed pre-loaded, or imported</td><td class="who">Acuity / Finance</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tablewrap" style="margin-top:14px">
+      <table class="rev phases">
+        <thead><tr><th>Week 2 &middot; Mon 19 &ndash; Fri 23 Oct &middot; cleansing, in parallel</th><th>Owner</th><th>The actual work</th></tr></thead>
+        <tbody>
+          <tr><td>Finance &mdash; general ledger, AR, AP</td><td class="who">Charlotte (FD)</td><td>Tax codes (SV / FZ / 8 / 0), the ID and EMP lists, AR and AP reconciled to the aged reports</td></tr>
+          <tr><td>Products and items</td><td class="who">David / stock manager</td><td>20,724 blank descriptions, the zero prices, 66 duplicate part records, category split sanity-checked</td></tr>
+          <tr><td>Bills of material</td><td class="who">Engineering</td><td>51 orphans, and confirm the active set</td></tr>
+          <tr><td>Customers</td><td class="who">Credit control</td><td>74 blank postcodes, 40 mismatches, addresses</td></tr>
+          <tr><td>Suppliers</td><td class="who">AP / procurement</td><td>34 mismatches, the EMP list, addresses</td></tr>
+          <tr><td>Open sales orders</td><td class="who">Sales order manager</td><td>The blank COR_ORDER_STATUS decision &mdash; 23,082 lines ride on it</td></tr>
+          <tr><td>Open purchase orders</td><td class="who">Procurement</td><td>Confirm the open filter</td></tr>
+          <tr><td>Stock</td><td class="who">Stock controller</td><td>Snapshot approach, at lot level</td></tr>
+          <tr><td>Crystal Reports</td><td class="who">Report owners</td><td>Catalogue each report: source tables and fields, rebuild or retire, named owner</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="tablewrap" style="margin-top:14px">
+      <table class="rev phases">
+        <thead><tr><th>Week 3 &middot; Mon 26 &ndash; Fri 30 Oct</th><th>What happens</th></tr></thead>
+        <tbody>
+          <tr><td class="ref bold" style="white-space:normal">Mon 26</td><td>Trial load master data &mdash; BPC, BPS, ITM, ITF, BOMP &mdash; into non-production; reconcile counts</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Tue 27</td><td>Fix rejections; trial load the transactions &mdash; SMR, GAS, BICX, BISX, POH, SOH</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Wed 28</td><td>Dress rehearsal: a full timed run against a frozen snapshot, with owner spot-checks</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Thu 29, evening</td><td>Access goes read-only; cutover snapshot taken; all waves loaded</td></tr>
+          <tr><td class="ref bold" style="white-space:normal">Fri 30, morning</td><td><b>Go / no-go.</b> The FD signs the trial balance, the stock value, AR and AP, and the sales and purchase order totals &mdash; then live</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="subhead" style="margin-top:12px"><b>A note on the calendar.</b> The plan as first drafted
+    ran &ldquo;13&ndash;17, 20&ndash;24, 27&ndash;31 October&rdquo; with a Friday 30 October cutover and
+    a go / no-go on Friday the 31st. 13 October 2026 is a Tuesday and 31 October is a Saturday, so
+    those could not all be true. The three working weeks that end on a Friday 30 October cutover are
+    the ones above.</p>
 
     <div class="callout">
       <h3>End of October is a target with a gate, not a commitment</h3>
-      <p><b>Three things have to hold and two of them do not hold today.</b> The third-party items
-      must clear in week one &mdash; the sign convention blocks the final AR and AP extracts, and
-      without non-production access and the product-category confirmation the trial load cannot run.
-      The cleansing has to actually happen. And only one trial-load cycle fits where the original
-      plan had two plus a rehearsal, so there is no safety net for a structural surprise.</p>
-      <p><b>The recommendation is an explicit decision point at the end of week one:</b> if those
-      three are not confirmed by <b>Friday 16 October</b>, the date rebaselines to mid-November. That
-      is cheaper than defending a date into a failed cutover, by a distance.</p>
+      <p><b>Three things have to hold and two of them do not hold today.</b></p>
+      <ul class="plain">
+        <li><b>The third-party items must clear in week one.</b> The sign convention blocks the final
+        AR and AP extracts, and without non-production access and the product-category confirmation the
+        trial load cannot run in week three.</li>
+        <li><b>Cleansing is real work, not sign-off.</b> 20,724 blank descriptions and the blank
+        sales-order-status decision are record-level effort for the business owners. Three weeks is
+        tight at that volume.</li>
+        <li><b>Only one trial-load cycle fits.</b> The original plan had two trial loads plus a dress
+        rehearsal; compressing to a single load, fix and rehearse pass removes the safety net, so any
+        structural surprise moves the date.</li>
+      </ul>
+      <p style="margin-top:10px"><b>The recommendation is an explicit decision point at the end of week
+      one:</b> if those three are not confirmed by <b>Friday 16 October</b>, the date rebaselines to
+      mid-November. That is cheaper than defending a date into a failed cutover, by a distance.</p>
     </div>
 
     <div class="callout plainbox">
       <h3>Three things genuinely not known</h3>
       <ul class="plain">
-        <li><b>The Crystal Reports inventory does not exist.</b> They are .rpt files rather than
-        tables, so nothing about them is in the table dump. Nothing migrates &mdash; each report is
-        rebuilt in X3 reporting or retired &mdash; but each needs identifying, its source tables
-        tracing and an owner. Opened in week one, <b>due by end of October</b>.</li>
-        <li><b>The UDEF family has not been analysed.</b> Some of those tables are custom fields on
-        live records and belong in X3 user fields; others are staging and drop. The column-definition
-        query is a week-one task and the decision is field by field, because deciding without it
-        would be guessing.</li>
-        <li><b>Routings and works orders: in scope, or still parked?</b> They are not among the
-        eleven. If they are now wanted for October that is a scope addition and it changes both the
-        disposition list and the load waves. <b>This needs an answer before the plan is final.</b></li>
+        <li><b>The Crystal Reports inventory does not exist.</b> They are .rpt files rather than tables,
+        so nothing about them is in the table dump. Nothing migrates &mdash; each report is rebuilt in
+        X3 reporting or retired &mdash; but each needs identifying, its source tables tracing and an
+        owner. Opened in week one, <b>due by end of October</b>.</li>
+        <li><b>The UDEF family has not been analysed.</b> Some of those tables are custom fields on live
+        records and belong in X3 user fields; others are staging and drop. The column-definition query
+        is a week-one task and the decision is field by field, because deciding without it would be
+        guessing.</li>
+        <li><b>Routings and works orders: in scope, or still parked?</b> They are not among the eleven.
+        If they are now wanted for October that is a scope addition and it changes both the disposition
+        table and the load waves. <b>This needs an answer before the plan is final.</b></li>
       </ul>
     </div>
   </section>
+
   <!-- ══════════════════════════════════════════════════════════════════ -->
   <section>
     <h2 id="open"><span class="n">07</span> Open across the programme</h2>
@@ -1354,7 +1520,7 @@ a:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
   </section>
 
   <footer>
-    SDI PROGRAMME STATUS · COMBINED REPORT · ISSUE 3 · ISSUED 16 SEPTEMBER 2026 · SUPERSEDES 7 SEPTEMBER 2026<br>
+    SDI INTELLIGENCE PROGRAMME STATUS · COMBINED REPORT · ISSUE 3 · ISSUED 16 SEPTEMBER 2026 · SUPERSEDES 7 SEPTEMBER 2026<br>
     SOURCES · SDI INTELLIGENCE COMMIT HISTORY 7 – 16 SEP AND CHANGE REGISTER D-016 TO D-078 · ESTIMATOR REVIEWS FROM HOWARD THURLEY (10 AND 15 SEP), TONY FORD (8 SEP) AND TIM WILKES (4 AND 9 SEP) · YOGESH KUMAR STATUS 11 SEP · MUHAMMAD YAZIR WEEKLY UPDATE · SHARED WORKSTATION CAPITAL REQUEST 3 SEP &middot; SDI LIVE TABLE EXTRACT AND MIGRATION ANALYSIS<br>
     ESTIMATING GO-LIVE TARGET · SEPTEMBER / OCTOBER 2026 — DECIDED ON REVIEWS RETURNED FROM THE PARALLEL RUN<br>
     SDI DISPLAYS · LOUGHBOROUGH · WE.ARE.SDI

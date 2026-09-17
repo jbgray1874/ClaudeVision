@@ -1,7 +1,7 @@
 # Programme status e-mail — 7 September 2026
 
 Paste-ready. Figures reconciled against the combined status report of 7 September
-(`reports/SDI-Programme-Status-2026-09-07.html`), Yogesh's status of 4 September and his
+(`reports/SDI-Intelligence-Programme-Status-2026-09-07.html`), Yogesh's status of 4 September and his
 project plan tracker (week 04 Sep), and the shared workstation capital request of 3 September.
 Keep the attachments together; the e-mail refers to them.
 

@@ -94,4 +94,4 @@ James Gray · AI and Systems Controller · SDI Displays · 075858 16501 · weare
 | SDI Client Briefing Intelligence | http://10.0.0.5:8071/#aisvc-client-briefing |
 | AI Programme · AI Roadmap | http://10.0.0.5:8071/#programme · http://10.0.0.5:8071/#roadmap |
 
-Attached: SDI Programme Status issue 3 · SDI Estimating Intelligence engine status, with the numbers above and the parity position set out in full.
+Attached: SDI Intelligence Programme Status issue 3 · SDI Estimating Intelligence engine status, with the numbers above and the parity position set out in full.
