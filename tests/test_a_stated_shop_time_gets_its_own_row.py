@@ -160,3 +160,90 @@ def test_a_plated_part_drops_its_generic_handling_when_it_takes_the_two_stated_p
     block = src[start:start + 400]
     assert 'run_times_min.pop("handling", None)' in block
     assert 'setup_times_min.pop("handling", None)' in block
+
+
+# ── what the six-off book of 17 Sep 12:47 actually showed ────────────────────────────
+#
+# The rows split correctly. Two of the three then took the wrong TIME, and the book named
+# both faults in its own rate-basis column:
+#
+#   105  Manual labour (Metal)  brush_before_plate   1.0  0.33h  £1.69   historical
+#   108  Assemble/pack (Metal)  assembly             1.0  1.05h  £5.00   stated_shop_time
+#   109  Assemble/pack (Metal)  plater_final_pack    1.0  1.05h  £5.00   stated_shop_time
+#   110  Assemble/pack (Metal)  plater_pack          1.0  0.65h  £3.09   stated_shop_time
+#
+# 110 and 109 are right: 0.65h is 15 min set-up plus 6 units at 4 min, 1.05h is 15 min plus
+# 6 at 8 min. Two faults sit either side of them.
+#
+# BRUSHING TOOK THE MEDIAN. Its basis reads `historical`, not `stated_shop_time`: 0.33h is
+# 15 min set-up plus 6 units at 79/hr, the corpus figure. The claim index was built with a
+# `break` after the FIRST marker a part matched, and 7332-01-101 is welded, brushed AND
+# plated — so it registered the weld pair and stopped. The brushing row's claim covered
+# `welding` and `dress_welds`, and did not cover brushing.
+#
+# THE GENERIC ASSEMBLY ROW TOOK A STATED TIME NOBODY STATED FOR IT. Row 108 is the whole
+# job's pack — 007, 008, 101 and the felt pad — and it came out at 1.05h, identical to the
+# final pack. It found no `assembly` hours, fell through to the department-alias fallback
+# ("any operation on this part billing to the same bench"), and PACM is the bench for the
+# generic pack, the pack out and the pack back alike. It picked up the final pack's stated
+# 8 minutes. One stated figure, charged twice, on a row nobody had stated anything about.
+
+def test_a_part_can_carry_more_than_one_stated_claim():
+    """7332-01-101 is welded, brushed and plated. Registering only the first marker is why
+    the brushing row read 79/hr."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
+           ).read_text(encoding="utf-8")
+    start = src.index("for _marker, _ops, _why in _STATED_SHOP_TIME_MARKERS:")
+    block = src[start:start + 2600]
+    body_lines = [ln.strip() for ln in block.splitlines()[:40]]
+    assert "break" not in body_lines, (
+        "the claim index stops at the first marker a part matches, so a part with several "
+        "stated times registers only one of them")
+
+
+def test_every_marker_operation_is_reachable_for_a_part_that_carries_them_all():
+    """The index must end up covering the union, not the first match."""
+    covered = {}
+    for marker, ops, _why in wb_populate._STATED_SHOP_TIME_MARKERS:
+        covered[marker] = set(ops)
+    union = set().union(*covered.values())
+    for op in ("welding", "dress_welds", "brush_before_plate", "plater_pack",
+               "plater_final_pack"):
+        assert op in union, op
+
+
+def test_a_stated_time_is_never_borrowed_through_the_department_alias():
+    """The alias fallback exists for one operation under two names — "assembly" on the
+    route, "handling" in the costing, one PACM row. It must not hand a GENERIC row a figure
+    the shop stated about a DIFFERENT operation that happens to share the bench."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "wb_populate.py"
+           ).read_text(encoding="utf-8")
+    start = src.index("The same operation under the department's other name")
+    block = src[start - 400:start + 2000]
+    assert "not is_stated_time_operation(_eop)" in block, (
+        "a generic row can still reach the bench and pick up a stated time")
+    assert "if is_stated_time_operation(_ak):" in block, (
+        "a stated time can still be offered as the SOURCE for another row")
+
+
+def test_the_three_stated_ops_all_bill_to_a_bench_they_share_with_generic_work():
+    """Which is why the alias exclusion matters at all: if each had its own department the
+    fallback could never have reached them."""
+    from department_codes import code_for as dept
+    assert dept("brush_before_plate") == dept("deburr") == "MANM"
+    assert dept("plater_pack") == dept("plater_final_pack") == dept("assembly") == "PACM"
+
+
+def test_an_estimators_own_operations_off_ruling_reaches_the_route():
+    """`operations_off` is how a person takes an operation off for one job. It recorded
+    `removed_operations` only — the same two-names fault D-085 found on the tube-bend gate,
+    on the strongest evidence there is."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent / "src" / "estimator.py"
+           ).read_text(encoding="utf-8")
+    start = src.index('_off = (part.get("_estimator_operations_off") or [])')
+    block = src[start:start + 1400]
+    assert 'part.setdefault("operations_ruled_out", {})' in block
+    assert 'part.setdefault("removed_operations", [])' in block

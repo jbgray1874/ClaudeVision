@@ -880,8 +880,19 @@ def _part_ops(part: Dict[str, Any]) -> List[str]:
     if _off:
         _keep = [o for o in ops if str(o).strip().lower() not in _off]
         if len(_keep) != len(ops):
-            part.setdefault("removed_operations", []).extend(
-                [o for o in ops if o not in _keep])
+            _gone = [o for o in ops if o not in _keep]
+            part.setdefault("removed_operations", []).extend(_gone)
+            # AND UNDER THE NAME THE ROUTE READS, or the sheet rebuilds what the estimator
+            # just struck off. The same two-names fault D-085 found on the tube-bend gate:
+            # `removed_operations` cleans the COSTED record, while route_operations_by_part
+            # and route_compiler both honour `operations_ruled_out` and nothing else. An
+            # estimator's own ruling is the strongest evidence there is, and it was the one
+            # most likely to be quietly rebuilt.
+            _ruled = part.setdefault("operations_ruled_out", {})
+            for _o in _gone:
+                _ruled.setdefault(
+                    _o, "the estimator took this operation off for this job "
+                        "(estimator_decisions.operations_off in the job's answers file)")
         ops = _keep
     return ops
 

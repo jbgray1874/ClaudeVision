@@ -5318,7 +5318,20 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # belongs in ONE place before the chain rather than as an exception inside
                 # each link of it. So the hours travel with the claim, and the loop asks
                 # once, at the top, whether this row has one.
-                break
+                #
+                # AND IT KEEPS LOOKING, BECAUSE ONE PART CAN CARRY SEVERAL CLAIMS.
+                #
+                # This used to `break` here. 7332-01-101 is a welded, brushed, plated
+                # weldment: it carries the weld markers AND brush_before_plate_applied AND
+                # plater_pack_applied. The break registered only the FIRST marker's
+                # operations — the weld pair — so the brushing row's claim covered
+                # `welding` and `dress_welds` and did not cover brushing. The stated 40
+                # minutes was computed correctly, recorded correctly, and then not asked
+                # for: the row fell to the corpus median of 79/hr and booked £1.69 where
+                # the figure Howard gave makes about £125 at six off.
+                #
+                # There was never a reason to stop at the first claim. A part has as many
+                # stated times as the shop has given it.
         # THE MARKER AND THE HOURS MAY NOT BE ON THE SAME DICT. The costing stage stamps
         # the part it is working on; the labour record is attached to the part ESTIMATE, and
         # whether those are one object or two has already cost this session one fix that
@@ -6200,14 +6213,30 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 if not _claim_covers(_covered, _eop):
                     continue
                 _v = _safe(_hrs.get(str(_eop).strip().lower()))
-                if not _v:
+                if not _v and not is_stated_time_operation(_eop):
                     # The same operation under the department's other name — "assembly" on
                     # the route, "handling" in the costing, one PACM row on the sheet.
+                    #
+                    # NEVER FOR A STATED OPERATION, IN EITHER DIRECTION. This fallback asks
+                    # "any operation on this part that bills to the same bench", and the
+                    # bench is PACM for the generic assembly row, the pack OUT and the pack
+                    # BACK alike. On the six-off book the GENERIC assembly row — 007, 008,
+                    # 101 and the felt pad — found no `assembly` hours, reached for the
+                    # bench and picked up the final pack's stated 8 minutes a unit, which
+                    # is 7.5/hr on a row that should have been at the department's own
+                    # rate. One stated figure, charged twice, on a row nobody had stated
+                    # anything about.
+                    #
+                    # A stated time belongs to its own operation and to no other. Excluding
+                    # the TARGET stops a generic row borrowing one; excluding stated ops as
+                    # SOURCES below stops the same thing from the other end.
                     try:
                         from department_codes import code_for as _dept_of2
                         _want2 = _dept_of2(_eop)
                         if _want2:
                             for _ak, _av in _hrs.items():
+                                if is_stated_time_operation(_ak):
+                                    continue
                                 if _dept_of2(_ak) == _want2 and _safe(_av):
                                     _v = _safe(_av)
                                     break
