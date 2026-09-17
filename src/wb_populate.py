@@ -6429,7 +6429,27 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _rws = [_r for _r in _rws if _r]
             if _rws:
                 _qs = "+".join("E%d" % _r for _r in _rws)
-                _ts = "+".join("E%d*V%d" % (_r, _r) for _r in _rws)
+                # A FLOOR UNDER THE SECONDS, BECAUSE NOBODY LOADS A PART IN ONE SECOND.
+                #
+                # The calculator times the CUT. On a part big enough for cutting to
+                # dominate that is the right answer and Howard's own figures agree with it:
+                # 7332-01-003, a 441 x 10 strap, computed 236/hr against his 235. But
+                # 7332-01-004 is a 15.88 mm square cap — a cut path of a few centimetres —
+                # and the same formula returned 3,340/hr where he books 900. At 3,340 an
+                # hour a part is loaded, pierced, cut and unloaded in 1.08 seconds, which
+                # no machine and no operator does.
+                #
+                # So the denominator is floored at the time a part takes REGARDLESS of its
+                # cut path (config.LASER_MIN_SECONDS_PER_PART). Applied inside the
+                # template's own formula with MAX(), so the calculator is still visibly
+                # doing the work and still tracks any change the estimators make to their
+                # cutting speeds — the floor only governs where the cut is so short that
+                # handling is the whole job.
+                _floor = _safe(getattr(config, "LASER_MIN_SECONDS_PER_PART", 0), 0) or 0
+                if _floor > 0:
+                    _ts = "+".join("E%d*MAX(V%d,%g)" % (_r, _r, _floor) for _r in _rws)
+                else:
+                    _ts = "+".join("E%d*V%d" % (_r, _r) for _r in _rws)
                 _fb = float(default_tp or 269)
                 _laser_formula = "=IFERROR(3600*(%s)/(%s),%s)" % (_qs, _ts, _fb)
 

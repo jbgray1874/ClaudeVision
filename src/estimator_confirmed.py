@@ -568,6 +568,13 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                      f"{type(block).__name__}"]
 
     for key in block:
+        # A LEADING UNDERSCORE IS A COMMENT, NOT A DECISION. The example answers file
+        # teaches writing "_why_operations_off" beside a ruling to record why it was made —
+        # which is the habit we want — and the validator was reporting every one of those
+        # as "that line did nothing". An estimator reading three complaints about their own
+        # notes learns to stop writing them, or to distrust the whole list.
+        if str(key).strip().startswith("_"):
+            continue
         if str(key).strip() not in _DECISION_KEYS:
             problems.append(
                 f"estimator_decisions: '{key}' is not a decision this engine applies — "

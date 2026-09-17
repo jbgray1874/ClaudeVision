@@ -388,3 +388,89 @@ def test_the_example_answers_file_carries_howards_two_rulings_and_no_price():
     assert "plating_gbp_per_unit" not in dec, (
         "a price typed into the answers file is still a price typed into a file")
     assert "250" not in json.dumps(dec)
+
+
+# ── the laser floor: nobody loads a part in one second ───────────────────────────────
+#
+# James, 18 Sep: "Correct 004's laser calculation and shared set-up allocation."
+#
+# The estimators' template times the CUT — blank size, hole count, internal cut distance,
+# at their own cutting speeds — and on a part where cutting dominates it is the best basis
+# on the sheet: 7332-01-003, a 441 x 10 strap, computed 236/hr against Howard's 235.
+#
+# It has no floor. 7332-01-004 is a 15.88 mm square cap, and the same formula returned
+# 3,340/hr where he books 900. At 3,340 an hour a part is loaded, pierced, cut and taken
+# off in 1.08 seconds.
+
+def test_the_floor_reproduces_howards_own_figure_for_the_cap():
+    floor = config.LASER_MIN_SECONDS_PER_PART
+    assert round(3600 / floor) == 900, (
+        "four seconds a part IS his 900/hr read back — a throughput, which the pricing "
+        "policy allows us to log, not a price")
+
+
+def test_the_strap_is_untouched_because_cutting_really_does_dominate_it():
+    """The control, and the reason this is a floor rather than a cap on the rate: where the
+    calculator is right it must keep governing."""
+    seconds_for_003 = 3600 / 236.0
+    assert seconds_for_003 > config.LASER_MIN_SECONDS_PER_PART
+
+
+def test_the_floor_is_applied_inside_the_templates_own_formula():
+    """With MAX(), so the calculator is still visibly doing the work and still tracks any
+    change the estimators make to their cutting speeds. Replacing the formula with a number
+    would take their calculator off the sheet."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert 'E%d*MAX(V%d,%g)' in src
+    assert "LASER_MIN_SECONDS_PER_PART" in src
+
+
+def test_no_floor_configured_leaves_the_formula_exactly_as_it_was():
+    """A floor of zero is how this gets switched off without editing the writer."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
+               encoding="utf-8").read()
+    assert "if _floor > 0:" in src
+    assert '_ts = "+".join("E%d*V%d" % (_r, _r) for _r in _rws)' in src
+
+
+# ── and Howard's rulings, in the form the live run reads ─────────────────────────────
+
+def test_the_job_answers_file_parses_with_no_complaints():
+    """Written out for the runner to pick up. If the engine reports a problem with it, the
+    ruling silently did nothing — which is how the tube bend survived two reruns."""
+    import json
+    import pathlib
+    import estimator_confirmed
+    raw = json.loads((pathlib.Path(__file__).resolve().parent.parent / "docs" / "answers" /
+                      "7332-01_confirmed.json").read_text(encoding="utf-8"))
+    out, problems = estimator_confirmed._read_decisions(raw, "7332-01_confirmed.json")
+    assert problems == [], problems
+    assert out["operations_off"]["7332-01-002"] == ["tube_bending"]
+    assert out["nesting_groups"]["003 and 004 on one laser program"] == [
+        "7332-01-003", "7332-01-004"]
+    assert out["throughput_per_hour"]["Laser (Acrylic)"] == 95
+
+
+def test_a_comment_key_is_not_reported_as_a_decision_that_did_nothing():
+    """The example file teaches writing "_why_..." beside a ruling to record why it was
+    made. The validator complained about every one — and an estimator reading three
+    complaints about their own notes learns to stop writing them, or to distrust the list."""
+    import estimator_confirmed
+    _out, problems = estimator_confirmed._read_decisions(
+        {"estimator_decisions": {"_why_this": "because Howard said so",
+                                 "operations_off": {"X-1": ["tubebend"]}}}, "x")
+    assert problems == []
+    assert _out["operations_off"] == {"X-1": ["tubebend"]}
+
+
+def test_the_answers_file_carries_no_price():
+    """Plating and plater freight are real costs and both are open — and a figure off
+    Howard's own sheet is not a price source."""
+    import json
+    import pathlib
+    text = (pathlib.Path(__file__).resolve().parent.parent / "docs" / "answers" /
+            "7332-01_confirmed.json").read_text(encoding="utf-8")
+    doc = json.loads(text)
+    assert "plating_gbp_per_unit" not in doc["estimator_decisions"]
+    assert "250" not in json.dumps(doc["estimator_decisions"])

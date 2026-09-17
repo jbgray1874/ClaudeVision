@@ -1346,6 +1346,27 @@ NAMED_PLATE_SPECS = {
 PER_FINISHED_UNIT = "per_finished_unit"
 PER_COMPONENT = "per_component"
 
+# THE SHORTEST A PART CAN TAKE ON THE LASER, WHATEVER ITS CUT PATH.
+#
+# The estimators' template times the CUT: blank size, hole count, internal cut distance, at
+# their own cutting speeds. On a part where cutting dominates it is the best basis on the
+# sheet and Howard's own figures agree with it — 7332-01-003, a 441 x 10 strap, computed
+# 236/hr against his 235.
+#
+# It has no floor. 7332-01-004 is a 15.88 mm square cap: a cut path of a few centimetres,
+# and the formula returned 3,340/hr where Howard books 900. At 3,340 an hour a part is
+# loaded, pierced, cut and unloaded in 1.08 seconds. Nothing does that.
+#
+# FOUR SECONDS IS HIS 900/hr READ BACK, and it is a THROUGHPUT, not a price — loggable
+# under the pricing policy, which asks only that we know where a rate came from and notice
+# when it changes. It is a SCOPED PILOT from one line on one job until the laser department
+# confirms it, because a figure that governs every small part on every job deserves the
+# department's word rather than one inference from one cap.
+#
+# What it represents is real and re-derivable: the part still has to be picked up, placed,
+# pierced and taken off, and none of that is in a cut-length calculation.
+LASER_MIN_SECONDS_PER_PART = 4.0
+
 STATED_TIME_OPERATIONS = {
     # 40 min/unit — Howard Thurley via production, 16 Sep 2026
     "brush_before_plate": PER_FINISHED_UNIT,
