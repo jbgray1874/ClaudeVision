@@ -40,6 +40,9 @@ WORKBOOK = "workbook"
 # An engine figure with no workbook cell behind it. Never a publishable currency amount --
 # it is an input still wanted, carried as a diagnostic so nobody loses it.
 PENDING = "pending"
+# Charged by the sheet, but with no recorded cell behind it. Not publishable money: a figure a
+# reader cannot open is the £321.88 shape whoever computed it.
+PENDING_TRACEABILITY = "pending_traceability"
 NOTHING = "none"
 
 
@@ -117,10 +120,19 @@ def displayed_charge(line: Mapping[str, Any]) -> Dict[str, Any]:
         amount, basis = charged, WORKBOOK
         label = f"the sheet's own figure, {cell}"
     elif charged is not None:
-        # CHARGED, BUT WE CANNOT SAY FROM WHERE. Publishable only in the sense that the sheet
-        # calculated it; the cell is missing, so a reader cannot check it. Said, not hidden.
-        amount, basis = charged, WORKBOOK
-        label = "the sheet's own figure — the cell it was read from was not recorded"
+        # CHARGED, BUT WE CANNOT SAY FROM WHERE — so it is not publishable money.
+        #
+        # The stated rule is that every published currency amount carries its recorded
+        # workbook cell. The first cut published this anyway, on the grounds that the sheet
+        # DID calculate it, and merely omitted the reference. That is the rule reduced to a
+        # formatting preference: a figure a reader cannot open is exactly the £321.88 shape,
+        # whoever computed it.
+        #
+        # Narrow in practice: `charged_ext_gbp` exists only where the read-back ran, and the
+        # read-back is what records the cell. This is the legacy record, and it says so.
+        amount, basis = None, PENDING_TRACEABILITY
+        label = ("the sheet calculated a figure for this line, but the cell it was read "
+                 "from was not recorded, so it cannot be published as traceable")
     elif engine:
         # ── AN ENGINE-ONLY AMOUNT IS NOT A PUBLISHABLE CURRENCY AMOUNT ──────────────
         #
@@ -149,6 +161,9 @@ def displayed_charge(line: Mapping[str, Any]) -> Dict[str, Any]:
     elif basis == PENDING:
         why = ("an engine figure with no workbook cell behind it is not a publishable "
                "currency amount — the line is pending a price")
+    elif basis == PENDING_TRACEABILITY:
+        why = ("the sheet's figure has no recorded cell, so nothing on this line can be "
+               "published as traceable money")
     elif basis == NOTHING:
         why = "there is no figure on this line"
 

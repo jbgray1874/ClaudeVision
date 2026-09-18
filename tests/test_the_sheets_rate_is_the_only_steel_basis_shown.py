@@ -320,6 +320,7 @@ def _section(charged=None, engine=3.88):
     import job_report_html as J
     _real = J._record_for
     J._record_for = lambda s: {"lines": ([{"part_number": "401912-02-01M",
+                                           "charged_cell": "Estimate!M63",
                                            "charged_ext_gbp": charged}] if charged else [])}
     try:
         import re

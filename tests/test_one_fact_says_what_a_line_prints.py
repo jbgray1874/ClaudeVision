@@ -67,6 +67,7 @@ def test_a_cell_is_never_inferred_from_the_row_number():
 
 def test_the_steel_block_never_publishes_the_engines_figure():
     got = displayed_charge({"block": "steel", "sheet_row": 63,
+                            "charged_cell": "Estimate!M63",
                             "charged_ext_gbp": 3.07, "engine_ext_gbp": 3.88})
     assert got["amount"] == 3.07
     assert got["publish_diagnostic"] is False
@@ -93,6 +94,7 @@ def test_every_other_block_keeps_its_cross_check():
     """The comparison has caught real faults. It goes only where a ruling replaced it."""
     for block in ("other_sheet", "tube", "wire", "bom"):
         got = displayed_charge({"block": block, "sheet_row": 20,
+                                "charged_cell": "Estimate!M20",
                                 "charged_ext_gbp": 10.0, "engine_ext_gbp": 12.0})
         assert got["publish_diagnostic"] is True, block
 

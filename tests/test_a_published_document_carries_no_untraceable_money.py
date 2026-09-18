@@ -73,51 +73,93 @@ def test_the_pending_line_has_no_amount_at_all():
 
 # ── and the documents a person actually reads ───────────────────────────────────────
 
-@pytest.fixture(scope="module")
-def report_html():
-    """A real report, rendered."""
-    import job_report_html as J
-    summary = {
+ENGINE_PENDING = "4.40"      # a bought-in the sheet never charged; the engine has a figure
+
+
+def _summary():
+    """A run shaped like 401912-02's: one line the sheet charged, one it never did."""
+    return {
         "job_no": "401912-02",
+        "client": "tesco",
+        "saved_output_paths": {},
         "estimate_summary": {"part_estimates": [
-            {"part_number": "401912-02-01M",
+            {"part_number": "401912-02-01M", "description": "METAL DIVIDER - TALL",
              "material_estimate": {"extended_material_cost_gbp": 3.88}},
-            {"part_number": "PACKAGING",
+            {"part_number": "PACKAGING", "description": "Packaging (per-unit share)",
              "material_estimate": {"extended_material_cost_gbp": 4.40}},
         ]},
-        "final_estimate": {"material_rows": [
-            {"part_number": "401912-02-01M", "total_value_gbp": 0},
-            {"part_number": "PACKAGING", "total_value_gbp": 0},
-        ]},
+        "final_estimate": {
+            "schema": "final_estimate.v2",
+            "totals": {"material_gbp": 3.07, "labour_gbp": 131.34,
+                       "unit_gbp": 149.87, "unit_cell": "Estimate!M105"},
+            "material_rows": [
+                {"part_number": "401912-02-01M", "block": "steel", "workbook_row": 63,
+                 "charged_cell": "Estimate!M63", "total_value_gbp": 3.07},
+                {"part_number": "PACKAGING", "block": "bom", "workbook_row": 12,
+                 "charged_cell": "Estimate!M12", "total_value_gbp": 0},
+            ],
+            "labour_rows": [],
+        },
     }
+
+
+@pytest.fixture(scope="module")
+def full_report():
+    """THE WHOLE REPORT, not one section of it.
+
+    The previous version of this fixture called `_unpriced_section()` alone and then grepped
+    the covering-email module's SOURCE — which could not see the live `engine: £4.40` branch
+    in `_render_bom_tree`, and did not render an email at all. It was the "test the source,
+    not the deliverable" weakness in the very file written to avoid it.
+    """
+    import job_report_html as J
     _real = J._record_for
-    J._record_for = lambda s: {"lines": [_steel_line(), _pending_line()]}
+    J._record_for = lambda s: {"lines": [_steel_line(), _pending_line()],
+                               "run": {"unit_cost_gbp": 149.87,
+                                       "unit_cell": "Estimate!M105"}}
     try:
-        return re.sub(r"<[^>]+>", " ", J._unpriced_section(summary))
+        html = J.build_report_html(_summary())
     finally:
         J._record_for = _real
+    return re.sub(r"<[^>]+>", " ", html)
 
 
-def test_the_engines_steel_figure_is_not_on_the_report(report_html):
-    assert ENGINE_STEEL not in report_html, (
+@pytest.fixture(scope="module")
+def covering_note(tmp_path_factory):
+    """A real covering email, rendered from a real workbook."""
+    import importlib
+    import estimate_explained as EE
+    sib = importlib.import_module("test_the_covering_note_says_what_the_estimate_costs")
+    d = tmp_path_factory.mktemp("published")
+    note = EE.covering_email(
+        sib._workbook(d / "12349-02_20260902_153051.xlsx"),
+        sib._scan(d / "12349-02.json"),
+        client="fanatics",
+        deliverables=[str(d / "12349-02.xlsx")],
+    )
+    return re.sub(r"<[^>]+>", " ", note["html"]) + " " + note["text"] + " " + note["subject"]
+
+
+def test_the_engines_steel_figure_is_not_on_the_report(full_report):
+    assert ENGINE_STEEL not in full_report, (
         "the £3.88 comparator is back on the report — it has returned five times")
 
 
-def test_the_engine_aggregate_is_not_on_the_report(report_html):
-    assert ENGINE_AGGREGATE not in report_html
+def test_the_engine_aggregate_is_not_on_the_report(full_report):
+    assert ENGINE_AGGREGATE not in full_report
 
 
-def test_the_charged_line_is_published_with_the_sheets_figure(report_html):
-    assert "£3.07" in report_html
-    assert "401912-02-01M" in report_html
+def test_the_charged_line_is_published_with_the_sheets_figure(full_report):
+    assert "£3.07" in full_report
+    assert "401912-02-01M" in full_report
 
 
-def test_the_pending_line_is_named_but_carries_no_amount(report_html):
+def test_the_pending_line_is_named_but_carries_no_amount(full_report):
     """Named, because a row that vanishes reads as a suppressed finding. No amount, because
     an engine figure with no workbook cell behind it is not a price."""
-    assert "PACKAGING" in report_html
-    assert "£4.40" not in report_html
-    assert "4.40" not in report_html
+    assert "PACKAGING" in full_report
+    assert "£4.40" not in full_report
+    assert "4.40" not in full_report
 
 
 # ── the rule, stated as a property of every published amount ────────────────────────
@@ -138,10 +180,31 @@ def test_no_published_amount_lacks_a_recorded_cell():
         {"run": {"unit_cost_gbp": 149.87, "unit_cell": "Estimate!G6"}})["amount"] == 149.87
 
 
-def test_the_covering_note_asks_the_fact_for_its_line_money():
-    """The last renderer that was deriving money for itself."""
+# ── and the covering email, rendered ────────────────────────────────────────────────
+
+def test_no_engine_figure_reaches_the_covering_email(covering_note):
+    for figure in (ENGINE_STEEL, ENGINE_AGGREGATE):
+        assert figure not in covering_note, f"{figure} is on the email"
+
+
+def test_the_email_headline_publishes_only_a_traceable_total(covering_note):
+    """It called `publishable_total` and then printed the raw total anyway, using the fact
+    only to decide whether to append a cell — the refusal reduced to a formatting choice."""
+    assert "£930.39" in covering_note
+    assert "Estimate!M105" in covering_note
+
+
+def test_an_untraceable_total_is_not_printed_at_all(tmp_path):
+    """The other half: where the fact refuses, no figure appears."""
+    import importlib
     import estimate_explained as EE
-    src = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    at = src.index("_todo = ([(r, \"market\")")
-    assert "displayed_charge" in src[at - 200:at + 2500], (
-        "the outstanding-items table still multiplies out its own money")
+    sib = importlib.import_module("test_the_covering_note_says_what_the_estimate_costs")
+    scan = sib._scan(tmp_path / "j.json")
+    import json
+    doc = json.loads(scan.read_text(encoding="utf-8"))
+    doc["final_estimate"]["totals"].pop("unit_cell", None)
+    scan.write_text(json.dumps(doc), encoding="utf-8")
+    note = EE.covering_email(sib._workbook(tmp_path / "j.xlsx"), scan, client="x")
+    text = re.sub(r"<[^>]+>", " ", note["html"])
+    assert "UNIT COST PENDING" in text
+    assert "£930.39" not in text

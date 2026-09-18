@@ -192,6 +192,14 @@ def _sheet_totals(wb, final: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                     if value is not None:
                         out[key] = round(value, 2)
                         out.setdefault("_from", {})[key] = "the workbook's own cell"
+                        # THE CELL, RECORDED WHERE IT IS FOUND. This scan locates the total by
+                        # LABEL precisely because a cell reference "cannot survive a template
+                        # revision" — which is the same reason `publishable_total` refuses to
+                        # assume one. The scan has just found it, so it says which it was, and
+                        # a published total can name where a reader checks it.
+                        if key == "unit":
+                            from openpyxl.utils import get_column_letter as _cl  # noqa: PLC0415
+                            out["unit_cell"] = f"Estimate!{_cl(c)}{r}"
                         break
     return _fill_totals_from_final(out, final)
 
@@ -2640,10 +2648,21 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     from displayed_charge import publishable_total as _pub_total       # noqa: PLC0415
     _job_total = _pub_total({"run": {"unit_cost_gbp": _money(totals.get("unit")),
                                      "unit_cell": totals.get("unit_cell")}})
-    add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
-        f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT'
-        + (f' &middot; {_e(_job_total["cell"])}' if _job_total.get("cell") else "")
-        + '</span></p>')
+    # AND IT PRINTS WHAT THE FACT VOUCHED FOR. The first cut called `publishable_total` and
+    # then printed `totals["unit"]` anyway, using the fact only to decide whether to append a
+    # cell reference — so a total the fact had REFUSED still appeared, merely without its
+    # provenance. That is the refusal reduced to a formatting preference.
+    if _job_total.get("amount") is not None:
+        add(f'<p style="font-size:26px;margin:12px 0 4px">'
+            f'<b>{_e(_gbp(_job_total["amount"]))}</b>'
+            f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT'
+            + (f' &middot; {_e(_job_total["cell"])}' if _job_total.get("cell") else "")
+            + '</span></p>')
+    else:
+        add('<p style="font-size:18px;margin:12px 0 4px"><b>UNIT COST PENDING</b>'
+            '<span style="color:#5b6b7d;font-size:14px"> — '
+            + _e(_job_total.get("why") or "the sheet's total could not be traced to a cell")
+            + '</span></p>')
     # "a set of explains" is not English. It survived because nobody reads their own
     # boilerplate, which is precisely why generated copy needs the same care as a figure.
     add("<p>Every figure below is read from the workbook's own calculated cells — nothing "
@@ -2672,7 +2691,14 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     if _other:
         _rows.append([(final.get("unit_price_composition") or {}).get("basis")
                       or "the unit cell's own uplift", f"+{_gbp(_other)}"])
-    _rows.append([f"Unit cost, {order_qty} of", _gbp(totals.get("unit"))])
+    # THE SAME TOTAL, PUBLISHED A SECOND TIME. The headline above asks `publishable_total`;
+    # this row printed `totals["unit"]` directly, so a total the fact had refused still
+    # appeared four lines further down. Withholding a figure in one place and printing it in
+    # another is not withholding it — it is the five-surfaces lesson inside one document.
+    _rows.append([f"Unit cost, {order_qty} of",
+                  _gbp(_job_total["amount"]) + (f"  ({_job_total['cell']})"
+                                                if _job_total.get("cell") else "")
+                  if _job_total.get("amount") is not None else "PENDING — not traceable"])
     add(_table(["", "£"], _rows, numeric={1}))
     # NAMED BY BLOCK, from the rows themselves. This said "bought-in and commercial X plus
     # sheet steel Y", where X was (material - steel) — so on any job with an acrylic, MDF or

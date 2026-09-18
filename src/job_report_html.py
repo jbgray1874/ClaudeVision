@@ -3006,10 +3006,12 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             # NOT RENDERED AS MONEY. An engine figure with no workbook cell behind it is an
             # input still wanted, not a price — printing it in pounds is what put £3.88 on
             # five pages. The diagnostic is named as a diagnostic.
-            money = ('—<br><span class="mini">pending a price'
-                     + (f' (engine: {_money(_shown["diagnostic"])})'
-                        if _shown["diagnostic"] else "")
-                     + '</span>')
+            # NO POUNDS. The first cut of this printed "pending a price (engine: £4.40)",
+            # which is precisely an engine-only amount rendered as currency — the thing the
+            # whole fact exists to prevent, reintroduced by the renderer that was meant to
+            # honour it. The diagnostic stays on the record for anybody debugging; it does
+            # not reach a published page.
+            money = '—<br><span class="mini">PENDING A CURRENT PRICE</span>' 
         else:
             money = "—"
         qty = l.get("qty_per_unit")

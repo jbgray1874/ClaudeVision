@@ -228,10 +228,12 @@ def seventy_three_thirty_two() -> dict:
         return {"block": "bom", "workbook_row": row, "part_code": code,
                 "description": desc + (" — costed in Sheet Steel below" if pointer else ""),
                 "supplier": "", "unit_price_gbp": unit, "qty_per_unit": qty,
-                "scrap": 0.04, "total_value_gbp": total}
+                "scrap": 0.04, "total_value_gbp": total,
+                "charged_cell": f"Estimate!M{row}"}
 
     def steel(row, desc, qty, length, width, gauge, nest, total, block="steel"):
         return {"block": block, "workbook_row": row, "description": desc,
+                "charged_cell": f"Estimate!M{row}",
                 "qty_per_unit": qty, "length_mm": length, "width_mm": width,
                 "gauge": gauge, "sheet_length_mm": 2500, "sheet_width_mm": 1250,
                 "qty_per_sheet": nest, "scrap": 0.04, "total_value_gbp": total}
@@ -287,7 +289,10 @@ def seventy_three_thirty_two() -> dict:
         "manufacturing_writeup": {"parts": writeup},
         "final_estimate": {
             "schema": "final_estimate.v2",
-            "totals": {"material_gbp": 40.89, "labour_gbp": 33.59, "unit_gbp": 80.09},
+            # The read-back records the cell it scanned the unit cost from. A published total
+            # names where a reader checks it; one that cannot is refused.
+            "totals": {"material_gbp": 40.89, "labour_gbp": 33.59, "unit_gbp": 80.09,
+                       "unit_cell": "Estimate!M105"},
             "labour_rows": [calc for calc, _ in labour],
             "material_rows": material_rows,
         },
