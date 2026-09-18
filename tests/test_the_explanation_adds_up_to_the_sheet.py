@@ -404,7 +404,17 @@ def test_a_thin_pack_is_priced_and_the_thin_lines_are_named(tmp_path):
     assert "priced in full, and some of it is read rather than measured" in section
     assert "INSUFFICIENT" not in section.upper(), (
         "the verdict is gone; what replaces it is which lines and why")
-    assert "26% rests on figures it considers credible" in section
+    assert "26% of what it assembled rests on figures it considers credible" in section
+    # AND NOT A SECOND TOTAL BESIDE THE SHEET'S. This sentence used to print
+    # `document_total_provisional_gbp` -- the engine's own sum before the sheet's blocks, its
+    # absorption divisor and its customer terms. On 401912-02 that was £321.88 against a
+    # workbook reading £150.32, four sentences from this same paragraph calling the sheet's
+    # figure the real one. The ratio is the point and is kept; its denominator is an internal
+    # working figure, and a number that appears on no other deliverable is worse than none.
+    # Per-line money is exactly what this section is FOR; it is the DOCUMENT total that must
+    # not appear, so the assertion names that construction rather than banning currency.
+    assert "Of the £" not in section, "the engine's own document total is back on the page"
+    assert "it assembled, £" not in section
     assert "9 of 12 fabricated part(s) have a DXF" in section
     assert "so they can be checked first rather than the whole estimate being doubted" in section
 

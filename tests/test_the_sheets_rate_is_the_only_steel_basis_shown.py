@@ -140,7 +140,7 @@ def test_the_report_renderer_is_the_one_that_was_fixed():
     text = open(J.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
     at = text.index("engine {_money(engine)} — not charged")
     guard = text[max(0, at - 400):at]
-    assert "_sheet_ruled_basis(part)" in guard, \
+    assert "_sheet_ruled_basis(l)" in guard, \
         "the HTML report still publishes the competing figure on the ruled route"
 
 
@@ -170,9 +170,19 @@ def test_the_provenance_column_is_withheld_with_it():
 
 
 def test_every_other_route_keeps_the_cross_check():
-    """The comparison has caught real faults. It is removed only where a ruling replaced it."""
-    import estimation_report as R
-    text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    at = text.index("_sheet_ruled = ")
-    assert "workbook_sheet_steel_formula" in text[at:at + 200], \
-        "the suppression is not scoped to the ruled route"
+    """The comparison has caught real faults. It is removed only on the block a ruling covers."""
+    import job_report_html as J
+    for other in ({"block": "Other Sheet Material"}, {"block": "Tube"},
+                  {"block": "Wire"}, {"block": "bom"}, {}):
+        assert J._sheet_ruled_basis(other) is False, other
+
+
+def test_the_gate_reads_who_charged_the_line_not_how_the_engine_costed_it():
+    """THE REASON THE FIRST ATTEMPT DID NOTHING. It asked whether the ENGINE had used
+    `workbook_sheet_steel_formula`; on 401912-02 it had not. The engine reached £3.88 its own
+    way and £3.07 is what the SHEET's nest row calculated and handed back. Two different
+    questions, and the one that matters is who charged the line."""
+    import job_report_html as J
+    engine_costed_differently = {"block": "Sheet Steel",
+                                 "material_estimate": {"cost_method": "mass_times_price_per_kg"}}
+    assert J._sheet_ruled_basis(engine_costed_differently) is True

@@ -1061,18 +1061,34 @@ not what a reader takes from a heading like this one.</td></tr>
 <div class="card"><table><tbody>{rows}</tbody></table></div>"""
 
 
-def _sheet_ruled_basis(part: Dict[str, Any]) -> bool:
-    """True where the workbook's own nest formula and its own rate cell priced this line.
+# The workbook blocks whose own nest formula and own rate cell charge the line. A second
+# figure beside the charged one on these is not evidence: the estimator has already ruled
+# which rate governs, and the sheet's cell is where they change it.
+_SHEET_RULED_BLOCKS = {"sheet steel"}
 
-    The one route an estimator has already ruled on, so a second figure beside the charged
-    one is not evidence -- it is an invitation to re-open a closed question. Reads the cost
-    method off whichever shape the part record is in, because this renderer is handed both.
+
+def _sheet_ruled_basis(line: Dict[str, Any]) -> bool:
+    """True where the workbook's own block charged this line.
+
+    KEYED ON THE CHARGED LINE'S BLOCK, NOT ON THE ENGINE'S cost_method. The first attempt
+    asked whether the ENGINE had costed the part by `workbook_sheet_steel_formula`, and on
+    401912-02 it had not: the engine's own material estimate reached GBP 3.88 by its own
+    method, and GBP 3.07 is what the SHEET's nest row calculated and handed back. Those are
+    two different questions, and the one that matters is WHO CHARGED THE LINE. So the gate
+    reads `block`, which costed_facts already records per line for exactly this purpose --
+    "Sheet Steel", "Other Sheet Material", "Tube", "Wire" -- and the guard fires on the one
+    the ruling covers.
+
+    Accepts a costed line or a part record, because two renderers hand it different shapes.
     """
-    if not isinstance(part, dict):
+    if not isinstance(line, dict):
         return False
-    for holder in (part.get("material_estimate"), part):
-        if isinstance(holder, dict) and \
-                str(holder.get("cost_method") or "") == "workbook_sheet_steel_formula":
+    for holder in (line, line.get("price_origin") or {}, line.get("material_estimate") or {}):
+        if not isinstance(holder, dict):
+            continue
+        if str(holder.get("block") or "").strip().lower() in _SHEET_RULED_BLOCKS:
+            return True
+        if str(holder.get("cost_method") or "") == "workbook_sheet_steel_formula":
             return True
     return False
 
@@ -1567,6 +1583,18 @@ def _render_checklist(review: Dict[str, Any], dq: Dict[str, Any]) -> str:
 
     for pv in review.get("provisional", []):
         items += f"<li><b>{_esc(pv['item'])}</b> — {_esc(pv['note'])}</li>"
+
+    # ONE PAGE MUST NOT SAY BOTH THINGS. Section 3 lists the flags the costing rules wrote;
+    # this section is built from a DIFFERENT structure and said "the estimate read cleanly"
+    # on the same page, four flags further up. That is the same contradiction section 3 was
+    # carrying against the workbook a commit ago, moved one heading down: two builders, one
+    # question, and a reader who cannot tell which answer to believe.
+    for pn in review.get("part_notes", []):
+        _who = pn.get("parts") or []
+        _lbl_who = ", ".join(_esc(x) for x in _who[:10]) + (
+            f' <span class="t-muted">(+{len(_who) - 10} more)</span>' if len(_who) > 10 else "")
+        items += (f'<li><b>Check against the drawing</b><br>{_esc(pn["note"])}<br>'
+                  f'<span class="t-muted">{_lbl_who}</span></li>')
 
     if not items:
         items = "<li>No specific review points — the estimate read cleanly.</li>"
@@ -2909,7 +2937,7 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             # Scoped to the route with a ruling, exactly as there: everywhere else the
             # engine's figure beside the sheet's has caught real faults and stays.
             if (engine is not None and abs(float(engine) - float(charged)) >= 0.01
-                    and float(engine or 0) and not _sheet_ruled_basis(part)):
+                    and float(engine or 0) and not _sheet_ruled_basis(l)):
                 money += f'<br><span class="mini">engine {_money(engine)} — not charged</span>'
         elif engine:
             money = f'{_money(engine)}<br><span class="mini">engine figure — not yet the sheet\'s</span>'

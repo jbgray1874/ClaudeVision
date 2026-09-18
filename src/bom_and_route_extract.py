@@ -491,10 +491,35 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         material = _text(row.get("material_text"))
         material_from = "the parts table row" if material else ""
         if not material and page is not None and by_page.get(page):
-            material = _text(by_page[page])
-            _where = (f"page {page}" if page_number is not None else f"sheet {page}")
-            material_from = (f"title block of {_where} — the parts table has no material "
-                             f"column")
+            # AND A PURCHASED LINE INHERITS NOTHING. The comment above already names the
+            # case -- "on a page carrying several, they are not [the same thing]" -- and the
+            # fallback took the title block anyway. 401912-02's bill of materials lists
+            # "25.4mm ADHESIVE MAGNETIC TAPE, L: 450mm" and this tab reported it as MILD
+            # STEEL, read off a GA title block that states what the DIVIDER is made of. The
+            # tape is magnetised rubber. Nothing was mis-costed -- it is priced as a
+            # bought-in and never touched the steel route -- but it is a wrong fact an
+            # estimator carries to a supplier, and it is the THIRD place this inheritance
+            # had to be stopped: the drawing-quality table and the provenance wording were
+            # the first two, and each was fixed alone because nobody looked for the others.
+            #
+            # bought_in_policy is the one module that answers "do we buy this", and it
+            # answers from the row's own part number and description -- no new signal is
+            # needed on the row for this.
+            try:
+                from bought_in_policy import is_bought_in as _is_bi     # noqa: PLC0415
+                _purchased = _is_bi({"part_number": row.get("part_number"),
+                                     "description": row.get("description")})
+            except Exception:                                           # noqa: BLE001
+                _purchased = False
+            if _purchased:
+                material = ""
+                material_from = ("purchased — the sheet's title block states the assembly's "
+                                 "material, not this item's")
+            else:
+                material = _text(by_page[page])
+                _where = (f"page {page}" if page_number is not None else f"sheet {page}")
+                material_from = (f"title block of {_where} — the parts table has no material "
+                                 f"column")
         # QTY_OWN AND QTY_EFFECTIVE, NEVER ONE NUMBER STANDING FOR BOTH. qty_own is what this
         # line itself states — the BOM cell, or the model's instance count where the model is
         # what was read. qty_effective is what the estimate actually costs for one quoted unit,

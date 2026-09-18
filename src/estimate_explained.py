@@ -2161,9 +2161,24 @@ def build(workbook: Path, scan_json: Optional[Path],
                    f"some of what IS priced is read rather than measured.** "
                    if _n_await else
                    "in full, and some of it is read rather than measured.** ")
-                + (f"Of the {_gbp(sufficiency.get('document_total_provisional_gbp'))} it "
-                   f"assembled, **{_ratio:.0%} rests on figures it considers credible** — the "
-                   f"rest on geometry read off a view, or on prices it could not verify. "
+                # A SECOND TOTAL, ON A PAGE THAT NAMES THE FIRST ONE AS THE REAL ONE.
+                #
+                # This printed `document_total_provisional_gbp` -- the ENGINE's own sum over
+                # its part estimates, before the sheet's blocks, its absorption divisor and
+                # its customer terms. On 401912-02 that is GBP 321.88 against a workbook
+                # reading GBP 150.32, and four sentences later this same paragraph says "the
+                # unit cost ... is what the sheet's own cells add up to". So the page carried
+                # two totals for one job, asserted the smaller one was real, and left the
+                # larger one traceable to nothing an estimator can open.
+                #
+                # The RATIO is the point of the sentence and it is kept: it is a statement
+                # about how much of the work rests on measurement. Its denominator is an
+                # internal working figure, so it is described rather than printed -- a number
+                # that appears on no other deliverable is worse than no number at all. This
+                # is the steel comparator's lesson (D-128/D-130) applied to a total.
+                + (f"**{_ratio:.0%} of what it assembled rests on figures it considers "
+                   f"credible** — the rest on geometry read off a view, or on prices it "
+                   f"could not verify. "
                    if _ratio is not None else "")
                 + (f"{_with} of {_fab} fabricated part(s) have a DXF; the others were sized "
                    f"from the drawing rather than measured. "

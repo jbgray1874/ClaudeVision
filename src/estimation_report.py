@@ -685,8 +685,16 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # is noise. Everywhere else the engine's figure beside the sheet's has caught real
         # faults and stays exactly as it was -- this removes a cross-check only where an
         # estimator's decision has already replaced it.
+        # KEYED ON WHO CHARGED THE LINE, not on how the engine costed it. The first attempt
+        # asked the engine's own cost_method and on 401912-02 that is not the sheet formula:
+        # the engine reached GBP 3.88 its own way and GBP 3.07 is what the SHEET's nest row
+        # calculated. `block` is the field costed_facts records for exactly this question.
         _mat_est = _pe.get("material_estimate") or {}
-        _sheet_ruled = str(_mat_est.get("cost_method") or "") == "workbook_sheet_steel_formula"
+        _sheet_ruled = (
+            str((_line or {}).get("block") or "").strip().lower() == "sheet steel"
+            or str(((_line or {}).get("price_origin") or {}).get("block") or "").strip().lower()
+            == "sheet steel"
+            or str(_mat_est.get("cost_method") or "") == "workbook_sheet_steel_formula")
         if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
                 and abs(_engine_ext - ext) >= 0.01 and not _sheet_ruled:
             # NAME BOTH BASES, NOT JUST BOTH NUMBERS. Two bare figures side by side read as
