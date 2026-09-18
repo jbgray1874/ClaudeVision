@@ -2337,6 +2337,31 @@ def _clip(text: Any, limit: int) -> str:
     return out
 
 
+def _english_plural(noun: str) -> str:
+    """The plural of an ordinary English noun.
+
+    IT APPENDED "s" TO ANYTHING, so `_plural(3, "quantity")` produced **"3 quantitys"** — on
+    the covering note, in the section about quantity breaks, where the word is unavoidable.
+    That is the same failure `_plural` itself was written to fix one step further in: a
+    document that looks generated rather than written, and a reader who trusts the arithmetic
+    a little less for it.
+
+    Deliberately small. It handles the endings English actually inflects — a consonant plus
+    -y, and the sibilant endings that take -es — and nothing else. Anything irregular is
+    passed explicitly at the call site, which is what the `plural` argument has always been
+    for. A general pluraliser would be a library and a source of new wrong answers.
+    """
+    word = str(noun)
+    if not word:
+        return word
+    low = word.lower()
+    if low.endswith("y") and len(low) > 1 and low[-2] not in "aeiou":
+        return word[:-1] + "ies"
+    if low.endswith(("s", "x", "z", "ch", "sh")):
+        return word + "es"
+    return word + "s"
+
+
 def _plural(count: Any, noun: str, plural: str = "") -> str:
     """"1 line" and "2 lines". A note an estimator forwards to a customer's engineer should
     not read "1 part number(s)" — small, and it is the difference between a document that
@@ -2344,8 +2369,8 @@ def _plural(count: Any, noun: str, plural: str = "") -> str:
     try:
         n = int(count)
     except (TypeError, ValueError):
-        return f"{count} {noun}s"
-    return f"{n} {noun}" if n == 1 else f"{n} {plural or noun + 's'}"
+        return f"{count} {_english_plural(noun)}"
+    return f"{n} {noun}" if n == 1 else f"{n} {plural or _english_plural(noun)}"
 
 
 def _e(text: Any) -> str:
@@ -2574,9 +2599,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
     add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
         f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT</span></p>')
+    # "a set of explains" is not English. It survived because nobody reads their own
+    # boilerplate, which is precisely why generated copy needs the same care as a figure.
     add("<p>Every figure below is read from the workbook's own calculated cells — nothing "
-        "re-derived. The objective is to give you a set of explains you can work with, so "
-        "please feed back anything that is wrong or missing.</p>")
+        "is re-derived here. It is meant to be something you can check line by line, so "
+        "please say if anything is wrong or missing.</p>")
     if deliverables:
         add("<p>Attached: " + " &middot; ".join(f"<b>{_e(_basename(d))}</b>"
                                                 for d in deliverables) + ".")
@@ -2972,8 +2999,15 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         add(_table(["Line", "What it is", "On the sheet now", "What's needed",
                     "Which drawing files and pages"], _nrows, numeric={2}))
         if _market:
-            add("<p>Overwrite anything tagged <b>AI ESTIMATE — INDICATIVE, NOT A QUOTE</b> "
-                "and the sheet recalculates.</p>")
+            # WHAT IS WANTED, IN THE WORDS OF THE PERSON BEING ASKED. This said "Overwrite
+            # anything tagged AI ESTIMATE — INDICATIVE, NOT A QUOTE", which quotes the
+            # workbook's own internal marker at an estimator as though it were an instruction
+            # from the machine. What they actually need to know is that these lines need a
+            # CURRENT SOURCE — SDI Live, a supplier, or a researched price with its date —
+            # and that the sheet follows once one is in.
+            add("<p>These lines need a current source — SDI Live, a supplier price, or a "
+                "researched figure with its date. Enter it against the line and the sheet "
+                "recalculates.</p>")
         else:
             add("<p>Enter a figure against any line above and the sheet recalculates.</p>")
     if _mfg:

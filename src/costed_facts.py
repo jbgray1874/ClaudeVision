@@ -1231,7 +1231,12 @@ PRICE_ORIGIN_LABELS: Dict[str, str] = {
         "SDI section-stock trade rate, £/kg from config — verify against the section size",
     "section_stock_flat_rate":
         "flat-product £/kg rate (INDICATIVE, likely UNDER-READS section) — set the section trade rate",
-    "market_ai_indicative": "AI market indication — NOT A QUOTE, replace it",
+    # PLAIN WORDS ON A DOCUMENT FOR A PERSON. "AI market indication ... NOT A QUOTE" is
+    # internal system language; what an estimator needs to know is that the figure was
+    # researched rather than quoted, and that it must be replaced before it reaches a
+    # customer. This label is the SOURCE the note, the report and the Provenance tab all
+    # render, so it is the one place the wording has to be right.
+    "market_ai_indicative": "researched market price — not a quotation, replace before quoting",
     "system_cost_not_found": "no rate found — estimator to price",
 }
 
@@ -1615,7 +1620,8 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
-                "label": f"AI market indication ({who}) — NOT A QUOTE, replace it"}
+                "label": f"researched market price ({who}) — not a quotation, "
+                         f"replace before quoting"}
     for key, label in PRICE_ORIGIN_LABELS.items():
         if key in ("market_ai_indicative", "system_cost_not_found"):
             continue
@@ -2042,7 +2048,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
     for l in market:
         decisions.append({
             "part": l["part_number"], "kind": "market_figure",
-            "issue": f"{l['part_number']} rests on an AI market indication",
+            "issue": f"{l['part_number']} rests on a researched market price",
             "assumption": l["price_origin"]["label"],
             "action": "replace it with a catalogue or supplier price — it moves between runs",
             "owner": "estimator", "gbp_at_stake": _money_of(l)})
@@ -2052,7 +2058,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
     if unpriced:
         reasons.append(f"{len(unpriced)} line(s) carry no price: {', '.join(gaps['unpriced'])}")
     if market:
-        reasons.append(f"{len(market)} line(s) rest on an AI market indication")
+        reasons.append(f"{len(market)} line(s) rest on a researched market price")
     inv = source.get("invariants") if isinstance(source.get("invariants"), dict) else None
     if inv is not None:
         blocking = [v for v in (inv.get("violations") or [])

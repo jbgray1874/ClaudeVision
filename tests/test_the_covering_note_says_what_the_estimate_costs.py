@@ -59,7 +59,7 @@ def _workbook(path: Path) -> Path:
     ws["C9"] = "BILL OF MATERIALS (PER UNIT)"
     ws["H9"] = "Part code"
     rows = [
-        ("CONCRETE SLAB", "FIXING908", "xAI market indication", 85.62, 2),
+        ("CONCRETE SLAB", "FIXING908", "xAI", 85.62, 2),
         ("ADJUSTABLE FOOT", "FIXING909", "Elite", 1.28, 6),
         ("M5 x 10 CAP SCREW", "BI-SCREW", "", None, 10),
         ("CROSS MEMBER — costed in Sheet Steel", "01-01M", "", None, 6),
@@ -120,7 +120,7 @@ def _scan(path: Path) -> Path:
                  "total_value_gbp": 30.71},
                 {"block": "bom", "part_code": "FIXING908",
                  "description": "CONCRETE SLAB", "qty_per_unit": 2,
-                 "unit_price_gbp": 85.62, "supplier": "xAI market indication",
+                 "unit_price_gbp": 85.62, "supplier": "xAI",
                  "total_value_gbp": 171.24},
             ],
         },
