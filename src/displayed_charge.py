@@ -29,10 +29,6 @@ every consumer asks it, and the losing reading is kept rather than discarded.
 """
 from typing import Any, Dict, Mapping, Optional
 
-# Every money column on the Estimate sheet is M — the BOM's Total Value, Wire's Cost, Sheet
-# Steel's and Other Sheet Material's Cost Per Part, and each labour row's Total Value. Verified
-# against 401912-02's book: M14 the tape, M63 the steel, M96-99 the labour.
-MONEY_COLUMN = "M"
 SHEET_NAME = "Estimate"
 
 # Blocks where an estimator has ruled that the workbook's own formula and rate cell govern.
@@ -41,7 +37,9 @@ SHEET_NAME = "Estimate"
 RULED_BLOCKS = {"steel", "sheet steel"}
 
 WORKBOOK = "workbook"
-ENGINE = "engine"
+# An engine figure with no workbook cell behind it. Never a publishable currency amount --
+# it is an input still wanted, carried as a diagnostic so nobody loses it.
+PENDING = "pending"
 NOTHING = "none"
 
 
@@ -56,21 +54,23 @@ def _num(value: Any) -> Optional[float]:
 
 
 def cell_reference(line: Mapping[str, Any]) -> Optional[str]:
-    """`Estimate!M63` — the cell a reader can open to check the figure.
+    """`Estimate!M63` — the cell a reader can open to check the figure, or None.
 
-    A row number alone ("Estimate!63") was what the deliverables printed, and it sends
-    somebody to a row of fourteen columns to find which one holds the money.
+    RECORDED, NOT INFERRED. The first cut of this built the reference from the row number and
+    a MONEY_COLUMN constant, on the grounds that every money column in today's template is M.
+    That is true today and it is the same bet that shipped wrong twice this afternoon — the
+    comparator gate was keyed on the engine's `cost_method`, then on the block's display
+    label, both of which also looked obviously correct.
+
+    The read-back locates the value column by reading the block's header and stamps
+    `charged_cell` there. Where that is missing, this returns None and the figure is NOT
+    publishable: a currency amount with no cell behind it is the £321.88 shape, and the answer
+    to it is to say nothing rather than to guess a column.
     """
     if not isinstance(line, Mapping):
         return None
-    row = line.get("sheet_row")
-    try:
-        row = int(float(row))
-    except (TypeError, ValueError):
-        return None
-    if row <= 0:
-        return None
-    return f"{SHEET_NAME}!{MONEY_COLUMN}{row}"
+    recorded = str(line.get("charged_cell") or "").strip()
+    return recorded or None
 
 
 def _block_is_ruled(line: Mapping[str, Any]) -> bool:
@@ -106,14 +106,26 @@ def displayed_charge(line: Mapping[str, Any]) -> Dict[str, Any]:
     engine = _num(line.get("engine_ext_gbp"))
     cell = cell_reference(line)
 
-    if charged is not None:
+    if charged is not None and cell:
         amount, basis = charged, WORKBOOK
-        label = f"the sheet's own figure{f', {cell}' if cell else ''}"
+        label = f"the sheet's own figure, {cell}"
+    elif charged is not None:
+        # CHARGED, BUT WE CANNOT SAY FROM WHERE. Publishable only in the sense that the sheet
+        # calculated it; the cell is missing, so a reader cannot check it. Said, not hidden.
+        amount, basis = charged, WORKBOOK
+        label = "the sheet's own figure — the cell it was read from was not recorded"
     elif engine:
-        # Nothing charged it, so the engine's figure is the only one there is. Said plainly:
-        # a number that is not the sheet's must not be printed as though it were.
-        amount, basis = engine, ENGINE
-        label = "the engine's figure — not yet the sheet's"
+        # ── AN ENGINE-ONLY AMOUNT IS NOT A PUBLISHABLE CURRENCY AMOUNT ──────────────
+        #
+        # James Gray, 18 Sep 2026: "Do not let an engine-only amount become a publishable
+        # currency amount without a workbook cell. Keep it as a diagnostic/pending input."
+        #
+        # The first cut returned it as `amount`, so a renderer printed it as money with a
+        # caption. That is how £3.88 reached five pages and how £321.88 reached a narrative:
+        # a figure with no cell behind it, rendered in pounds, reads as the job's cost. It is
+        # carried as a DIAGNOSTIC and the line reads as PENDING — which is what it is.
+        amount, basis = None, PENDING
+        label = "not yet priced on the sheet — an engine figure is held for diagnosis only"
     else:
         amount, basis = None, NOTHING
         label = "no figure"
@@ -127,8 +139,9 @@ def displayed_charge(line: Mapping[str, Any]) -> Dict[str, Any]:
             why = "the two agree, so there is nothing to show"
         else:
             publish = True
-    elif basis == ENGINE:
-        why = "it IS the figure shown; there is nothing to compare it with"
+    elif basis == PENDING:
+        why = ("an engine figure with no workbook cell behind it is not a publishable "
+               "currency amount — the line is pending a price")
     elif basis == NOTHING:
         why = "there is no figure on this line"
 
@@ -158,12 +171,20 @@ def publishable_total(record: Mapping[str, Any]) -> Dict[str, Any]:
         return {"amount": None, "cell": None, "basis": NOTHING,
                 "why": "no costed record"}
     run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
+    # The cell the read-back located by scanning for the unit-cost label. Not "Estimate!G6" —
+    # hard-coding that would be the same guess this whole module refuses to make.
+    cell = str(run.get("unit_cell") or record.get("unit_cell") or "").strip() or None
     for holder, key in ((run, "unit_cost_gbp"), (run, "unit_gbp"),
                         (record, "unit_cost_gbp")):
         value = _num((holder or {}).get(key))
-        if value is not None:
-            return {"amount": value, "cell": f"{SHEET_NAME}!G6", "basis": WORKBOOK,
-                    "why": ""}
+        if value is None:
+            continue
+        if not cell:
+            # A total with no cell behind it is the £321.88 shape. Refused, and said.
+            return {"amount": None, "cell": None, "basis": NOTHING,
+                    "why": ("the sheet's total was read but the cell it came from was not "
+                            "recorded, so it cannot be published as a traceable figure")}
+        return {"amount": value, "cell": cell, "basis": WORKBOOK, "why": ""}
     return {"amount": None, "cell": None, "basis": NOTHING,
             "why": ("the sheet's own total could not be read, and an engine aggregate is "
                     "not the job's cost")}

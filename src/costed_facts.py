@@ -1845,6 +1845,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "thickness_mm": part.get("normalized_thickness_mm"),
             "block": block,
             "sheet_row": sheet_row,
+            # The cell the read-back actually read this money from. Recorded at the point the
+            # column was located, never inferred from the template's current shape.
+            "charged_cell": (str((row or {}).get("charged_cell") or "")
+                             or str((bom or {}).get("charged_cell") or "")) or None,
             "cross_reference": cross_ref,
             "charged_unit_gbp": charged_unit,
             "charged_ext_gbp": charged_ext,

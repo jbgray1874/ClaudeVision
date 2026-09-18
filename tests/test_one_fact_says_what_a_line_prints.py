@@ -34,7 +34,8 @@ from displayed_charge import (  # noqa: E402
 
 
 def _line(**kw):
-    return dict({"block": "bom", "sheet_row": 14}, **kw)
+    """A costed line, carrying the cell the read-back recorded for it."""
+    return dict({"block": "bom", "sheet_row": 14, "charged_cell": "Estimate!M14"}, **kw)
 
 
 # ── what prints, and from where ──────────────────────────────────────────────────────
@@ -47,15 +48,19 @@ def test_the_sheets_figure_is_what_prints():
 
 def test_every_amount_carries_the_cell_it_came_from():
     """A row number alone — "Estimate!63" — sends somebody to fourteen columns to find the
-    money. Every money column on that sheet is M."""
-    assert cell_reference(_line(sheet_row=63)) == "Estimate!M63"
+    money. The cell is RECORDED by the read-back that located the column, never inferred."""
+    assert cell_reference(_line(charged_cell="Estimate!M63")) == "Estimate!M63"
     assert displayed_charge(_line(charged_ext_gbp=1.0))["cell"] == "Estimate!M14"
 
 
-def test_a_line_with_no_row_admits_it_rather_than_inventing_a_cell():
-    assert cell_reference(_line(sheet_row=None)) is None
-    assert cell_reference(_line(sheet_row="not a row")) is None
-    assert cell_reference(_line(sheet_row=0)) is None
+def test_a_cell_is_never_inferred_from_the_row_number():
+    """The first cut built "Estimate!M{row}" from a MONEY_COLUMN constant, on the grounds that
+    every money column in today's template is M. True today, and the same bet that shipped
+    wrong twice this afternoon on the comparator gate."""
+    import displayed_charge as D
+    assert not hasattr(D, "MONEY_COLUMN"), "the column is being assumed again"
+    assert cell_reference({"sheet_row": 63}) is None
+    assert cell_reference({"sheet_row": 63, "charged_cell": ""}) is None
 
 
 # ── the ruled block: the amount or a dash, never a comparison ───────────────────────
@@ -100,12 +105,17 @@ def test_agreement_is_not_published_as_a_disagreement():
 
 # ── a line the sheet never charged ──────────────────────────────────────────────────
 
-def test_an_uncharged_line_shows_the_engines_figure_and_says_so():
+def test_an_engine_only_amount_is_not_publishable_currency():
+    """James Gray: "Do not let an engine-only amount become a publishable currency amount
+    without a workbook cell. Keep it as a diagnostic/pending input." The first cut returned it
+    as `amount`, so a renderer printed it in pounds with a caption — which is exactly how
+    £3.88 reached five pages and £321.88 reached a narrative."""
     got = displayed_charge(_line(charged_ext_gbp=None, engine_ext_gbp=7.5))
-    assert got["amount"] == 7.5
-    assert got["basis"] == "engine"
-    assert "not yet the sheet's" in got["label"]
-    assert got["publish_diagnostic"] is False, "it IS the figure; there is nothing beside it"
+    assert got["amount"] is None
+    assert got["basis"] == "pending"
+    assert got["diagnostic"] == 7.5, "the figure is kept, for diagnosis"
+    assert got["publish_diagnostic"] is False
+    assert "pending" in got["withheld_reason"]
 
 
 def test_a_line_with_no_money_at_all_prints_nothing():
@@ -123,9 +133,18 @@ def test_rubbish_in_does_not_crash_a_renderer():
 # ── the £321.88 rule ────────────────────────────────────────────────────────────────
 
 def test_a_narrative_total_comes_from_the_sheet():
-    got = publishable_total({"run": {"unit_cost_gbp": 149.87}})
+    got = publishable_total({"run": {"unit_cost_gbp": 149.87,
+                                     "unit_cell": "Estimate!G6"}})
     assert got["amount"] == 149.87
     assert got["cell"] == "Estimate!G6"
+
+
+def test_a_total_with_no_recorded_cell_is_refused():
+    """Read, but untraceable. The read-back scans for the unit-cost label and records the cell
+    it found; hard-coding G6 here would be the guess this module exists to refuse."""
+    got = publishable_total({"run": {"unit_cost_gbp": 149.87}})
+    assert got["amount"] is None
+    assert "cannot be published" in got["why"]
 
 
 def test_an_unreadable_total_is_refused_rather_than_substituted():
@@ -148,3 +167,30 @@ def test_the_ruled_blocks_are_named_once():
 def test_the_renderers_ask_the_fact_rather_than_deciding(module):
     text = open(__import__(module).__file__.replace(".pyc", ".py"), encoding="utf-8").read()
     assert "displayed_charge" in text, f"{module} still decides for itself"
+
+
+# ── and the wiring, which the first cut of this module did not have ─────────────────
+#
+# James Gray, 18 Sep 2026: "It does not wire `publishable_total()` anywhere. It has zero
+# callers outside its test, so the £321.88 protection is not live." A fact nothing asks is
+# not a protection; it is a docstring.
+
+def test_the_covering_note_asks_for_a_publishable_total():
+    import estimate_explained as EE
+    text = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "publishable_total" in text, "the note still publishes a total nothing vouched for"
+
+
+def test_the_read_back_records_the_cell_it_read_the_money_from():
+    """`charged_cell` is stamped where the value COLUMN was located by reading the block
+    header — the only place the answer is known rather than guessed."""
+    import wep_readback_from_xlsx as W
+    text = open(W.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert 'row["charged_cell"]' in text
+    assert 'out["unit_cell"]' in text
+
+
+def test_the_unit_cell_travels_to_the_note():
+    import estimate_explained as EE
+    text = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert 'out["unit_cell"]' in text, "the cell is recorded and then dropped on the way"

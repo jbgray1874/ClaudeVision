@@ -348,10 +348,15 @@ def test_it_no_longer_points_at_a_column_we_withheld():
     assert "what the sheet charges" in said
 
 
-def test_the_engine_figure_still_answers_where_the_sheet_charged_nothing():
-    """The fallback is the only case where the engine's number is the only number there is."""
+def test_an_engine_only_line_is_named_but_not_priced():
+    """DELIBERATELY REVERSED. This asserted the engine's figure was published where the sheet
+    charged nothing — "the only case where the engine's number is the only number there is".
+    James Gray ruled otherwise: an engine-only amount is a diagnostic, not a publishable
+    currency amount. The line is still named, because a row that vanishes reads as a
+    suppressed finding; the money is not invented."""
     said = _section(charged=None, engine=12.40)
-    assert "£12.40" in said
+    assert "401912-02-01M" in said
+    assert "£12.40" not in said
 
 
 def test_the_line_is_still_named_as_costed_rather_than_dropped():

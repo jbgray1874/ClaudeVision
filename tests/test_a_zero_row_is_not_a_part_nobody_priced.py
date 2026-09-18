@@ -99,14 +99,23 @@ def test_the_moved_rows_are_named_and_say_where_the_money_is():
     reader to rediscover the same thing."""
     txt = _text(jrh._unpriced_section(JOB))
     assert "2 line(s) show zero here and ARE costed" in txt
-    assert "£40.62" in txt and "£0.21" in txt
+    # DELIBERATELY REVERSED, 18 Sep 2026. These amounts came from the ENGINE's material
+    # estimate, and James Gray ruled: "Do not let an engine-only amount become a publishable
+    # currency amount without a workbook cell. Keep it as a diagnostic/pending input." The
+    # parts are still NAMED — which is what this test protects, a row that vanishes reading as
+    # a suppressed finding — and the money is not invented. Where the SHEET charged the line,
+    # its own figure and cell are published, which the sibling test covers.
+    assert "10575-01-001" in txt and "10575-01-012" in txt
     # WHERE TO FIND THE FIGURES — and it is no longer the AI Provenance per-part column.
     # That column is withheld on the sheet-steel route (D-128..D-134), so pointing at it sent
     # a reader to a dash. The block row is the answer that survives the ruling, and the test's
     # intent is unchanged: this sentence must say where the money is, not merely that it
     # exists.
-    assert "what the sheet charges" in txt and "block row" in txt, \
-        "it does not say where to find the figures"
+    # WHERE THE MONEY IS — and the sentence now depends on whether a figure could be
+    # published. Where the sheet charged these lines it names the charge and the block row;
+    # where only the engine has a number, that number is a diagnostic and is not printed, so
+    # the sentence says where the money lives instead of promising a figure it withheld.
+    assert "block row" in txt, "it does not say where to find the figures"
     assert "not waiting on anybody" in txt or "not waiting on anyone" in txt
 
 
@@ -119,7 +128,10 @@ def test_a_job_with_nothing_outstanding_still_explains_its_zeros():
                     "material_estimate": {"extended_material_cost_gbp": 40.62}}])
     txt = _text(jrh._unpriced_section(ok))
     assert "Every material line on this job carries a price" in txt
-    assert "ARE costed" in txt and "£40.62" in txt
+    # The CLASSIFICATION is what this test protects and it is unchanged. The engine's £40.62
+    # is a diagnostic, not a publishable currency amount (18 Sep ruling), so the part is named
+    # and the money is not invented.
+    assert "ARE costed" in txt and "10575-01-001" in txt
 
 
 def test_a_part_with_no_material_but_a_total_still_counts_as_costed():
@@ -131,7 +143,11 @@ def test_a_part_with_no_material_but_a_total_still_counts_as_costed():
                     "extended_total_cost_gbp": 12.40}])
     html = jrh._unpriced_section(bi)
     assert "<tbody>" not in html or "FIXING2104" not in html[html.index("<tbody>"):]
-    assert "£12.40" in _text(html)
+    # The part is named as costed — which is what this test is for, a bought-in whose money is
+    # on its total rather than its material line. The £12.40 is the ENGINE's figure and is no
+    # longer published as currency (18 Sep ruling); it remains on the record as a diagnostic.
+    assert "FIXING2104" in _text(html)
+    assert "£12.40" not in _text(html)
 
 
 def test_a_genuinely_unpriced_part_is_not_rescued_by_a_zero_estimate():

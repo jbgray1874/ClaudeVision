@@ -210,6 +210,11 @@ def _fill_totals_from_final(out: Dict[str, Any],
                 out[key] = round(value, 2)
                 out.setdefault("_from", {})[key] = (
                     "the run's read-back of that cell, calculated by Excel")
+    # The cell the read-back located for the unit cost, carried so a published total can name
+    # where a reader checks it. Absent on a run where Excel never opened, and `publishable_total`
+    # then refuses to publish rather than inventing "Estimate!G6".
+    if totals.get("unit_cell"):
+        out["unit_cell"] = str(totals["unit_cell"])
     return out
 
 
@@ -2597,8 +2602,20 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         f"outstanding items below before anything goes to the customer.</p>")
     add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
         f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
+    # ── THE HEADLINE TOTAL, AND THE CELL IT CAME FROM ───────────────────────────
+    #
+    # `publishable_total` refuses a total with no workbook cell behind it. That is the
+    # £321.88 rule made live: `AI Explanation!A111` printed the engine's own sum over its
+    # part estimates as though it were the job's cost, and nobody could open a cell to check
+    # it. Where the sheet's total is traceable this names the cell beside it; where it is
+    # not, the reader is told rather than shown a figure that cannot be checked.
+    from displayed_charge import publishable_total as _pub_total       # noqa: PLC0415
+    _job_total = _pub_total({"run": {"unit_cost_gbp": _money(totals.get("unit")),
+                                     "unit_cell": totals.get("unit_cell")}})
     add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
-        f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT</span></p>')
+        f'<span style="color:#5b6b7d;font-size:14px"> per unit, ex VAT'
+        + (f' &middot; {_e(_job_total["cell"])}' if _job_total.get("cell") else "")
+        + '</span></p>')
     # "a set of explains" is not English. It survived because nobody reads their own
     # boilerplate, which is precisely why generated copy needs the same care as a figure.
     add("<p>Every figure below is read from the workbook's own calculated cells — nothing "

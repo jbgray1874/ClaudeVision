@@ -2111,6 +2111,15 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         _pn = str(_pe.get("part_number") or "").strip().upper()
         if not _pn:
             continue
+        # THE ENGINE ANSWERS "IS THIS ROW'S MONEY ELSEWHERE", NOT "WHAT IS THE FIGURE".
+        #
+        # Two different questions, and this loop was being used for both. The CLASSIFICATION
+        # must survive a run where Excel never opened — otherwise every zero row reads as
+        # unpriced, which is the defect this whole section exists to prevent. The AMOUNT must
+        # not be an engine figure printed in pounds, which is how £3.88 reached five pages.
+        #
+        # So the engine seeds the classification with None for the figure, and the costed
+        # record overwrites it below with the sheet's own charge where there is one.
         _me = _pe.get("material_estimate") or {}
         try:
             _v = float(_me.get("extended_material_cost_gbp") or 0) or float(
@@ -2118,7 +2127,7 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         except (TypeError, ValueError):
             _v = 0.0
         if _v:
-            _costed_elsewhere[_pn] = _v
+            _costed_elsewhere[_pn] = None
 
     # THE FIGURE IN THIS SENTENCE IS WHAT THE SHEET CHARGED, NOT WHAT THE ENGINE RESOLVED.
     #
@@ -2138,6 +2147,8 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
             continue
         _lp = str(_l.get("part_number") or "").strip().upper()
         _sh = _dc_elsewhere(_l)
+        # ONLY A LINE THE SHEET CHARGED counts as "costed elsewhere". A pending line has an
+        # engine figure and no cell, and calling it costed is how a genuine gap disappears.
         if _lp and _sh["basis"] == "workbook" and _sh["amount"]:
             _costed_elsewhere[_lp] = float(_sh["amount"])
 
@@ -2152,9 +2163,11 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         except (TypeError, ValueError):
             pass
         _key = str(r.get("part_number") or r.get("part_code") or "").strip().upper()
-        _found = _costed_elsewhere.get(_key)
-        if _found:
-            _elsewhere.append((r, _found))
+        # MEMBERSHIP, NOT TRUTHINESS. The value is now None where the classification came
+        # from the engine alone and there is no publishable figure — and `if _found:` sent
+        # every one of those lines back into `blanks`, reporting a costed part as unpriced.
+        if _key in _costed_elsewhere:
+            _elsewhere.append((r, _costed_elsewhere[_key]))
             continue
         blanks.append(r)
 
@@ -2164,15 +2177,26 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     # is the same sentence that stops the next reader chasing it.
     _elsewhere_note = ""
     if _elsewhere:
-        _bits = ", ".join(f"{_esc(str(r.get('part_number') or r.get('part_code')))} "
-                          f"({_money(v)})" for r, v in _elsewhere[:8])
+        # A FIGURE ONLY WHERE THE SHEET CHARGED ONE. Where the classification came from the
+        # engine alone there is no publishable amount — the part is named and the money is
+        # not invented.
+        _bits = ", ".join(
+            (f"{_esc(str(r.get('part_number') or r.get('part_code')))} ({_money(v)})"
+             if v is not None else
+             f"{_esc(str(r.get('part_number') or r.get('part_code')))}")
+            for r, v in _elsewhere[:8])
         _more = f" and {len(_elsewhere) - 8} more" if len(_elsewhere) > 8 else ""
         _elsewhere_note = (
             f'<p class="mini"><b>{len(_elsewhere)} line(s) show zero here and ARE costed.</b> '
             f'Their material sits on another row — a sheet-steel stream line covers every part '
             f'nested from that sheet, so the part\'s own row reads as a dash meaning "costed '
-            f'below". These are not waiting on anybody: {_bits}{_more}. The figure shown is '
-            f'what the sheet charges, on its own block row.</p>')
+            f'below". These are not waiting on anybody: {_bits}{_more}.'
+            + (' Each figure shown is what the sheet charges, on its own block row.'
+               if any(v is not None for _, v in _elsewhere) else
+               # No figure was published, so the sentence must not promise one. The money is
+               # on the block; the engine's own number is not a price and is not printed.
+               ' Their money is on the block rows above, not on these lines.')
+            + '</p>')
 
     if not blanks:
         return ('<h2>11 &nbsp;Why these lines carry no price</h2>'
@@ -2978,9 +3002,14 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             if _shown["publish_diagnostic"]:
                 money += (f'<br><span class="mini">engine '
                           f'{_money(_shown["diagnostic"])} — not charged</span>')
-        elif _shown["basis"] == "engine":
-            money = (f'{_money(_shown["amount"])}<br><span class="mini">'
-                     f'{_esc(_shown["label"])}</span>')
+        elif _shown["basis"] == "pending":
+            # NOT RENDERED AS MONEY. An engine figure with no workbook cell behind it is an
+            # input still wanted, not a price — printing it in pounds is what put £3.88 on
+            # five pages. The diagnostic is named as a diagnostic.
+            money = ('—<br><span class="mini">pending a price'
+                     + (f' (engine: {_money(_shown["diagnostic"])})'
+                        if _shown["diagnostic"] else "")
+                     + '</span>')
         else:
             money = "—"
         qty = l.get("qty_per_unit")

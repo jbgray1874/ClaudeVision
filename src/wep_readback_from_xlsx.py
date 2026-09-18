@@ -270,6 +270,14 @@ def read_unit_price_composition(com_ws, material: Optional[float], labour: Optio
     cell = _scan_total_cell(com_ws, _TOTAL_LABELS["unit"], max_row, max_col)
     if not cell:
         return out
+    # WHERE THE UNIT COST LIVES, recorded rather than assumed. `publishable_total` refuses to
+    # publish a job total with no cell behind it, and hard-coding "Estimate!G6" there would be
+    # the same guess this read-back exists to avoid. This function has just FOUND the cell.
+    try:
+        from openpyxl.utils import get_column_letter as _cl            # noqa: PLC0415
+        out["unit_cell"] = f"Estimate!{_cl(int(cell[1]))}{int(cell[0])}"
+    except Exception:                                                  # noqa: BLE001
+        pass
     try:
         formula = str(com_ws.Cells(cell[0], cell[1]).Formula or "")
     except Exception:
@@ -487,6 +495,25 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
         if ident is None or not str(ident).strip():
             continue
         row: Dict[str, Any] = {"workbook_row": r}
+        # ── THE CELL THE MONEY WAS READ FROM, RECORDED WHERE IT IS KNOWN ────────────
+        #
+        # James Gray, 18 Sep 2026: "Record the actual charged cell when the workbook writer
+        # writes it; don't infer `Estimate!M<row>`, even if M is correct in today's template."
+        #
+        # He is right, and the reason is this afternoon's record: the steel comparator gate
+        # was keyed twice on a value that looked obviously correct and was not — the engine's
+        # cost_method, then the block's display label. Inferring the money COLUMN from the
+        # template's current shape is the same bet. This function has just located that column
+        # by reading the header, so the answer is known here and nowhere else; anything
+        # downstream would be guessing from a layout that has already moved once
+        # ("header_row_not_found" exists because it did).
+        _vc = cols.get(value_field) if value_field else None
+        if _vc:
+            try:
+                from openpyxl.utils import get_column_letter as _col_letter  # noqa: PLC0415
+                row["charged_cell"] = f"Estimate!{_col_letter(int(_vc))}{r}"
+            except Exception:                                         # noqa: BLE001
+                pass
         for field, c in cols.items():
             try:
                 v = com_ws.Cells(r, c).Value
@@ -799,6 +826,10 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
                      "null, never as zero — a cell showing #DIV/0! is missing data."),
             "totals": {
                 "material_gbp": material, "labour_gbp": labour, "unit_gbp": unit,
+                # WHERE THE UNIT COST LIVES, recorded rather than assumed. `publishable_total`
+                # refuses to publish a job total with no cell behind it, and hard-coding
+                # "Estimate!G6" there would be the same guess this read-back exists to avoid.
+                **({"unit_cell": _comp["unit_cell"]} if (_comp or {}).get("unit_cell") else {}),
                 # DECLARED, not residual. Present only when the unit cell's formula
                 # accounted for the gap; absent when it did not, so the reconciliation
                 # invariant still fires rather than being satisfied by its own arithmetic.
