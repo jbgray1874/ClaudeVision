@@ -122,6 +122,38 @@ def test_main_selects_the_breaks_this_way():
 # ── (2) one basis where the estimator has ruled ─────────────────────────────────────
 
 def test_the_engine_figure_is_withheld_on_the_sheets_own_route():
+    """THE TEST THAT DID NOT CATCH IT, REWRITTEN AS THE TEST THAT WOULD HAVE.
+
+    The first version of this asserted the SHAPE OF THE SOURCE of `estimation_report` -- the
+    module that builds the Provenance TAB. The page James was reading is built by
+    `job_report_html`, which still printed "engine GBP 3.88 - not charged" on the next run.
+    The test passed and the report did not change. So it asks the renderer instead.
+    """
+    import job_report_html as J
+    ruled = {"material_estimate": {"cost_method": "workbook_sheet_steel_formula"}}
+    assert J._sheet_ruled_basis(ruled) is True
+
+
+def test_the_report_renderer_is_the_one_that_was_fixed():
+    """Two pages, two modules, and only one of them had been found."""
+    import job_report_html as J
+    text = open(J.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    at = text.index("engine {_money(engine)} — not charged")
+    guard = text[max(0, at - 400):at]
+    assert "_sheet_ruled_basis(part)" in guard, \
+        "the HTML report still publishes the competing figure on the ruled route"
+
+
+def test_a_part_record_of_either_shape_is_understood():
+    """This renderer is handed both a costed part and a bare node."""
+    import job_report_html as J
+    assert J._sheet_ruled_basis({"cost_method": "workbook_sheet_steel_formula"}) is True
+    assert J._sheet_ruled_basis({"material_estimate": {"cost_method": "mass_times_price_per_kg"}}) is False
+    assert J._sheet_ruled_basis({}) is False
+    assert J._sheet_ruled_basis(None) is False
+
+
+def test_the_provenance_tab_agrees_with_the_report():
     import estimation_report as R
     text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
     assert 'cost_method") or "") == "workbook_sheet_steel_formula"' in text

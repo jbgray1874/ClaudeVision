@@ -1061,6 +1061,23 @@ not what a reader takes from a heading like this one.</td></tr>
 <div class="card"><table><tbody>{rows}</tbody></table></div>"""
 
 
+def _sheet_ruled_basis(part: Dict[str, Any]) -> bool:
+    """True where the workbook's own nest formula and its own rate cell priced this line.
+
+    The one route an estimator has already ruled on, so a second figure beside the charged
+    one is not evidence -- it is an invitation to re-open a closed question. Reads the cost
+    method off whichever shape the part record is in, because this renderer is handed both.
+    """
+    if not isinstance(part, dict):
+        return False
+    for holder in (part.get("material_estimate"), part):
+        if isinstance(holder, dict) and \
+                str(holder.get("cost_method") or "") == "workbook_sheet_steel_formula":
+            return True
+    return False
+
+
+
 def _render_review_items(review: Dict[str, Any]) -> str:
     """Section 3 — provisional / low-confidence items to check."""
     rows = ""
@@ -2876,7 +2893,23 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         engine = l.get("engine_ext_gbp")
         if charged is not None:
             money = _money(charged)
-            if engine is not None and abs(float(engine) - float(charged)) >= 0.01 and float(engine or 0):
+            # ── ONE BASIS WHERE THE ESTIMATOR HAS RULED ────────────────────────────
+            # James Gray, 18 Sep 2026: "Remove the competing GBP 3.88 engine-steel figure
+            # from the report. The estimate must present the editable workbook rate --
+            # GBP 900/tonne in Estimate!L5 and GBP 3.07 in the nest row -- as the single
+            # charged steel basis."
+            #
+            # THIS IS THE RENDERER THAT ACTUALLY WRITES THE REPORT. The same suppression
+            # went into estimation_report first, which builds the Provenance TAB, and the
+            # HTML report kept printing "engine GBP 3.88 - not charged" on the next run --
+            # because the two pages are built by two modules and only one of them had been
+            # found. The test that was supposed to prove the fix asserted the SHAPE OF THE
+            # SOURCE of the module I had edited, so it passed while the page did not change.
+            #
+            # Scoped to the route with a ruling, exactly as there: everywhere else the
+            # engine's figure beside the sheet's has caught real faults and stays.
+            if (engine is not None and abs(float(engine) - float(charged)) >= 0.01
+                    and float(engine or 0) and not _sheet_ruled_basis(part)):
                 money += f'<br><span class="mini">engine {_money(engine)} — not charged</span>'
         elif engine:
             money = f'{_money(engine)}<br><span class="mini">engine figure — not yet the sheet\'s</span>'
