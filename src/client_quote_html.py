@@ -1367,49 +1367,45 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     unit_price = (unit_cost * MARKUP_FACTOR) if isinstance(unit_cost, (int, float)) else None
     order_value = (unit_price * qty) if (unit_price is not None and qty) else None
 
-    # ── AND THE PAGE SAYS WHICH IT IS — TO THE ESTIMATOR, ON THE PORTAL VIEW ─────
+    # ── A MISSING FIGURE IS ONE LINE OF WORK, NOT A WARNING ──────────────────────
     #
-    # A refused price rendered as a bare em-dash reads as a page somebody did not finish, and
-    # the next move is a number typed in from memory. So the box says PRICE PENDING.
+    # James Gray, 18 September 2026:
     #
-    # WHICH MAKES IT AN INTERNAL PAGE, AND THAT IS THE POINT. James Gray, 18 Sep 2026:
-    # "`PRICE PENDING` on a 'quotation' is still a customer-facing disclaimer... the portal
-    # needs an editable quote view, not an incomplete quote for a customer to see." A notice
-    # explaining why a document is incomplete is only ever needed because the wrong document
-    # is being produced — so the incomplete one is not a customer document at all. It is the
-    # portal view, its audience is the person who closes those items, and it tells them what
-    # they are. A CUSTOMER page cannot reach this branch: `build_quote_html` refuses to make
-    # one while anything is outstanding, and a missing price is one of the things outstanding.
+    #     "The default objective is a fully priced estimate, using the precedence pipeline —
+    #      not a polished list of missing prices."
+    #     "If still unresolved, surface ONE CONCISE INTERNAL ESTIMATOR ACTION — not a long
+    #      warning block — and let the estimator enter or amend the value in the workbook."
+    #     "Customer output should simply be unavailable until the estimate is complete; it
+    #      should not contain 'do not issue', pricing caveats, or a catalogue of gaps."
+    #
+    # THIS PAGE HAS NOW GROWN A WARNING BLOCK SIX TIMES AND HAD IT REMOVED SIX TIMES — the red
+    # LLM-only band, the invariant banner, "DRAFT — not for issue", the undrawn-parts gap
+    # list, PRICE PENDING, and last of all a PORTAL VIEW panel with a bulleted catalogue of
+    # everything outstanding. Every one was accurate. Every one was the same mistake: telling
+    # a professional what is wrong with a document instead of telling them what to do next.
+    #
+    # The safety is not on the page and never was. An incomplete estimate is not written as a
+    # customer file, is not served as a download and is not attached to a mail — none of which
+    # needs a sentence on the page to work. So what is left here is the one thing the page can
+    # usefully say: which value to enter, and where.
     if unit_price is None:
-        _price_class = _order_class = "pending"
-        _unit_figure = _order_figure = "PRICE PENDING"
-        _unit_caption = _order_caption = "awaiting a traceable price"
+        _price_class = _order_class = "unit"
+        _unit_figure = _order_figure = "&mdash;"
+        _unit_caption = "per unit, ex VAT"
+        _order_caption = "ex VAT"
+        _pending_note = (
+            '\n      <div class="estimator-action">Enter the unit cost on the Estimate sheet '
+            'and regenerate — the price follows from the workbook.</div>')
     else:
         _price_class, _order_class = "unit", "ov"
         _unit_figure, _order_figure = _money(unit_price), _money(order_value)
         _unit_caption = ("per unit, ex VAT · indicative"
                          + ((' · ' + _num(qty) + ' of') if qty else ''))
         _order_caption = "ex VAT · indicative"
-
-    # ── THE BANNER FOLLOWS THE AUDIENCE, NOT THE PRICE ───────────────────────────
-    #
-    # The first cut keyed this on `unit_price is None`, which is the same two-names fault this
-    # session has now paid for six times: a page whose total IS traceable but whose commercial
-    # inputs are open and whose release nobody has authorised rendered a confident price and
-    # said nothing, because the condition asked about the figure when the question was about
-    # the audience. `customer_releasable` is the question, so it is what is asked.
-    if _for_customer:
+        # A PRICED PAGE AWAITING RELEASE SAYS NOTHING AT ALL. The estimate is complete; what
+        # is outstanding is a person's sign-off, and the release form is where that is done.
+        # A caveat here would be a caveat on a document that is about to be correct.
         _pending_note = ""
-    else:
-        _open_items = "".join(
-            f"<li>{_esc(b.get('short') or b['what'])}</li>"
-            for b in (_state.get("blocking") or []))
-        _pending_note = (
-            '\n      <div class="pending-note"><b>PORTAL VIEW — NOT FOR ISSUE</b> — this page '
-            'is the editable working copy. It is not released to the customer until the items '
-            'below are closed and an estimator authorises it.'
-            + (f'<ul class="open">{_open_items}</ul>' if _open_items else '')
-            + '</div>')
 
     # ONE part list across every deliverable (costed_facts.job_parts): the canonical
     # list the Estimate sheet was built from, not the engine's pre-canonical one. They are
@@ -1468,11 +1464,13 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     #
     # It replaces the page rather than watermarking it: a watermark still produces a PDF of a
     # quotation with a mark on it, and somebody will crop it.
+    # WHY IT STILL DOES NOT PRINT, AND WHY THAT IS NOT A CAVEAT. Print-to-PDF is how an
+    # HTML view becomes a file somebody emails, and it is the one export no server-side gate
+    # can see. The page says nothing about issuing; it simply is not the customer's document
+    # yet, so it does not produce one. The estimator reads it on screen as normal.
     _print_block = "" if _for_customer else """  @media print {{
     body > * {{ display:none !important; }}
-    body::after {{ display:block; content:"SDI Intelligence — portal working copy. This
-      quotation is not released for customer issue, so it does not print. Close the open
-      items and authorise release, and the customer document prints from there.";
+    body::after {{ display:block; content:"SDI Intelligence — working copy.";
       font:600 14px/1.6 system-ui, sans-serif; padding:40px; }}
   }}"""
 
@@ -1695,13 +1693,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .price-box .per {{ font-size:13px; color:#c9cac7; margin-top:4px; }}
   .price-box .right {{ text-align:right; }}
   .price-box .right .ov {{ font-size:20px; font-weight:600; }}
-  .price-box .pending {{ font-size:34px; font-weight:700; color:#c9cac7; line-height:1; }}
-  .pending-note {{ border:1px solid var(--line); border-left:4px solid var(--sdi-ink);
-                   border-radius:4px; padding:12px 16px; margin:-14px 0 26px;
-                   font-size:13px; color:var(--muted); }}
-  .pending-note b {{ color:var(--sdi-ink); letter-spacing:.08em; }}
-  .pending-note ul.open {{ margin:8px 0 0; padding-left:18px; }}
-  .pending-note ul.open li {{ padding:2px 0; }}
+  .estimator-action {{ margin:-14px 0 26px; font-size:13px; color:var(--muted); }}
 {_print_block}
   .inc h3 {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }}
   .inc ul {{ margin:0; padding:0; list-style:none; columns:2; column-gap:32px; }}

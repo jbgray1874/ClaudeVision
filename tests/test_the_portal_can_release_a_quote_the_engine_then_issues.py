@@ -125,13 +125,22 @@ def test_the_generated_quote_becomes_the_customer_document(tmp_path):
 
     before = Path(generate_quote_files(str(jp), out_dir=str(tmp_path), job_stem=_STEM))
     assert before.name == "401912-02_quote_PORTAL.html"
-    assert "PORTAL VIEW" in before.read_text(encoding="utf-8")
+    # ── AND IT IS A FULLY PRICED PAGE, NOT A LIST OF GAPS ───────────────────────
+    #
+    # This job's estimate is complete — a traceable workbook total, every line priced. What
+    # is outstanding is a PERSON's sign-off, so the working copy shows the estimator the
+    # price as normal and carries no warning at all. The control is that the file is not
+    # named, served or attached as the customer's document.
+    _body = before.read_text(encoding="utf-8")
+    assert "£" in _body, "a priced estimate must show its price to the estimator"
+    for gone in ("PORTAL VIEW", "NOT FOR ISSUE", "do not issue", "not released"):
+        assert gone.lower() not in _body.lower(), gone
 
     _release(tmp_path)
     after = Path(generate_quote_files(str(jp), out_dir=str(tmp_path), job_stem=_STEM))
     assert after.name == "401912-02_quote.html"
     body = after.read_text(encoding="utf-8")
-    assert "PORTAL VIEW" not in body
+    assert "£" in body, "the released document carries its price"
     assert 'content="customer"' in body, "the delivery routes read this declaration"
 
 

@@ -198,6 +198,47 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
     return out
 
 
+def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
+    """The web/LLM rung behind `indicative_price`, for a packaging or delivery charge.
+
+    SAME SEAM AS EVERY OTHER LINE. `estimator._rung4_researcher` does this for parts; this
+    one exists because a commercial line's brief is a sentence about a consignment rather
+    than a part code, and because the office's own switch has to be honoured from here too.
+
+    It returns what it found and nothing else. Whether that is enough to price with is
+    `indicative_price`'s decision, and it refuses anything without a source, a date, a unit
+    basis and a quantity basis — which is the whole reason this rung may contribute to a
+    total at all.
+    """
+    if not (getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}).get(
+            "enable_web_ai_fallback", True):
+        return {}
+    from price_provenance import stamp_source_name as _stamp_source_name
+    try:
+        from web_ai_price_lookup import lookup_web_ai_price as _look
+        found = _look({"material": str(brief.get("code") or "").title(),
+                       "description": brief.get("description"),
+                       "part_code": brief.get("code"),
+                       "quantity": 1,
+                       "wanted_unit": "order"},
+                      enable_web_search=True, enable_llm_estimate=True) or {}
+    except Exception:                                            # noqa: BLE001
+        return {}
+    if not found.get("found"):
+        return {}
+    return {
+        "price_gbp": found.get("price_gbp"),
+        "unit": found.get("unit") or "order",
+        "as_of": found.get("as_of") or found.get("price_date") or found.get("date"),
+        # THE SHARED READER, NOT A FOURTH CHAIN OF MY OWN. Every reader that hand-rolls
+        # `a or b or c` over the source keys ends up disagreeing with the others about a
+        # stamp that recorded the name under the key it did not check.
+        "source": _stamp_source_name(found),
+        "quantity_basis": found.get("quantity_basis") or "one order",
+        "confidence": found.get("confidence"),
+    }
+
+
 def _ask_market(description: str, tag: str) -> Optional[Dict[str, Any]]:
     """The same lookup the sheet rates, the fixings and the finishes use. Never raises."""
     try:
@@ -497,34 +538,67 @@ def _line(code: str, order: Dict[str, Any], description: str,
         if _method.get("inferred_step_note"):
             out["inferred_step"] = True
     else:
-        # THE COUNT IS KEPT; THE PRICE IS WITHHELD. Asking a model to price the sentence gave
-        # 12349-02 three different answers for one unchanged pack at one quantity — £424.97,
-        # £175.00, £74.97 at order level. A figure that moves 5.7x cannot be sanity-checked by
-        # an estimator or compared by the parity harness, so it is worse than a zero that
-        # states its own question. config.COMMERCIAL_LINE_ASK_MARKET restores it; the real fix
-        # is a house rate in COMMERCIAL_LINE_GBP_PER_ORDER, which is asked first and always.
-        _ind = (_ask_market(description, code.title())
-                if bool(getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False)) else None)
+        # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────
+        #
+        # James Gray, 18 September 2026:
+        #
+        #     "The default objective is a fully priced estimate, using the precedence
+        #      pipeline — not a polished list of missing prices."
+        #     "If those do not answer, use evidenced LLM research with source, date, unit
+        #      and calculation."
+        #
+        # THIS LINE WAS THE ONE THE PIPELINE DID NOT REACH. Packaging and delivery went to
+        # `_ask_market` behind `COMMERCIAL_LINE_ASK_MARKET`, which is False, so in practice
+        # they were not researched at all — they were held at £0 with a paragraph naming a
+        # config key. Every other line in the engine goes to `indicative_price`.
+        #
+        # AND THE REASON IT WAS TURNED OFF IS ANSWERED BY THE THING THAT REPLACES IT. The
+        # old ask gave 12349-02 £424.97, £175.00 and £74.97 for one unchanged pack — a 5.7x
+        # spread, unsanity-checkable, rightly withdrawn. `resolve_indicative` refuses a
+        # figure that does not carry its SOURCE, the DATE it was true, what it is PER and
+        # the QUANTITY it was found at, and returns the working from that figure to this
+        # line. A number that moves 5.7x between runs either fails that contract or arrives
+        # with the evidence to see why — and either is better than a withheld £0, because
+        # an estimator can check the first and can only re-do the second.
+        _ind = None
+        try:
+            from indicative_price import resolve_indicative as _rung4
+            _res = _rung4(
+                {"code": code, "description": description,
+                 "quantity": 1, "unit_of_measure": "order",
+                 "input_origins": (order.get("input_origins") or {})},
+                order_qty=1,
+                as_of=str(order.get("run_date") or ""),
+                ask=_commercial_researcher,
+            ) or {}
+        except Exception:                                        # noqa: BLE001
+            _res = {}
+        _res_gbp = _num(_res.get("price_gbp"))
+        if _res_gbp and _res_gbp > 0:
+            _ind = {"order_gbp": round(_res_gbp, 2), "source_class": "llm_indicative",
+                    "source_name": ((_res.get("evidence") or {}).get("source")
+                                    or "researched"),
+                    "reproducible": False, "indicative": True,
+                    "evidence": _res.get("evidence"),
+                    "calculation": _res.get("calculation")}
         if not _ind:
-            # NOTHING CAME BACK, SO NOTHING IS INVENTED — and the line still says what it
-            # would have been asked, so an estimator can answer the question themselves
-            # rather than rediscover it.
-            _why = ("could not be priced"
-                    if bool(getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False))
-                    else "is deliberately left at £0.00 until SDI's own rate is entered — a "
-                         "market indication for this line moved 5.7x between runs of the same "
-                         "job, so it is withheld rather than quoted")
+            # ONE ACTION, NOT A WARNING. "Surface one concise internal estimator action —
+            # not a long warning block — and let the estimator enter or amend the value in
+            # the workbook." The paragraph that used to live here named a config key and a
+            # 5.7x anecdote at somebody trying to finish a job.
+            #
+            # The shipment was still COUNTED, and that work is the useful half: it is on the
+            # line whether or not anybody has priced it yet, so the estimator is entering a
+            # figure against a measured consignment rather than a guess.
             out.update({"unit_gbp": None, "order_gbp": None,
-                        "estimator_input_required": True, "reason": "no_price_for_" + code.lower(),
-                        # The shipment was still COUNTED. That work is the useful half and it
-                        # is on the line whether or not anybody has priced it yet.
+                        "estimator_input_required": True,
+                        "reason": "no_price_for_" + code.lower(),
                         "shipment_counted": bool((order.get("shipment") or {}).get("pallet_count")
                                                  or (order.get("shipment") or {}).get("carton_count")),
-                        "note": (f"{code.title()} {_why}.{_method_gap} The shipment was still "
-                                 f"measured and counted: {description}. Price it from that, or "
-                                 f"put a per-order figure in "
-                                 f"config.COMMERCIAL_LINE_GBP_PER_ORDER['{held_key}'] and "
-                                 f"every job carries it.")})
+                        "estimator_action": f"Enter the {code.lower()} charge for this order.",
+                        "research_gap": str(_res.get("missing") or ""),
+                        "note": (f"Enter the {code.lower()} charge for this order. "
+                                 f"Measured and counted: {description}.{_method_gap}")})
             return out
         _order_gbp, _src = _ind["order_gbp"], _ind
     out.update({

@@ -184,8 +184,11 @@ def test_the_portal_copy_does_not_print():
     route no server-side gate can see. It replaces the page rather than watermarking it: a
     watermark still produces a PDF of a quotation, and somebody will crop it."""
     html = build_quote_html({}, job_stem="401912-02")
-    assert "does not print" in html
-    assert build_quote_html(_released(), job_stem="401912-02").count("does not print") == 0
+    assert "working copy" in html
+    assert build_quote_html(_released(), job_stem="401912-02").count("working copy") == 0
+    # AND IT SAYS NOTHING ABOUT ISSUING. The page is simply not the customer's document yet,
+    # so it does not produce one; that is a fact about the file, not a caveat on the print.
+    assert "not released for customer issue" not in html
 
 
 def test_the_portal_copy_is_not_named_like_a_quotation(tmp_path):

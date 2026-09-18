@@ -37,32 +37,33 @@ PANELS = [
 
 @pytest.fixture()
 def market(monkeypatch):
-    """The market answers. Stubbed rather than live — a test that reaches the internet is a
-    test that fails on a train.
+    """Rung 4 answers, WITH ITS EVIDENCE. Stubbed rather than live — a test that reaches the
+    internet is a test that fails on a train.
 
-    The flag is set here too, because asking the market is now OFF by default: one pack priced
-    three times gave £424.97 / £175.00 / £74.97. The arithmetic below is still the arithmetic
-    a house rate goes through, so it stays covered — this fixture just says out loud which
-    rung of the ladder it is exercising."""
+    THE RESEARCHER IS PATCHED, NOT THE PRICE. `_commercial_researcher` returns what it found;
+    whether that is enough to price with is `indicative_price`'s decision, and it refuses
+    anything without a source, the date it was true, what it is per and the quantity it was
+    found at. A fixture that injected a bare figure would prove the arithmetic and skip the
+    contract that makes the figure usable — which is the whole of what changed here.
+    """
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
-    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", True, raising=False)
-    monkeypatch.setattr(cl, "_ask_market", lambda d, t: {
-        "order_gbp": 84.0, "source_class": "llm", "source_name": "web_ai_fallback",
-        "reproducible": False, "indicative": True})
+    monkeypatch.setattr(cl, "_commercial_researcher", lambda brief: {
+        "price_gbp": 84.0, "unit": "order", "as_of": "2026-09-18",
+        "source": "Tuffnells published tariff", "quantity_basis": "one order"})
 
 
 @pytest.fixture()
 def silent_market(monkeypatch):
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
-    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", True, raising=False)
-    monkeypatch.setattr(cl, "_ask_market", lambda d, t: None)
+    monkeypatch.setattr(cl, "_commercial_researcher", lambda brief: {})
 
 
 @pytest.fixture()
 def withheld(monkeypatch):
-    """The shipped default: no house rate, and the market deliberately not asked."""
+    """No house rate, and the research answering nothing — the only route to an unpriced
+    commercial line now that the pipeline reaches it."""
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
-    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", False, raising=False)
+    monkeypatch.setattr(cl, "_commercial_researcher", lambda brief: {})
 
 
 # ── the shipment, from what the engine already measured ──────────────────────────────
@@ -116,7 +117,11 @@ def test_delivery_is_priced_the_same_way(market):
 
 def test_a_market_price_declares_that_it_is_not_reproducible(market):
     ps = cl.packaging_line(PANELS, 5)["price_source"]
-    assert ps["source_class"] == "llm" and ps["reproducible"] is False
+    assert ps["source_class"] == "llm_indicative" and ps["reproducible"] is False
+    # AND THE EVIDENCE TRAVELS WITH IT. The old market answer carried a confidence score and
+    # nothing checkable; this one names its source and the date it was true, because that is
+    # the condition on which rung 4 may contribute to a total at all.
+    assert (ps.get("evidence") or {}).get("source")
 
 
 def test_a_figure_the_business_holds_beats_the_market(monkeypatch):
@@ -132,13 +137,15 @@ def test_a_figure_the_business_holds_beats_the_market(monkeypatch):
 
 
 def test_nothing_found_means_an_owned_gap_and_never_a_zero(silent_market):
-    """The net is wider, not guaranteed. Where nothing comes back the line still says what it
-    WOULD have asked, so an estimator can answer it rather than rediscover the question."""
+    """The net is wider, not guaranteed. Where nothing comes back the line still carries the
+    measured consignment, so an estimator enters a figure against something rather than
+    rediscovering the question."""
     line = cl.packaging_line(PANELS, 5)
     assert line["unit_gbp"] is None and line["order_gbp"] is None
     assert line["estimator_input_required"] is True
     assert line["reason"] == "no_price_for_packaging"
-    assert "COMMERCIAL_LINE_GBP_PER_ORDER" in line["note"]
+    assert line["note"].startswith("Enter the packaging charge")
+    assert "Measured and counted" in line["note"]
 
 
 def test_a_lookup_that_explodes_does_not_take_the_estimate_with_it(monkeypatch):
@@ -221,20 +228,49 @@ def test_an_unpriced_placeholder_is_still_a_clean_zero():
 # against, and the parity harness cannot compare a job with itself. So the sentence a haulier
 # would be asked is kept, and the answer is left to a person.
 
-def test_the_market_is_not_asked_by_default(monkeypatch):
-    """The whole point. Not "it usually is not asked" — it is not asked."""
+def test_the_pipeline_reaches_a_commercial_line(monkeypatch):
+    """THE DEFECT THIS REPLACED. James Gray, 18 Sep 2026: "The default objective is a fully
+    priced estimate, using the precedence pipeline — not a polished list of missing prices."
+
+    Packaging and delivery went to `_ask_market` behind `COMMERCIAL_LINE_ASK_MARKET`, which
+    is False — so in practice they were never researched at all. They were held at £0 with a
+    paragraph naming a config key, while every other line in the engine went to
+    `indicative_price`. They go there now.
+    """
     monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
-    monkeypatch.setattr(config, "COMMERCIAL_LINE_ASK_MARKET", False, raising=False)
-    monkeypatch.setattr(cl, "_ask_market", lambda d, t: pytest.fail(
-        "a model was asked to price a shipment while the flag is off"))
-    for line in (cl.packaging_line(PANELS, 7), cl.delivery_line(PANELS, 7)):
-        assert line["unit_gbp"] is None and line["order_gbp"] is None
+    asked = []
+    monkeypatch.setattr(cl, "_commercial_researcher",
+                        lambda brief: asked.append(brief) or {})
+    cl.packaging_line(PANELS, 7)
+    cl.delivery_line(PANELS, 7)
+    assert len(asked) == 2, "a commercial line was not offered to the research rung"
+    assert all(b.get("description") for b in asked), \
+        "the researcher was asked without the sentence describing the consignment"
 
 
-def test_the_shipped_default_is_the_flag_being_off():
-    """A default that has to be set to be safe is not a default. Read off config itself, so
-    turning it on in a live config fails here rather than quietly on a customer's estimate."""
-    assert getattr(config, "COMMERCIAL_LINE_ASK_MARKET", False) is False
+def test_the_house_rate_is_still_asked_before_any_research(monkeypatch):
+    """Rule 1 before rule 2. A figure the business holds is not re-researched."""
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER",
+                        {"PACKAGING": 42.0}, raising=False)
+    monkeypatch.setattr(cl, "_commercial_researcher", lambda brief: pytest.fail(
+        "the research rung was asked over the top of SDI's own rate"))
+    assert cl.packaging_line(PANELS, 7)["order_gbp"] == 42.0
+
+
+def test_a_researched_figure_without_its_evidence_is_refused(monkeypatch):
+    """WHY THE OLD ASK WAS TURNED OFF, AND WHY THIS ONE MAY BE ON.
+
+    `_ask_market` gave 12349-02 £424.97, £175.00 and £74.97 for one unchanged pack — a 5.7x
+    spread nobody could check. `indicative_price` refuses a figure that does not name its
+    source, the date it was true, what it is per and the quantity it was found at, so a
+    number arriving with nothing behind it does not reach the sheet however confident it is.
+    """
+    monkeypatch.setattr(config, "COMMERCIAL_LINE_GBP_PER_ORDER", {}, raising=False)
+    monkeypatch.setattr(cl, "_commercial_researcher",
+                        lambda brief: {"price_gbp": 424.97})     # a figure and nothing else
+    line = cl.packaging_line(PANELS, 7)
+    assert line["order_gbp"] is None
+    assert line["estimator_input_required"] is True
 
 
 @pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
@@ -259,23 +295,33 @@ def test_the_packer_is_told_the_panel_and_the_haulier_the_pallets(withheld):
 
 
 @pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
-def test_a_withheld_line_is_an_owned_gap_not_a_silent_zero(withheld, fn):
-    """£0.00 on its own sums as free and nobody argues with it. £0.00 that names the question
-    it could not answer lands on OUTSTANDING ESTIMATOR INPUTS and gets actioned."""
+def test_an_unpriced_line_is_one_action_not_a_warning(withheld, fn):
+    """£0.00 on its own sums as free and nobody argues with it. What replaces it is not an
+    explanation — it is the next thing to do.
+
+    James Gray, 18 Sep 2026: "surface ONE CONCISE INTERNAL ESTIMATOR ACTION — not a long
+    warning block — and let the estimator enter or amend the value in the workbook."
+
+    The note used to run to four lines naming a config key, a 5.7x anecdote and the reason
+    the market was not asked, at somebody trying to finish a job. The measured consignment
+    stays, because that is what the figure is entered against.
+    """
     line = getattr(cl, fn)(PANELS, 7)
     assert line["estimator_input_required"] is True
+    assert line["estimator_action"].startswith("Enter the")
     note = line["note"]
-    assert "deliberately left at" in note
-    assert "still measured and counted" in note
-    assert "COMMERCIAL_LINE_GBP_PER_ORDER" in note
+    assert note.startswith("Enter the")
+    assert "Measured and counted" in note
+    for gone in ("COMMERCIAL_LINE_GBP_PER_ORDER", "deliberately left at", "5.7"):
+        assert gone not in note, f"the warning block is back: {gone!r}"
 
 
 @pytest.mark.parametrize("fn", ["packaging_line", "delivery_line"])
-def test_the_note_says_the_figure_moved_rather_than_that_nothing_was_found(withheld, fn):
-    """"Could not be priced" would be a lie: it could, three times, differently. The reader is
-    owed the actual reason, because it is the reason the fix is two catalogue rates."""
-    note = getattr(cl, fn)(PANELS, 7)["note"]
-    assert "5.7x" in note or "5.7" in note
+def test_why_the_research_could_not_answer_is_kept_off_the_note(withheld, fn):
+    """It is still ON THE LINE, for the report and the log — it is simply not the sentence an
+    estimator reads at the point of entering a number."""
+    line = getattr(cl, fn)(PANELS, 7)
+    assert "research_gap" in line
 
 
 def test_a_house_rate_still_beats_everything_with_the_flag_off(monkeypatch):

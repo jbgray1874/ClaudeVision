@@ -124,15 +124,22 @@ def test_no_unit_or_customer_price_reaches_the_page(monkeypatch):
     assert "%.2f" % (_UNIT * client_quote_html.MARKUP_FACTOR * _QTY) not in html
 
 
-def test_the_page_says_it_is_pending_traceability(monkeypatch):
+def test_the_page_names_one_action_and_does_not_warn(monkeypatch):
+    """James Gray, 18 Sep 2026: "surface ONE CONCISE INTERNAL ESTIMATOR ACTION — not a long
+    warning block... Customer output should simply be unavailable until the estimate is
+    complete; it should not contain 'do not issue', pricing caveats, or a catalogue of gaps."
+
+    THIS PAGE HAS GROWN A WARNING BLOCK SIX TIMES. The red LLM-only band, the invariant
+    banner, "DRAFT — not for issue", the undrawn-parts list, PRICE PENDING, and a PORTAL VIEW
+    panel with a bulleted catalogue of everything outstanding. Every one was accurate and
+    every one was the same mistake. The safety is the file not being written, served or
+    attached — none of which needs a sentence on the page.
+    """
     html = _broken_quote(monkeypatch)
-    assert "PRICE PENDING" in html
-    # Not a blank waiting for a number: the caption where the figure was says what it is.
-    assert "awaiting a traceable price" in html
-    # And it says WHOSE page this is, because an incomplete quotation is not a customer
-    # document — it is the portal working copy, and the difference is the point.
-    assert "PORTAL VIEW" in html
-    assert "the unit price is not yet traceable" in html
+    assert "Enter the unit cost on the Estimate sheet" in html
+    for gone in ("PRICE PENDING", "PORTAL VIEW", "NOT FOR ISSUE", "do not issue",
+                 "not released", "outstanding"):
+        assert gone.lower() not in html.lower(), f"the warning block is back: {gone!r}"
 
 
 def test_the_engines_own_reason_stays_off_the_customers_page(monkeypatch):
@@ -145,7 +152,6 @@ def test_the_engines_own_reason_stays_off_the_customers_page(monkeypatch):
     one document that leaves the building.
     """
     html = _broken_quote(monkeypatch)
-    assert "traceable" in html.lower(), "the page must still read as pending traceability"
     for leak in ("Estimate!M", "publishable_total", "_Exploded", "exploded", "Traceback"):
         assert leak not in html, f"the quotation carries an engine internal: {leak}"
     # It does not describe itself with the internal word for an unfinished document, and

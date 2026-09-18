@@ -160,14 +160,18 @@ def test_an_unsettled_job_is_not_a_customer_document_at_all():
         q.build_quote_html(_job(draft=True), job_stem="7332-01", audience=CUSTOMER)
 
 
-def test_the_portal_copy_does_say_what_is_outstanding():
-    """Its audience is the person who closes the items, so silence there helps nobody.
+def test_the_working_copy_names_the_next_action_and_nothing_else():
+    """AND THE BANNER DOES NOT COME BACK IN AN INTERNAL COSTUME.
 
-    This is the half that makes removing the customer banner safe rather than merely quiet.
+    A first cut of the release model gave the working copy a PORTAL VIEW panel listing every
+    outstanding item. It was accurate, internal, and the sixth time this page has grown a
+    warning block. What an estimator needs is the next thing to do; what is outstanding is on
+    the report and on the release form, which is where it is acted on.
     """
     html = q.build_quote_html(_job(draft=True), job_stem="7332-01")
-    assert "PORTAL VIEW" in html
-    assert "no estimator has authorised release" in html
+    assert "Enter the unit cost on the Estimate sheet" in html
+    for gone in ("PORTAL VIEW", "NOT FOR ISSUE", "not released", "authorised release"):
+        assert gone.lower() not in html.lower(), f"the warning block is back: {gone!r}"
 
 
 def test_the_portal_copy_still_keeps_the_workings_off_the_page():
