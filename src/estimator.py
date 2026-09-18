@@ -6644,6 +6644,43 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         rule = LABOUR_RULES["folding"]
         setup_times_min["folding"] = round(rule["setup_min"], 2)
         run_times_min["folding"] = round((bends * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
+        # ── WHERE THE FOLD COUNT CAME FROM, ON THE LINE THAT CHARGES IT ──────────────
+        #
+        # James Gray, 401912-02: "why are we getting this incorrect ever?"
+        #
+        # We are not, usually — but the sheet cannot say so. A flat DXF exported WITHOUT a
+        # bend-line layer carries the outline and nothing else, so the count falls to the
+        # SolidWorks model or a drawing note. That fallback is right and the engine has to
+        # have it: plenty of parts have their folds only in a callout. What is missing is
+        # the sentence saying WHICH, and without it a measured fold and an inferred one look
+        # identical on the page — a reader who wants to check the count has nowhere to start
+        # and no reason to suspect they should.
+        #
+        # 401912-02's own book: "DXF: layers not provided so bend vs cut assignment
+        # unknown", one Fold row charged at 30 minutes of set-up, and nothing connecting the
+        # two. The count was almost certainly right. Nobody could tell.
+        #
+        # `bend_count_source` is already on the record — `_model_measured_zero_bends` reads
+        # it to decide whether a zero was measured or merely absent. It has simply never
+        # been said out loud.
+        _bsrc = str((part.get("manufacturing_features") or {}).get(
+            "bend_count_source") or "").strip()
+        if _bsrc.lower() in _MEASURED_BEND_SOURCES:
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged, counted by {_bsrc} — measured, not inferred.")
+        else:
+            _ng_fold = part.get("normalized_geometry") or {}
+            _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged, and NOTHING THAT CAN SEE THE PART COUNTED "
+                f"THEM" + (f" — the count came from {_bsrc}" if _bsrc else "")
+                + ". "
+                + ("The flat DXF carries no bend-line layer, so the fold is taken from the "
+                   "model or a drawing note. That is the right fallback and it is not a "
+                   "measurement: confirm the count, or ask the drawing office to export "
+                   "bend lines and it becomes one."
+                   if not _layers_seen else
+                   "Confirm the count against the drawing."))
 
     # THE COAT IS CHARGED ON EVIDENCE, NOT ON CLASS. The first cut of this gate shed the
     # op from every bought-in and every area-less parent, and the reviewer's probes

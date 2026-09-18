@@ -376,15 +376,20 @@ def test_a_group_of_one_is_rejected_because_it_shares_nothing():
 
 def test_the_example_answers_file_carries_howards_two_rulings_and_no_price():
     """The example is what the next person copies. It used to teach a policy breach —
-    plating_gbp_per_unit: 250.0, Howard's own figure off his own sheet."""
+    plating_gbp_per_unit: 250.0, Howard's own figure off his own sheet.
+
+    READ FROM config, WHICH IS WHERE THE EXAMPLE LIVES NOW (D-111). It used to read
+    `docs/7332-01_confirmed.example.json`, a file the blanket `*.json` rule meant git never
+    carried — so the test was green on the one machine that happened to have it and failed
+    on every other, including a fresh checkout. That is the same fault D-111 was about, in
+    a test rather than a ruling: a file nobody can diff is not evidence of anything, and a
+    test that depends on one is asserting about local state.
+    """
     import json
-    import pathlib
-    doc = json.loads((pathlib.Path(__file__).resolve().parent.parent / "docs" /
-                      "7332-01_confirmed.example.json").read_text(encoding="utf-8"))
-    dec = doc["estimator_decisions"]
+    import config
+    dec = (config.JOB_DECISIONS["7332-01"].get("estimator_decisions") or {})
     assert dec["operations_off"]["7332-01-002"] == ["tube_bending"]
-    assert dec["nesting_groups"]["003 and 004 on one program"] == [
-        "7332-01-003", "7332-01-004"]
+    assert list(dec["nesting_groups"].values())[0] == ["7332-01-003", "7332-01-004"]
     assert "plating_gbp_per_unit" not in dec, (
         "a price typed into the answers file is still a price typed into a file")
     assert "250" not in json.dumps(dec)

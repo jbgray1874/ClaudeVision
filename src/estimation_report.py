@@ -250,6 +250,52 @@ def source_label(source: str) -> str:
         return f"{s.replace('_', ' ')} (source name not in the glossary)"
     else:
         return "not recorded"
+def _material_basis_phrase(material_estimate: Any) -> str:
+    """How this material figure was arrived at, in one clause, from the record's own
+    `cost_method` and the facts beside it.
+
+    TWO NUMBERS FOR ONE LINE, AND NEITHER SAID WHAT IT WAS. 401912-02's divider reads
+    "£3.07 · engine £3.88 — not charged", and three people read that as the engine and the
+    workbook disagreeing about the METHOD — weight against blank — when both had costed the
+    blank and the whole gap was the steel rate being written in two files with different
+    values (a duplicate the rate audit already lists: £950/tonne in config, £900 on the
+    sheet that shipped).
+
+    A reader cannot settle that from two bare pounds figures. Given the two bases they can
+    settle it in seconds, and the answer is usually "get the rate ruled on", not "find the
+    bug". Display only — nothing here changes a price.
+    """
+    me = material_estimate if isinstance(material_estimate, dict) else {}
+    method = str(me.get("cost_method") or "").strip().lower()
+    _kg = me.get("unit_material_mass_kg")
+    _stock = me.get("stock_estimate") or {}
+    _pps = _stock.get("parts_per_sheet") or me.get("parts_per_sheet")
+    _sheet = _stock.get("candidate_sheet_size_mm")
+    _sheet_txt = (f"{_sheet[0]:g} x {_sheet[1]:g}"
+                  if isinstance(_sheet, (list, tuple)) and len(_sheet) >= 2
+                  and all(isinstance(v, (int, float)) for v in _sheet[:2]) else "")
+    _nest = (f"{int(_pps)} per {_sheet_txt} sheet" if _pps and _sheet_txt
+             else (f"{int(_pps)} per sheet" if _pps else ""))
+
+    if not method:
+        return ""
+    if "sheet_steel_formula" in method or "board_sheet_yield" in method or \
+            "sheet_rate_live_udef" in method or "board_rate_researched" in method:
+        _by = "the blank's share of a sheet"
+        bits = [b for b in (_nest,
+                            (f"{float(_kg):.3f} kg blank" if _kg else "")) if b]
+        return f"{_by}" + (f", {', '.join(bits)}" if bits else "")
+    if "stated_weight" in method or "per_kg" in method or "mass" in method:
+        return ("the part's stated weight"
+                + (f" ({float(_kg):.3f} kg)" if _kg else "")
+                + " x a rate per kilogram")
+    if "bought_in" in method or "catalogue" in method:
+        return "a bought-in unit price"
+    if "unpriced" in method or "no_price" in method:
+        return "nothing — this line is unpriced"
+    return method.replace("_", " ")
+
+
 def _price_basis_label(price_source: Dict[str, Any], material: str = "") -> str:
     """One-line 'where did this price come from?' for the provenance sheet, built
     from the engine's own per-part price_source metadata (pricing_service /
@@ -613,8 +659,17 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             rate_basis = str(_origin["label"])
         if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
                 and abs(_engine_ext - ext) >= 0.01:
-            rate_basis += (f" · engine net-part figure £{_engine_ext:,.2f} — not charged; "
-                           f"the sheet's £{ext:,.2f} is the money")
+            # NAME BOTH BASES, NOT JUST BOTH NUMBERS. Two bare figures side by side read as
+            # a contradiction; with their bases beside them the reader can see in seconds
+            # whether the engine and the sheet disagree about the METHOD (which is a defect)
+            # or about the RATE (which is a ruling somebody owes, and is usually the answer).
+            _eng_basis = _material_basis_phrase(_pe.get("material_estimate"))
+            rate_basis += (f" · engine net-part figure £{_engine_ext:,.2f}"
+                           + (f", from {_eng_basis}" if _eng_basis else "")
+                           + f" — not charged; the sheet's £{ext:,.2f} is the money, from "
+                             f"its own block and its own rate cell. Where the two bases are "
+                             f"the SAME the difference is a rate written in two places, not "
+                             f"a costing fault.")
         # ── Route text, and the audit trail behind it ──────────────────────────
         _ops_text = (", ".join(ops) if ops
                      else ("none charged" if _canonical else "—"))
