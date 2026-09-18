@@ -39,13 +39,22 @@ def _num(value: Any) -> Optional[float]:
         return None
 
 
-def _find_value_in_row(ws, row_idx: int, label_col: int) -> Optional[float]:
-    """The first credible number to the RIGHT of a label cell, on the same row."""
+def _find_value_in_row(ws, row_idx: int, label_col: int):
+    """The first credible number to the RIGHT of a label cell, and the CELL it was in.
+
+    Returns (value, "Estimate!M105") — the reference recorded where it is found, because a
+    published figure must name where a reader checks it and nothing downstream can work out
+    which column this scan landed on.
+    """
     for col in range(label_col + 1, ws.max_column + 1):
         v = _num(ws.cell(row=row_idx, column=col).value)
         if v is not None:
-            return v
-    return None
+            try:
+                from openpyxl.utils import get_column_letter as _cl   # noqa: PLC0415
+                return v, f"Estimate!{_cl(col)}{row_idx}"
+            except Exception:                                        # noqa: BLE001
+                return v, ""
+    return None, ""
 
 
 def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
@@ -64,6 +73,7 @@ def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
     try:
         ws = wb["Estimate"] if "Estimate" in wb.sheetnames else wb[wb.sheetnames[0]]
         found: Dict[str, float] = {}
+        cells: Dict[str, str] = {}
         qty: Optional[float] = None
         wanted = {lbl.lower(): lbl for lbl in _PRICE_LABELS}
         qty_wanted = {lbl.lower() for lbl in _QTY_LABELS}
@@ -73,11 +83,12 @@ def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
                     continue
                 text = cell.value.strip().lower()
                 if text in wanted and wanted[text] not in found:
-                    v = _find_value_in_row(ws, cell.row, cell.column)
+                    v, _ref = _find_value_in_row(ws, cell.row, cell.column)
                     if v is not None:
                         found[wanted[text]] = v
+                        cells[wanted[text]] = _ref
                 elif text in qty_wanted and qty is None:
-                    qty = _find_value_in_row(ws, cell.row, cell.column)
+                    qty, _ = _find_value_in_row(ws, cell.row, cell.column)
     finally:
         wb.close()
 
@@ -99,6 +110,9 @@ def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
         "quantity": int(qty) if qty else None,
         "price": price,
         "source_label": source_label,
+        # The cell the price was read from. A quote is the one deliverable a customer keeps,
+        # so it is the last place an untraceable figure should be allowed.
+        "price_cell": cells.get(source_label, ""),
     }
 
 
@@ -202,6 +216,13 @@ def _summary_from_figures(figures: Dict[str, Any], *, units: int, drawing_number
     _wep = dict(_es.get("workbook_equivalent_pricing") or {})
     _wep["m105_total_unit_cost_gbp"] = figures["price"]
     _es["workbook_equivalent_pricing"] = _wep
+    # The cell that price came from, where `publishable_total` looks for it.
+    if figures.get("price_cell"):
+        _fe = dict(summary.get("final_estimate") or {})
+        _fe_tot = dict(_fe.get("totals") or {})
+        _fe_tot["unit_cell"] = figures["price_cell"]
+        _fe["totals"] = _fe_tot
+        summary["final_estimate"] = _fe
     _inputs = dict(_es.get("estimate_workbook_inputs") or {})
     _inputs["assumed_job_quantity"] = int(units)
     _es["estimate_workbook_inputs"] = _inputs

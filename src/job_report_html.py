@@ -127,8 +127,25 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
     # fallbacks to cost_breakdown if WEP absent
     if unit is None:
         unit = _get(summary, "estimate_summary", "document_total_estimated_cost_gbp")
+    # ── THE UNIT COST THIS REPORT MAY PRINT, DECIDED ONCE ───────────────────────
+    #
+    # D-141: the report printed raw `hl["unit"]` in its header, its summary, its verdict and
+    # its footer, while the covering email had already been put behind `publishable_total`.
+    # Four sites in one document, each deciding for itself — the five-surfaces shape again,
+    # inside a single file. So the decision is made HERE, where `hl` is built, and every
+    # renderer reads the same answer.
+    #
+    # The cell comes from the read-back's own scan (`final_estimate.totals.unit_cell`). A
+    # total with no cell behind it is refused: the whole point is that a reader can open the
+    # figure, and "£149.87" with nowhere to check it is the £321.88 shape.
+    _fe_tot = (_get(summary, "final_estimate", "totals", default={}) or {})
+    from displayed_charge import publishable_total as _pub            # noqa: PLC0415
+    _pt = _pub({"run": {"unit_cost_gbp": unit, "unit_cell": _fe_tot.get("unit_cell")}})
     return {
         "unit": unit, "material": material, "labour": labour,
+        "unit_publishable": _pt.get("amount"),
+        "unit_cell": _pt.get("cell"),
+        "unit_withheld_why": _pt.get("why") or "",
         "hours": hours, "source_of_truth": src,
     }
 
@@ -680,13 +697,26 @@ def _render_header(h: Dict[str, Any], has_parity: bool,
 </header>"""
 
 
+def _unit_text(hl: Dict[str, Any]) -> str:
+    """The unit cost as this report may print it — a figure, or why it may not.
+
+    Every site that used to print `_money(hl["unit"])` calls this, so the header, the summary,
+    the verdict and the footer cannot disagree about whether the total is publishable. They
+    could before: the email refused a total the report printed four ways.
+    """
+    if hl.get("unit_publishable") is not None:
+        return _money(hl["unit_publishable"])
+    return "PENDING — NOT TRACEABLE TO A WORKBOOK CELL"
+
+
+
 def _render_headline(hl: Dict[str, Any], h: Dict[str, Any], streams: List[Dict[str, Any]]) -> str:
     parts = _extract_parts_count_note(streams)
     src_note = ""
     if hl.get("source_of_truth") == "populated_xlsx_excel_com":
         src_note = "Workbook-computed (Excel)"
     return f"""<div class="headline">
-  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_money(hl['unit'])}</div><div class="note">{src_note or 'Deliverable figure'} &middot; qty {_esc(h['quantity'])}</div></div>
+  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_unit_text(hl)}</div><div class="note">{src_note or 'Deliverable figure'} &middot; qty {_esc(h['quantity'])}</div></div>
   <div class="fig"><div class="lab">Material</div><div class="val">{_money(hl['material'])}</div><div class="note">Steel + BOM + boards + powder</div></div>
   <div class="fig"><div class="lab">Labour</div><div class="val">{_money(hl['labour'])}</div><div class="note">{_num(hl['hours'],2)} hrs · all depts</div></div>
   <div class="fig"><div class="lab">Parts costed</div><div class="val">{parts}</div><div class="note">across material streams</div></div>
@@ -705,7 +735,7 @@ def _render_glance(streams: List[Dict[str, Any]], hl: Dict[str, Any]) -> str:
         fig_rows += f'<tr><td>Material</td><td class="n">{_money(hl["material"])}</td></tr>'
     if hl.get("labour") is not None:
         fig_rows += f'<tr><td>Labour</td><td class="n">{_money(hl["labour"])}</td></tr>'
-    fig_rows += f'<tr><td><b>Unit Cost</b></td><td class="n"><b>{_money(hl["unit"])}</b></td></tr>'
+    fig_rows += f'<tr><td><b>Unit Cost</b></td><td class="n"><b>{_unit_text(hl)}</b></td></tr>'
 
     # Parts grouped by material stream — COUNTS only. The per-stream £ breakdown was on an
     # engine-internal basis that did not reconcile with the workbook total, so it is not shown
@@ -1706,23 +1736,23 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
                  f"{_inv.get('blocking', 0)} consistency check(s) failed and "
                  f"{_inv.get('unverified', 0)} could not be run — listed in section 8. Material "
                  f"streams are separated and nothing is counted twice, and the workbook Unit "
-                 f"Cost is <b>{_money(hl['unit'])}</b>, but that figure is not yet one the "
+                 f"Cost is <b>{_unit_text(hl)}</b>, but that figure is not yet one the "
                  f"engine can stand behind.{_open_note}")
     elif _inv is None:
         _lead = (f"Material streams are correctly separated and there is no double-counting. "
-                 f"The workbook Unit Cost is <b>{_money(hl['unit'])}</b>. The consistency "
+                 f"The workbook Unit Cost is <b>{_unit_text(hl)}</b>. The consistency "
                  f"checks did NOT run on this job, so none of these figures have been verified "
                  f"against the workbook — treat as provisional.{_open_note}")
     elif _open:
         _lead = (f"Every consistency check passed — material rows and labour rows each "
                  f"reconcile to the workbook's own totals, and those totals to the unit price "
                  f"— <b>but the estimate is not releasable</b>.{_open_note} The workbook Unit "
-                 f"Cost is <b>{_money(hl['unit'])}</b>.")
+                 f"Cost is <b>{_unit_text(hl)}</b>.")
     else:
         _lead = (f"The estimate is <b>structurally sound</b> and every consistency check passed: "
                  f"material rows and labour rows each reconcile to the workbook's own totals, "
                  f"and those totals to the unit price. The workbook Unit Cost is "
-                 f"<b>{_money(hl['unit'])}</b>. It is presented with a transparent list of "
+                 f"<b>{_unit_text(hl)}</b>. It is presented with a transparent list of "
                  f"provisional items for estimator review.")
     return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
@@ -2523,7 +2553,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         diagnostics,
         '</details>',
         f'<div class="foot">SDI Intelligence &middot; ClaudeVision automated estimating engine &middot; '
-        f'Job {_esc(h["stem"])}<br>Unit Cost {_money((record.get("run") or {}).get("unit_gbp") if (record.get("run") or {}).get("totals_source") == "excel_calculated" else hl["unit"])} is the workbook-computed figure. '
+        f'Job {_esc(h["stem"])}<br>Unit Cost {_unit_text(hl)} is the workbook-computed figure. '
         f'Decisions required and drawing recommendations are listed for estimator and Design review. '
         f'Generated for internal review.'
         + (f'<br>Run <code>{_esc(summary.get("run_id"))}</code> &middot; quantity '
@@ -2785,6 +2815,9 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     estimator asks first, each from the record."""
     run = record.get("run") or {}
     calculated = run.get("totals_source") == "excel_calculated"
+    # THE ONE ANSWER, HERE TOO. This chose between the record's run total and the headline's,
+    # and then printed whichever it got — so the summary could show a figure the header had
+    # already refused. `_unit_text` is the single decision for this document.
     unit = run.get("unit_gbp") if calculated else hl.get("unit")
     material = run.get("material_gbp") if calculated else hl.get("material")
     labour = run.get("labour_gbp") if calculated else hl.get("labour")
@@ -2827,7 +2860,7 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     reason_html = ("".join(f"<li>{_esc(r)}</li>" for r in reasons[:6]) if reasons else "")
     return f"""<h2>Summary</h2>
 <div class="headline">
-  <div class="fig"><div class="lab">Unit cost</div><div class="val">{_money(unit)}</div><div class="note">per unit, ex VAT</div></div>
+  <div class="fig"><div class="lab">Unit cost</div><div class="val">{_unit_text(hl)}</div><div class="note">per unit, ex VAT{(" &middot; " + _esc(hl["unit_cell"])) if hl.get("unit_cell") else ""}</div></div>
   <div class="fig"><div class="lab">Material</div><div class="val">{_money(material)}</div><div class="note">sheet, section, bought-in, commercial</div></div>
   <div class="fig"><div class="lab">Labour</div><div class="val">{_money(labour)}</div><div class="note">per department row</div></div>
   <div class="fig"><div class="lab">Quantity</div><div class="val">{_esc(qty) if qty else '—'}</div><div class="note">order quantity the sheet was priced at</div></div>
@@ -3011,7 +3044,14 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             # whole fact exists to prevent, reintroduced by the renderer that was meant to
             # honour it. The diagnostic stays on the record for anybody debugging; it does
             # not reach a published page.
-            money = '—<br><span class="mini">PENDING A CURRENT PRICE</span>' 
+            money = '—<br><span class="mini">PENDING A CURRENT PRICE</span>'
+        elif _shown["basis"] == "pending_traceability":
+            # A DASH HERE WOULD READ AS "NOTHING TO SEE". The sheet DID calculate a figure
+            # for this line; what is missing is the record of which cell it came from, so it
+            # cannot be published as traceable money. Falling through to a plain dash makes an
+            # outstanding traceability problem look like an empty row, which is the one way
+            # nobody would ever go and fix it.
+            money = ('—<br><span class="mini">PENDING — WORKBOOK CELL NOT RECORDED</span>')
         else:
             money = "—"
         qty = l.get("qty_per_unit")

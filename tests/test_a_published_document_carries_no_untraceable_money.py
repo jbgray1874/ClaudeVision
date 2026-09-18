@@ -208,3 +208,87 @@ def test_an_untraceable_total_is_not_printed_at_all(tmp_path):
     text = re.sub(r"<[^>]+>", " ", note["html"])
     assert "UNIT COST PENDING" in text
     assert "£930.39" not in text
+
+
+# ── D-141: the report and the quote stop bypassing the fact ─────────────────────────
+#
+# James Gray, 18 Sep 2026: "`job_report_html` still prints raw `hl["unit"]` in its header,
+# summary, verdict and footer. `client_quote_html` has its own direct total path."
+#
+# Four sites in one document, each deciding for itself — the five-surfaces shape inside a
+# single file — while the covering email had already been put behind `publishable_total`.
+
+def _hl(unit=149.87, cell="Estimate!M105"):
+    import job_report_html as J
+    return J._extract_headline({
+        "estimate_summary": {"workbook_equivalent_pricing": {
+            "m105_total_unit_cost_gbp": unit}},
+        "final_estimate": {"totals": {"unit_gbp": unit, "unit_cell": cell}},
+    })
+
+
+def test_the_report_headline_publishes_a_traceable_total():
+    import job_report_html as J
+    assert J._unit_text(_hl()) == "£149.87"
+
+
+def test_the_report_refuses_a_total_it_cannot_trace():
+    import job_report_html as J
+    said = J._unit_text(_hl(cell=None))
+    assert "PENDING" in said
+    assert "149.87" not in said
+
+
+def test_every_site_in_the_report_asks_the_same_helper():
+    """Header, summary, verdict and footer. They could disagree before: the email refused a
+    total the report printed four ways."""
+    import job_report_html as J
+    src = open(J.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    # DOCSTRINGS TOO, not just `#` lines. `_unit_text`'s own docstring names the pattern it
+    # replaced, and a stripper that misses triple-quoted blocks matched it — the seventh time
+    # in this suite a text search has found prose ABOUT a thing rather than the thing.
+    body = re.sub(r'"""[\s\S]*?"""', " ", src)
+    body = "\n".join(l for l in body.split("\n") if not l.lstrip().startswith("#"))
+    assert "_money(hl['unit'])" not in body and '_money(hl["unit"])' not in body, \
+        "a headline site is still printing the raw total"
+    assert body.count("_unit_text(hl)") >= 6
+
+
+def test_the_quote_will_not_price_from_an_untraceable_cost():
+    """A quote is the one deliverable a customer keeps — the last place an untraceable figure
+    should be allowed."""
+    import client_quote_html as Q
+    src = open(Q.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "publishable_total" in src
+    at = src.index("unit_price = (unit_cost * MARKUP_FACTOR)")
+    assert "publishable_total" in src[max(0, at - 1400):at]
+
+
+def test_the_regen_reader_records_the_cell_it_read_the_price_from():
+    """It scans for the price by LABEL, so it knows the cell — and a quote regenerated from an
+    amended workbook is still a published figure."""
+    import client_quote_regen as R
+    src = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert '"price_cell"' in src
+    assert '_fe_tot["unit_cell"] = figures["price_cell"]' in src
+
+
+# ── and a traceability gap is visible, not a blank ──────────────────────────────────
+
+def test_a_charge_with_no_recorded_cell_says_so_on_the_page():
+    """James Gray: it "falls through to a dash. It should say `PENDING — WORKBOOK CELL NOT
+    RECORDED`, so the absence is actionable rather than looking like a blank." A dash reads as
+    "nothing to see" on a line where the sheet DID calculate a figure."""
+    import job_report_html as J
+    src = open(J.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert 'pending_traceability' in src
+    assert "PENDING — WORKBOOK CELL NOT RECORDED" in src
+
+
+def test_the_three_pending_states_are_distinguishable():
+    """Pending a price, pending traceability, and nothing at all mean different things and
+    send a reader to different people."""
+    from displayed_charge import displayed_charge
+    assert displayed_charge({"engine_ext_gbp": 4.40})["basis"] == "pending"
+    assert displayed_charge({"charged_ext_gbp": 9.99})["basis"] == "pending_traceability"
+    assert displayed_charge({})["basis"] == "none"
