@@ -1608,6 +1608,29 @@ def main() -> None:
             # and it swamps the saving the variant exists to show.
             _breaks = [q for q in (getattr(args, "quantity_breaks", None) or [])
                        if int(q) >= 1]
+            # THE QUANTITY THE JOB WAS COSTED AT IS ALWAYS A BREAK.
+            #
+            # James Gray, 18 Sep 2026, on 401912-02: "Make Quantity Breaks show both requested
+            # quantities, 1 and 3, rather than only the last 3-off result."
+            #
+            # The run was `--order-qty 1 --quantity-breaks 3`, and the tab came back with a
+            # single column headed 3. Both numbers were asked for -- one as the quantity to
+            # cost, one as the break -- and the tab is the only place they can be read side by
+            # side. Without the order quantity the reader has the 3-off unit cost on this tab
+            # and the 1-off unit cost on the Estimate sheet, in different books, with nothing
+            # saying they are the same estimate at two quantities. On 401912-02 that is GBP
+            # 150.32 against GBP 56.31: the whole story of the job is the difference between
+            # those two, and the tab showed one of them.
+            #
+            # Deduplicated and sorted, so `--order-qty 3 --quantity-breaks 3` is one column and
+            # not two identical ones, and the columns read left to right.
+            _order_break = None
+            try:
+                _order_break = int(getattr(args, "order_qty", None) or 0)
+            except (TypeError, ValueError):
+                _order_break = 0
+            if _breaks and _order_break and _order_break >= 1:
+                _breaks = sorted({int(q) for q in _breaks} | {_order_break})
             if _breaks and xlsx_path:
                 try:
                     from quantity_sweep import sweep as _sweep

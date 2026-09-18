@@ -467,6 +467,29 @@ def _sources_of(record: Dict[str, Any], pack: List[str],
     return out
 
 
+def _material_stated(rec: Dict[str, Any]) -> str:
+    """What the drawing states this part is made of — and nothing about the sheet it sits on.
+
+    A PURCHASED ITEM IS NOT MADE OF THE ASSEMBLY'S MATERIAL. 401912-02's bill of materials
+    lists "25.4mm ADHESIVE MAGNETIC TAPE, L: 450mm", and this column reported its material
+    stated as MILD STEEL -- read off the GA title block, which states what the DIVIDER is made
+    of. The tape is magnetised rubber from Abel Magnets. Nothing was mis-costed by it (the
+    tape is priced as a bought-in and never touched the steel route), but a purchased line
+    that reads as mild steel on a page headed "Drawing quality, sheet by sheet" is the kind of
+    wrong fact an estimator carries into a conversation with a supplier.
+
+    The same test the "What it could not give" column already applies two cells along: a line
+    whose only page role is bought_in has no detail drawing, so the sheet it appears on states
+    the assembly's material and not its own. Where a bought-in DOES have a detail drawing the
+    material on it is genuinely the part's, and it is printed as before.
+    """
+    roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
+    if "bought_in" in roles and "detail" not in roles:
+        return "purchased — the sheet states the assembly's material, not this item's"
+    return ", ".join(str(m) for m in rec.get("materials") or []) or "no"
+
+
+
 def _where(record: Dict[str, Any], pack: List[str],
            pages: Optional[Dict[int, Dict[str, Any]]] = None) -> str:
     """Every file and page this part was seen in, which is what "where did you see that"
@@ -2023,7 +2046,10 @@ def build(workbook: Path, scan_json: Optional[Path],
                 if not (geom.get("estimated_cut_length_mm") or 0):
                     missing.append("cut length")
             add(f"| {_where(rec, pack, page_index)} | {code or _fmt(rec.get('description'))} "
-                f"| {', '.join(str(m) for m in rec.get('materials') or []) or '**no**'} "
+                # Same rule as the HTML table's cell -- see _material_stated. Two copies of
+                # one table disagreeing about what a part is made of is worse than either
+                # answer alone.
+                f"| {_material_stated(rec) if _material_stated(rec) != 'no' else '**no**'} "
                 f"| {', '.join(str(t) for t in rec.get('thicknesses_mm') or []) or '**no**'} "
                 f"| {', '.join(str(f) for f in rec.get('surface_finishes') or []) or '**no**'} "
                 f"| {_fmt(rec.get('geometry_source'))}"
@@ -3018,7 +3044,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _qrows.append([
                 _where(rec, pack, page_index), code or _fmt(rec.get("description")),
                 _drawing_no(rec),
-                ", ".join(str(m) for m in rec.get("materials") or []) or "no",
+                _material_stated(rec),
                 _gauge_stated(rec),
                 ", ".join(str(f) for f in rec.get("surface_finishes") or []) or "no",
                 (f"{_fmt(rec.get('geometry_source'))}"

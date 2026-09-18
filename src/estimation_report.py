@@ -665,8 +665,30 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         _origin = (_line or {}).get("price_origin") or {}
         if _origin.get("label"):
             rate_basis = str(_origin["label"])
+        # ── ONE BASIS ON THE SHEET'S OWN ROUTE ─────────────────────────────────
+        #
+        # James Gray, 18 Sep 2026, on 401912-02: "Remove the competing GBP 3.88 engine-steel
+        # figure from the report. The estimate must present the editable workbook rate --
+        # GBP 900/tonne in Estimate!L5 and GBP 3.07 in the nest row -- as the single charged
+        # steel basis."
+        #
+        # D-118 put both bases on the page so a reader could tell a METHOD disagreement from a
+        # RATE one. That was the right answer while four steel rates were live and nobody knew
+        # which governed. It is the wrong answer now that one does: the ruling settled which
+        # rate is controlling, and a second figure beside the controlling one is no longer
+        # evidence, it is an invitation to re-open a closed question. Three readers of that
+        # book, including me, spent an afternoon on GBP 3.07 vs GBP 3.88 and the answer was
+        # that there was nothing wrong.
+        #
+        # SCOPED TO THE ROUTE THAT HAS A RULING, and no further. Where the sheet's own block
+        # and its own rate cell priced the line there is a single authority and the comparison
+        # is noise. Everywhere else the engine's figure beside the sheet's has caught real
+        # faults and stays exactly as it was -- this removes a cross-check only where an
+        # estimator's decision has already replaced it.
+        _mat_est = _pe.get("material_estimate") or {}
+        _sheet_ruled = str(_mat_est.get("cost_method") or "") == "workbook_sheet_steel_formula"
         if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
-                and abs(_engine_ext - ext) >= 0.01:
+                and abs(_engine_ext - ext) >= 0.01 and not _sheet_ruled:
             # NAME BOTH BASES, NOT JUST BOTH NUMBERS. Two bare figures side by side read as
             # a contradiction; with their bases beside them the reader can see in seconds
             # whether the engine and the sheet disagree about the METHOD (which is a defect)
@@ -724,6 +746,10 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
             "extended_cost":     ext,
             # The engine's own net-part figure and whether the money above is the sheet's.
             "engine_extended_cost": round(_engine_ext, 4),
+            # Suppressed on the route the estimator has ruled on -- see the note above. The
+            # Provenance column and the report sentence must agree, or removing the figure
+            # from one page simply moves the same argument to the other.
+            "engine_figure_withheld": bool(_sheet_ruled),
             "charged":           bool(_charged and _line is not None
                                       and _line.get("charged_ext_gbp") is not None),
             # What a person has to do about this line, from the record's decisions.
@@ -956,7 +982,8 @@ def add_provenance_sheet(wb, summary: Dict[str, Any],
         cell(row, 9,  f"£{p['extended_cost']:.2f}", bg=bg,   align="right",
              bold=True, border=True)
         _eng = float(p.get("engine_extended_cost") or 0.0)
-        _differs = p.get("charged") and abs(_eng - float(p["extended_cost"] or 0)) >= 0.01
+        _differs = (p.get("charged") and not p.get("engine_figure_withheld")
+                    and abs(_eng - float(p["extended_cost"] or 0)) >= 0.01)
         cell(row, 10, f"£{_eng:.2f}" if _differs else "—", bg=bg, align="right",
              border=True, size=9, fg="666666")
         _rb = p.get("rate_basis") or "—"
