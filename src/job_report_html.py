@@ -182,11 +182,26 @@ def _extract_cost_streams(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     def bucket(part: Dict[str, Any]) -> str:
         pn = str(part.get("part_number") or "").upper()
-        mat = str(part.get("normalized_material") or "").upper()
         me = part.get("material_estimate") or {}
         stock = str(me.get("stock_form") or "").lower()
         if pn.startswith("BI-") or stock == "bought_in":
             return "Bought-in items"
+        # ── AND A BOUGHT-IN IS NOT BUCKETED BY SOMEBODY ELSE'S MATERIAL ─────────
+        #
+        # The two tests above catch a bought-in by its part-number prefix or its stock form,
+        # and a parts-table row that carries neither reaches the material tests below wearing
+        # the DRAWING SHEET's reading — so the magnetic tape counted as an Acrylic part on
+        # 0355255 and a Sheet steel part on 401912-02, in a section that tells an estimator
+        # how many of each the job has.
+        #
+        # `display_material` answers whether the material on a line is the line's own. Where
+        # it is not, the material tests have nothing to work from and the part is what it is:
+        # bought in.
+        from display_material import display_material as _dm
+        _fact = _dm(part)
+        if _fact["inherited"]:
+            return "Bought-in items"
+        mat = str(_fact["text"] if _fact["basis"] == "own" else "").upper()
         if "ACRYLIC" in mat or "ACR" in mat:
             return "Acrylic"
         if pn.startswith("VINYL") or "BOARD" in mat or "DISPLAY" in mat:

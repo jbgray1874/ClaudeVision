@@ -501,9 +501,17 @@ def _material_stated(rec: Dict[str, Any]) -> str:
     whose only page role is bought_in has no detail drawing, so the sheet it appears on states
     the assembly's material and not its own. Where a bought-in DOES have a detail drawing the
     material on it is genuinely the part's, and it is printed as before.
+
+    ── AND THE RULE MOVED, BECAUSE IT WAS NEVER THIS COLUMN'S ─────────────────────
+
+    This knew the answer and was the only surface that did. The same inherited reading
+    reached the quotation's Material line, the report's part table and the SQL export, each
+    of which read `normalized_material` raw. `display_material.material_is_the_parts_own`
+    is this test, asked by all of them.
     """
+    from display_material import material_is_the_parts_own
     roles = [str(r).lower() for r in (rec.get("page_roles") or [])]
-    if "bought_in" in roles and "detail" not in roles:
+    if "bought_in" in roles and not material_is_the_parts_own(rec):
         return "purchased — the sheet states the assembly's material, not this item's"
     return ", ".join(str(m) for m in rec.get("materials") or []) or "no"
 

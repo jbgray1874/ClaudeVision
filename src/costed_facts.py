@@ -1472,26 +1472,22 @@ def _line_kind(part: Mapping[str, Any], node: Optional[Mapping[str, Any]]) -> st
 
 
 def _material_label(part: Mapping[str, Any], kind: str) -> str:
-    """What the Material column should say. A commercial line and a subcontract service are
-    not made of anything; the stub that minted them carries MILD STEEL because every stub
-    does, and printing that put 'MILD STEEL' beside PACKAGING on three tabs."""
-    if kind == "commercial":
-        return "— (commercial line)"
-    if kind == "service":
-        return "— (subcontract service)"
-    # ROLL GOODS ARE NOT THE SHEET MATERIAL THEY INHERITED. The tape carried ACRYLIC —
-    # the job's sheet material, copied onto every BOM line — onto three tabs, beside a
-    # description that says EPDM. The record knows it was priced off a roll; the column
-    # says that, and what the roll IS stays in the description where the drawing put it.
-    _me = part.get("material_estimate") if isinstance(part.get("material_estimate"),
-                                                      dict) else {}
-    if (str(_me.get("stock_form") or "").lower() == "roll"
-            or str(_me.get("cost_method") or "").startswith("roll_goods")):
-        return "Roll goods (priced by length)"
-    mat = str(part.get("normalized_material") or part.get("material") or "").strip()
-    if kind == "bought_in":
-        return mat if mat and mat.upper() != "BOUGHT_IN" else "— (bought-in)"
-    return mat or "Unknown"
+    """What the Material column should say — asked of `display_material`, not decided here.
+
+    This function KNEW three of the exceptions and was the only surface that did. A commercial
+    line and a subcontract service are not made of anything and the stub that minted them
+    carries MILD STEEL because every stub does; roll goods carried the sheet material they
+    inherited, so the tape printed ACRYLIC beside a description saying EPDM. The quote, the
+    report, the explanation and the SQL export each read `normalized_material` raw and knew
+    none of it.
+
+    So the exceptions moved to `display_material` and every surface asks the same question —
+    including the fourth one this file never knew about: a BOUGHT-IN carrying the drawing
+    sheet's title block is carrying the ASSEMBLY's material, which is the defect that reached
+    three tabs on two jobs.
+    """
+    from display_material import material_text
+    return material_text(part, kind)
 
 
 def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],

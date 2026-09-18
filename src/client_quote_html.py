@@ -113,6 +113,7 @@ _OPS_HIDE = {"handling"}
 # ── helpers ─────────────────────────────────────────────────────────────────
 from quote_state import (CUSTOMER, NotReleasable, PORTAL,  # noqa: E402
                          quote_state, release_meta_tag)
+from display_material import describes_the_product  # noqa: E402
 from release_record import apply_to_summary  # noqa: E402
 
 def _esc(s: Any) -> str:
@@ -758,9 +759,21 @@ def _collect_operations(parts: List[Dict[str, Any]],
 
 
 def _materials_line(parts: List[Dict[str, Any]]) -> str:
+    """What the customer is told the product is made of.
+
+    IT COLLECTED `normalized_material` OFF EVERY LINE, including the bought-ins — and a
+    bought-in carries the drawing sheet's material because the sheet's reading was stamped on
+    every row it found. At best that repeats what a fabricated part already said; at worst it
+    puts a second material on a quotation for a product made of one, which is a claim about
+    the goods.
+
+    `describes_the_product` answers None for anything whose material is not its own: a
+    commercial line, a subcontract service, roll goods, and a bought-in wearing the assembly's
+    reading.
+    """
     mats = []
     for p in parts:
-        m = p.get("normalized_material")
+        m = describes_the_product(p)
         if m and m not in mats:
             mats.append(m)
     return ", ".join(_title_material(m) for m in mats) if mats else "As drawing"
