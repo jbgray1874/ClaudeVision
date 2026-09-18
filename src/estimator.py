@@ -2651,7 +2651,9 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
 
 _MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pattern", "dxf",
                           # The BENDLINES layer itself — the narrowest and strongest of them.
-                          "dxf_bendlines_layer"}
+                          "dxf_bendlines_layer",
+                          # fold_count's own names for the same two measured things.
+                          "flat_pattern_bend_lines", "solidworks_bend_features"}
 
 
 def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
@@ -6106,7 +6108,18 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if _model_measured_zero_bends(part):
         bends = 0
     else:
-        bends = manufacturing_features.get("bend_count") or max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])), part.get("fold_count_textual", 0) or 0)
+        # THE ONE RESOLVER, ASKED BY THE THING THAT SPENDS THE MONEY. `fold_count` ranks the
+        # flat pattern's measured bend axes above the drawing's fold callouts, both above the
+        # SolidWorks feature count, and all three above our own dashed-line inference. Asked
+        # here rather than re-derived, so the charged fold and the fold the sheet NAMES cannot
+        # be two different numbers -- which is what 401912-02 shipped: three charged, and a
+        # provenance label from the flat pattern that had said one.
+        from fold_count import press_brake_folds as _press_folds      # noqa: PLC0415
+        _fold_res = _press_folds(part)
+        bends = _fold_res["count"] or (
+            manufacturing_features.get("bend_count")
+            or max(len(part.get("angles_deg", [])), len(part.get("fold_values_mm", [])),
+                   part.get("fold_count_textual", 0) or 0))
     bend_length_mm = sum([_safe_float(value) or 0.0 for value in part.get("fold_values_mm", [])])
     thickness_mm = _safe_thickness_mm(part)
 
@@ -6735,6 +6748,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # `bend_count_source` is already on the record — `_model_measured_zero_bends` reads
         # it to decide whether a zero was measured or merely absent. It has simply never
         # been said out loud.
+        # THE MODEL'S NUMBER, WHERE IT DIFFERS FROM THE CHARGE. Never silently: on 401912-02
+        # the model carried three bend features and the flat pattern one, and the only way a
+        # reader could have known is if somebody opened both files.
+        try:
+            from fold_count import press_brake_folds as _pf_flag      # noqa: PLC0415
+            _fd = _pf_flag(part).get("disagreement")
+            if _fd:
+                part.setdefault("review_flags", []).append(_fd)
+        except Exception:                                             # noqa: BLE001
+            pass
         _bsrc = str((part.get("manufacturing_features") or {}).get(
             "bend_count_source") or "").strip()
         if _bsrc.lower() in _MEASURED_BEND_SOURCES:

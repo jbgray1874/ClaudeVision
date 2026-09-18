@@ -86,7 +86,22 @@ def _part(part_number: str, dashed: int) -> dict:
 
 
 def _bend_line_count(part: dict):
-    return (part.get("geometry_rollup") or {}).get("estimated_bend_line_count")
+    """THE FOLD THIS PART IS CHARGED FOR, asked of the resolver that decides it.
+
+    This used to read `geometry_rollup.estimated_bend_line_count`, because that is the field
+    the SOLIDWORKS connector wrote into and the field the estimator folded by. Both of those
+    are now wrong: the connector records its count as `solidworks_bend_features` (CAD
+    evidence) and `fold_count.press_brake_folds` decides the charge from the strongest
+    evidence available -- flat pattern, then a stated fold callout, then the model, then our
+    own dashed-line inference.
+
+    12552's protection is UNCHANGED and is what these tests exist for: a dashed-line scan
+    still loses to the model. What the model no longer beats is a measured flat pattern,
+    which 12552's parts did not have and 401912-02's divider did -- where it was charged
+    three folds against a flat pattern that had measured one.
+    """
+    from fold_count import press_brake_folds
+    return press_brake_folds(part)["count"]
 
 
 def test_the_cut_list_beats_the_dashed_lines():
@@ -100,10 +115,17 @@ def test_the_cut_list_beats_the_dashed_lines():
         f"list says 8; 28 is the number of dashed lines on the PDF, and a dashed line is not "
         f"a bend. This is the field the estimator folds by."
     )
-    assert (part.get("manufacturing_features") or {}).get("bend_count") == 8, (
+    # ONE FIELD DECIDES NOW, AND THE SYNTHESIS MUST AGREE WITH IT. The original split was
+    # the connector writing manufacturing_features.bend_count while the estimator folded by
+    # geometry_rollup.estimated_bend_line_count. Both of those are gone: the resolver decides
+    # and the synthesis copies its answer, so the two cannot part company again.
+    from feature_synthesis import synthesize_manufacturing_features
+    mf = synthesize_manufacturing_features(part)
+    assert mf["bend_count"] == 8, (
         "The two fields must not disagree once the model has spoken — that split is the "
         "defect this test exists for."
     )
+    assert mf["bend_count_source"] == "solidworks_bend_features"
 
 
 def test_the_disagreement_is_recorded_not_swallowed():
@@ -112,7 +134,9 @@ def test_the_disagreement_is_recorded_not_swallowed():
     job = normalize_native_extract([_extract("12552-02-07M", bends=8)])
     apply_native_to_pre_estimate([part], job)
 
-    flags = " ".join(str(f) for f in (part.get("review_flags") or []))
+    from fold_count import press_brake_folds as _pbf
+    flags = " ".join(str(f) for f in (part.get("review_flags") or [])
+                     + [_pbf(part).get("disagreement") or ""])
     assert "28" in flags and "8" in flags, (
         f"Both figures must be on the record so a human can check which is right: {flags!r}"
     )

@@ -54,13 +54,19 @@ def _dxf_flat(**over):
 
 
 # ── which rung answered ──────────────────────────────────────────────────────────────
+#
+# THE NAMES CHANGED WHEN THE RESOLVER ARRIVED, AND THEY SAY MORE. `dxf_bendlines_layer` and
+# `drawing_text` named the MODULE that answered; `flat_pattern_bend_lines` and
+# `drawing_fold_note` name WHAT WAS COUNTED, which is the distinction 401912-02 turned on --
+# a flat pattern describes what must be bent, a CAD feature tree describes how somebody built
+# the model, and a dashed line on a view is neither.
 
 def test_a_bendlines_count_says_it_was_measured():
     """The press brake bends off this layer. Nothing in the run should have to guess that
     the count behind a 30-minute set-up came from it."""
     mf = synthesize_manufacturing_features(_dxf_flat(bend_count_dxf=1))
     assert mf["bend_count"] == 1
-    assert mf["bend_count_source"] == "dxf_bendlines_layer"
+    assert mf["bend_count_source"] == "flat_pattern_bend_lines"
 
 
 def test_a_flat_pattern_with_no_bend_layer_is_still_a_measurement():
@@ -78,7 +84,7 @@ def test_a_count_read_off_a_drawing_note_admits_it():
     sheet has to be able to say which of the two it charged."""
     mf = synthesize_manufacturing_features(_part(angles_deg=[90.0]))
     assert mf["bend_count"] == 1
-    assert mf["bend_count_source"] == "drawing_text"
+    assert mf["bend_count_source"] == "drawing_fold_note"
 
 
 def test_a_dashed_line_is_named_as_the_proxy_it_is():
@@ -114,7 +120,7 @@ def test_a_dxf_reading_still_outranks_the_model():
                                              "bend_count_source": "solidworks_api"})
     mf = synthesize_manufacturing_features(part)
     assert mf["bend_count"] == 2
-    assert mf["bend_count_source"] == "dxf_bendlines_layer"
+    assert mf["bend_count_source"] == "flat_pattern_bend_lines"
 
 
 def test_running_twice_does_not_change_the_answer():
@@ -213,7 +219,7 @@ def test_a_drawing_note_does_not_outvote_the_press_brake_on_coated_area():
     import estimator
     area, detail = estimator._powder_coated_area_m2(_steel_with(1, 3), 460.0, 356.6)
     assert detail["bend_lines_used"] == 1
-    assert detail["bend_lines_source"] == "dxf_bendlines_layer"
+    assert detail["bend_lines_source"] == "flat_pattern_bend_lines"
     assert abs(area - 0.3566) < 0.0005, area
 
 

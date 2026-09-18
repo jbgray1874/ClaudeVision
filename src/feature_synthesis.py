@@ -148,13 +148,34 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     # zero — is discarded here unless it is carried across. A DXF reading still outranks it
     # (the BENDLINES layer is what the press brake bends, and on 11762-02-02M it was one fold
     # more than the model's count); anything short of a DXF leaves the model's word standing.
-    _prior = part.get("manufacturing_features")
-    _prior_source = str((_prior or {}).get("bend_count_source") or "").strip() if isinstance(_prior, dict) else ""
-    bend_count = infer_bend_count(part, geometry_confidence)
-    bend_count_source = str(part.get("bend_count_source") or "")
-    if _prior_source and not bend_count_source.startswith("dxf"):
-        bend_count_source = _prior_source
+    # ── ONE RESOLVER FOR THE FOLD COUNT ─────────────────────────────────────────
+    #
+    # `fold_count.press_brake_folds` is the single answer to "how many times does this go in
+    # the brake", and every consumer asks it. Before this, the count and its LABEL came from
+    # different places: `infer_bend_count` stamped `dxf_bendlines_layer` off the flat
+    # pattern's one, the SOLIDWORKS connector overwrote the count with three afterwards, and
+    # the review line read "3 fold(s) charged, counted by dxf_bendlines_layer -- measured, not
+    # inferred". A provenance label attached to a figure it did not produce, which is worse
+    # than no label: it tells a reader to stop checking.
+    #
+    # The DXF branch of `infer_bend_count` is still consulted for parts the resolver cannot
+    # answer from -- it knows the mirrored-flange and long-strip readings this does not.
+    from fold_count import press_brake_folds as _folds, NO_EVIDENCE as _NO_FOLD_EVIDENCE
+    _fold = _folds(part)
+    bend_count = _fold["count"]
+    bend_count_source = _fold["source"]
+    if _fold["source"] == _NO_FOLD_EVIDENCE:
+        # Nothing the resolver ranks. The older rungs still have things to say: a mirrored
+        # return flange, a long strip with a repeated angle, a geometry rollup.
+        bend_count = infer_bend_count(part, geometry_confidence)
+        bend_count_source = str(part.get("bend_count_source") or _NO_FOLD_EVIDENCE)
+        _prior = part.get("manufacturing_features")
+        _prior_source = (str((_prior or {}).get("bend_count_source") or "").strip()
+                         if isinstance(_prior, dict) else "")
+        if _prior_source and not bend_count_source.startswith("dxf"):
+            bend_count_source = _prior_source
     part["bend_count_source"] = bend_count_source
+    part["fold_count_disagreement"] = _fold.get("disagreement")
     hole_count = infer_hole_count(part, geometry_confidence)
     slot_count = max(text_slot_count, geometry_slot_count)
     # A FINISH NOBODY STATED IS NOT A FINISH NOBODY NEEDS.
@@ -209,6 +230,10 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
         # Which rung answered it. A press-brake set-up is half an hour and the reader who
         # wants to check the count needs to know whether to open the DXF, the model or a note.
         "bend_count_source": bend_count_source,
+        # The model's own figure, kept whatever happened to it, and the sentence to print
+        # where it differs from what is charged.
+        "solidworks_bend_features": part.get("solidworks_bend_features"),
+        "fold_count_disagreement": part.get("fold_count_disagreement"),
         "radius_count": len(part.get("radii_mm", [])),
         "hole_sizes_mm": part.get("hole_sizes_mm", []),
         "slot_sizes_mm": part.get("slot_sizes_mm", []),

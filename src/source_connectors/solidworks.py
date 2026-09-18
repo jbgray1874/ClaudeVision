@@ -2151,47 +2151,31 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         # ── BENDS ────────────────────────────────────────────────────────────────
         _bends = int(nat.bend_count or 0)
         if _bends > 0:
-            mf = part.setdefault("manufacturing_features", {})
-            if isinstance(mf, dict) and int(mf.get("bend_count") or 0) < _bends:
-                mf["bend_count"] = _bends
-                flags.append(f"{_bends} bend(s) counted in the SolidWorks feature tree")
-                out["bends"] += 1
-            # THE FOLD ROW READS A DIFFERENT FIELD, AND NOTHING WAS PUTTING THE MODEL IN IT.
+            # ── CAD EVIDENCE, KEPT APART FROM THE OPERATION COUNT ────────────────────
             #
-            # manufacturing_features.bend_count is not what costing folds by. estimator reads
-            # geometry_rollup.estimated_bend_line_count — which is written by the PDF vector
-            # scan as dashed_long_axis_lines, a count of dashed lines on a drawing. So the
-            # model's cut-list bend count landed in one field while the fold hours were
-            # billed from the other, and the two never met.
+            # James Gray, 18 Sep 2026, on 401912-02: "SolidWorks is not necessarily 'wrong';
+            # its feature tree may correctly contain three CAD bend-related features. The
+            # defect is ours: we treated that model feature count as though it were the number
+            # of press-brake operations and gave it a higher generic source rank than the
+            # flat-pattern/DXF evidence. That is the wrong comparison."
             #
-            # 12552 IS WHAT THAT COSTS. On every part in that job estimated_bend_line_count
-            # equalled dashed_long_axis_lines exactly, model or no model:
+            # This wrote the cut-list count straight into
+            # geometry_rollup.estimated_bend_line_count at rank 90 -- over the top of a flat
+            # pattern that had MEASURED the bend axes. On that divider the flat said one fold
+            # and the model said three, and the sheet charged three: thirty minutes of brake
+            # set-up and three times the run time, on a part with one bend in it.
             #
-            #     02-06M   LARGE TRAY BODY    26 dashed lines     6 bends in the cut list
-            #     02-07M   SMALL TRAY BODY    28 dashed lines     8 bends in the cut list
-            #     02-04M   LATCH MECHANISM     1 dashed line      5 bends in the cut list
+            # 12552, WHICH THIS OVERRIDE WAS BUILT FOR, IS STILL RIGHT. The failure there was
+            # a DASHED-LINE SCAN reading 26 and 28 lines against cut lists of 6 and 8. That
+            # proxy now sits BELOW the model in `fold_count`, so the model still beats it --
+            # what it no longer beats is a measured flat pattern or a stated fold callout,
+            # neither of which 12552's parts had.
             #
-            # the two largest fabricated lines on the bay, folded roughly twenty times each
-            # for folds that are not there. Where the two agreed — 01-04M at 5, 01-05M at 4 —
-            # that was coincidence, not application, and it is why the run's own "bends+7"
-            # looked like the model had been applied when it had reached seven records.
-            #
-            # Through the resolver at rank 90, exactly as cut length and pierce count already
-            # are a few lines below, so a human figure still outranks it and a disagreement is
-            # recorded rather than silently overwritten. Raise-only would be wrong here: the
-            # failure is the model reading LOWER than the drawing scan, which is the whole
-            # point — a dashed line is not a bend. Under-counting by the feature tree is a
-            # real hazard and is already answered separately by formed_but_no_bend_features,
-            # which fires before a zero is ever believed.
-            from source_precedence import apply_field as _apply_bends
-            _prev_bl = _num((part.get("geometry_rollup") or {}).get("estimated_bend_line_count"))
-            if _apply_bends(part, "geometry_rollup.estimated_bend_line_count",
-                            _bends, SOURCE_NAME):
-                if _prev_bl and int(_prev_bl) != _bends:
-                    part.setdefault("review_flags", []).append(
-                        f"bend count: {int(_prev_bl)} read from dashed lines on the drawing, "
-                        f"replaced by {_bends} from the SolidWorks cut list. The fold row is "
-                        f"costed on {_bends}.")
+            # The number is not discarded. It is recorded as what it is, and `fold_count`
+            # publishes a disagreement wherever it differs from the charge.
+            part["solidworks_bend_features"] = _bends
+            flags.append(f"{_bends} bend(s) counted in the SolidWorks feature tree")
+            out["bends"] += 1
             if _plausible_thk(nat.bend_radius_mm):
                 part["bend_radius_mm"] = float(nat.bend_radius_mm)
         elif (_plausible_thk(nat.thickness_mm)
