@@ -1061,10 +1061,36 @@ not what a reader takes from a heading like this one.</td></tr>
 <div class="card"><table><tbody>{rows}</tbody></table></div>"""
 
 
+def _sheet_ruled_block_names() -> set:
+    """Every spelling the Sheet Steel block answers to, taken from the module that names it.
+
+    TWICE THIS GATE WAS KEYED ON A VALUE NOBODY CHECKED. First on the engine's `cost_method`,
+    which on 401912-02 is not the sheet formula at all. Then on the block's DISPLAY LABEL,
+    "Sheet Steel" -- and a costed line carries the block KEY, `steel`. Both times the guard
+    was written, tested green and shipped without ever meeting a real record, and both times
+    the £3.88 was still on the page after the rerun.
+
+    So the vocabulary comes from `costed_facts._FABRICATED_BLOCKS`, which defines it, rather
+    than from a literal typed here a third time. Falls back to both known spellings if that
+    private name ever moves, because a gate that silently stops matching is how this fault
+    behaves in the first place.
+    """
+    names = {"steel", "sheet steel"}
+    try:
+        from costed_facts import _FABRICATED_BLOCKS as _FB      # noqa: PLC0415
+        names.add("steel")
+        label = _FB.get("steel")
+        if label:
+            names.add(str(label).strip().lower())
+    except Exception:                                            # noqa: BLE001
+        pass
+    return names
+
+
 # The workbook blocks whose own nest formula and own rate cell charge the line. A second
 # figure beside the charged one on these is not evidence: the estimator has already ruled
 # which rate governs, and the sheet's cell is where they change it.
-_SHEET_RULED_BLOCKS = {"sheet steel"}
+_SHEET_RULED_BLOCKS = _sheet_ruled_block_names()
 
 
 def _sheet_ruled_basis(line: Dict[str, Any]) -> bool:

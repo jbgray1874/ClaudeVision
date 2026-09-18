@@ -690,10 +690,13 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # the engine reached GBP 3.88 its own way and GBP 3.07 is what the SHEET's nest row
         # calculated. `block` is the field costed_facts records for exactly this question.
         _mat_est = _pe.get("material_estimate") or {}
+        # The block KEY is `steel`; "Sheet Steel" is its display label. Both accepted, from
+        # the one helper, because this gate has already been keyed on the wrong value twice.
+        from job_report_html import _SHEET_RULED_BLOCKS as _SRB       # noqa: PLC0415
         _sheet_ruled = (
-            str((_line or {}).get("block") or "").strip().lower() == "sheet steel"
+            str((_line or {}).get("block") or "").strip().lower() in _SRB
             or str(((_line or {}).get("price_origin") or {}).get("block") or "").strip().lower()
-            == "sheet steel"
+            in _SRB
             or str(_mat_est.get("cost_method") or "") == "workbook_sheet_steel_formula")
         if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
                 and abs(_engine_ext - ext) >= 0.01 and not _sheet_ruled:

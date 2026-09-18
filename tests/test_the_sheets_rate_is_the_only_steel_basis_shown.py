@@ -186,3 +186,51 @@ def test_the_gate_reads_who_charged_the_line_not_how_the_engine_costed_it():
     engine_costed_differently = {"block": "Sheet Steel",
                                  "material_estimate": {"cost_method": "mass_times_price_per_kg"}}
     assert J._sheet_ruled_basis(engine_costed_differently) is True
+
+
+# ── the vocabulary, pinned to the module that defines it ────────────────────────────
+#
+# THIS GATE WAS KEYED ON THE WRONG VALUE TWICE. First on the engine's `cost_method`, which on
+# 401912-02 is not the sheet formula at all. Then on the block's DISPLAY LABEL, "Sheet Steel"
+# -- and a costed line carries the block KEY, `steel`. Both times it was written, tested green
+# and shipped without ever meeting a real record, and both times the £3.88 was still on the
+# page after the rerun. A test that invents its own fixture vocabulary cannot catch that; this
+# one reads the definition.
+
+def test_the_block_key_a_costed_line_actually_carries_is_accepted():
+    """`steel` is what `costed_facts` puts on the line. It is the value that matters."""
+    import job_report_html as J
+    assert J._sheet_ruled_basis({"block": "steel"}) is True
+
+
+def test_the_display_label_is_accepted_too():
+    import job_report_html as J
+    assert J._sheet_ruled_basis({"block": "Sheet Steel"}) is True
+
+
+def test_the_vocabulary_comes_from_the_module_that_defines_it():
+    """Not a third literal typed by hand. If `_FABRICATED_BLOCKS` is renamed, this fails here
+    rather than silently on a customer's estimate."""
+    import job_report_html as J
+    from costed_facts import _FABRICATED_BLOCKS
+    assert "steel" in _FABRICATED_BLOCKS, "the block key moved"
+    assert str(_FABRICATED_BLOCKS["steel"]).strip().lower() in J._SHEET_RULED_BLOCKS
+
+
+def test_the_other_fabricated_blocks_are_not_swept_in():
+    """Only the steel block has a ruling. Board, tube and wire keep their cross-check."""
+    import job_report_html as J
+    from costed_facts import _FABRICATED_BLOCKS
+    for key, label in _FABRICATED_BLOCKS.items():
+        if key == "steel":
+            continue
+        assert J._sheet_ruled_basis({"block": key}) is False, key
+        assert J._sheet_ruled_basis({"block": label}) is False, label
+
+
+def test_both_surfaces_share_one_vocabulary():
+    """The report and the Provenance tab must not disagree about which block is ruled --
+    that disagreement is the whole reason the figure is withheld at all."""
+    import estimation_report as R
+    text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "_SHEET_RULED_BLOCKS" in text
