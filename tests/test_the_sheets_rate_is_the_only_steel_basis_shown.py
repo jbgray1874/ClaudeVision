@@ -134,14 +134,17 @@ def test_the_engine_figure_is_withheld_on_the_sheets_own_route():
     assert J._sheet_ruled_basis(ruled) is True
 
 
-def test_the_report_renderer_is_the_one_that_was_fixed():
-    """Two pages, two modules, and only one of them had been found."""
+def test_the_report_renderer_asks_the_one_fact():
+    """It no longer decides for itself. It was one of the FIVE renderers that each decided
+    separately, which is why the £3.88 was found once per rerun rather than once."""
     import job_report_html as J
     text = open(J.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    at = text.index("engine {_money(engine)} — not charged")
-    guard = text[max(0, at - 400):at]
-    assert "_sheet_ruled_basis(l)" in guard, \
-        "the HTML report still publishes the competing figure on the ruled route"
+    at = text.index('engine \'\n                          f\'{_money(_shown["diagnostic"])}') \
+        if 'f\'{_money(_shown["diagnostic"])}' in text else text.index('_shown["diagnostic"]')
+    guard = text[max(0, at - 700):at]
+    assert "displayed_charge" in guard, "the money cell is not built from the one fact"
+    assert '_shown["publish_diagnostic"]' in text, \
+        "the renderer is still deciding whether to publish the engine's figure"
 
 
 def test_a_part_record_of_either_shape_is_understood():
@@ -153,10 +156,12 @@ def test_a_part_record_of_either_shape_is_understood():
     assert J._sheet_ruled_basis(None) is False
 
 
-def test_the_provenance_tab_agrees_with_the_report():
+def test_the_provenance_tab_asks_the_same_fact():
+    """Both surfaces ask `displayed_charge`. They cannot disagree about which block is ruled,
+    because neither of them decides it any more."""
     import estimation_report as R
     text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    assert 'cost_method") or "") == "workbook_sheet_steel_formula"' in text
+    assert "from displayed_charge import displayed_charge" in text
     assert "and not _sheet_ruled" in text
 
 
@@ -229,11 +234,15 @@ def test_the_other_fabricated_blocks_are_not_swept_in():
 
 
 def test_both_surfaces_share_one_vocabulary():
-    """The report and the Provenance tab must not disagree about which block is ruled --
-    that disagreement is the whole reason the figure is withheld at all."""
-    import estimation_report as R
-    text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    assert "_SHEET_RULED_BLOCKS" in text
+    """The report and the Provenance tab must not disagree about which block is ruled — that
+    disagreement is the whole reason the figure is withheld at all. They share it now by
+    asking one function rather than by keeping two copies of a set in step."""
+    import displayed_charge as D
+    for renderer in ("estimation_report", "job_report_html"):
+        text = open(__import__(renderer).__file__.replace(".pyc", ".py"),
+                    encoding="utf-8").read()
+        assert "displayed_charge" in text, f"{renderer} does not ask the one fact"
+    assert "steel" in D.RULED_BLOCKS
 
 
 # ── the fourth and last surface: the AI Explanation tab ─────────────────────────────

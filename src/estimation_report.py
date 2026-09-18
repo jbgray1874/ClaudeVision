@@ -690,14 +690,13 @@ def build_provenance(summary: Dict[str, Any]) -> List[Dict]:
         # the engine reached GBP 3.88 its own way and GBP 3.07 is what the SHEET's nest row
         # calculated. `block` is the field costed_facts records for exactly this question.
         _mat_est = _pe.get("material_estimate") or {}
-        # The block KEY is `steel`; "Sheet Steel" is its display label. Both accepted, from
-        # the one helper, because this gate has already been keyed on the wrong value twice.
-        from job_report_html import _SHEET_RULED_BLOCKS as _SRB       # noqa: PLC0415
-        _sheet_ruled = (
-            str((_line or {}).get("block") or "").strip().lower() in _SRB
-            or str(((_line or {}).get("price_origin") or {}).get("block") or "").strip().lower()
-            in _SRB
-            or str(_mat_est.get("cost_method") or "") == "workbook_sheet_steel_formula")
+        # ONE FACT, ASKED HERE TOO. This gate was keyed on the engine's cost_method, then on
+        # the block's display label, and shipped wrong both times. It no longer decides:
+        # `displayed_charge` carries whether the engine's figure may be published beside the
+        # charge, and the report, this tab and section 11 all ask the same function.
+        from displayed_charge import displayed_charge as _dc          # noqa: PLC0415
+        _shown_line = _dc(_line or {})
+        _sheet_ruled = not _shown_line["publish_diagnostic"]
         if _charged and _line is not None and _line.get("charged_ext_gbp") is not None \
                 and abs(_engine_ext - ext) >= 0.01 and not _sheet_ruled:
             # NAME BOTH BASES, NOT JUST BOTH NUMBERS. Two bare figures side by side read as

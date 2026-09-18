@@ -2132,18 +2132,14 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     # The costed record carries what the sheet actually charged, per line. Where it has an
     # answer it is used; the engine's figure remains the fallback for a line the sheet never
     # charged, which is the only case where it is the only number there is.
+    from displayed_charge import displayed_charge as _dc_elsewhere    # noqa: PLC0415
     for _l in ((_record_for(summary) or {}).get("lines") or []):
         if not isinstance(_l, dict):
             continue
         _lp = str(_l.get("part_number") or "").strip().upper()
-        _lc = _l.get("charged_ext_gbp")
-        if _lp and _lc is not None:
-            try:
-                _lcf = float(_lc)
-            except (TypeError, ValueError):
-                continue
-            if _lcf:
-                _costed_elsewhere[_lp] = _lcf
+        _sh = _dc_elsewhere(_l)
+        if _lp and _sh["basis"] == "workbook" and _sh["amount"]:
+            _costed_elsewhere[_lp] = float(_sh["amount"])
 
     blanks, _elsewhere = [], []
     for r in rows:
@@ -2970,28 +2966,21 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         origin = l.get("price_origin") or {}
         charged = l.get("charged_ext_gbp")
         engine = l.get("engine_ext_gbp")
-        if charged is not None:
-            money = _money(charged)
-            # ── ONE BASIS WHERE THE ESTIMATOR HAS RULED ────────────────────────────
-            # James Gray, 18 Sep 2026: "Remove the competing GBP 3.88 engine-steel figure
-            # from the report. The estimate must present the editable workbook rate --
-            # GBP 900/tonne in Estimate!L5 and GBP 3.07 in the nest row -- as the single
-            # charged steel basis."
-            #
-            # THIS IS THE RENDERER THAT ACTUALLY WRITES THE REPORT. The same suppression
-            # went into estimation_report first, which builds the Provenance TAB, and the
-            # HTML report kept printing "engine GBP 3.88 - not charged" on the next run --
-            # because the two pages are built by two modules and only one of them had been
-            # found. The test that was supposed to prove the fix asserted the SHAPE OF THE
-            # SOURCE of the module I had edited, so it passed while the page did not change.
-            #
-            # Scoped to the route with a ruling, exactly as there: everywhere else the
-            # engine's figure beside the sheet's has caught real faults and stays.
-            if (engine is not None and abs(float(engine) - float(charged)) >= 0.01
-                    and float(engine or 0) and not _sheet_ruled_basis(l)):
-                money += f'<br><span class="mini">engine {_money(engine)} — not charged</span>'
-        elif engine:
-            money = f'{_money(engine)}<br><span class="mini">engine figure — not yet the sheet\'s</span>'
+        # ── ONE FACT DECIDES WHAT THIS CELL PRINTS ─────────────────────────────
+        # `displayed_charge` carries the amount, its cell, and whether the engine's own
+        # figure may be shown beside it. This renderer no longer decides: it was one of the
+        # FIVE that each decided separately, and the £3.88 was found once per rerun because
+        # of it.
+        from displayed_charge import displayed_charge as _dc          # noqa: PLC0415
+        _shown = _dc(l)
+        if _shown["basis"] == "workbook":
+            money = _money(_shown["amount"])
+            if _shown["publish_diagnostic"]:
+                money += (f'<br><span class="mini">engine '
+                          f'{_money(_shown["diagnostic"])} — not charged</span>')
+        elif _shown["basis"] == "engine":
+            money = (f'{_money(_shown["amount"])}<br><span class="mini">'
+                     f'{_esc(_shown["label"])}</span>')
         else:
             money = "—"
         qty = l.get("qty_per_unit")
