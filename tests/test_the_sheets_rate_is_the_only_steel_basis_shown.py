@@ -234,3 +234,64 @@ def test_both_surfaces_share_one_vocabulary():
     import estimation_report as R
     text = open(R.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
     assert "_SHEET_RULED_BLOCKS" in text
+
+
+# ── the fourth and last surface: the AI Explanation tab ─────────────────────────────
+#
+# James Gray, 18 Sep 2026: "It must be removed from every output for this
+# workbook-sheet-steel route. The reported £3.07 is the only applicable steel basis."
+# The HTML report and the Provenance tab were gated; the AI Explanation tab carried it
+# TWICE more -- a table column headed "The engine's own figure", and a paragraph beginning
+# "The two columns disagree". Four surfaces, found one at a time across three reruns.
+
+def test_the_steel_block_table_has_no_engine_column():
+    """Every row in that table is on the sheet-steel block by definition, so the column goes
+    rather than being gated row by row."""
+    import estimate_explained as EE
+    src = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "The engine's own figure | Sheet row" not in src
+    assert "**£ the sheet charges** | Sheet row |" in src
+
+
+def test_the_disagreement_paragraph_is_gone():
+    import estimate_explained as EE
+    src = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "The two columns disagree" not in src
+    assert "engine resolved these" not in src
+
+
+def test_the_nest_explanation_survived_the_removal():
+    """The paragraph's useful half — why a part yielding one per sheet carries the whole
+    sheet — is the method, not a discrepancy, and an estimator still needs it."""
+    import estimate_explained as EE
+    src = open(EE.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    assert "the ONLY steel basis" in src
+    assert "ROUNDUP(sheet price / nest per sheet, 2) x qty x scrap" in src
+
+
+# ── and a measurement is not asked to confirm itself ────────────────────────────────
+
+def test_a_measured_fold_is_not_asked_for_confirmation():
+    """James Gray: "it still says 'confirm the fold count if this matters.' That should be
+    softened or removed for this job — the drawing/DXF establishes one fold already." Where
+    the winning rung MEASURED the part, the sentence explains the difference; it does not
+    hand the question back."""
+    from fold_count import press_brake_folds
+    said = press_brake_folds({"bend_count_dxf": 1, "solidworks_bend_features": 3})["disagreement"]
+    assert "no confirmation is needed" in said
+    assert "Confirm the fold count" not in said
+
+
+def test_an_unmeasured_fold_still_asks():
+    """A count resting on a drawing callout against a model that disagrees is a real question,
+    and softening that one would be softening the wrong thing."""
+    from fold_count import press_brake_folds
+    said = press_brake_folds({"fold_count_textual": 1, "solidworks_bend_features": 3})["disagreement"]
+    assert "Confirm the fold count" in said
+
+
+def test_the_model_reading_is_still_named_either_way():
+    from fold_count import press_brake_folds
+    for part in ({"bend_count_dxf": 1, "solidworks_bend_features": 3},
+                 {"fold_count_textual": 1, "solidworks_bend_features": 3}):
+        assert "read 3" in press_brake_folds(part)["disagreement"]

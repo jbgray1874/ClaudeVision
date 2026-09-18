@@ -1797,9 +1797,18 @@ def build(workbook: Path, scan_json: Optional[Path],
             "of a sheet, and pricing it in both places would double it. This is the other "
             "half of those lines.")
         add("")
+        # ── ONE STEEL BASIS ON THIS BLOCK ────────────────────────────────────────
+        #
+        # James Gray, 18 Sep 2026: "It must be removed from every output for this
+        # workbook-sheet-steel route. The reported GBP 3.07 is the only applicable steel
+        # basis." This table's "The engine's own figure" column and the paragraph below it
+        # were the third and fourth places that comparator reached a page, after the HTML
+        # report and the Provenance tab. Every row in THIS table is by definition on the
+        # sheet-steel block -- that is what the block is -- so the whole column goes rather
+        # than being gated row by row.
         add("| Part | Blank L × W | Gauge | Off a sheet | Nest per sheet | Scrap | Qty | "
-            "**£ the sheet charges** | The engine's own figure | Sheet row |")
-        add("|---|---|---|---|---|---|---|---|---|---|")
+            "**£ the sheet charges** | Sheet row |")
+        add("|---|---|---|---|---|---|---|---|---|")
         for code, row in steel.items():
             # COST FROM THE RESOLVED FIGURE, NOT THE FORMULA CELL. The Sheet Steel block's
             # cost column is an Excel formula, and a workbook written by the engine and never
@@ -1821,7 +1830,6 @@ def build(workbook: Path, scan_json: Optional[Path],
                 f"| {_fmt(row.get('scrap'))} "
                 f"| {_fmt(row.get('qty'))} "
                 f"| **{_gbp_or((steel_calc.get(code) or {}).get('total_value_gbp'), 'not read back')}** "
-                f"| {_gbp_or(mat.get('Ext Material'), 'not resolved')} "
                 f"| `Estimate!{row['row']}` |")
         add("")
         add("> **£ the sheet charges** is column M of the part's own nested block row — "
@@ -1829,34 +1837,24 @@ def build(workbook: Path, scan_json: Optional[Path],
             "TOTAL despite the column being headed *Cost Per Part*: "
             "`ROUNDUP(sheet price / nest per sheet, 2) x qty x scrap`. Do not divide it back "
             "out — the sheet computes no per-piece figure. That total is what is inside "
-            "Total Material Cost. **The engine's own figure** is the AI Material Detail tab's "
-            "blank-area calculation of the same part; it is NOT in the unit cost and must "
-            "not be quoted. Nothing here is recalculated.")
-        # THE TWO VIEWS OF THE SAME FIFTEEN PARTS, HELD AGAINST EACH OTHER.
+            "Total Material Cost, and on this block it is the ONLY steel basis: the rate is "
+            "the template's own cell and the estimator changes it there. Nothing here is "
+            "recalculated.")
+        # THE TWO VIEWS OF THE SAME PARTS -- NO LONGER HELD AGAINST EACH OTHER HERE.
         #
-        # On 12552 the engine's per-part figures extended to £49.76 while the sheet's own
-        # steel rows summed to £136.32 — £86.56, sixteen per cent of the material total, on
-        # the same fifteen parts. The document printed the first set and reconciled with the
-        # second, so both numbers were honestly labelled and nothing said they disagreed.
-        # An estimator adding the Extended column would have got a figure the sheet does not
-        # charge, and the covering note quoted "£1.05 a part" off it.
-        if steel_calc:
-            _engine = round(sum(_money((material.get(c) or {}).get("Ext Material")) or 0.0
-                                for c in steel), 2)
-            _sheet_side = round(sum(_money(r.get("total_value_gbp")) or 0.0
-                                    for r in steel_calc.values()), 2)
-            if abs(_engine - _sheet_side) >= 0.01:
-                add("")
-                add(f"> **The two columns disagree, and the sheet's is the one you pay.** "
-                    f"The engine resolved these {len(steel)} part(s) at {_gbp(_engine)}; the "
-                    f"sheet charges {_gbp(_sheet_side)}, a difference of "
-                    f"{_gbp(abs(_engine - _sheet_side))}. The usual cause is the nest: the "
-                    f"sheet divides a whole sheet by the Nest per sheet column beside each "
-                    f"row, and a part that yields one per sheet carries the whole sheet — at "
-                    f"one off that is the template working correctly, not a double charge. "
-                    f"Quote the bold column, and do not change the block to match the other "
-                    f"one without a policy decision: every job costed on this template moves "
-                    f"with it.")
+        # This paragraph existed for 12552, where the engine's per-part figures extended to
+        # £49.76 while the sheet's steel rows summed to £136.32 -- £86.56 on the same fifteen
+        # parts, printed and reconciled in two places with nothing saying they disagreed.
+        # Naming the gap was right then, because nobody had ruled which figure governs.
+        #
+        # THE RULING SETTLED IT. The sheet's own block and its own rate cell are the single
+        # charged steel basis, and a second figure beside the controlling one is no longer
+        # evidence -- it is an invitation to re-open a closed question, which is what it did:
+        # three readers spent an afternoon on £3.07 against £3.88 and the answer was that
+        # nothing was wrong. The nest explanation the paragraph carried is the useful half and
+        # it survives in the note above, stated as the method rather than as a discrepancy.
+        #
+        # This is the fourth and last place that comparator reached a page.
         add("")
 
     # ── every labour line, with the money on it ──────────────────────────────

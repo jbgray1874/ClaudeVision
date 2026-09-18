@@ -160,25 +160,32 @@ def test_a_part_we_cut_gets_both_of_its_halves_and_the_page_on_each(tmp_path):
         "cost — it must not appear in the money column")
 
 
-def test_the_two_views_of_the_steel_are_shown_disagreeing(tmp_path):
-    """The engine's per-part figures and the sheet's own steel rows are different numbers.
+def test_the_sheet_is_the_only_steel_figure_on_the_block(tmp_path):
+    """DELIBERATELY REVERSED, 18 Sep 2026. This used to assert that the engine's per-part
+    figures were printed BESIDE the sheet's and the disagreement named -- written for 12552,
+    where the engine extended to £49.76 against the sheet's £136.32 and nothing said they
+    differed.
 
-    It is the sheet's that reaches Total Material Cost. Printing one and reconciling with
-    the other leaves both honestly labelled and nothing saying they disagree — which is how
-    a covering note came to quote a per-part steel cost the sheet does not charge.
+    James Gray ruled the comparison out for this route: "It must be removed from every output
+    for this workbook-sheet-steel route. The reported £3.07 is the only applicable steel
+    basis." Naming the gap was right while nobody had ruled which figure governs; once one is
+    controlling, a second beside it re-opens a closed question, which is exactly what it did
+    -- three readers spent an afternoon on £3.07 against £3.88 and nothing was wrong.
+
+    What the paragraph was PROTECTING is kept: the sheet's charge is the bold, quotable
+    figure, and the nest explanation survives as the method rather than as a discrepancy.
     """
     text = handover_note.build(_workbook(tmp_path), _run_json(tmp_path))
     row = next(l for l in text.splitlines() if l.startswith("| 12552-01-01M | 650.7"))
     assert "**£6.30**" in row, "the sheet's own charge is the bold, quotable figure"
-    assert "the one you pay" not in text, (
-        "6.30 against 6.30 is agreement — the warning must not fire on a job that ties")
 
     louder = handover_note.build(_workbook(tmp_path),
                                  _run_json(tmp_path, material_values=(17.60, 0.40)))
-    assert "**The two columns disagree, and the sheet's is the one you pay.**" in louder
-    assert "the sheet charges £17.60" in louder
-    assert "a difference of £11.30" in louder
-    assert "Nest per sheet" in louder
+    assert "The two columns disagree" not in louder, (
+        "the engine comparator is back on the sheet-steel block")
+    assert "£11.30" not in louder, "the difference is being published again"
+    assert "Nest per sheet" in louder, (
+        "the nest explanation is the useful half and must survive the removal")
 
 
 def test_the_labour_lines_carry_the_money_the_sheet_charged(tmp_path):

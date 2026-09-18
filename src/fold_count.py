@@ -138,12 +138,26 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     disagreement = None
     if _others:
         _said = "; ".join(f"{_LABEL[n]} read {int(v)}" for n, v in _others)
+        # AND IT DOES NOT ASK FOR A CONFIRMATION IT ALREADY HAS.
+        #
+        # James Gray, 18 Sep 2026: "it still says 'confirm the fold count if this matters.'
+        # That should be softened or removed for this job -- the drawing/DXF establishes one
+        # fold already." He is right, and it generalises: where the winning rung MEASURED the
+        # part, the count is established and the sentence's job is to explain why the other
+        # readings differ, not to hand the question back. Asking anyway is how a page full of
+        # dutiful confirmations stops being read -- the lesson three other flags in this
+        # engine have already paid for. Where the charge rests on something UNMEASURED, the
+        # ask is real and stays.
+        _closing = (
+            "The charge follows the measurement; no confirmation is needed."
+            if source in _MEASURED else
+            "The charge follows the strongest evidence available. Confirm the fold count "
+            "if this matters to the price.")
         disagreement = (
             f"fold count: {count} from {_LABEL[source]} is CHARGED — {_said}. A CAD feature "
             f"tree describes how the model was built, a flat pattern describes what the brake "
             f"has to bend, and a dashed line on a view is neither. They are different "
-            f"quantities and the charge follows the strongest evidence. Confirm the fold "
-            f"count if this matters to the price.")
+            f"quantities. {_closing}")
     return {
         "count": count,
         "source": source,
