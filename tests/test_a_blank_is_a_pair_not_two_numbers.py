@@ -143,31 +143,56 @@ def test_the_three_earlier_fixes_all_work_on_the_real_files():
 
 # ── and the pack's other line: does everything enter the pipeline? ──────────────────
 
-def test_a_printed_line_is_not_assumed_to_be_free():
-    """0355255's SECOND part, and the second thing found by reading the pack.
+def test_no_material_name_short_circuits_a_line_to_free():
+    """0355255's SECOND part, and the second thing reading the pack turned up.
 
-    PAPER and PRINTED_PAPER sat in a set beside BOUGHT_IN and took its rule with them, so a
-    printed line short-circuited to £0.00 `customer_supplied` BEFORE reaching a single pricing
-    rung. The GRAPHIC is 792 x 210, MATERIAL: PAPER, WEIGHT: 3g, "COLOUR: CLIENT ARTWORK —
-    SEE PRINT SPEC".
+    James Gray, 18 September 2026: "we price everything. we dont drop something if it's
+    obviously something that is part of the unit."
 
-    The ARTWORK is the client's. Whether SDI prints it, buys the print, or receives it
-    finished is a commercial fact about the job, and the word PAPER is evidence of none of
-    the three.
+    `estimate_part` returned £0.00 — nil material, nil labour, no operations,
+    `costing_basis: customer_supplied` — for any part whose normalised material was BOUGHT_IN,
+    PAPER or PRINTED_PAPER, BEFORE the waterfall began. Not researched, not looked up, not
+    offered to SDI Live. On this pack that is the GRAPHIC: 792 x 210, MATERIAL: PAPER,
+    WEIGHT: 3g, one of the two things the customer is buying.
 
-    BOUGHT_IN keeps its meaning: that material has been normalised to "the customer supplies
-    this", which is a decision somebody made about the line. A material name is not a
-    decision.
+    BOUGHT_IN IS A SOURCING FACT, NOT A ZERO. It says SDI buys this rather than makes it,
+    which is the start of a price chain and not the end of one. A part can be bought in and
+    still be ours to buy, which is the ordinary case.
     """
-    import re
-    from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "src" / "estimator.py").read_text(
-        encoding="utf-8")
-    at = src.index("BOUGHT_IN MEANS THE CUSTOMER SUPPLIES IT")
-    window = src[at:at + 1800]
-    gate = re.search(r'normalized_material.*?\.upper\(\) in \{([^}]*)\}', window)
-    assert gate, "the customer-supplied gate moved — check what it now keys on"
-    assert "PAPER" not in gate.group(1), \
-        "a printed line is short-circuited to £0 again, before any pricing rung"
-    assert "BOUGHT_IN" in gate.group(1), \
-        "BOUGHT_IN is the stated rule and must keep its meaning"
+    from estimator import estimate_part
+    for material in ("BOUGHT_IN", "PAPER", "PRINTED_PAPER"):
+        out = estimate_part({"part_number": "G01", "quantity": 1,
+                             "description": "A4 GRAPHIC - CLIENT ARTWORK",
+                             "normalized_material": material}, 1)
+        assert out.get("costing_basis") != "customer_supplied", material
+        assert "customer_supplied_zero_cost" not in (out.get("risk_flags") or []), material
+
+
+def test_a_line_nothing_priced_is_an_owned_gap_and_not_a_free_one():
+    """AND THE OTHER HALF OF THE SAME RULE. Removing the short-circuit is only right if what
+    replaces it is a gap somebody owns — £0.00 on its own sums as free and nobody argues with
+    it. Offline, nothing answers, and the record says so in the words an estimator acts on.
+    """
+    from costed_facts import costed_job
+    from estimator import estimate_part
+    part = estimate_part({"part_number": "G01", "quantity": 1,
+                          "description": "A4 GRAPHIC - CLIENT ARTWORK",
+                          "normalized_material": "PAPER"}, 1)
+    job = costed_job({"estimate_summary": {"part_estimates": [part]}})
+    line = next(l for l in job["lines"] if l["part_number"] == "G01")
+    assert line["price_origin"]["firmness"] == "unpriced"
+    assert line["price_origin"]["owner"] == "estimator"
+    assert "G01" in " ".join(job["release"]["reasons"])
+
+
+def test_free_issue_is_still_available_as_a_decision():
+    """IT IS A PERSON'S RULING AND IT STAYS. What changed is that it is no longer read off a
+    material string — the vocabulary that words it even now ends "if SDI is buying it, enter
+    the rate", which is the sentence of somebody who knew the assumption was sometimes wrong.
+    """
+    from estimator_inputs import unpriced_reason_for_row
+    said = unpriced_reason_for_row(
+        {"part_number": "G01", "risk_flags": ["customer_supplied_zero_cost"]}) or {}
+    blob = " ".join(str(v) for v in said.values())
+    assert "FREE-ISSUE" in blob.upper()
+    assert said.get("owner") == "nobody", "a ruled nil is not an open question"

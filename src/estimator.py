@@ -8054,36 +8054,35 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             ";".join(_part_ops(part) or []),
         ]
     ).upper()
-    # ── BOUGHT_IN MEANS THE CUSTOMER SUPPLIES IT. PAPER MEANS IT IS MADE OF PAPER. ──
+    # ── A PART IN THE BUILD GETS A PRICE ────────────────────────────────────────────
     #
-    # James Gray, 18 September 2026: "we need to still price everything and we have our
-    # pipeline precedence model."
+    # James Gray, 18 September 2026:
     #
-    # PAPER and PRINTED_PAPER sat in this set beside BOUGHT_IN and took its rule with them, so
-    # any printed line short-circuited to £0.00 `customer_supplied` BEFORE reaching a single
-    # pricing rung. On 0355255 that is the GRAPHIC — 792 x 210, MATERIAL: PAPER, WEIGHT: 3g,
-    # "COLOUR: CLIENT ARTWORK - SEE PRINT SPEC". The ARTWORK is the client's. Whether SDI
-    # prints it, buys the print, or receives it finished is a commercial fact about the job,
-    # and the word PAPER is not evidence of any of the three.
+    #     "we price everything. we dont drop something if it's obviously something that is
+    #      part of the unit."
     #
-    # BOUGHT_IN KEEPS ITS MEANING, because that one IS the stated rule: the material has been
-    # normalised to "the customer supplies this", which is a decision somebody made about the
-    # line. A material name is not a decision. So a printed line goes down the ordinary
-    # waterfall like every other line, and where nothing prices it the estimator gets one
-    # action rather than a zero that sums as free.
-    if (part.get("normalized_material") or "").upper() in {"BOUGHT_IN"}:
-        return {
-            "part_number": part.get("part_number"),
-            "description": part.get("description"),
-            "quantity": quantity,
-            "unit_total_cost_gbp": 0.0,
-            "extended_total_cost_gbp": 0.0,
-            "costing_basis": "customer_supplied",
-            "material_estimate": {"cost_per_part_gbp": 0.0, "extended_material_cost_gbp": 0.0},
-            "labour_estimate": {"total_labour_cost_gbp": 0.0},
-            "process_estimate": {"operations": []},
-            "risk_flags": ["customer_supplied_zero_cost"],
-        }
+    # THIS RETURNED £0.00 BEFORE THE WATERFALL BEGAN. Any part whose normalised material was
+    # BOUGHT_IN, PAPER or PRINTED_PAPER was handed back as a complete costed part — nil
+    # material, nil labour, no operations, `costing_basis: customer_supplied` — without being
+    # offered to SDI Live, to a supplier catalogue, to a current quote or to researched
+    # evidence. On 0355255 that is the GRAPHIC: 792 x 210, MATERIAL: PAPER, WEIGHT: 3g, one
+    # of the two things the customer is buying, costed at nothing.
+    #
+    # BOUGHT_IN IS A SOURCING FACT, NOT A ZERO. It says SDI buys this rather than makes it,
+    # which is the start of a price chain, not the end of one. The inference that somebody
+    # else pays for it was never in the material name — a part can be bought in and still be
+    # ours to buy, which is the ordinary case.
+    #
+    # FREE ISSUE STILL EXISTS AND IS STILL FREE. It is a DECISION — the estimator rules that
+    # the customer supplies this item — and it already has its own representation, its own
+    # nil_by_design classification and its own sentence, which even now ends "if SDI is buying
+    # it, enter the rate". That sentence was written because this assumption was known to be
+    # wrong sometimes. It is a person's ruling and it is recorded as one; it is not something
+    # to be read off a material string.
+    #
+    # So the line falls through to the bought-in price chain below like every other purchased
+    # item, and where nothing prices it the estimator gets one action instead of a zero that
+    # sums as free.
 
     bought_in_keywords = (
         "BOUGHT IN",
