@@ -303,7 +303,51 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
             "item": f"Powder £{ci.get('powder_rate_per_kg_gbp')}/kg",
             "note": "Powder material rate — confirm with supplier.",
         })
+
+    # ── THE SENTENCES THE ENGINE ACTUALLY WROTE ─────────────────────────────────
+    #
+    # THE REPORT SAID "NO PROVISIONAL OR LOW-CONFIDENCE ITEMS FLAGGED FOR THIS JOB" ON A JOB
+    # WITH FIVE. 401912-02's book of 18 Sep 07:31 carried an OUTSTANDING ESTIMATOR INPUTS list
+    # five long, and section 3 of the report beside it was empty, because this dict is built
+    # from `estimate_review_signals.parts_flagged` -- a structured signal with a fixed
+    # vocabulary -- and NEVER from `part["review_flags"]`, which is where every sentence the
+    # costing rules write actually lands.
+    #
+    # So the mass check's "the line is light by 0.91 kg", the fold's "counted by
+    # dxf_bendlines_layer -- measured, not inferred", the steel rate's refusal note and every
+    # other rule written this month reached the record, reached the workbook, and stopped
+    # short of the one page an estimator reads before sending. The claim on the page was not
+    # merely incomplete, it was the OPPOSITE of true, which is worse than saying nothing.
+    #
+    # Deduplicated across parts, because a flag written by a rule that runs per part would
+    # otherwise print forty times on a forty-part job and be scrolled past.
+    #
+    # The NOT PRICED lines are deliberately left out: they are the Decisions-required section's
+    # subject, that section is the one that gates sending, and the same item in two places on
+    # one page reads as two problems.
+    review["part_notes"] = part_review_notes(parts)
     return review
+
+
+def part_review_notes(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every sentence the costing rules wrote onto a part, deduplicated, with who it was about.
+
+    Split out so it can be exercised directly: a gatherer buried inside a 90-line builder is a
+    gatherer that gets tested through the thing it feeds, which is how this one went unnoticed.
+    """
+    seen: Dict[str, List[str]] = {}
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        for flag in (p.get("review_flags") or []):
+            text = str(flag or "").strip()
+            if not text or "NOT PRICED" in text.upper() or "NOT YET PRICED" in text.upper():
+                continue
+            number = str(p.get("part_number") or "").strip()
+            who = seen.setdefault(text, [])
+            if number and number not in who:
+                who.append(number)
+    return [{"note": t, "parts": who} for t, who in seen.items()]
 
 
 def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -1066,6 +1110,15 @@ def _render_review_items(review: Dict[str, Any]) -> str:
     for pv in review.get("provisional", []):
         rows += (f'<tr><td><b>{_esc(pv["item"])}</b> <span class="tag t-info">Provisional</span></td>'
                  f'<td>{_esc(pv["note"])}</td><td>Confirm the rate.</td></tr>')
+
+    # What the costing rules themselves said about these parts. See the note where
+    # `part_notes` is built: these had never reached this page.
+    for pn in review.get("part_notes", []):
+        _who = pn.get("parts") or []
+        _lbl = ", ".join(_esc(x) for x in _who[:6]) + (f" (+{len(_who)-6} more)" if len(_who) > 6 else "")
+        rows += (f'<tr><td><b>{_lbl or "This job"}</b> <span class="tag t-warn">Check</span></td>'
+                 f'<td>{_esc(pn["note"])}</td>'
+                 f'<td>Read it against the drawing before this goes out.</td></tr>')
 
     if not rows:
         rows = '<tr><td colspan="3" class="mini">No provisional or low-confidence items flagged for this job.</td></tr>'
