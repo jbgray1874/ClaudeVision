@@ -143,6 +143,73 @@ def test_the_estimator_recognises_a_measured_source():
         assert inferred not in estimator._MEASURED_BEND_SOURCES
 
 
+# ── and the powder is spread over the measured count, not the loudest one ───────────
+
+def _steel_with(dxf_bends, textual):
+    part = {"part_number": "PROBE-01M", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 2.0, "overall_length_mm": 460.0,
+            "overall_width_mm": 356.6, "quantity": 1,
+            "fold_count_textual": textual, "angles_deg": [90.0] * textual,
+            "geometry_rollup": {"confidence": {"geometry_reliability": 0.9},
+                                "estimated_bend_line_count": textual}}
+    if dxf_bends is not None:
+        part.update(flat_pattern_detected=True, geometry_source="dxf_flat_pattern",
+                    bend_count_dxf=dxf_bends)
+    part["manufacturing_features"] = synthesize_manufacturing_features(part)
+    return part
+
+
+def test_a_drawing_note_does_not_outvote_the_press_brake_on_coated_area():
+    """THE FOLD LABOUR OBEYED THE DXF AND THE COATING AREA DID NOT. Both coating figures
+    took max(bend_count, rollup, fold_count_textual), so a callout or a dashed-line
+    heuristic could add bend-edge strips the flat pattern says are not there. On
+    401912-02's divider -- one measured bend, three angle callouts -- that is 0.4137 m2
+    against 0.3566 m2, sixteen per cent more area on a part where powder is about sixty
+    per cent of the unit cost."""
+    import estimator
+    area, detail = estimator._powder_coated_area_m2(_steel_with(1, 3), 460.0, 356.6)
+    assert detail["bend_lines_used"] == 1
+    assert detail["bend_lines_source"] == "dxf_bendlines_layer"
+    assert abs(area - 0.3566) < 0.0005, area
+
+
+def test_with_nothing_measured_the_larger_count_still_wins():
+    """The max() is right where nothing has looked: a rollup count and a drawing's callouts
+    are all the evidence there is, and for a consumable the larger is the safer bet. Only a
+    measurement displaces it."""
+    import estimator
+    area, detail = estimator._powder_coated_area_m2(_steel_with(None, 3), 460.0, 356.6)
+    assert detail["bend_lines_used"] == 3
+    assert area > 0.41
+
+
+def test_the_consumable_and_the_area_count_the_same_bends():
+    """Two functions, one question. They took the same max() and would have drifted apart
+    the moment one of them was corrected."""
+    import estimator
+    part = _steel_with(1, 3)
+    assert estimator._bends_for_coating(part)[0] == 1
+    _, detail = estimator._powder_coated_area_m2(part, 460.0, 356.6)
+    assert detail["bend_lines_used"] == estimator._bends_for_coating(part)[0]
+
+
+def test_the_coated_area_says_where_its_bend_count_came_from():
+    """An estimator cannot check a coating area by eye, so it names its inputs."""
+    import estimator
+    _, detail = estimator._powder_coated_area_m2(_steel_with(None, 2), 460.0, 356.6)
+    assert detail["bend_lines_source"]
+
+
+def test_the_fold_labour_was_already_right_and_stays_right():
+    """The control on the claim that sent me here. The route charges the DXF's count, not
+    the drawing's -- it did before this change and it must after."""
+    import estimator
+    process = estimator.estimate_process_times(
+        dict(_steel_with(1, 3), textual_operations=["folding", "laser_cutting"],
+             blank_length_mm=460.0, blank_width_mm=356.6))
+    assert process["run_times_min_per_unit"].get("folding") == 0.3
+
+
 # ── and the layers are ours to report, not the drawing's to be blamed for ───────────
 
 def _reader():

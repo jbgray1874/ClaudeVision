@@ -2684,6 +2684,40 @@ def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
     return str(mf.get("bend_count_source") or "").strip().lower() in _MEASURED_BEND_SOURCES
 
 
+def _bends_for_coating(part: Dict[str, Any]) -> Tuple[int, str]:
+    """How many bend-edge strips the powder is spread over, and on whose authority.
+
+    THE FOLD LABOUR OBEYS THE DXF AND THE COATING AREA DID NOT. The route charges the
+    measured count -- `manufacturing_features.bend_count`, which IS the BENDLINES figure
+    when a flat pattern answered -- but both coating-area calculations took
+
+        max(mf.bend_count, geometry_rollup.estimated_bend_line_count, fold_count_textual)
+
+    so a drawing note or a dashed-line heuristic could outvote the press brake's own layer.
+    Measured on a probe of 401912-02's divider: a DXF that measured ONE bend, against three
+    angle callouts, coats 0.4137 m2 instead of 0.3566 m2 -- 16% more area, on a part where
+    powder is about sixty per cent of the unit cost. It is not a rounding difference and it
+    moves money in the direction nobody checks, because a slightly high coating figure reads
+    as caution rather than as an error.
+
+    The max() is right where nothing measured: a rollup count and a drawing's callouts are
+    the only evidence there is, and the larger is the safer bet for a consumable. It is
+    wrong the moment something has actually looked. So: a measured count controls, and
+    everything else keeps the behaviour it had.
+    """
+    def _nz(val: Any) -> int:
+        n = _safe_int(val)
+        return int(n) if n is not None else 0
+
+    mf = part.get("manufacturing_features") or {}
+    _src = str(mf.get("bend_count_source") or "").strip().lower()
+    if _src in _MEASURED_BEND_SOURCES:
+        return _nz(mf.get("bend_count")), _src
+    return max(_nz(mf.get("bend_count")),
+               _nz((part.get("geometry_rollup") or {}).get("estimated_bend_line_count")),
+               _nz(part.get("fold_count_textual"))), (_src or "unmeasured_proxies")
+
+
 def _dxf_geometry_trusted(part: Dict[str, Any], ng: Dict[str, Any]) -> bool:
     """True when blank/bbox extents came from flat DXF, not PDF page vectors."""
     if part.get("dxf_augmented") or part.get("flat_pattern_detected"):
@@ -3113,15 +3147,7 @@ def _powder_coated_area_m2(
     faces_m, faces_reason = _effective_coated_faces_multiplier(part)
     flat_m2 = (L * W) / 1_000_000.0 * faces_m
     strip_mm = float(policy.get("bend_coating_strip_mm", 40.0))
-    def _nz_int(val: Any) -> int:
-        n = _safe_int(val)
-        return int(n) if n is not None else 0
-
-    bends = max(
-        _nz_int(part.get("manufacturing_features", {}).get("bend_count")),
-        _nz_int((part.get("geometry_rollup") or {}).get("estimated_bend_line_count")),
-        _nz_int(part.get("fold_count_textual")),
-    )
+    bends, bends_from = _bends_for_coating(part)
     fold_vals = part.get("fold_values_mm") or []
     perimeter_fold_mm = sum(_safe_float(x) or 0.0 for x in fold_vals)
     if perimeter_fold_mm > 0:
@@ -3133,6 +3159,9 @@ def _powder_coated_area_m2(
         "flat_coated_m2": round(flat_m2, 4),
         "bend_extra_coated_m2": round(bend_extra_m2, 4),
         "bend_lines_used": bends,
+        # Who supplied the count the strips were spread over. A coating area is one of the
+        # few figures an estimator cannot check by eye, so it says where its inputs came from.
+        "bend_lines_source": bends_from,
         "coated_faces_multiplier": faces_m,
         "coated_faces_reason": faces_reason,
     }
@@ -3440,11 +3469,7 @@ def _powder_consumable_estimate(
     flat_area_m2 = L_m * W_m * faces_m          # workbook: faces_m = 2.0 always
     bend_extra_m2 = 0.0
     strip_mm = float(policy.get("bend_coating_strip_mm", 40.0))
-    bends = max(
-        _safe_int((part.get("manufacturing_features") or {}).get("bend_count")) or 0,
-        _safe_int((part.get("geometry_rollup") or {}).get("estimated_bend_line_count")) or 0,
-        _safe_int(part.get("fold_count_textual")) or 0,
-    )
+    bends, _ = _bends_for_coating(part)
     fold_vals = part.get("fold_values_mm") or []
     perimeter_fold_mm = sum(_safe_float(x) or 0.0 for x in fold_vals)
     if perimeter_fold_mm > 0:
