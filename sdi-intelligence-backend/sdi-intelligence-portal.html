@@ -1716,262 +1716,11 @@
 </div>
 
 <script>
-  // ---- AI Services (data-driven — add ONE object here to add a service) ----
-  const SERVICES=[
-    // --- LIVE / IN-FLIGHT ---
-    {id:'estimating', name:'Estimating', status:'Live \u00b7 parallel run', cls:'c-prog',
-     desc:'Deterministic cost-estimating engine \u2014 SolidWorks PDF/DXF in, costed workbook out.',
-     detail:'Live cost-estimating engine that mirrors the SDI estimating workbook to the cell. All 80 workbook formulas reverse-engineered. A growing RAG store of historical SDI jobs feeds comparables on material, labour and operations. Five-tier price chain with source attribution and confidence on every line \u2014 no priceless rows. Cell-level parity report against the manually completed workbook. Currently in parallel run with Tim, Howard and Tony ahead of a targeted GO-LIVE in July 2026 (contingent on testing, adoption and holiday-period cover).'
-       +'<div style="margin-top:22px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase">Programme timeline</div>'
-       +'<div style="display:grid;grid-template-columns:220px 1fr 100px;gap:14px 18px;align-items:center;padding:18px;background:var(--bg);border:1px solid var(--line);margin-top:8px">'
-       + '<div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line)">Phase</div>'
-       + '<div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line)">May 2026 \u2192 July 2026</div>'
-       + '<div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;padding-bottom:8px;border-bottom:1px solid var(--line);text-align:right">Status</div>'
-       + '<div>Build &amp; calibrate</div>'
-         +'<div style="position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden"><span style="position:absolute;top:0;left:0;width:33%;height:100%;background:var(--good);border-radius:3px"></span></div>'
-         +'<div style="text-align:right"><span class="chip c-done">Done</span></div>'
-       + '<div>Estimator passive validation</div>'
-         +'<div style="position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden"><span style="position:absolute;top:0;left:33%;width:9%;height:100%;background:var(--good);border-radius:3px"></span></div>'
-         +'<div style="text-align:right"><span class="chip c-done">Done</span></div>'
-       + '<div>Active estimator review</div>'
-         +'<div style="position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden"><span style="position:absolute;top:0;left:42%;width:19%;height:100%;background:var(--accent);border-radius:3px"></span></div>'
-         +'<div style="text-align:right"><span class="chip c-prog">Now</span></div>'
-       + '<div>AI-assisted live estimating</div>'
-         +'<div style="position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden"><span style="position:absolute;top:0;left:61%;width:20%;height:100%;background:var(--ink-dim);opacity:.6;border-radius:3px"></span></div>'
-         +'<div style="text-align:right"><span class="chip c-plan">Next</span></div>'
-       + '<div>Stabilisation buffer</div>'
-         +'<div style="position:relative;height:12px;background:var(--panel);border-radius:3px;overflow:hidden"><span style="position:absolute;top:0;left:81%;width:19%;height:100%;background:var(--ink-dim);opacity:.4;border-radius:3px"></span></div>'
-         +'<div style="text-align:right"><span class="chip c-plan">Buffer</span></div>'
-       + '</div>'
-       + '<div style="margin-top:8px;display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase"><span>1 May</span><span>26 May</span><span>15 Jun</span><span style="color:var(--accent);font-weight:600">JULY GO-LIVE</span></div>',
-     inputs:['SolidWorks PDF', 'DXF files', 'job folder path'],
-     outputs:['Costed Excel workbook', 'Parity report HTML', 'Normalised JSON', 'Audit trail'],
-     tech:['Python', 'PyMuPDF', 'pdfplumber', 'Claude Sonnet Vision', 'ezdxf', 'pyodbc \u2192 SQL Server'],
-     phase:'Phase 1 \u00b7 GO-LIVE JULY 2026',
-     invoke:'Invoked from the command line by the estimating team during the parallel run. See <b>AI Tools</b> for the exact commands and arguments. UI-triggered runs are planned post-go-live.'},
-
-    // --- PIPELINE STAGES ---
-    {id:'brief', name:'AI Brief Capture & Concept Design', status:'Planned', cls:'c-plan',
-     desc:'Client brief \u2192 structured JSON \u2192 photorealistic concepts in hours.',
-     detail:'Front of the pipeline. Verbal brief or spec sheet captured by Claude and converted to a structured Brief JSON: footprint, load, materials, brand, budget, quantity, lead time. The same JSON feeds the design generators (Firefly/Midjourney) and the estimating pipeline simultaneously. Photorealistic concepts in under two hours; sketch-to-3D via Vizcom for designers working from a napkin.',
-     inputs:['Client brief (audio / text)', 'spec sheets', 'brand assets', 'budget & lead-time constraints'],
-     outputs:['Brief JSON', 'concept renders (10+)', 'parametric 3D models'],
-     tech:['Claude Sonnet (structured output)', 'Adobe Firefly v3', 'Midjourney API', 'Fusion 360 AI', 'Vizcom', 'Spline'],
-     phase:'Phase 2 \u00b7 Q3 2026',
-     invoke:'POC scoping after go-live. The Brief JSON contract is the first artefact to lock down.'},
-
-    {id:'omniverse', name:'Design Omniverse \u00b7 Immersive', status:'Discovery', cls:'c-plan',
-     desc:'Full-scale digital-twin walkthrough in NVIDIA Omniverse / Unreal Engine 5.',
-     detail:'Immersive client review of designs before any steel is cut. Full-scale walkthrough in NVIDIA Omniverse or Unreal Engine 5, optionally via Vision Pro / Quest 3 headset. Client signs off in the room. The same Omniverse environment later hosts the factory digital twin used in Phase 5 robotic-cell validation (Isaac Sim).',
-     inputs:['Parametric 3D model', 'brand textures', 'retail / store reference environment'],
-     outputs:['Immersive walkthrough scene', 'client sign-off render', 'digital-twin scene (later phase)'],
-     tech:['NVIDIA Omniverse', 'Unreal Engine 5', 'Isaac Sim (later)', 'Vision Pro / Quest 3'],
-     phase:'Phase 2 \u00b7 Q3 2026',
-     invoke:'POC scoping with the internal design team. Hardware shortlist underway.'},
-
-    {id:'dfm', name:'AI Design for Manufacture', status:'Planned', cls:'c-plan',
-     desc:'Every design AI-reviewed before the shop floor \u2014 flags cost, suggests alternatives, auto-BOM.',
-     detail:'AI review of every design before manufacture. Flags costly features with a \u00a3 impact estimate. Suggests redesign alternatives. Auto-generates flat patterns, bend sequences, weld sequences and full BOM. The BOM feeds straight into the estimating engine \u2014 closing the loop between design and estimate.',
-     inputs:['Fusion 360 / SolidWorks model', 'manufacturing capability rules', 'price reference'],
-     outputs:['DFM flag report (\u00a3 impact per feature)', 'flat patterns', 'bend / weld sequence', 'BOM \u2192 estimate'],
-     tech:['Fusion 360 Manufacturing Extension', 'Boothroyd Dewhurst DFMA', 'nTopology', 'custom rules engine'],
-     phase:'Phase 3 \u00b7 Q4 2026',
-     invoke:'Not yet built. Roadmapped after the Phase 2 design AI is in.'},
-
-    {id:'scheduling', name:'AI Production Scheduling', status:'Planned', cls:'c-plan',
-     desc:'Optimal job sequencing across laser, brake, weld and coat \u2014 with dynamic rescheduling.',
-     detail:'Operation routes from the estimating engine feed an AI scheduler. Optimal sequencing across laser, brake, weld and powder coat. Dynamic rescheduling when priorities shift. Material procurement triggered automatically. Accurate lead-time commitment at point of order. Capacity dashboard visible 2\u20134 weeks ahead.',
-     inputs:['Operation routes from estimating', 'live shop-floor capacity', 'stock levels', 'priority overrides'],
-     outputs:['Daily / weekly schedule', 'material trigger orders', 'lead-time commitments', 'capacity dashboard'],
-     tech:['Custom scheduler', 'Seiki Systems', 'Sage X3 integration', 'procurement API'],
-     phase:'Phase 4 \u00b7 Q1 2027',
-     invoke:'Gated on the Sage X3 migration providing the live operational data layer.'},
-
-    {id:'manufacture', name:'AI Manufacture & Robotics', status:'Planned', cls:'c-plan',
-     desc:'AI nesting \u00b7 robotic brake \u00b7 cobot weld \u00b7 AI powder coat \u2014 feedback to the estimating engine.',
-     detail:'AI nesting \u2192 laser auto-program (Lantek / ProNest). Robotic press brake with AI bend sequencing (Trumpf TruBend Cell or Amada HG-ATC). Cobot welding with vision path planning (UR + Vectis or Fanuc CRX). AI-controlled powder coat (Nordson / Gema). Every stage feeds back into the estimating engine\u2019s RAG store for continuous calibration. Each robotic cell is a multi-\u00a3100k investment with 18\u201330 month payback.',
-     inputs:['Operation route', 'flat patterns', 'tacked assembly geometry', 'powder application path'],
-     outputs:['Nested sheets', 'pressed parts', 'welded assemblies', 'coated finished parts', 'feedback to RAG store'],
-     tech:['Lantek Expert / Hypertherm ProNest', 'Trumpf TruBend Cell', 'Amada HG-ATC', 'UR10e + Vectis', 'Fanuc CRX-10iA/L', 'Nordson / Gema'],
-     phase:'Phase 5 \u00b7 Q1\u2013Q3 2027',
-     invoke:'Capex planning underway. First cell projected for Q1 2027.'},
-
-    {id:'inspection', name:'AI Quality Inspection', status:'Planned', cls:'c-plan',
-     desc:'Vision systems at every station \u2014 every part checked, deviations feed back into DFM rules.',
-     detail:'Keyence IV3 at laser and brake stations \u2014 show 10 good parts, system is live. Cognex In-Sight 3800 deep learning at weld and powder coat \u2014 trained on SDI\u2019s own good/bad examples. Every deviation logged against job number; defect patterns auto-update DFM rules and brake parameters. Target: 97%+ first-pass yield.',
-     inputs:['Live camera feeds per station', 'reference drawings', 'job number'],
-     outputs:['Pass / fail per part', 'deviation log \u2192 DFM rule updates', 'first-pass yield metric'],
-     tech:['Keyence IV3', 'Cognex In-Sight 3800', 'deep-learning vision', 'pyodbc \u2192 SQL Server'],
-     phase:'Phase 6 \u00b7 Q2 2027',
-     invoke:'Specced; quote in flight with Keyence for the laser cell.'},
-
-    // --- CO-WORKER AGENTS ---
-    {id:'md-agent', name:'MD Agent \u00b7 Chief of Staff', status:'Concept', cls:'c-plan',
-     desc:'Matt Evans\u2019 AI Chief of Staff \u2014 voice, email, WhatsApp, ERP, sales & finance intelligence.',
-     detail:'A seven-layer agent that lives in the MD\u2019s digital world. Starts highly suggestive; over 6\u201312 months transitions to acting, with Matt approving at decreasing frequency as trust builds. Year 2+: full autopilot on routine operations, escalating only genuine judgement calls. Layers: (1) Voice \u2014 always-on assistant. (2) Email \u2014 inbox intelligence and morning briefing. (3) WhatsApp \u2014 client / staff messaging. (4) ERP \u2014 live Access \u2192 Sage X3 view. (5) Sales intelligence \u2014 client profiles, reorder alerts. (6) Financial dashboard \u2014 P&L, margin, debtors. (7) Progressive autonomy model.',
-     inputs:['Email (Gmail / Microsoft Graph)', 'WhatsApp Business', 'Access / Sage X3 DB', 'voice (Deepgram Nova-2)', 'calendar', 'CRM'],
-     outputs:['Voice briefings', 'email drafts', 'WhatsApp replies', 'morning brief', 'pipeline alerts', 'financial snapshots'],
-     tech:['Claude Sonnet API', 'Deepgram Nova-2 STT', 'ElevenLabs TTS', 'WhatsApp Business API', 'Twilio', 'pyodbc', 'n8n (self-hosted)'],
-     phase:'Phase 3+ \u00b7 progressive rollout',
-     invoke:'Not yet built. Layer 1 (voice + email morning brief) is the proposed pilot post-go-live.'},
-
-    {id:'sales-agent', name:'Sales Intelligence Agent', status:'Planned', cls:'c-plan',
-     desc:'Quote follow-ups, client profiles from order history, reorder alerts, pipeline reporting.',
-     detail:'Co-worker agent for the sales team. Drafts quote follow-up emails in SDI house style. Generates client profile cards from order history (average value, frequency, last contact, open quotes). Pipeline visualisation. Reorder alerts \u2014 "TTI haven\u2019t ordered in 6 weeks, last order was \u00a328k; suggest a call." New-stock suggestions based on current levels, pipeline jobs and lead times. Auto-updates CRM from email and WhatsApp threads.',
-     inputs:['Sales pipeline (CRM)', 'order history (Sage X3)', 'client comms threads', 'stock levels'],
-     outputs:['Quote follow-up drafts', 'client profile cards', 'reorder alerts', 'pipeline report'],
-     tech:['Claude Sonnet API', 'SDILive', 'Access Supply Chain / Sage X3', 'CRM integration'],
-     phase:'Priority 2 \u2014 after the MD Agent pilot',
-     invoke:'Not yet built. Specced in the May 2026 strategy doc.'},
-
-    {id:'design-agent', name:'Design Support Agent', status:'Planned', cls:'c-plan',
-     desc:'Drawing review notes, DFM flag summaries, BOM checking, SolidWorks DXF automation.',
-     detail:'Co-worker agent for the design team. Auto-generates drawing review notes. Summarises DFM flags into plain language for client meetings. Structures client briefs from meeting notes. Checks BOM against the estimate workbook for omissions. Automates the SolidWorks DXF batch export step via Task Scheduler \u2014 replacing manual export.',
-     inputs:['SolidWorks model + drawings', 'meeting notes', 'estimate workbook (for BOM cross-check)'],
-     outputs:['Drawing review notes', 'DFM summary', 'structured brief', 'BOM diff', 'DXF batch export'],
-     tech:['Claude Sonnet API', 'SolidWorks Task Scheduler', 'ezdxf', 'document_builder.py'],
-     phase:'Priority 3',
-     invoke:'DXF batch export automation is the most-requested first feature.'},
-
-    {id:'production-agent', name:'Production Control Agent', status:'Planned', cls:'c-plan',
-     desc:'WO status drafts, capacity alerts, supplier chasing, material shortfall flags.',
-     detail:'Co-worker agent for production control. Drafts work-order status updates to clients. Flags capacity bottlenecks. Chases supplier delivery dates. Cross-references stock against the scheduled jobs and flags material-shortfall risk before it bites. Drafts delivery confirmations and shipping documentation.',
-     inputs:['WO schedule', 'stock levels', 'supplier order book', 'shop-floor status'],
-     outputs:['Client status emails', 'capacity alerts', 'supplier chase drafts', 'shortfall risk reports'],
-     tech:['Claude Sonnet API', 'Access \u2192 Sage X3', 'pyodbc', 'n8n'],
-     phase:'Priority 3',
-     invoke:'Not yet built.'},
-
-    {id:'finance-agent', name:'Finance Intelligence Agent', status:'Planned', cls:'c-plan',
-     desc:'Variance reporting, cost analysis, board-report drafting, aged-debtor chasing.',
-     detail:'Co-worker agent for Charlotte Blackwell\u2019s finance team. Variance reporting: estimated vs actual labour and materials from WO data. Cost analysis by customer and product family. Board-report drafting from the numbers. Aged-debtor chasing email drafts. Invoice processing assistance.',
-     inputs:['Sage X3 financial data', 'WO actuals', 'estimate workbooks', 'AR / AP ledger'],
-     outputs:['Variance report', 'margin analysis', 'board-report draft', 'debtor chase emails'],
-     tech:['Claude Sonnet API', 'Access \u2192 Sage X3', 'pyodbc', 'Chart.js / Plotly'],
-     phase:'Priority 4',
-     invoke:'Not yet built.'},
-
-    // --- CUSTOMER-FACING ---
-    {id:'chatbots', name:'ChatBots \u00b7 Customer & Internal', status:'Planned', cls:'c-plan',
-     desc:'RAG chatbot on wearesdi.com + internal knowledge bot, grounded in SDI technical docs.',
-     detail:'Two flavours. (1) Public-facing on wearesdi.com: a RAG-based bot (e.g. MxChat) trained on SDI technical documentation and case studies \u2014 answers engineering questions like a 24/7 product expert and captures brief requirements straight into the estimating pipeline. (2) Internal: a knowledge bot grounded in process docs, certifications and capabilities, routing complex enquiries to the right human.',
-     inputs:['Web chat messages', 'internal Slack / Teams queries', 'SDI knowledge corpus'],
-     outputs:['Conversational responses', 'captured Brief JSON \u2192 estimating', 'route-to-human escalations'],
-     tech:['Claude Sonnet API', 'MxChat or custom RAG', 'pgvector / Qdrant', 'WordPress integration'],
-     phase:'Phase 2 \u2014 alongside the website rebuild',
-     invoke:'Knowledge corpus assembly is the first task. UI invocation will be the on-site chat widget; brief-capture handover is API-to-API.'},
-
-    {id:'voice', name:'AI Voice Agents', status:'Planned', cls:'c-plan',
-     desc:'Voice agents for enquiries, reception and support \u2014 natural conversation.',
-     detail:'Spoken AI for routine inbound enquiries \u2014 order status, lead times, brochure requests \u2014 routed to humans when complexity warrants. Same Deepgram / ElevenLabs stack as the MD Agent\u2019s voice layer. Optional pilot: outbound voice agent for quote follow-ups.',
-     inputs:['Inbound calls', 'caller intent', 'live ERP / CRM lookups'],
-     outputs:['Spoken responses', 'routed call transfers', 'logged conversation summaries'],
-     tech:['Deepgram Nova-2 STT', 'ElevenLabs TTS', 'Claude Sonnet', 'Twilio voice'],
-     phase:'Phase 3+',
-     invoke:'Not yet built. Pilot use-case selection pending.'},
-
-    {id:'voice-crm', name:'Voice-Activated CRM · Sandbox Pilot', status:'Proposed · awaiting approval', cls:'c-plan',
-     desc:'Morning outbound call updates Nick’s NG project records by voice — read back, confirmed, audited.',
-     detail:'The first concrete voice pilot, requested by Nick Garrish (Account Director). Between 08:30 and 09:30 the system calls Nick, reads out his highest-priority or most out-of-date projects, takes the updates by voice, reads each proposed change back for explicit confirmation, and only then writes it to a SharePoint sandbox List. Every change is journalled (old value, new value, time, user, source) and a daily summary is emailed. '
-       +'<b>A custom Azure application is the workflow owner</b> — Microsoft Graph is the data path into Microsoft 365, not the application, and the speech/AI layer never writes records directly. Scope is deliberately narrow: the sandbox List only, records whose AM Owner is exactly <code>NG</code>, and the live project tracker in Teams is untouched until testing is approved.',
-     sections:[
-       {title:'Microsoft Graph', body:'Reads and updates the selected SharePoint sandbox List. Access is granted to the application explicitly (selected-permissions consent) — no live-tracker permission is requested. No additional licence beyond the existing Microsoft 365 access.'},
-       {title:'Azure Communication Services', body:'Places and controls the outbound telephone call — dialling Nick’s mobile, playing prompts, receiving voice input, raising call events. ACS provides the telephone connection only; the conversation and all business logic sit in the application.'},
-       {title:'Speech and AI', body:'Azure AI Speech for listening and speaking, and an Azure-hosted language model for interpretation. This layer interprets and responds — it makes no record writes of its own.'},
-       {title:'Custom Azure application', body:'Python or C#, hosted in Azure. Schedules the call and selects the authorised NG projects, co-ordinates telephony + speech + AI, validates proposed changes, reads them back and obtains explicit confirmation, writes through Graph handling concurrent edits and retries safely, records the audit trail, co-ordinates report refreshes and sends the daily summary.'},
-       {title:'SharePoint List', body:'Structured sandbox records with required unique Project IDs, owner identity, status and next actions — defined fields, per-record forms, status views and version history. Use status <i>views</i> rather than moving or deleting records. Excel is retained as a reporting output, not the system of record.'},
-       {title:'Scheduling', body:'An Azure timer or Power Automate — use one scheduler, not both. Premium licensing is not required for the pilot: the Azure application schedules the calls and performs the updates directly. Assess Premium only if a selected flow genuinely requires it.'},
-       {title:'Audit and monitoring', body:'Pending and completed updates are recorded durably so a retry can never repeat a saved change. Failed writes, audit steps or report refreshes report their actual outcome — never a false “complete”. Raw call recording is not required by default.'},
-       {title:'Approval and boundaries', body:'IT and the SharePoint owner approve the sandbox, restrict human and application access, and enable version history. The application re-checks the NG owner and the record version at every update — a filtered view alone is not security. Nick is authenticated before any confidential project detail is read out.'},
-       {title:'Sage X3 — later, separate approval', body:'A separate service using Sage-supported interfaces, read-only initially (customer code, order status, invoiced value). Field ownership and stable ID mappings to be agreed with the X3 team ahead of the 4 January go-live. Tracker completion or hold status must never automatically close or alter an ERP order; live writeback requires a separately approved scope.'},
-       {title:'Not required for the pilot', body:'Copilot Studio voice capabilities and Office Scripts. Office Scripts are not needed for List updates and should not be assumed to refresh every workbook connection or pivot table — consider them only for specific Excel reporting tasks.'},
-       {title:'Indicative running cost', body:'One user, a 10–15 minute call on roughly 22 working days a month: an initial <b>£50–£150 per month</b> Azure operating allowance covers consumption-based voice, AI and application hosting. IT to confirm the selected services and tariffs before approval.'}
-     ],
-     inputs:['Scheduled morning trigger (08:30–09:30)', 'Nick’s spoken updates via ACS', 'SharePoint sandbox List records (AM Owner = NG)', 'Sage X3 customer / order data (later, read-only)'],
-     outputs:['Confirmed record updates in the sandbox List', 'Update journal (old / new value, confirmation, outcome)', 'Refreshed sandbox reporting (Excel or Power BI)', 'Daily email — saved changes, failed changes, outstanding actions'],
-     tech:['Azure Communication Services (Call Automation)', 'Azure AI Speech', 'Azure-hosted language model', 'Microsoft Graph (selected permissions)', 'Microsoft Entra ID', 'SharePoint List', 'Python or C# on Azure', 'Power Automate or Azure timer'],
-     phase:'Proposed · sandbox pilot — gated on IT approval and SharePoint access',
-     invoke:'Not yet built. Next steps: confirm the sandbox List schema and unique Project IDs, grant the application selected-permissions access to that List only, and agree the Azure spend allowance. The live tracker stays untouched until the pilot is reviewed and formally approved.'},
-
-    // --- INTERNAL TOOLS ---
-    {id:'brighthr', name:'BrightHR Ingestion \u2192 InVentry', status:'Built \u00b7 awaiting API access', cls:'c-prog',
-     desc:'On-demand pull of staff roster from BrightHR into InVentry tablets.',
-     detail:'COO-driven on-demand sync. Pulls the active staff roster from BrightHR (Personal Access Token or client_credentials OAuth), writes the InVentry-format CSV (First Name, Surname, Email Address) to the watched folder where InVentry\u2019s service picks it up. Every pull is snapshotted to disk for audit. Guards: refuses to write if zero records are returned or if the dropout exceeds the configured threshold (default 30%). Live attendance (Blip clock-ins) is a separate, later feature once BrightHR API access exposes it.'
-       +'<div style="margin-top:18px;padding:14px;background:var(--bg);border:1px solid var(--line)">'
-       +'<div style="font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px">COO controls</div>'
-       +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'
-       +'<button class="run" id="hr-blip-btn" onclick="hrBlip()">Who\'s clocked in?</button>'
-       +'<button class="run" style="background:transparent;color:var(--ink);border:1px solid var(--line)" onclick="var n=document.querySelector(\'.nav a[data-view=files]\');if(n)n.click();">View HR output folder \u2192</button>'
-       +'<button class="run" disabled title="Load to InVentry \u2014 in development" style="opacity:.5;cursor:not-allowed;background:transparent;color:var(--ink);border:1px solid var(--line)">Load to InVentry (soon)</button>'
-       +'</div>'
-       +'<div id="hr-blip-result" class="muted" style="margin-top:12px;font-size:12px;font-family:var(--mono);white-space:pre-wrap"></div>'
-       +'<div class="muted" style="margin-top:10px;font-size:12px">Buttons activate as soon as BrightHR credentials and the employee endpoint are populated in <code>.env</code>. They call <code>POST /api/hr/sync</code>, <code>/api/hr/pull</code> and <code>/api/hr/load</code> respectively.</div>'
-       +'</div>',
-     inputs:['BrightHR credentials (PAT or OAuth client_credentials)', 'employee endpoint URL', 'pagination params'],
-     outputs:['Timestamped JSON snapshots (audit)', 'InVentry CSV at the watched folder', 'pull/load report'],
-     tech:['Python + requests', 'FastAPI router', 'BrightHR REST API', 'InVentry watched-folder CSV'],
-     phase:'Built \u2014 gated on BrightHR API credentials',
-     invoke:'Once API access is granted: the COO or any director with permission clicks <b>Run Sync</b> above. Also schedulable from Windows Task Scheduler. Endpoints: <code>POST /api/hr/sync</code> (pull+load), <code>/api/hr/pull</code>, <code>/api/hr/load</code>.'},
-
-    {id:'wearesdi', name:'WeAreSDI \u00b7 Public-Site AI Layer', status:'Beta', cls:'c-prog',
-     desc:'Layered AI-readiness on the existing WordPress site \u2014 not a rewrite.',
-     detail:'WordPress is the right engine for what SDI is doing \u2014 AI search engines love it for clean HTML, schema/JSON-LD support and B2B-intel integrations. Rather than rewrite the site, we layer six AI-native upgrades on top, and use this portal to mock new sections privately before they touch the staging WordPress clone.',
-     sections:[
-       {title:'1 \u00b7 LinkedIn \u2192 site insights feed', body:'Publish once on LinkedIn, syndicate automatically to a News / Insights section on wearesdi.com so AI crawlers see fresh SDI activity immediately. Tools: Elfsight feed widget or Jetpack Social with a filter on the relevant topics.'},
-       {title:'2 \u00b7 AI-native SEO & content', body:'Adopt an AI SEO plugin \u2014 Rank Math with Content AI, or AIOSEO. These optimise for the technical vocabulary engineers and procurement people actually search, so SDI ranks for the high-intent, long-tail prompts AI search engines surface.'},
-       {title:'3 \u00b7 RAG chatbot on site', body:'A retrieval-augmented chatbot (e.g. MxChat) trained on SDI\u2019s own technical docs and case studies. Acts as a 24/7 technical sales assistant or "AI product expert" \u2014 not a generic FAQ bot. Same RAG pattern already running in the estimating engine.'},
-       {title:'4 \u00b7 GA4 + B2B visitor identification', body:'GA4 wired to Sage X3 (when ready). Layer a B2B visitor-ID tool on top to surface which companies read which pages. Dealfront (Leadfeeder + Echobot, EU-built, GDPR-aligned) is the recommended path for the UK \u2014 Clearbit folded into HubSpot\u2019s Breeze Intelligence and is no longer a standalone option. Albacross is an alternative. Track stakeholder journeys (multiple visitors from one prospect company) and conversion attribution back to the originating content.'},
-       {title:'5 \u00b7 Predictive next-best content', body:'AI suggests the most relevant follow-up content to each visitor based on the current page \u2014 e.g. a Vue case study automatically surfaced when someone reads the cinema-display capability page. Lifts engagement and quote-request conversion.'},
-       {title:'6 \u00b7 Multimodal search optimisation', body:'Tag SDI\u2019s video and high-res facility imagery with ImageObject / VideoObject schema so AI tools can "see" the facility and processes, not just read text. Alt text, captions, transcripts \u2014 all built for AI ingestion as well as accessibility.'}
-     ],
-     inputs:['Existing WordPress site', 'LinkedIn posts', 'SDI technical docs corpus', 'media library', 'Sage X3 (later)'],
-     outputs:['Fresh insights feed', 'AI-optimised pages', 'RAG-grounded chat widget', 'company-level visitor identification', 'predictive content layer', 'multimodal schema'],
-     tech:['WordPress', 'Elfsight / Jetpack Social', 'Rank Math Content AI', 'MxChat or custom RAG', 'GA4', 'Dealfront', 'schema.org JSON-LD'],
-     phase:'Layer 1 mock-ups in progress \u2014 staging WordPress clone to follow',
-     invoke:'Mock pages drafted in this portal behind your login. Once approved, applied to the WordPress staging clone before production.',
-     link:'https://wearesdi.com', linkLabel:'Open wearesdi.com \u2197'},
-
-    {id:'x3', name:'Sage X3 Acceleration Program', status:'Planned \u00b7 2027', cls:'c-plan',
-     desc:'AI support for the Sage X3 ERP migration and the versioned price seam.',
-     detail:'Tooling and AI assistance to accelerate the Sage X3 rollout. Includes the versioned price / supplier seam that feeds the estimating engine from Jan 2027 forward (the current price chain bridges this until X3 is live). Migration-period dual-running validation plan.',
-     inputs:['Current ERP (Access Supply Chain)', 'historical pricing', 'supplier master data', 'BOM data'],
-     outputs:['Migration mapping artefacts', 'X3 seed data', 'dual-running validation reports'],
-     tech:['Sage X3', 'pyodbc bridge', 'Claude API for data-cleaning assistance'],
-     phase:'Jan 2027 seam',
-     invoke:'Aligned with the X3 migration timeline. Detailed scoping starts Q4 2026.'},
-
-    {id:'obs', name:'OBS Studio \u00b7 Live Recording', status:'Live \u00b7 James', cls:'c-done',
-     desc:'Professional screen recording and live streaming \u2014 AI demos, presentations, facility content and virtual camera for Teams.',
-     detail:'OBS (Open Broadcaster Software) is the capture and broadcast layer at SDI. Record AI tool demos, estimating engine runs, design presentations and facility walkthroughs for the portal, SEEN content and client materials. Free, open source, runs locally. Download from obsproject.com if not already installed.',
-     sections:[
-       {title:'First-time setup', body:'Settings \u2192 Video: Base Resolution 1920\u00d71080, Output 1920\u00d71080, FPS 30. Settings \u2192 Output \u2192 Recording: Format <b>MP4</b>, set a recordings folder (e.g. <code>C:\\SDIRecordings</code>). Settings \u2192 Audio: Desktop Audio = your speakers; Mic = your microphone. Encoder: <b>NVENC</b> if you have an NVIDIA GPU (faster, no CPU hit), otherwise <b>x264</b>.'},
-       {title:'Scene \u00b7 AI Demo / Estimating Engine', body:'Add Scene \u201cEngine Demo\u201d. Sources \u2192 + \u2192 <b>Display Capture</b> (full screen). Add <b>Audio Input Capture</b> (your microphone). Press <b>Start Recording</b> before running the engine. Stop when done. The MP4 lands in your configured recordings folder. Use this for parity run walkthroughs and portal demonstrations.'},
-       {title:'Scene \u00b7 Presentation (screen + face cam)', body:'Add Scene \u201cPresentation\u201d. Sources: <b>Window Capture</b> (select your slides or browser) + <b>Video Capture Device</b> (webcam) + <b>Audio Input</b>. Drag the webcam source to the bottom-right and resize it. Use for recording portal walkthroughs, AI tool demonstrations or client-facing demos.'},
-       {title:'Scene \u00b7 Facility Walkthrough', body:'Add Scene \u201cFacility\u201d. Sources: <b>Video Capture Device</b> (GoPro via USB, external camera or built-in laptop camera). Set output resolution to match your camera. Exports as MP4 for LinkedIn video, the SEEN newsletter or the wearesdi.com media library.'},
-       {title:'Virtual Camera \u2192 Teams / Zoom / Meet', body:'Tools \u2192 VirtualCam \u2192 <b>Start Virtual Camera</b>. In Teams: Settings \u2192 Devices \u2192 Camera \u2192 select <b>OBS Virtual Camera</b>. Everything in your active OBS scene broadcasts live into the call \u2014 switch scenes mid-call to share different layouts. If Virtual Camera isn\u2019t shown, install the <b>obs-virtualcam</b> plugin (free, GitHub).'},
-       {title:'Streaming live \u00b7 LinkedIn Live / YouTube', body:'Settings \u2192 Stream: select <b>YouTube</b> or <b>Custom RTMP</b> for LinkedIn Live. Paste your stream key from YouTube Studio or LinkedIn Live Events (you need to create the live event in advance on each platform to get the key). Press <b>Start Streaming</b>. OBS handles encoding; the platform handles distribution.'},
-       {title:'Hotkeys worth setting', body:'Settings \u2192 Hotkeys. Recommended: <b>Ctrl+Shift+R</b> Start/Stop Recording, <b>Ctrl+Shift+S</b> Start/Stop Streaming, <b>F1, F2\u2026</b> per scene. Hotkeys fire even when OBS is minimised \u2014 useful when the engine is running full-screen and you need to stop recording without switching windows.'}
-     ],
-     inputs:['Screen / window capture', 'Webcam or external camera (GoPro, USB cam)', 'Microphone', 'Stream key for LinkedIn Live or YouTube'],
-     outputs:['MP4 recordings (local)', 'Live stream to YouTube / LinkedIn', 'Virtual camera feed into Teams / Zoom / Meet'],
-     tech:['OBS Studio \u2014 free \u00b7 obsproject.com', 'OBS VirtualCam plugin', 'x264 / NVENC encoder', 'LinkedIn Live / YouTube Studio'],
-     phase:'Live \u00b7 introduced by James',
-     invoke:'Launch OBS from the desktop. Select the right scene for the task, hit <b>Start Recording</b> or <b>Start Streaming</b>. Recordings land in your configured output folder (Settings \u2192 Output \u2192 Recording Path). Stop recording before closing the engine window.'},
-
-    // --- META ---
-    {id:'tech-radar', name:'AI Tech Radar', status:'Live \u00b7 on demand', cls:'c-done',
-     desc:'Continuous intelligence scan of the global AI marketplace, tuned to SDI\u2019s stack.',
-     detail:'A standing, evidence-based view of where AI is heading across SDI\u2019s entire technology stack. Uses Claude Opus 4.8 with live web search to track the newest large language models, OCR and document-extraction engines, computer-vision systems, geometry and mathematical estimating models, 3D and generative-design tools, and simulation platforms including NVIDIA Omniverse and digital twins. Each finding is assessed against how SDI actually works \u2014 the estimating engine, the co-worker agents and the design studio \u2014 and tagged ADOPT, TRIAL, ASSESS or HOLD so leadership can see at a glance what is proven, what is worth piloting and what to keep watching. Every run flags only what has changed since the last, giving the MD a true "what\u2019s new" view. Runs on demand and can be scheduled weekly via Windows Task Scheduler.',
-     inputs:['Live web search', 'SDI roadmap context', 'previous-run snapshot (for the what\u2019s-new diff)'],
-     outputs:['Dated HTML radar report \u2192 Status Reports', 'ADOPT / TRIAL / ASSESS / HOLD rings per area', 'what\u2019s-new-since-last-run summary'],
-     tech:['Claude Opus 4.8', 'web search tool', 'Python', 'HTML report + JSON snapshot'],
-     phase:'Live \u2014 ten areas, six in the default run',
-     invoke:'Run <code>python tech_radar.py</code> on the engine host (<code>--full</code> for all areas). Reports land in <code>output\\reports</code> and surface in Status Reports.'},
-
-    {id:'roadmap', name:'AI Roadmap', status:'Live', cls:'c-done', view:'roadmap',
-     desc:'The full delivery plan \u2014 Phase 1 live, Phases 2\u20136 mapped through Q3 2027.'}
-  ];
-  (function renderSvc(){
+  // ---- AI Services ----
+  // The catalogue now lives in services.json (single source of truth, shared with the
+  // mobile app portal at /app). Add or edit a service THERE, not here.
+  let SERVICES=[];
+  function renderSvc(){
     const spark='<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><path d="M12 3v3.5M12 17.5V21M3 12h3.5M17.5 12H21M6 6l2.4 2.4M15.6 15.6 18 18M18 6l-2.4 2.4M8.4 15.6 6 18"/></svg>';
     const nav=document.getElementById('aisvc-nav'), grid=document.getElementById('aisvc-grid');
     const ov=document.createElement('a'); ov.className='svc-link'; ov.dataset.svc='overview-all'; ov.innerHTML=spark+'Overview'; nav.appendChild(ov);
@@ -1982,7 +1731,7 @@
         +'<div class="ds">'+s.desc+'</div><button class="run" data-open="'+s.id+'">Open</button>';
       grid.appendChild(c);
     });
-  })();
+  }
 
   // ---- nav ----
   const links=[...document.querySelectorAll('.nav a')];
@@ -1992,6 +1741,8 @@
   function go(id,updateHash){
     if(!id||id==='undefined')return;
     links.forEach(l=>l.classList.toggle('active',l.dataset.view===id));
+    // Service links are rendered after `links` is captured, so clear them explicitly.
+    document.querySelectorAll('#aisvc-nav .svc-link').forEach(a=>a.classList.remove('active'));
     views.forEach(v=>v.classList.toggle('show',v.id===id));
     crumb.textContent=labels[id]||id;
     document.querySelectorAll('#'+id+' .reveal').forEach(el=>{el.style.animation='none';el.offsetHeight;el.style.animation='';});
@@ -2042,8 +1793,21 @@
   document.getElementById('aisvc-grid').addEventListener('click',e=>{
     const b=e.target.closest('[data-open]'); if(!b)return; openService(b.dataset.open);
   });
-  // Route any deep-link hash now that all handlers are defined
-  routeHash(window.location.hash.replace('#',''));
+  // Load the shared catalogue, then render and route any deep-link hash.
+  (async function bootServices(){
+    try{
+      const r=await fetch('services.json',{cache:'no-cache'});
+      if(!r.ok) throw new Error('services.json '+r.status);
+      const d=await r.json();
+      SERVICES=(d.services||[]).filter(s=>s.surface!=='app');
+    }catch(e){
+      const grid=document.getElementById('aisvc-grid');
+      if(grid) grid.innerHTML='<div class="muted">Could not load <code>services.json</code> ('+e.message+').<br>'
+        +'Run <code>python app.py</code> and open this page from <b>http://localhost:8071</b> \u2014 not the file on disk.</div>';
+    }
+    renderSvc();
+    routeHash(window.location.hash.replace('#',''));
+  })();
 
   // ---- go-live countdown ----
   (function(){

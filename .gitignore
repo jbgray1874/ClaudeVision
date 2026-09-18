@@ -27,3 +27,12 @@ output/
 *.xlsx
 
 *.sql
+# ── SDI Intelligence app portal ──
+# The repo ignores *.json and *.png wholesale (output data). These are source,
+# not output, so they are tracked deliberately.
+!sdi-intelligence-backend/services.json
+!sdi-intelligence-backend/appportal/*.png
+
+# Secrets. NOTE: .env is ALREADY TRACKED — this line stops future ones being
+# added, it does NOT untrack the existing file. See appportal/README.md.
+.env

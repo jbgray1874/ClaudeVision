@@ -25,7 +25,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 import config
 
@@ -146,7 +146,10 @@ def db_ping(x_sdi_key: str | None = Header(default=None)):
 
 
 # Serve the portal at "/" so the site and API are same-origin (http://<host>:<port>/)
-_PORTAL = Path(__file__).with_name("sdi-intelligence-portal.html")
+_HERE = Path(__file__).parent
+_PORTAL = _HERE / "sdi-intelligence-portal.html"
+_SERVICES = _HERE / "services.json"
+_APP_DIR = _HERE / "appportal"
 
 
 @app.get("/")
@@ -155,6 +158,69 @@ def home():
         return FileResponse(str(_PORTAL))
     return JSONResponse({"status": "backend up",
                          "note": "place sdi-intelligence-portal.html next to app.py to serve it here"})
+
+
+# ── App catalogue ────────────────────────────────────────────────────────────
+# services.json is the single source of truth for both the intranet portal and
+# the mobile app portal. It is public, non-sensitive description only — no keys,
+# no paths, no data — so it is served without the X-SDI-Key gate, exactly like
+# the portal page itself.
+@app.get("/services.json")
+def services_json():
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    return FileResponse(str(_SERVICES), media_type="application/json")
+
+
+@app.get("/api/services")
+def api_services(surface: str | None = Query(default=None, pattern="^(intranet|app|both)$")):
+    """The catalogue as JSON, optionally filtered to one surface.
+
+    `surface=app` returns only what is safe to show outside the network — it
+    excludes anything marked `intranet` (things that need the shares or SDILive).
+    """
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    import json
+    data = json.loads(_SERVICES.read_text(encoding="utf-8"))
+    items = data.get("services", [])
+    if surface:
+        items = [s for s in items if s.get("surface") in (surface, "both")]
+    return {"version": data.get("version"), "count": len(items), "services": items}
+
+
+# ── Mobile app portal (PWA) ──────────────────────────────────────────────────
+# Served at /app. Static shell only — it reads the catalogue from /api/services.
+# NOTE: this is intranet-only until Entra ID SSO is in front of it. Do NOT
+# expose this route publicly while the service still authenticates with a
+# shared X-SDI-Key.
+@app.get("/app")
+def app_portal_redirect():
+    # The trailing slash matters: without it every relative URL in the page
+    # (manifest, icons, sw.js) resolves against "/" instead of "/app/".
+    return RedirectResponse(url="/app/", status_code=308)
+
+
+@app.get("/app/")
+def app_portal():
+    index = _APP_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="app portal not installed")
+    return FileResponse(str(index))
+
+
+@app.get("/app/{filename}")
+def app_portal_asset(filename: str):
+    # Flat directory, no nesting — reject anything with a path separator.
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Bad asset name")
+    target = _APP_DIR / filename
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type, _ = mimetypes.guess_type(str(target))
+    if filename.endswith(".webmanifest"):
+        media_type = "application/manifest+json"
+    return FileResponse(str(target), media_type=media_type or "application/octet-stream")
 
 
 # ── HR pipeline (BrightHR -> InVentry) ──
