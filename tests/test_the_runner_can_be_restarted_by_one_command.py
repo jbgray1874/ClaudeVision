@@ -232,3 +232,95 @@ def test_the_page_is_still_one_well_formed_document(portal):
     class _P(html.parser.HTMLParser):
         pass
     _P().feed(portal)
+
+
+# ── and the service has a stop, on whichever supervisor the machine uses ─────────────
+#
+# Found while answering "are the stop and restart commands on that page now for the laptop
+# and the server": there was no STOP for a service at all -- only start and restart -- and
+# `restart-service.ps1` knew only about the laptop's scheduled task. SDI-APP01 runs the
+# portal as an NSSM service. On that machine the script would find no task, KILL WHATEVER
+# WAS LISTENING ON 8071, then print "start it yourself: install-service-task.ps1" and exit 1:
+# the intranet stopped, on the production box, with the remedy naming a mechanism that
+# machine does not use.
+
+_SVC = (_ROOT / "tools" / "start" / "restart-service.ps1").read_text(encoding="utf-8")
+
+
+def test_the_service_script_is_still_ascii_only():
+    raw = (_ROOT / "tools" / "start" / "restart-service.ps1").read_bytes()
+    assert all(b < 128 for b in raw)
+
+
+def test_a_service_can_be_stopped_and_left_stopped():
+    assert "[switch] $StopOnly" in _SVC
+    code = _code(_SVC)
+    assert code.index("Stop-Process") < code.index("if ($StopOnly)"), \
+        "-StopOnly must stop the orphan too, not just the supervisor"
+
+
+def test_the_nssm_service_is_found_where_there_is_no_task():
+    code = _code(_SVC)
+    assert "Get-Service" in code
+    assert "SDIIntelligence" in _SVC
+
+
+def test_the_supervisor_is_stopped_before_the_port_is_killed():
+    """NSSM RESTARTS WHAT YOU KILL. Ending the process while the service still supervises it
+    brings the OLD code straight back, the health check passes, and the restart reports
+    success having changed nothing."""
+    code = _code(_SVC)
+    assert code.index("Stop-Service") < code.index("Stop-Process")
+
+
+def test_the_supervisor_is_resolved_once_and_reused():
+    """Asking again after the kill could get a different answer and restart the wrong thing."""
+    code = _code(_SVC)
+    assert code.index("$svc  = Get-Service") < code.index("Stop-Service")
+    assert code.index("$svc  = Get-Service") < code.index("Start-Service")
+
+
+def test_a_service_it_stopped_is_a_service_it_starts():
+    code = _code(_SVC)
+    assert "Start-Service" in code
+
+
+def test_an_unsupervised_service_is_told_the_truth_rather_than_the_laptops_remedy():
+    """A hand-started window has no supervisor to restart. Naming install-service-task.ps1
+    there sends somebody to install a scheduled task they did not want."""
+    # Sliced from the RAW script: the section markers are comments, which _code() blanks.
+    tail = _code(_SVC)[_SVC.index("# -- 3. START IT AGAIN"):]
+    assert "start-service.ps1" in tail
+    assert "install-service-task.ps1" not in tail, \
+        "the laptop's remedy is still being offered to a machine that does not use it"
+
+
+def test_the_page_carries_a_stop_and_a_restart_for_every_box(portal):
+    tools = portal[portal.index('<section class="view" id="tools">'):]
+    tools = tools[:tools.index("<h2>Entry Points</h2>")]
+    flat = tools.replace("&nbsp;", " ")
+    for cmd in ("restart-service.ps1 -Port 8072 -StopOnly",
+                "restart-service.ps1 -Port 8072",
+                "restart-service.ps1 -Port 8071 -StopOnly",
+                "restart-service.ps1 -Port 8071",
+                "restart-runner.ps1 -StopOnly",
+                "restart-runner.ps1 -Pull"):
+        assert cmd in flat, f"the page has no command: {cmd}"
+
+
+def test_the_page_says_the_server_is_nssm_and_the_laptop_is_a_task(portal):
+    tools = portal[portal.index('<section class="view" id="tools">'):]
+    tools = tools[:tools.index("<h2>Entry Points</h2>")]
+    assert "NSSM" in tools
+    assert "SDIIntelligence" in tools
+    assert "SDI Intelligence Service" in tools
+
+
+def test_the_page_says_pushing_does_not_restart(portal):
+    """The step after push-to-server is the one that was missing, and it is the step that
+    makes the copy take effect."""
+    tools = portal[portal.index('<section class="view" id="tools">'):]
+    tools = tools[:tools.index("<h2>Entry Points</h2>")]
+    assert "does not restart" in tools.lower()
+    at = tools.lower().index("does not restart")
+    assert "restart-service.ps1 -Port 8071" in tools[at:at + 900]

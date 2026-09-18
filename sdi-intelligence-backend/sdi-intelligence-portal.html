@@ -960,6 +960,55 @@
       so there is nothing on screen to tell them apart. Each script below refuses to act on the wrong machine rather
       than reporting a success that happened somewhere else.</p>
 
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:28px 0 8px">Stop and restart &mdash; by box</h3>
+      <p class="muted" style="margin-bottom:12px">Run each of these <b>on the machine in the first column</b>, from
+      <code>C:\ClaudeVision</code>. They are not interchangeable: the two boxes are supervised by different things.</p>
+      <table>
+        <thead><tr><th>Where</th><th>Stop</th><th>Restart</th><th>Supervised by</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Laptop</b><br><span class="muted">8072 &mdash; hand-started</span></td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8072&nbsp;-StopOnly</td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8072</td>
+            <td>Scheduled task <code>SDI Intelligence Service</code>, or a window you started</td>
+          </tr>
+          <tr>
+            <td><b>Laptop</b><br><span class="muted">8071 &mdash; installed</span></td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8071&nbsp;-StopOnly</td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8071</td>
+            <td>Scheduled task <code>SDI Intelligence Service</code></td>
+          </tr>
+          <tr>
+            <td><b>SDI-APP01</b><br><span class="muted">10.0.0.5:8071</span></td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8071&nbsp;-StopOnly</td>
+            <td class="path">restart-service.ps1&nbsp;-Port&nbsp;8071</td>
+            <td><b>NSSM service <code>SDIIntelligence</code></b> &mdash; not a scheduled task</td>
+          </tr>
+          <tr>
+            <td><b>Runner</b><br><span class="muted">DESKTOP-GFAAP80</span></td>
+            <td class="path">restart-runner.ps1&nbsp;-StopOnly</td>
+            <td class="path">restart-runner.ps1&nbsp;-Pull</td>
+            <td>Scheduled task <code>SDI Estimating Runner</code>, or a window you started</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="note reveal" style="margin-top:14px">
+        <h4>Two things that are easy to get wrong here</h4>
+        <b>Pushing to the server does not restart it.</b> <code>push-to-server.ps1</code> copies files to
+        SDI-APP01 and stops. The running service goes on serving the code it imported, exactly like the runner does.
+        <b>You must then restart it on SDI-APP01</b> &mdash; the scripts travel with the push, so
+        <code>restart-service.ps1 -Port 8071</code> is there waiting.<br><br>
+        <b>The server is NSSM, the laptop is a scheduled task.</b> That matters because NSSM <i>restarts what you
+        kill</i>. Ending the process on 8071 without stopping the service first brings the <b>old code</b> straight
+        back, the health check passes, and the restart reports success having changed nothing.
+        <code>restart-service.ps1</code> now finds whichever supervisor is on the machine and stops that first.
+        <span style="color:var(--warn)">Before this it knew only about the task</span>, so on the server it killed
+        what was listening, found no task, and exited saying &ldquo;start it yourself:
+        install-service-task.ps1&rdquo; &mdash; the intranet stopped, on the production box, pointing at a mechanism
+        that machine does not use.
+      </div>
+
       <div class="tools" style="margin-top:18px">
 
         <div class="tool reveal">
@@ -1017,6 +1066,9 @@
           <code>.\tools\start\restart-service.ps1 -Port 8072</code>
           <div class="muted" style="margin-top:8px;font-size:12px">
             <b>8072</b> (laptop, the default) &middot; <b>8071</b> pass <code>-Port 8071</code><br>
+            <b><code>-StopOnly</code></b> stops it and leaves it stopped &mdash; the stop command there wasn't one of<br>
+            Finds whichever supervisor this machine uses: the scheduled task on the laptop, the NSSM service
+            <code>SDIIntelligence</code> on SDI-APP01<br>
             Restarting a service does <b>not</b> change how any job is priced.
           </div>
         </div>
@@ -1046,7 +1098,9 @@
             cannot contain it, not a rule applied afterwards. The two machines hold different roots, staging paths
             and service accounts.<br>
             It sends what the server <i>runs</i>: the backend, the start/repair scripts and seven src modules &mdash;
-            not the tests or the probes. <code>-All</code> overrides.
+            not the tests or the probes. <code>-All</code> overrides.<br>
+            <b style="color:var(--warn)">It copies and stops.</b> Then, <b>on SDI-APP01</b>:
+            <code>.\tools\start\restart-service.ps1 -Port 8071</code>
           </div>
         </div>
 

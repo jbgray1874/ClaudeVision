@@ -37,7 +37,20 @@
 param(
     [int]    $Port = 8072,
     [string] $Root = "",
-    [string] $TaskName = "SDI Intelligence Service"
+    [string] $TaskName = "SDI Intelligence Service",
+    # THE SERVER IS SUPERVISED BY SOMETHING ELSE ENTIRELY.
+    #
+    # The laptop runs the service as a scheduled task. SDI-APP01 runs it as an NSSM service
+    # called SDIIntelligence - configure-nssm-service.ps1 exists because of it. This script
+    # knew only about the task, so on the server it would: find no task, KILL WHATEVER IS
+    # LISTENING ON 8071, then print "start it yourself: install-service-task.ps1" and exit 1.
+    # That is the intranet stopped, on the production box, with the remedy pointing at a
+    # mechanism that machine does not use. It is the same wrong-machine fault the -Port guard
+    # above was written for, one step further in.
+    [string] $ServiceName = "SDIIntelligence",
+    # Stop it and leave it stopped. There was no stop command for a service at all -- only
+    # start and restart -- so "take the site down for five minutes" had no answer.
+    [switch] $StopOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -135,17 +148,36 @@ if ($serving.Count -gt 0 -and ($serving -notcontains $Port)) {
     exit 2
 }
 
-# -- 1. STOP THE TASK, IF THERE IS ONE ------------------------------------------------
+# -- 1. STOP WHATEVER SUPERVISES IT HERE ----------------------------------------------
+#
+# Two machines, two supervisors, and this script only knew one of them. Asked before
+# anything is stopped, so the restart at step 3 uses the same answer the stop did.
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$svc  = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+
 if ($task) {
     if ($task.State -eq "Running") {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-        Write-Host "  stopped the scheduled task"
+        Write-Host "  stopped the scheduled task '$TaskName'"
     } else {
-        Write-Host "  the scheduled task was not running"
+        Write-Host "  the scheduled task '$TaskName' was not running"
+    }
+} elseif ($svc) {
+    # NSSM RESTARTS WHAT YOU KILL, which is the whole point of it and is exactly why the
+    # port must not be killed while the supervisor is still running: NSSM would bring the
+    # OLD code straight back, the health check would pass, and the restart would report
+    # success having changed nothing. The service is stopped first and properly.
+    Write-Host "  supervised by the Windows service '$ServiceName' (state: $($svc.Status))"
+    if ($svc.Status -ne "Stopped") {
+        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
+        $svc.WaitForStatus("Stopped", [TimeSpan]::FromSeconds(20))
+        Write-Host "  stopped the service"
     }
 } else {
-    Write-Host "  no scheduled task installed - install-service-task.ps1 sets one up" -ForegroundColor Yellow
+    Write-Host "  NOTHING SUPERVISES THIS SERVICE HERE." -ForegroundColor Yellow
+    Write-Host "  No scheduled task '$TaskName' and no service '$ServiceName'." -ForegroundColor Yellow
+    Write-Host "  It is a hand-started window, so this script can stop it but cannot start" -ForegroundColor Yellow
+    Write-Host "  it again. Restart it with:  .\tools\start\start-service.ps1 -Port $Port" -ForegroundColor Yellow
 }
 
 # -- 2. END WHATEVER IS ACTUALLY LISTENING --------------------------------------------
@@ -170,11 +202,22 @@ if ($held.Count -eq 0) {
 }
 
 # -- 3. START IT AGAIN ------------------------------------------------------------------
+if ($StopOnly) {
+    Write-Host ""
+    Write-Host "  stopped. Nothing restarted (-StopOnly)." -ForegroundColor Green
+    Write-Host "  Start it again with this script without -StopOnly." -ForegroundColor Green
+    exit 0
+}
+
 if ($task) {
     Start-ScheduledTask -TaskName $TaskName
     Write-Host "  started the scheduled task"
+} elseif ($svc) {
+    Start-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    Write-Host "  started the service '$ServiceName'"
 } else {
-    Write-Host "  start it yourself:  .\tools\start\install-service-task.ps1" -ForegroundColor Yellow
+    Write-Host "  Nothing here can start it again - it was a hand-started window." -ForegroundColor Yellow
+    Write-Host "      .\tools\start\start-service.ps1 -Port $Port" -ForegroundColor Yellow
     exit 1
 }
 

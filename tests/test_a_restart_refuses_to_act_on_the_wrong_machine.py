@@ -43,8 +43,16 @@ _S = _PATH.read_text(encoding="utf-8")
 
 
 def _guard() -> str:
+    """The wrong-machine guard: everything between step 0 and step 1.
+
+    ANCHORED ON THE STEP NUMBER, NOT ON ITS TITLE. This sliced to "# -- 1. STOP THE TASK",
+    and the day that step learned to stop an NSSM service as well as a scheduled task its
+    heading became "STOP WHATEVER SUPERVISES IT HERE" -- five tests then failed on a
+    ValueError, about a guard that had not changed at all. A test that breaks when a comment
+    is reworded is testing the comment.
+    """
     at = _S.index("# -- 0. IS THIS THE MACHINE")
-    return _S[at:_S.index("# -- 1. STOP THE TASK", at)]
+    return _S[at:_S.index("# -- 1. ", at)]
 
 
 def _code() -> str:
