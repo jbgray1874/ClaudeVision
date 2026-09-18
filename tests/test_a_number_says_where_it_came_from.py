@@ -20,14 +20,20 @@ Two numbers cannot say that. Two numbers WITH THEIR BASES can, in seconds — an
 bases turn out to be the same, the reader knows immediately that what they are looking at is
 a rate written twice rather than an engine that cannot add up.
 
-THE FOLD. We are not getting it wrong, usually — but the sheet cannot say so. A flat DXF
-exported without a bend-line layer carries the outline and nothing else, so the count falls
-to the SolidWorks model or a drawing note. That fallback is correct and the engine has to
-have it, because plenty of parts have their folds only in a callout. What was missing is the
-sentence naming WHICH, and without it a measured fold and an inferred one look identical on
-the page: a reader who wants to check has nowhere to start and no reason to think they
-should. 401912-02 charged thirty minutes of press-brake set-up on a fold nothing had
-counted, and said "layers not provided" four hundred words away from it.
+THE FOLD. We are not getting it wrong, usually — but the sheet cannot say so. When nothing
+that can SEE the part has counted the bends, the count falls to the SolidWorks model or a
+drawing note. That fallback is correct and the engine has to have it, because plenty of
+parts have their folds only in a callout. What was missing is the sentence naming WHICH, and
+without it a measured fold and an inferred one look identical on the page: a reader who
+wants to check has nowhere to start and no reason to think they should. 401912-02 charged
+thirty minutes of press-brake set-up on a fold nothing had counted, and said "layers not
+provided" four hundred words away from it.
+
+AND THE MESSAGE SAYS ONLY WHAT IS KNOWN. "The export has no BENDLINES" is a claim about a
+file this run may never have parsed. What is true is that THIS RUN DID NOT RECEIVE USABLE
+LAYER DATA, and that has two causes needing opposite fixes: a flat exported without bend
+lines, or a hand-off that did not carry the layers through. A message that picks one sends
+the reader to the wrong department, so it names both.
 
 `bend_count_source` has been on the record all along — `_model_measured_zero_bends` reads it
 to decide whether a zero was measured or merely absent. It had simply never been said out
@@ -69,17 +75,31 @@ def test_a_sheet_nested_figure_says_it_is_a_share_of_a_sheet():
     assert "2.575 kg" in said
 
 
-def test_a_weight_based_figure_says_so_and_they_do_not_read_alike():
-    """The distinction three people got wrong on one line. A reader must be able to tell
-    these apart at a glance or the two figures stay a mystery."""
+def test_the_three_ways_a_steel_line_can_be_costed_do_not_read_alike():
+    """401912-02 carried two of these at once: the engine on mass_times_price_per_kg at a
+    live GBP/kg (2.575 kg -> £3.88) and the sheet on its own sheet formula (£3.07). A
+    reader must be able to tell them apart at a glance or the two figures stay a mystery."""
     nested = estimation_report._material_basis_phrase({
         "cost_method": "workbook_sheet_steel_formula",
         "stock_estimate": {"parts_per_sheet": 15}})
-    weighed = estimation_report._material_basis_phrase({
+    by_mass = estimation_report._material_basis_phrase({
+        "cost_method": "mass_times_price_per_kg", "unit_material_mass_kg": 2.575})
+    stated = estimation_report._material_basis_phrase({
         "cost_method": "stated_weight_per_kg", "unit_material_mass_kg": 1.7})
     assert "share of a sheet" in nested
-    assert "stated weight" in weighed and "per kilogram" in weighed
-    assert nested != weighed
+    assert "blank's mass" in by_mass and "NOT a share of a sheet" in by_mass
+    assert "STATED weight" in stated
+    assert len({nested, by_mass, stated}) == 3
+
+
+def test_a_blank_mass_is_never_called_a_stated_weight():
+    """The one sentence written to stop people naming the wrong number must not name the
+    wrong number. 401912-02's engine figure is the BLANK's 2.575 kg; its title block says
+    1.7 kg, and they are different facts."""
+    said = estimation_report._material_basis_phrase({
+        "cost_method": "mass_times_price_per_kg", "unit_material_mass_kg": 2.575})
+    assert "2.575 kg" in said
+    assert "stated" not in said.lower()
 
 
 def test_the_faced_board_and_researched_bases_are_shares_of_a_sheet_too():
@@ -132,12 +152,15 @@ def test_a_fold_nothing_looked_at_says_that_plainly():
     assert "NOTHING THAT CAN SEE THE PART COUNTED THEM" in said
 
 
-def test_it_explains_why_rather_than_only_that():
-    """"Unproven" invites a rerun with the same file. "Your DXF has no bend-line layer"
-    invites the one change that would fix it permanently."""
+def test_it_says_only_what_is_known_and_names_both_causes():
+    """"The export has no BENDLINES" is a claim about a file this run may never have
+    parsed. An export written without bend lines and a hand-off that dropped them need
+    opposite fixes, and naming one sends the reader to the wrong department."""
     said = _timed(_divider(manufacturing_features={"bend_count": 1}))
-    assert "no bend-line layer" in said
-    assert "export bend lines" in said
+    assert "DID NOT RECEIVE USABLE DXF LAYER DATA" in said
+    assert "exported without bend lines" in said
+    assert "not have reached the route reader" in said
+    assert "Check whether the staged flat carries a BENDLINES layer" in said
 
 
 def test_a_dxf_with_layers_gets_the_shorter_ask():
@@ -145,9 +168,9 @@ def test_a_dxf_with_layers_gets_the_shorter_ask():
     not the thing to change."""
     said = _timed(_divider(
         manufacturing_features={"bend_count": 1},
-        normalized_geometry={"layers": ["0", "BENDLINES"]}))
-    assert "Confirm the count against the drawing" in said
-    assert "export bend lines" not in said
+        normalized_geometry={"layers": ["0", "SLD-0"]}))
+    assert "Layers were read and none of them named bend lines" in said
+    assert "DID NOT RECEIVE USABLE DXF LAYER DATA" not in said
 
 
 def test_a_part_with_no_fold_is_told_nothing_about_folds():

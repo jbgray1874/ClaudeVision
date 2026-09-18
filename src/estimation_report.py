@@ -285,10 +285,18 @@ def _material_basis_phrase(material_estimate: Any) -> str:
         bits = [b for b in (_nest,
                             (f"{float(_kg):.3f} kg blank" if _kg else "")) if b]
         return f"{_by}" + (f", {', '.join(bits)}" if bits else "")
-    if "stated_weight" in method or "per_kg" in method or "mass" in method:
-        return ("the part's stated weight"
+    # A STATED WEIGHT AND A BLANK MASS ARE BOTH "kg" AND THEY ARE NOT THE SAME FACT.
+    # 401912-02 costed `mass_times_price_per_kg` on the BLANK's 2.575 kg at a live £/kg,
+    # while the title block said 1.7 kg — calling that "the stated weight" would name the
+    # wrong number in the one sentence written to stop people naming the wrong number.
+    if "stated_weight" in method:
+        return ("the part's STATED weight"
                 + (f" ({float(_kg):.3f} kg)" if _kg else "")
                 + " x a rate per kilogram")
+    if "per_kg" in method or "mass" in method:
+        return ("the blank's mass"
+                + (f" ({float(_kg):.3f} kg)" if _kg else "")
+                + " x a rate per kilogram — NOT a share of a sheet")
     if "bought_in" in method or "catalogue" in method:
         return "a bought-in unit price"
     if "unpriced" in method or "no_price" in method:

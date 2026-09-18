@@ -6648,17 +6648,25 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         #
         # James Gray, 401912-02: "why are we getting this incorrect ever?"
         #
-        # We are not, usually — but the sheet cannot say so. A flat DXF exported WITHOUT a
-        # bend-line layer carries the outline and nothing else, so the count falls to the
-        # SolidWorks model or a drawing note. That fallback is right and the engine has to
-        # have it: plenty of parts have their folds only in a callout. What is missing is
-        # the sentence saying WHICH, and without it a measured fold and an inferred one look
-        # identical on the page — a reader who wants to check the count has nowhere to start
-        # and no reason to suspect they should.
+        # We are not, usually — but the sheet cannot say so. When nothing that can SEE the
+        # part has counted the bends, the count falls to the SolidWorks model or a drawing
+        # note. That fallback is right and the engine has to have it: plenty of parts have
+        # their folds only in a callout. What is missing is the sentence saying WHICH, and
+        # without it a measured fold and an inferred one look identical on the page — a
+        # reader who wants to check has nowhere to start and no reason to suspect they
+        # should.
         #
-        # 401912-02's own book: "DXF: layers not provided so bend vs cut assignment
-        # unknown", one Fold row charged at 30 minutes of set-up, and nothing connecting the
-        # two. The count was almost certainly right. Nobody could tell.
+        # 401912-02's own book: "layers not provided so bend vs cut assignment unknown",
+        # one Fold row charged at 30 minutes of set-up, and nothing connecting the two.
+        # The count was almost certainly right. Nobody could tell.
+        #
+        # AND THE MESSAGE SAYS ONLY WHAT IS KNOWN. "The export has no BENDLINES" is a
+        # claim about a file this run may never have parsed; what is actually true is that
+        # THIS RUN DID NOT RECEIVE USABLE LAYER DATA, which has two very different causes —
+        # an export written without bend lines, and a hand-off that did not carry the
+        # layers through. They need opposite fixes, and a message that picks one sends the
+        # reader to the wrong department. So it names both and asks for the file to be
+        # checked.
         #
         # `bend_count_source` is already on the record — `_model_measured_zero_bends` reads
         # it to decide whether a zero was measured or merely absent. It has simply never
@@ -6675,12 +6683,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{bends:g} fold(s) charged, and NOTHING THAT CAN SEE THE PART COUNTED "
                 f"THEM" + (f" — the count came from {_bsrc}" if _bsrc else "")
                 + ". "
-                + ("The flat DXF carries no bend-line layer, so the fold is taken from the "
-                   "model or a drawing note. That is the right fallback and it is not a "
-                   "measurement: confirm the count, or ask the drawing office to export "
-                   "bend lines and it becomes one."
+                + ("THIS RUN DID NOT RECEIVE USABLE DXF LAYER DATA, so the fold rests on "
+                   "the drawing note or the model rather than on bend-line evidence. Two "
+                   "things cause that and they need opposite fixes: the flat may have been "
+                   "exported without bend lines, or the layers may not have reached the "
+                   "route reader. Check whether the staged flat carries a BENDLINES layer, "
+                   "and confirm the count meanwhile."
                    if not _layers_seen else
-                   "Confirm the count against the drawing."))
+                   "Layers were read and none of them named bend lines. Confirm the count "
+                   "against the drawing."))
 
     # THE COAT IS CHARGED ON EVIDENCE, NOT ON CLASS. The first cut of this gate shed the
     # op from every bought-in and every area-less parent, and the reviewer's probes
