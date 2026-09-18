@@ -32,9 +32,12 @@ import os
 import re
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import client_quote_html  # noqa: E402
+import displayed_charge  # noqa: E402
 from client_quote_html import build_quote_html  # noqa: E402
 
 _UNIT = 149.87
@@ -80,8 +83,26 @@ def test_the_same_job_prices_normally_when_the_check_works():
 
 # ── and when the check itself raises ────────────────────────────────────────────────
 def _broken_quote(monkeypatch):
-    monkeypatch.setattr(client_quote_html, "publishable_total", _raise)
+    # PATCHED AT THE SOURCE, because the check moved. `client_quote_html` called
+    # `publishable_total` itself when this was written; the page and the release decision
+    # were answering the same question in two places, so it moved into `quote_state`, which
+    # imports it from `displayed_charge` at the point of use. Patching the name the quote
+    # used to hold would now patch nothing and the test would pass against a broken guard.
+    monkeypatch.setattr(displayed_charge, "publishable_total", _raise)
     return build_quote_html(_summary(), job_stem="401912-02")
+
+
+def test_the_broken_check_does_not_release_it_to_a_customer(monkeypatch):
+    """Fail closed on the AUDIENCE. A check that cannot run has not said the price is sound,
+    so there is no customer document — and asking for one says so rather than producing a
+    page that has to explain itself."""
+    from quote_state import CUSTOMER, NotReleasable, quote_state
+    monkeypatch.setattr(displayed_charge, "publishable_total", _raise)
+    state = quote_state(_summary())
+    assert state["customer_releasable"] is False
+    assert state["portal_editable"] is True
+    with pytest.raises(NotReleasable):
+        build_quote_html(_summary(), job_stem="401912-02", audience=CUSTOMER)
 
 
 def test_the_quote_is_still_generated(monkeypatch):
@@ -108,6 +129,10 @@ def test_the_page_says_it_is_pending_traceability(monkeypatch):
     assert "PRICE PENDING" in html
     # Not a blank waiting for a number: the caption where the figure was says what it is.
     assert "awaiting a traceable price" in html
+    # And it says WHOSE page this is, because an incomplete quotation is not a customer
+    # document — it is the portal working copy, and the difference is the point.
+    assert "PORTAL VIEW" in html
+    assert "the unit price is not yet traceable" in html
 
 
 def test_the_engines_own_reason_stays_off_the_customers_page(monkeypatch):
@@ -123,5 +148,8 @@ def test_the_engines_own_reason_stays_off_the_customers_page(monkeypatch):
     assert "traceable" in html.lower(), "the page must still read as pending traceability"
     for leak in ("Estimate!M", "publishable_total", "_Exploded", "exploded", "Traceback"):
         assert leak not in html, f"the quotation carries an engine internal: {leak}"
-    # And it does not describe itself with the internal word for an unfinished document.
+    # It does not describe itself with the internal word for an unfinished document, and
+    # it carries no part numbers or check results — internal is not a licence to print the
+    # engine's reasoning, only to say plainly what is outstanding.
     assert "draft" not in html.lower()
+    assert "consistency check" not in html.lower()

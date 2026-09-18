@@ -68,8 +68,55 @@ def _job(draft=True):
     }
 
 
+def _released_job():
+    """The same job after an estimator has settled it — every line priced, the commercial
+    inputs recorded complete, release authorised. THIS is the customer document, and it is
+    the one the forbidden wording must never reach.
+
+    James's original point stands and is now structural rather than editorial: "after their
+    changes, it will be [a quote for a client]". The page a client sees is the page produced
+    AFTER those changes, so it cannot carry a tally of work nobody owes any more — there is
+    none.
+    """
+    job = _job(draft=False)
+    # PACKAGING is EXCLUDED by the estimator's decision, not left unpriced — so the scope
+    # sentence below is reachable on a released page, which is the point of the test that
+    # asserts it. An unpriced line is a gap and blocks release; an excluded one is an answer.
+    job["estimate_summary"]["part_estimates"][1]["_commercial_excluded"] = True
+    job["estimate_summary"]["workbook_equivalent_pricing"] = {
+        "m105_total_unit_cost_gbp": 149.87}
+    # The workbook was read back and every line carries money — which is what "settled"
+    # means, and what `costed_facts.costed_job` reads to say the record is no longer a draft.
+    job["final_estimate"] = {
+        "totals": {"unit_cell": "Estimate!M105", "unit_cell_value": 149.87,
+                   "unit_gbp": 149.87, "source": "excel_calculated"},
+        "material_rows": [{"description": "7332-01-101 FRAME WELDMENT",
+                           "part_number": "7332-01-101",
+                           "block": "steel", "qty_per_unit": 1,
+                           "total_value_gbp": 62.0, "charged_cell": "Estimate!M63",
+                           "supplier": "SDI Live"},
+                          ],
+        "labour_rows": []}
+    job["invariants"] = {"violations": [], "may_quote_firm": True}
+    job["decisions_required"] = []
+    job["commercial_inputs"] = {"complete": True}
+    job["quote_release"] = {"authorised_by": "Dave Shepherd",
+                            "authorised_at": "2026-09-18T15:40"}
+    return job
+
+
 def _html(draft=True):
-    return q.build_quote_html(_job(draft), job_stem="7332-01")
+    """The CUSTOMER document. What this file polices has always been that page.
+
+    It used to be the only page there was, so rendering the open job WAS rendering the
+    customer's quotation. It is not any more: an unsettled record produces the portal working
+    copy, which is internal and says what is outstanding because the person reading it is the
+    person who closes those items. So the fixture renders the released job, and a companion
+    test below asserts the unsettled one is not a customer document at all — which is a
+    stronger guarantee than the wording ban it replaces, because it does not depend on
+    anybody remembering to keep a phrase off a page.
+    """
+    return q.build_quote_html(_released_job(), job_stem="7332-01")
 
 
 # ── the customer is not shown the workings ───────────────────────────────────────────────
@@ -94,6 +141,46 @@ def test_a_settled_job_and_an_open_one_produce_the_same_page():
     """THE PROOF THAT THE STATUS IS GONE RATHER THAN REWORDED. If any wording still varied
     with the release block, these two would differ."""
     assert _html(draft=True) == _html(draft=False)
+
+
+def test_an_unsettled_job_is_not_a_customer_document_at_all():
+    """AND THE STRONGER FORM OF THE SAME RULE.
+
+    The ban on "DRAFT — not for issue" was a rule about wording, and a rule about wording is
+    kept by everyone remembering it. This one cannot be forgotten: a record with open lines,
+    no commercial inputs and no authorisation cannot produce a customer page, so there is no
+    page for the phrase to appear on.
+    """
+    from quote_state import CUSTOMER, NotReleasable, quote_state
+
+    state = quote_state(_job(draft=True))
+    assert state["customer_releasable"] is False
+    assert state["portal_editable"] is True, "the estimator must always have a page to edit"
+    with pytest.raises(NotReleasable):
+        q.build_quote_html(_job(draft=True), job_stem="7332-01", audience=CUSTOMER)
+
+
+def test_the_portal_copy_does_say_what_is_outstanding():
+    """Its audience is the person who closes the items, so silence there helps nobody.
+
+    This is the half that makes removing the customer banner safe rather than merely quiet.
+    """
+    html = q.build_quote_html(_job(draft=True), job_stem="7332-01")
+    assert "PORTAL VIEW" in html
+    assert "no estimator has authorised release" in html
+
+
+def test_the_portal_copy_still_keeps_the_workings_off_the_page():
+    """INTERNAL IS NOT A LICENCE TO PRINT THE ENGINE'S REASONING.
+
+    The first cut listed `release.reasons` verbatim, so the page acquired "the consistency
+    checks have not run" and the part number of every unpriced line — the exact material the
+    invariant banner and the gap list were removed from this page for, arriving by a new door
+    because the page's audience had changed. The detail belongs to the job report.
+    """
+    html = q.build_quote_html(_job(draft=True), job_stem="7332-01")
+    for leak in ("consistency check", "7332-01-101", "PLATERFREIGHT", "invariant"):
+        assert leak not in html, leak
 
 
 def test_the_offer_window_comes_back():

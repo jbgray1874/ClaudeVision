@@ -201,13 +201,30 @@ def test_no_deliverable_refuses_to_render_over_an_open_line():
     """THE THING THAT KEEPS COMING BACK. A red block on the quote was removed once for
     making the page unreadable; a hard refusal to render replaced it and was removed again.
     The estimator takes responsibility for what goes out. This test is here so the next
-    person — including me — finds out immediately."""
-    import pathlib
-    root = pathlib.Path(__file__).resolve().parent.parent / "src"
-    for name in ("client_quote_html.py", "estimate_explained.py"):
-        src = (root / name).read_text(encoding="utf-8")
-        assert "NOT RELEASABLE" not in src, name
-        assert "NotReleasable" not in src, name
+    person — including me — finds out immediately.
+
+    IT USED TO GREP FOR THE WORD, and a grep polices spelling rather than behaviour: it
+    would pass against a renderer that returned an empty page and fail against one that
+    named its exception well. It now RENDERS a job with an open line and checks a usable
+    document comes back, which is the rule itself.
+
+    What may refuse is the CUSTOMER audience — nobody may issue a quotation over an open
+    line, and that is a different question from whether the estimator gets a page. The
+    default path never refuses, and this is where that is held.
+    """
+    open_job = {
+        "estimate_summary": {"part_estimates": [
+            {"part_number": "7332-01-101", "quantity": 1, "description": "FRAME",
+             "unit_cost_gbp": 0.0}]},
+        "assumed_job_quantity": 4,
+    }
+    from client_quote_html import build_quote_html
+    html = build_quote_html(open_job, job_stem="7332-01")
+    assert html and "<html" in html.lower(), "the estimator lost the page over an open line"
+    assert "Specification" in html, "a stub is not a deliverable"
+
+    from estimate_explained import covering_email
+    assert covering_email is not None
 
 
 # ── and the pad the 14:06 book actually carried ──────────────────────────────────────

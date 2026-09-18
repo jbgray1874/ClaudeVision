@@ -76,7 +76,7 @@ def test_the_attached_line_names_what_the_service_will_attach():
     _after = block.split("_SENDABLE", 1)[1][:400]
     for internal in ("source_drawing_data", "boms_and_routes", "parity"):
         assert internal not in _after, f"{internal} can still reach somebody's email"
-    assert '_k == "quote" and _provisional' in block, (
+    assert '_k == "quote" and not _releasable' in block, (
         "the quote is named as attached while the service holds it")
     assert '["report"] = str(_rhtml)' in SRC and '["quote"] = str(_qpath)' in SRC, (
         "the report and the quote are never recorded, so the note cannot name them")

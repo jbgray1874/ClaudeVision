@@ -96,8 +96,51 @@ def test_the_filename_says_which_kind_of_run_it_was(summary_json, tmp_path, monk
     assert Path(out).name == "10575-02_quote_LLM-ONLY.html", Path(out).name
 
 
-def test_an_ordinary_estimate_keeps_the_plain_name(summary_json, tmp_path, monkeypatch):
+def test_an_unreleased_estimate_is_named_as_the_portal_copy(summary_json, tmp_path,
+                                                            monkeypatch):
+    """SAME REASONING AS THE LLM-ONLY NAME, APPLIED TO RELEASE.
+
+    A file called `10575-02_quote.html` on the Estimating share is a quotation as far as
+    anyone reading the folder is concerned, and the way an unreleased one goes out is that
+    somebody attaches it without opening it. Until the commercial inputs are recorded and an
+    estimator authorises release, the page is the portal working copy and is named as one.
+    """
     out = _write(summary_json, tmp_path, monkeypatch, llm_only=False)
+    assert Path(out).name == "10575-02_quote_PORTAL.html", Path(out).name
+
+
+def test_a_released_estimate_takes_the_plain_name(summary_json, tmp_path, monkeypatch):
+    """AND THE CONTROL — a gate that renames everything is not a gate.
+
+    With the price traceable, the record settled, the commercial inputs recorded complete and
+    a named estimator's authorisation on it, this is the customer's document and is named as
+    one.
+    """
+    monkeypatch.delenv("SDI_LLM_ONLY", raising=False)
+    jp = summary_json(
+        estimate_summary={
+            "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": 149.87},
+            "estimate_workbook_inputs": {"assumed_job_quantity": 1}},
+        final_estimate={
+            "totals": {"unit_cell": "Estimate!M105", "unit_cell_value": 149.87,
+                       "unit_gbp": 149.87, "source": "excel_calculated"},
+            "material_rows": [{"description": "10575-02-001 PANEL",
+                               "part_number": "10575-02-001",
+                               "block": "steel", "qty_per_unit": 1,
+                               "total_value_gbp": 62.0,
+                               "charged_cell": "Estimate!M63",
+                               "supplier": "SDI Live"}],
+            "labour_rows": []},
+        invariants={"violations": [], "may_quote_firm": True},
+        commercial_inputs={"complete": True},
+        quote_release={"authorised_by": "Dave Shepherd",
+                       "authorised_at": "2026-09-18T15:40"})
+
+    from quote_state import quote_state
+    _state = quote_state(json.loads(Path(jp).read_text(encoding="utf-8")))
+    assert _state["customer_releasable"], _state["blocking"]
+
+    out = q.generate_quote_files(str(jp), out_dir=str(tmp_path), job_stem="10575-02")
     assert Path(out).name == "10575-02_quote.html", Path(out).name
 
 

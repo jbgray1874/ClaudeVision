@@ -2163,6 +2163,23 @@ def main() -> None:
             except Exception:                                        # noqa: BLE001
                 _rel3 = {}
             _provisional = bool(_rel3.get("draft")) or not (_inv_rec and _inv_rec.get("may_quote_firm"))
+            # WHETHER A QUOTE MAY GO TO A CUSTOMER IS ONE FACT, ASKED HERE ONCE. It is not
+            # `_provisional`: that says the ESTIMATE is unsettled, which is about the covering
+            # note's wording, and it is silent on the commercial inputs and on authorisation.
+            try:
+                from quote_state import quote_state as _quote_state
+                _q_state = _quote_state(summary)
+            except Exception as _exc_qs:                             # noqa: BLE001
+                # Fail closed on the AUDIENCE. A release gate that cannot run has not said yes.
+                _q_state = {"customer_releasable": False,
+                            "blocking": [{"gate": "state_unreadable",
+                                          "what": f"the release state could not be read "
+                                                  f"({_exc_qs})"}]}
+            _releasable = bool(_q_state.get("customer_releasable"))
+            if not _releasable:
+                print("   [quote] held from the customer email — "
+                      + "; ".join(b.get("what", "") for b in (_q_state.get("blocking") or [])),
+                      flush=True)
 
             # ── THE REFUSAL. DETECTION WITHOUT REFUSAL IS A COMMENT ────────────────
             # A pack shipped whose quantities were finally right and whose money was gone —
@@ -2228,8 +2245,15 @@ def main() -> None:
                 _v = _sop.get(_k)
                 if not _v or isinstance(_v, (list, dict)):
                     continue
-                if _k == "quote" and _provisional:
-                    continue        # the service holds the quote while the estimate is provisional
+                if _k == "quote" and not _releasable:
+                    # THE ATTACHMENT HALF OF THE RELEASE RULE. "A customer email may attach a
+                    # quote only when the estimator has completed the commercial inputs and
+                    # authorised release." This asked `_provisional`, which is a different and
+                    # looser question — it knows nothing about commercial inputs or about
+                    # anybody authorising anything — so a quote could be attached to a note
+                    # going out while both were still open. One fact answers it now, and the
+                    # same fact named the file and decided what the page says.
+                    continue
                 _attach.append(str(_v))
             try:
                 from estimate_explained import covering_email as _covering_email

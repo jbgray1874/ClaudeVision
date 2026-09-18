@@ -389,11 +389,14 @@ def test_the_quote_fails_closed_when_the_check_cannot_run(monkeypatch):
     the document can, so it does.
     """
     import client_quote_html as Q
+    import displayed_charge
 
     def _raise(*_a, **_k):
         raise RuntimeError("the check exploded")
 
-    monkeypatch.setattr(Q, "publishable_total", _raise)
+    # PATCHED AT THE SOURCE. The quote used to call `publishable_total` itself; it now asks
+    # `quote_state`, which is the same question answered in one place instead of two.
+    monkeypatch.setattr(displayed_charge, "publishable_total", _raise)
     html = Q.build_quote_html(_quote_summary())
     assert html and "<html" in html.lower(), "the draft quotation must still be generated"
     said = re.sub(r"<[^>]+>", " ", html)

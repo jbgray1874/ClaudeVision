@@ -111,7 +111,8 @@ _OPS_HIDE = {"handling"}
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
-from displayed_charge import publishable_total  # noqa: E402
+from quote_state import (CUSTOMER, NotReleasable, PORTAL,  # noqa: E402
+                         quote_state)
 
 def _esc(s: Any) -> str:
     return html.escape(str(s if s is not None else ""))
@@ -1283,7 +1284,26 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
 
 
 def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
-                     manual_workbook: Optional[str] = None, customer: Optional[str] = None) -> str:
+                     manual_workbook: Optional[str] = None, customer: Optional[str] = None,
+                     audience: Optional[str] = None) -> str:
+    """The quotation page, for the audience the record allows.
+
+    PORTAL is the estimator's editable view: it may carry a pending price and say what is
+    outstanding, because the person reading it is the person who closes those items.
+    CUSTOMER is the released document, and asking for one the record does not allow raises
+    `NotReleasable` rather than producing a page that has to apologise for itself.
+
+    The default is not a default: it is `audience_for(summary)`, so a caller that says nothing
+    gets the portal view until the record earns the customer one. Naming CUSTOMER explicitly
+    is how you ask for a released document, and it is checked.
+    """
+    _state = quote_state(summary)
+    if audience == CUSTOMER and not _state["customer_releasable"]:
+        raise NotReleasable(
+            "this quotation is not released for customer issue — "
+            + "; ".join(b["what"] for b in _state["blocking"]))
+    audience = audience or (CUSTOMER if _state["customer_releasable"] else PORTAL)
+    _for_customer = (audience == CUSTOMER)
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
@@ -1317,75 +1337,62 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     #
     # Where the cost cannot be traced, no unit price is computed, so the quote renders its
     # own missing-price path rather than a confident figure resting on nothing.
-    unit_cost = _get(es, "workbook_equivalent_pricing", "m105_total_unit_cost_gbp")
-    # ── AND IT FAILS CLOSED ──────────────────────────────────────────────────────
+    # ── AND IT FAILS CLOSED, IN ONE PLACE ───────────────────────────────────────
     #
-    # The first cut wrapped this in `except Exception: pass`, which leaves `unit_cost` SET
-    # when the traceability check itself breaks — so the one failure mode a guard exists for
-    # is the one where it lets the figure through. On the page a customer keeps.
-    #
-    # There is no broad except any more: the import is at module scope with the rest, and a
-    # check that cannot run refuses the price rather than waving it past.
-    _fe_totals = _get(summary, "final_estimate", "totals") or {}
-    try:
-        _q_tot = publishable_total({"run": {
-            "unit_cost_gbp": unit_cost,
-            "unit_cell": _fe_totals.get("unit_cell") or "",
-            "unit_cell_value": _fe_totals.get("unit_cell_value"),
-        }})
-    except Exception as _exc_tr:                                       # noqa: BLE001
-        # FAIL CLOSED ON THE PRICE, NOT ON THE DOCUMENT.
-        #
-        # Two wrong shapes were tried before this one. `except Exception: pass` left the old
-        # price LIVE when the guard broke — the one failure mode a guard exists for. Removing
-        # the guard's handling altogether then made a raising check CRASH quote generation,
-        # which breaks the release rule: a draft quote is always generated in the portal so an
-        # estimator can edit it. Refusing the figure and keeping the page is the only version
-        # that satisfies both.
-        _q_tot = {"amount": None,
-                  "why": f"the traceability check could not run ({_exc_tr})"}
-    if _q_tot.get("amount") is None:
-        unit_cost = None
+    # Three shapes were tried. `except Exception: pass` left the old price LIVE when the check
+    # broke — the one failure mode a guard exists for. Removing the handling altogether made a
+    # raising check CRASH quote generation, against the rule that a draft is always generated
+    # in the portal. Catching, refusing the figure and keeping the page satisfies both, and it
+    # now lives in `quote_state._price_fact` rather than here: the page and the release
+    # decision were answering the same question in two places, which is how a fact acquires
+    # two names.
+    unit_cost = _state["price"].get("amount")
     unit_price = (unit_cost * MARKUP_FACTOR) if isinstance(unit_cost, (int, float)) else None
     order_value = (unit_price * qty) if (unit_price is not None and qty) else None
 
-    # ── AND THE PAGE SAYS WHICH IT IS ────────────────────────────────────────────
+    # ── AND THE PAGE SAYS WHICH IT IS — TO THE ESTIMATOR, ON THE PORTAL VIEW ─────
     #
-    # Refusing the figure is only half of failing closed. Rendered as a bare em-dash in the
-    # same box as always, a refused price reads as a page somebody has not finished filling
-    # in — and an estimator's next move is to type a number into it from memory, which is the
-    # exact thing `publishable_total` exists to stop. So the box says PRICE PENDING and the
-    # note underneath says why, in the estimator's language rather than the engine's.
+    # A refused price rendered as a bare em-dash reads as a page somebody did not finish, and
+    # the next move is a number typed in from memory. So the box says PRICE PENDING.
     #
-    # This is not a disclaimer. It is a state: the workbook total could not be tied to a cell,
-    # nobody is being warned about anything, and the sentence disappears the moment it can be.
+    # WHICH MAKES IT AN INTERNAL PAGE, AND THAT IS THE POINT. James Gray, 18 Sep 2026:
+    # "`PRICE PENDING` on a 'quotation' is still a customer-facing disclaimer... the portal
+    # needs an editable quote view, not an incomplete quote for a customer to see." A notice
+    # explaining why a document is incomplete is only ever needed because the wrong document
+    # is being produced — so the incomplete one is not a customer document at all. It is the
+    # portal view, its audience is the person who closes those items, and it tells them what
+    # they are. A CUSTOMER page cannot reach this branch: `build_quote_html` refuses to make
+    # one while anything is outstanding, and a missing price is one of the things outstanding.
     if unit_price is None:
         _price_class = _order_class = "pending"
         _unit_figure = _order_figure = "PRICE PENDING"
         _unit_caption = _order_caption = "awaiting a traceable price"
-        # ── AND THE REASON DOES NOT COME ONTO THIS PAGE ──────────────────────────
-        #
-        # The first cut printed `publishable_total`'s own `why` here, which reads: "the
-        # proposed total (£149.87) does not match what Estimate!M105 holds (£321.88)". On the
-        # one document that leaves the building. It names two figures neither of which may be
-        # published, cites a cell in somebody else's spreadsheet, and hands a customer the
-        # workings of a disagreement inside our own estimate — the same mistake the invariant
-        # banner was taken off this page for.
-        #
-        # The reason is NOT lost: the internal job report prints it under the unit cost, in
-        # the language and with the figures an estimator needs to chase it. This page says
-        # which state it is in and nothing about how it got there.
-        _pending_note = (
-            '\n      <div class="pending-note"><b>PRICE PENDING</b> — no price is shown on '
-            'this quotation yet. The specification, quantity and scope below are complete; '
-            'the price follows once the estimate has been confirmed.</div>')
     else:
         _price_class, _order_class = "unit", "ov"
         _unit_figure, _order_figure = _money(unit_price), _money(order_value)
         _unit_caption = ("per unit, ex VAT · indicative"
                          + ((' · ' + _num(qty) + ' of') if qty else ''))
         _order_caption = "ex VAT · indicative"
+
+    # ── THE BANNER FOLLOWS THE AUDIENCE, NOT THE PRICE ───────────────────────────
+    #
+    # The first cut keyed this on `unit_price is None`, which is the same two-names fault this
+    # session has now paid for six times: a page whose total IS traceable but whose commercial
+    # inputs are open and whose release nobody has authorised rendered a confident price and
+    # said nothing, because the condition asked about the figure when the question was about
+    # the audience. `customer_releasable` is the question, so it is what is asked.
+    if _for_customer:
         _pending_note = ""
+    else:
+        _open_items = "".join(
+            f"<li>{_esc(b.get('short') or b['what'])}</li>"
+            for b in (_state.get("blocking") or []))
+        _pending_note = (
+            '\n      <div class="pending-note"><b>PORTAL VIEW — NOT FOR ISSUE</b> — this page '
+            'is the editable working copy. It is not released to the customer until the items '
+            'below are closed and an estimator authorises it.'
+            + (f'<ul class="open">{_open_items}</ul>' if _open_items else '')
+            + '</div>')
 
     # ONE part list across every deliverable (costed_facts.job_parts): the canonical
     # list the Estimate sheet was built from, not the engine's pre-canonical one. They are
@@ -1431,6 +1438,26 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # reads as a firm quotation. The estimator is warned; the customer is not shown the
     # workings.
     _inv_banner = ""  # retained for the fixture that asserts it stays empty
+
+    # ── AND IT CANNOT BE PRINTED OR SAVED INTO A CUSTOMER DOCUMENT ───────────────
+    #
+    # "export, email attachment, print/share: disabled while `customer_releasable` is false."
+    #
+    # The attachment half is enforced where attachments are chosen (`main.py` asks
+    # `quote_state`) and the filename half in `generate_quote_files`, which does not write a
+    # file called `_quote.html` for a page that is not one. This is the half that lives on the
+    # page, because print-to-PDF is how an HTML view becomes a document somebody emails, and
+    # it is the one route no server-side gate can see.
+    #
+    # It replaces the page rather than watermarking it: a watermark still produces a PDF of a
+    # quotation with a mark on it, and somebody will crop it.
+    _print_block = "" if _for_customer else """  @media print {{
+    body > * {{ display:none !important; }}
+    body::after {{ display:block; content:"SDI Intelligence — portal working copy. This
+      quotation is not released for customer issue, so it does not print. Close the open
+      items and authorise release, and the customer document prints from there.";
+      font:600 14px/1.6 system-ui, sans-serif; padding:40px; }}
+  }}"""
 
     customer = _derive_customer(summary, stem, manual_workbook=manual_workbook, customer_override=customer)
     # Strip any job/drawing code the name carried ('Harrods 7332-01' -> 'Harrods') BEFORE the logo
@@ -1655,6 +1682,9 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
                    border-radius:4px; padding:12px 16px; margin:-14px 0 26px;
                    font-size:13px; color:var(--muted); }}
   .pending-note b {{ color:var(--sdi-ink); letter-spacing:.08em; }}
+  .pending-note ul.open {{ margin:8px 0 0; padding-left:18px; }}
+  .pending-note ul.open li {{ padding:2px 0; }}
+{_print_block}
   .inc h3 {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }}
   .inc ul {{ margin:0; padding:0; list-style:none; columns:2; column-gap:32px; }}
   .inc li {{ padding:6px 0 6px 22px; position:relative; font-size:13.5px; break-inside:avoid; }}
@@ -1809,6 +1839,10 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
         os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"})
 
     stem = job_stem or summary.get("job_output_stem") or jp.stem
+    # THE AUDIENCE IS THE RECORD'S TO DECIDE, and this asks rather than assuming: a caller
+    # that wanted the customer document and cannot have one gets the portal view, because
+    # generating nothing was never the answer.
+    _releasable = bool(quote_state(summary).get("customer_releasable"))
     html_str = build_quote_html(summary, job_stem=stem,
                                 manual_workbook=manual_workbook,
                                 customer=customer)
@@ -1824,8 +1858,20 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
     # IN THE NAME, because a file is identified from a folder listing far more often than it
     # is opened. A quote off a measurement run and a quote off a real estimate sitting in one
     # directory as "10575-02_quote.html" twice is how the wrong one gets attached.
-    out_path = out_dir_p / (f"{safe}_quote_LLM-ONLY.html" if _llm_only
-                            else f"{safe}_quote.html")
+    #
+    # AND A PORTAL VIEW IS NOT CALLED `_quote.html`. "export, email attachment, print/share:
+    # disabled while `customer_releasable` is false" — the export half is this. A file named
+    # `401912-02_quote.html` sitting on the Estimating share is a quotation as far as anyone
+    # reading the folder is concerned, and the way an unreleased one goes out is that somebody
+    # attaches it without opening it. `_quote_PORTAL.html` cannot be mistaken for the
+    # document, in a listing or in an attachment box, which is the same reasoning that named
+    # the LLM-only file.
+    if _llm_only:
+        out_path = out_dir_p / f"{safe}_quote_LLM-ONLY.html"
+    elif _releasable:
+        out_path = out_dir_p / f"{safe}_quote.html"
+    else:
+        out_path = out_dir_p / f"{safe}_quote_PORTAL.html"
     out_path.write_text(html_str, encoding="utf-8")
     return str(out_path)
 
