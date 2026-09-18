@@ -31,6 +31,32 @@ def infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
 
 
 def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
+    # THE NUMBER, AND WHICH RUNG ANSWERED IT.
+    #
+    # James Gray, 18 Sep 2026, on 401912-02: "anything fundamental around bends needs to be
+    # resolved." The count on that divider was right — the flat pattern carries its single
+    # bend line and the drawing calls the 90 degrees — and nothing downstream could say so,
+    # because this function returned a bare integer. A press-brake set-up is thirty minutes
+    # and a reader who wants to check the count has no idea whether to look at the DXF, the
+    # model or a note.
+    #
+    # This is the same shape `_section_length_source` already fixed for a leg's length: the
+    # rung IS known here, at the moment it is chosen, and nowhere else afterwards. It is
+    # stamped on the part rather than returned, so every existing caller is untouched.
+    #
+    # `manufacturing_features.bend_count_source` is read by `_model_measured_zero_bends` and
+    # by the fold's own review line, and until now nothing in the codebase WROTE it — so a
+    # measured zero could never be told from an absent one, and every folded part read as
+    # unverified. Written here, once, where the decision is made.
+    # Stamped on the PART and not on `manufacturing_features`, deliberately. That dict may
+    # already carry a source from something that read the solid — the SOLIDWORKS plate gate
+    # stamps `solidworks_api` on a measured zero — and writing over it here would destroy
+    # evidence this function is not entitled to overrule. Precedence between the two is
+    # settled once, in `synthesize_manufacturing_features`, which then writes the answer to
+    # both places so they cannot drift apart.
+    def _stamp(src: str) -> None:
+        part["bend_count_source"] = src
+
     # DXF flat-pattern is what the press brake actually bends from — it is ground
     # truth for bend count. When a genuine flat-pattern DXF is present, its bend
     # count is authoritative and WINS over the text / dashed-line proxies below
@@ -48,7 +74,9 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
         # rollup's authoritative measured-zero still decides, so a 0-fold part is untouched.
         _dxf_bl = part.get("bend_count_dxf")
         if _dxf_bl is not None:
+            _stamp("dxf_bendlines_layer")
             return int(_dxf_bl or 0)
+        _stamp("dxf_flat_pattern")
         return int(_gr.get("estimated_bend_line_count", 0) or 0)
     angle_count = len(part.get("angles_deg", []))
     fold_value_count = len(part.get("fold_values_mm", []))
@@ -68,15 +96,23 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
         fold_values = [_safe_float(v) for v in part.get("fold_values_mm", []) if _safe_float(v) is not None]
         mirrored_fold_values = len(fold_values) >= 2 and abs(fold_values[0] - fold_values[1]) <= 0.5
         if repeated_angle_text or mirrored_fold_values:
+            _stamp("inferred_mirrored_return_flange")
             return 2
 
     text_signal = max(angle_count, fold_value_count, fold_text_count)
     if text_signal and geometry_bends:
+        _stamp("drawing_text_bounded_by_geometry")
         return min(max(text_signal, 1) + 1, geometry_bends)
     if text_signal:
+        _stamp("drawing_text")
         return text_signal
     if dashed_lines:
+        _stamp("inferred_dashed_lines")
         return max(1, min(dashed_lines, 2 if long_strip else dashed_lines))
+    # A zero here is the ABSENCE of evidence, not a measurement of none. The DXF branches
+    # above are the only ones entitled to say "measured"; this one has to admit it read a
+    # rollup that may never have seen a flat pattern.
+    _stamp("geometry_rollup" if geometry_bends else "no_bend_evidence")
     return geometry_bends
 
 
@@ -86,7 +122,19 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     text_slot_count = len(part.get("slot_sizes_mm", [])) + (1 if part.get("slot_detected") else 0)
     geometry_hole_count = part["geometry_rollup"].get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
     geometry_slot_count = part["geometry_rollup"].get("estimated_slot_like_features", 0) if geometry_confidence >= 0.55 else 0
+    # WHATEVER THE MODEL ALREADY SAID, BEFORE THIS FUNCTION REPLACES THE DICT IT SAID IT IN.
+    # This returns a FRESH manufacturing_features that `_interpret_part` assigns straight over
+    # the old one, so a source the SOLIDWORKS connector stamped — the plate gate's measured
+    # zero — is discarded here unless it is carried across. A DXF reading still outranks it
+    # (the BENDLINES layer is what the press brake bends, and on 11762-02-02M it was one fold
+    # more than the model's count); anything short of a DXF leaves the model's word standing.
+    _prior = part.get("manufacturing_features")
+    _prior_source = str((_prior or {}).get("bend_count_source") or "").strip() if isinstance(_prior, dict) else ""
     bend_count = infer_bend_count(part, geometry_confidence)
+    bend_count_source = str(part.get("bend_count_source") or "")
+    if _prior_source and not bend_count_source.startswith("dxf"):
+        bend_count_source = _prior_source
+    part["bend_count_source"] = bend_count_source
     hole_count = infer_hole_count(part, geometry_confidence)
     slot_count = max(text_slot_count, geometry_slot_count)
     # A FINISH NOBODY STATED IS NOT A FINISH NOBODY NEEDS.
@@ -138,6 +186,9 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
         "hole_count": hole_count,
         "slot_count": slot_count,
         "bend_count": bend_count,
+        # Which rung answered it. A press-brake set-up is half an hour and the reader who
+        # wants to check the count needs to know whether to open the DXF, the model or a note.
+        "bend_count_source": bend_count_source,
         "radius_count": len(part.get("radii_mm", [])),
         "hole_sizes_mm": part.get("hole_sizes_mm", []),
         "slot_sizes_mm": part.get("slot_sizes_mm", []),

@@ -460,6 +460,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
     part["geometry_rollup"] = _empty_geometry_rollup()
     _rollup_geometry(part["geometry_rollup"], geometry)
 
+    # THE LAYERS THE READER SAW, KEPT WHERE THE REST OF THE RUN CAN ASK. The reader has
+    # always known them; nothing carried them onto the part, so the fold review line could
+    # not tell "exported without bend lines" from "the layers never reached us", and the
+    # DXF interpreter below was handed a null and duly reported OUR gap as the drawing's.
+    _lays = (raw or {}).get("layers")
+    if _lays:
+        part["dxf_layers"] = list(_lays)
+
     flat: Optional[Dict[str, Any]] = None
     try:
         flat = extract_flat_pattern_data(dxf_path)

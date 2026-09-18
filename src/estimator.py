@@ -2649,7 +2649,9 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 
 
-_MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pattern", "dxf"}
+_MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pattern", "dxf",
+                          # The BENDLINES layer itself — the narrowest and strongest of them.
+                          "dxf_bendlines_layer"}
 
 
 def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:

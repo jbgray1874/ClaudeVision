@@ -193,9 +193,35 @@ def extract_dxf_geometry(dxf_path: Path) -> Dict[str, Any]:
     hole_diameters_mm: List[float] = []
     dimension_values_mm: List[float] = []
     max_span_mm = 0.0
+    # WHAT THE FILE IS ORGANISED INTO, WHICH NOBODY DOWNSTREAM HAS EVER BEEN TOLD.
+    #
+    # `drawing_job_merge` hands the DXF interpreter `"layers": raw.get("layers")` and this
+    # dict has never carried that key, so the answer was null on every job ever run. The
+    # model then wrote "layers not provided so bend vs cut assignment unknown" — 401912-02's
+    # book says exactly that — and three people read it as a fact about the drawing. It was
+    # a fact about OUR HAND-OFF: the reader knows the layers perfectly well, and the loop
+    # below is already touching every entity to get them.
+    #
+    # `entity_counts` and `text_entities` are asked for on the same line and were absent for
+    # the same reason. A model asked to say which layer is the cut profile, with no layers,
+    # no entity census and no text, is being asked to guess and then quoted as a witness.
+    layer_entity_counts: Dict[str, int] = {}
+    entity_counts: Dict[str, int] = {}
+    text_entities: List[str] = []
 
     for entity in _iter_modelspace_entities(doc):
         dxftype = entity.dxftype()
+        entity_counts[dxftype] = entity_counts.get(dxftype, 0) + 1
+        _lay = _entity_layer(entity) or "0"
+        layer_entity_counts[_lay] = layer_entity_counts.get(_lay, 0) + 1
+        if dxftype in {"TEXT", "MTEXT"} and len(text_entities) < 200:
+            try:
+                _txt = (entity.plain_text() if dxftype == "MTEXT"
+                        else str(entity.dxf.text or "")).strip()
+            except Exception:                                    # noqa: BLE001
+                _txt = ""
+            if _txt:
+                text_entities.append(_txt)
 
         if dxftype == "LINE":
             start = entity.dxf.start
@@ -323,6 +349,12 @@ def extract_dxf_geometry(dxf_path: Path) -> Dict[str, Any]:
         "estimated_pierce_count": estimated_pierce_count,
         "dimension_values_mm": dimension_values_mm,
         "drawing_extents_mm": extents_mm,
+        # The layer census, named rather than merely counted, so a reader — human or model —
+        # can say whether a BENDLINES layer was present, empty or never exported.
+        "layers": sorted(layer_entity_counts),
+        "layer_entity_counts": dict(sorted(layer_entity_counts.items())),
+        "entity_counts": dict(sorted(entity_counts.items())),
+        "text_entities": text_entities,
         "vector_features": vector_features,
         "confidence": {
             "geometry_reliability": geometry_reliability,
