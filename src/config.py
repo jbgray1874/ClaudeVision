@@ -2320,20 +2320,186 @@ HOURLY_RATES_GBP = {
     "machines_joinery": 28.74,       # MC J
 }
 
-# Learn from Tim: overlay the ingested rate card (tim_rate_card.json beside this file).
-# Source of truth = Tim's sheet; defaults above are the fallback when the JSON is absent.
+# The ONE stable mapping between the estimate sheet's own labour labels and the engine's
+# operation names. The RATES come from the sheet; only these names are maintained here.
+# `tim_rate_card_ingest` imports it rather than keeping a second copy — one mapping, one home.
+ESTIMATE_LABOUR_LABEL_TO_OP = {
+    "punch": "punch", "fold": "folding", "guillotine": "guillotine",
+    "laser (metal)": "laser_cutting", "laser (acrylic)": "laser_cutting_acrylic",
+    "weld (co2)": "welding", "spotweld": "spot_welding", "dress welds": "dress_welds",
+    "roll": "roll", "saw": "saw", "glue": "glue", "tube": "tube", "tubebend": "tube_bend",
+    "assemble/pack (metal)": "assembly", "assemble/pack (acrylic)": "assembly_acrylic",
+    "manual labour (metal)": "manual_labour_metal", "manual labour (acrylic)": "manual_labour_acrylic",
+    "p.coat": "powder_coating", "wet spray": "wet_spray", "cnc": "cnc", "cnc joinery": "cnc_joinery",
+    "bench work joinery": "bench_work", "diamond polish": "diamond_polish",
+    "drill (acrylic)": "hole_machining", "linebend": "linebend", "pin router": "pin_router",
+    "robomac": "robomac", "salvagnini": "salvagnini", "oven": "oven", "edge banding": "edge_banding",
+    "packing joinery": "packing_joinery", "machines joinery": "machines_joinery",
+}
+
+# A rate nobody could mean. £355.43/hr for P.Coat is legitimately high — it is a LINE rate
+# applied with a throughput divisor, not a person's hour — so the ceiling is generous and
+# only catches a decimal in the wrong place or a column read by mistake.
+HOURLY_RATE_PLAUSIBLE_GBP = (1.0, 2000.0)
+
+# ── THE SHEET'S OWN RATE TABLE IS THE RATE TABLE ──────────────────────────────────────
+#
+# James Gray's steel ruling, 18 Sep 2026, applies word for word to labour: "the spreadsheet
+# rate is the controlling rate... It should not independently substitute... a config
+# fallback." The estimate template carries a "Labour / Rate / Dept" block — the estimator's
+# own card, the one they amend — and `tim_rate_card_ingest` has always known how to read it.
+#
+# WHAT IT DID WITH IT IS THE FAULT. The ingester wrote `tim_rate_card.json` BESIDE THIS FILE
+# and this block overlaid it at import. Three consequences, all of them D-111 again:
+#
+#   * the blanket `*.json` rule means git has never carried that file, so every department
+#     rate in the shop — the numbers that price every route — lived outside version control
+#   * two machines could hold different rate cards and produce different money from the same
+#     commit, with nothing on either book to compare
+#   * it was SILENT. `TIM_RATE_CARD_LOADED` was assigned here and read by nothing, so a run
+#     with a rate card and a run without it looked identical on the page
+#
+# And a fourth, worse than the others: the overlay applied INSIDE the loop, so an exception
+# part-way through left SOME rates overlaid and others at their defaults — a rate card half
+# applied, which is the one outcome nobody would ever choose.
+#
+# So the template is read directly, as `workbook_input_value` reads Estimate!L5, and every
+# rate says where it came from. The loose file still applies — an estimator who has just
+# ingested a newer sheet is answering later than this file — but only where the template was
+# silent, and it is REPORTED rather than swallowed. Nothing here can raise: a missing or
+# locked template leaves the defaults standing and says so.
+HOURLY_RATE_SOURCE = {_op: "config.HOURLY_RATES_GBP (default)" for _op in HOURLY_RATES_GBP}
+RATE_CARD_NOTES: list = []
 TIM_RATE_CARD_LOADED = None
-try:
-    import os as _os_rc, json as _json_rc
-    _rc_path = _os_rc.path.join(_os_rc.path.dirname(_os_rc.path.abspath(__file__)), "tim_rate_card.json")
-    if _os_rc.path.exists(_rc_path):
+
+# Where an ingested card is looked for. A path is a setting, so it is named here rather than
+# rebuilt from __file__ inside the loader — which also means a test can point at one without
+# reaching into the os module.
+import os as _os_cfg
+INGESTED_RATE_CARD_PATH = _os_cfg.path.join(
+    _os_cfg.path.dirname(_os_cfg.path.abspath(__file__)), "tim_rate_card.json")
+
+
+def _plausible_hourly_rate(value) -> bool:
+    try:
+        _r = float(value)
+    except (TypeError, ValueError):
+        return False
+    _lo, _hi = HOURLY_RATE_PLAUSIBLE_GBP
+    return _lo <= _r <= _hi
+
+
+def read_template_rate_card():
+    """{op: £/hr} from the estimating template's own Labour/Rate/Dept block, and its source.
+
+    Returns ({}, reason) when the template cannot be read — never raises, and never returns
+    a PARTIAL card: the block is parsed whole and applied whole, because a rate card missing
+    three of its rows prices a job with a mixture of this year's numbers and last year's.
+    """
+    try:
+        import openpyxl as _oxl_rc
+    except Exception:                                                # noqa: BLE001
+        return {}, "openpyxl unavailable"
+    try:
+        _wb_rc = _oxl_rc.load_workbook(AI_ESTIMATE_XLSX_TEMPLATE, data_only=True,
+                                       read_only=True)
+    except Exception:                                                # noqa: BLE001
+        return {}, f"the estimating template could not be opened ({AI_ESTIMATE_XLSX_TEMPLATE})"
+    try:
+        _ws_rc = _wb_rc["Estimate"] if "Estimate" in _wb_rc.sheetnames else _wb_rc.worksheets[0]
+        # The header is located rather than assumed, exactly as the ingester does: H="Labour",
+        # I="Rate", J="Dept". A template whose block has moved is found; one that has no block
+        # is reported, not guessed at.
+        _hdr_rc = None
+        _grid = [row for row in _ws_rc.iter_rows(min_col=8, max_col=11, values_only=True)]
+        for _i, _row in enumerate(_grid):
+            _h, _i_, _j = (_row + (None, None, None, None))[:3]
+            if (str(_h).strip().lower() == "labour" and str(_i_).strip().lower() == "rate"
+                    and str(_j).strip().lower() == "dept"):
+                _hdr_rc = _i
+                break
+        if _hdr_rc is None:
+            return {}, "the template carries no 'Labour / Rate / Dept' block"
+        _card = {}
+        for _row in _grid[_hdr_rc + 1:]:
+            _label, _rate, _dept = (_row + (None, None, None, None))[:3]
+            if not _dept or not isinstance(_rate, (int, float)):
+                continue
+            _d = str(_dept).strip().upper()
+            if not _d or not _d[0].isalpha():
+                break        # past the labour block — the wire price-break rows have numeric J
+            _op_rc = ESTIMATE_LABOUR_LABEL_TO_OP.get(str(_label).strip().lower())
+            if _op_rc and _plausible_hourly_rate(_rate):
+                _card[_op_rc] = round(float(_rate), 4)
+        if not _card:
+            return {}, "the template's labour block named no rate this engine costs with"
+        return _card, f"the estimating template's Estimate!H:K labour block"
+    except Exception:                                                # noqa: BLE001
+        return {}, "the estimating template's labour block could not be read"
+    finally:
+        try:
+            _wb_rc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+
+
+def _apply_rate_cards() -> None:
+    """Template first, the ingested file only where the template was silent, defaults last."""
+    _tpl, _tpl_src = read_template_rate_card()
+    if _tpl:
+        for _op, _rate in _tpl.items():
+            HOURLY_RATES_GBP[_op] = _rate
+            HOURLY_RATE_SOURCE[_op] = _tpl_src
+        RATE_CARD_NOTES.append(
+            f"{len(_tpl)} department rate(s) read from {_tpl_src}")
+    else:
+        RATE_CARD_NOTES.append(
+            f"department rates are config defaults — {_tpl_src}")
+
+    global TIM_RATE_CARD_LOADED
+    try:
+        import os as _os_rc, json as _json_rc
+        _rc_path = INGESTED_RATE_CARD_PATH
+        if not _os_rc.path.exists(_rc_path):
+            return
         with open(_rc_path) as _fh_rc:
             _rc = _json_rc.load(_fh_rc)
-        for _op, _rate in (_rc.get("by_op") or {}).items():
-            HOURLY_RATES_GBP[_op] = float(_rate)
-        TIM_RATE_CARD_LOADED = _rc.get("source")
-except Exception:
-    TIM_RATE_CARD_LOADED = None
+        # Built whole, then applied whole. The old loop wrote as it read.
+        _by_op = {str(_op): float(_r) for _op, _r in (_rc.get("by_op") or {}).items()
+                  if _plausible_hourly_rate(_r)}
+    except Exception as _exc_rc:                                     # noqa: BLE001
+        RATE_CARD_NOTES.append(
+            f"an ingested rate card is present and could not be read ({_exc_rc}); "
+            f"the rates above stand")
+        return
+    if not _by_op:
+        return
+    _used, _ignored = [], []
+    for _op, _rate in _by_op.items():
+        if _tpl and _op in _tpl:
+            # The live template already answered. A file ingested from some OTHER estimate
+            # does not get to overrule the sheet this job is costed on -- but a difference
+            # between them is worth a sentence, because one of the two is out of date.
+            if abs(_rate - _tpl[_op]) > 0.005:
+                _ignored.append(f"{_op} {_rate:.2f} vs the template's {_tpl[_op]:.2f}")
+            continue
+        _used.append(_op)
+        HOURLY_RATES_GBP[_op] = _rate
+        HOURLY_RATE_SOURCE[_op] = f"tim_rate_card.json ({_rc.get('source') or 'ingested'})"
+    TIM_RATE_CARD_LOADED = _rc.get("source")
+    if _used:
+        RATE_CARD_NOTES.append(
+            f"{len(_used)} rate(s) supplied by tim_rate_card.json where the template was "
+            f"silent: {', '.join(sorted(_used))}")
+    if _ignored:
+        RATE_CARD_NOTES.append(
+            f"tim_rate_card.json DISAGREES with the template and the template was used: "
+            f"{'; '.join(sorted(_ignored))}")
+
+
+def hourly_rate(op: str):
+    """(£/hr, where it came from) for one operation — so a labour row can state its rate."""
+    return (HOURLY_RATES_GBP.get(op), HOURLY_RATE_SOURCE.get(op, "not in the rate card"))
 
 # Max unit cost applied silently to auto-detected bought-in lines (fuzzy catalogue match).
 # Above this → reject match and flag for manual pricing (prevents "BRACKET" -> £13k hits).
@@ -2893,6 +3059,10 @@ FALLBACK_PRICING_POLICY = {
 
 # openpyxl cannot save .xls; use an .xlsx copy of the blank estimate for --generate-ai-spreadsheet / write-back.
 AI_ESTIMATE_XLSX_TEMPLATE = SPREADSHEETS_DIR / "EmptyEstimating" / "Blank Estimate Sheet 2026.xlsx"
+
+# Applied HERE and not where it is defined, because the rate card is read OUT of the template
+# named on the line above. Everything `_apply_rate_cards` touches is already in place.
+_apply_rate_cards()
 
 WORKBOOK_EQUIVALENT_PRICING = {
     # overhead_absorption_factor: the divisor in the workbook's M105 formula.

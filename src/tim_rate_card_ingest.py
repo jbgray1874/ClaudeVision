@@ -21,20 +21,10 @@ from pathlib import Path
 import openpyxl
 
 # Tim's operation labels (dept block, col H) -> the engine's operation names.
-# This is the ONE stable mapping we maintain; the RATES come from the sheet.
-TIM_LABEL_TO_OP = {
-    "punch": "punch", "fold": "folding", "guillotine": "guillotine",
-    "laser (metal)": "laser_cutting", "laser (acrylic)": "laser_cutting_acrylic",
-    "weld (co2)": "welding", "spotweld": "spot_welding", "dress welds": "dress_welds",
-    "roll": "roll", "saw": "saw", "glue": "glue", "tube": "tube", "tubebend": "tube_bend",
-    "assemble/pack (metal)": "assembly", "assemble/pack (acrylic)": "assembly_acrylic",
-    "manual labour (metal)": "manual_labour_metal", "manual labour (acrylic)": "manual_labour_acrylic",
-    "p.coat": "powder_coating", "wet spray": "wet_spray", "cnc": "cnc", "cnc joinery": "cnc_joinery",
-    "bench work joinery": "bench_work", "diamond polish": "diamond_polish",
-    "drill (acrylic)": "hole_machining", "linebend": "linebend", "pin router": "pin_router",
-    "robomac": "robomac", "salvagnini": "salvagnini", "oven": "oven", "edge banding": "edge_banding",
-    "packing joinery": "packing_joinery", "machines joinery": "machines_joinery",
-}
+# This is the ONE stable mapping we maintain; the RATES come from the sheet. It lives in
+# config beside the rates it names, because the engine now reads the same block directly and
+# two copies of a mapping is two answers to "what does 'p.coat' cost" waiting to happen.
+from config import ESTIMATE_LABOUR_LABEL_TO_OP as TIM_LABEL_TO_OP
 
 def parse_rate_card(xlsx_path: str):
     wb = openpyxl.load_workbook(xlsx_path, data_only=True)

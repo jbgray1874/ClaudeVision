@@ -218,6 +218,18 @@ def print_build_stamp() -> None:
         print(f"   [build] engine source: {build_stamp_line()}", flush=True)
     except Exception:                                                # noqa: BLE001
         pass
+    # WHICH RATE CARD PRICED THIS JOB, BESIDE WHICH ENGINE COSTED IT. The department rates
+    # decide every labour line on the sheet, and until now a run that read them from the live
+    # template and a run that fell back to the defaults in config printed exactly the same
+    # thing — nothing. Two machines could produce different money from the same commit with
+    # no way to tell from either book which had the newer card. It goes here because this is
+    # the banner people already read when a number looks wrong.
+    try:
+        import config as _cfg_bs
+        for _note in (getattr(_cfg_bs, "RATE_CARD_NOTES", None) or []):
+            print(f"   [rates] {_note}", flush=True)
+    except Exception:                                                # noqa: BLE001
+        pass
     try:
         _warn = stale_process_warning()
     except Exception:                                                # noqa: BLE001
