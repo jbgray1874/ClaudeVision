@@ -1652,17 +1652,41 @@ def build(workbook: Path, scan_json: Optional[Path],
         for row, kind in sorted(
                 _todo, key=lambda pair: -((_money(pair[0].get("price")) or 0)
                                           * (_money(pair[0].get("qty")) or 0))):
+            # ── THE ONE FACT, ASKED HERE TOO ───────────────────────────────────
+            #
+            # This multiplied the row's own price by its quantity and printed the product.
+            # That is a renderer deriving money for itself — the habit that put £3.88 on five
+            # pages. `displayed_charge` carries what the SHEET charged and the cell it was
+            # read from; where nothing was charged the line is PENDING and no currency is
+            # printed, because an engine figure with no cell behind it is not a price.
+            from displayed_charge import displayed_charge as _dc_note   # noqa: PLC0415
+            _rl = _record_line(record_lines, row) or {}
+            # The costed line where there is one, else the read-back row itself — which
+            # carries the same money from the same cell.
+            _shown_note = _dc_note(_rl if _rl.get("charged_ext_gbp") is not None else row)
             _unit, _qty = _money(row.get("price")), _money(row.get("qty"))
-            _ext = round(_unit * _qty, 2) if _unit and _qty else None
+            if _shown_note["basis"] == "workbook" and _shown_note["amount"] is not None:
+                _ext_txt = _gbp(_shown_note["amount"]) + (
+                    f" ({_shown_note['cell']})" if _shown_note.get("cell") else "")
+            elif _unit and _qty:
+                # THE SHEET'S OWN UNIT PRICE AND QUANTITY, MULTIPLIED OUT. Not an engine
+                # figure: both operands were read back off the Estimate sheet, and a template
+                # that leaves the extended cell empty should not cost an estimator the one
+                # number this table exists to show. Labelled, so nobody reads it as a cell.
+                _ext_txt = (f"{_gbp(round(_unit * _qty, 2))} — the sheet's own unit price "
+                            f"x quantity")
+            elif _shown_note["basis"] == "pending":
+                _ext_txt = "not yet priced on the sheet"
+            else:
+                _ext_txt = "—"
             _rec = scan.get(row["code"].upper()) or {}
-            _label = str(((_record_line(record_lines, row) or {}).get("price_origin")
-                          or {}).get("label") or "")
+            _label = str((_rl.get("price_origin") or {}).get("label") or "")
             add(f"| {row['code'] or '—'} | {_description(row)} | {_fmt(row.get('qty'))} "
-                + (f"| {_gbp(_ext)} — a researched market price, not a catalogue price "
+                + (f"| {_ext_txt} — a researched market price, not a catalogue price "
                    f"| **Replace it, or accept it deliberately.** It can move between runs, "
                    f"so an estimate resting on it cannot be reproduced. "
                    if kind == "market" else
-                   f"| {_gbp(_ext)} — an SDI house rate marked INDICATIVE "
+                   f"| {_ext_txt} — an SDI house rate marked INDICATIVE "
                    f"| **Verify it, or accept it deliberately.** "
                    f"{_label or 'A configured rate, reproducible between runs.'} "
                    if kind == "house" else
@@ -1884,7 +1908,11 @@ def build(workbook: Path, scan_json: Optional[Path],
         for row in sorted(labour_rows, key=lambda r: -(_money(r.get("total_value_gbp")) or 0)):
             acc = accepted.get(int(_money(row.get("workbook_row")) or 0), {})
             parts = [str(p) for p in (acc.get("part_numbers") or []) if p]
-            add(f"| `Estimate!{_fmt(row.get('workbook_row'))}` "
+            # The cell the read-back read this money from, where it recorded one. A row
+            # number alone sends a reader to fourteen columns to find the money.
+            _lab_cell = str(row.get("charged_cell") or "").strip() \
+                or f"Estimate!{_fmt(row.get('workbook_row'))}"
+            add(f"| `{_lab_cell}` "
                 f"| {_fmt(row.get('operation'))} "
                 f"| {_fmt(row.get('department'))} "
                 f"| {', '.join(parts) if parts else 'not recorded on the accepted row'} "

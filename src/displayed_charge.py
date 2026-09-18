@@ -102,7 +102,14 @@ def displayed_charge(line: Mapping[str, Any]) -> Dict[str, Any]:
                 "publish_diagnostic": False, "withheld_reason": "no line",
                 "label": "no figure"}
 
+    # EITHER SHAPE OF ROW. A costed LINE carries `charged_ext_gbp`; a row straight off the
+    # read-back carries `total_value_gbp` — and both are the sheet's own figure, read from the
+    # same cell. Refusing the second would throw away a legitimate workbook amount because the
+    # caller happened to hold the row rather than the line, which is a renderer's accident and
+    # not a fact about the money.
     charged = _num(line.get("charged_ext_gbp"))
+    if charged is None:
+        charged = _num(line.get("total_value_gbp"))
     engine = _num(line.get("engine_ext_gbp"))
     cell = cell_reference(line)
 
