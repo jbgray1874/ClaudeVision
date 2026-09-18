@@ -90,6 +90,16 @@ def _clean(value: Any) -> str:
     return str(value if value is not None else "").strip()
 
 
+def _num(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        f = float(value)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
     """The traceable unit cost, or the refusal — computed ONCE, for every surface.
 
@@ -176,16 +186,45 @@ def commercial_inputs(summary: Mapping[str, Any]) -> Dict[str, Any]:
     return {"complete": complete, "outstanding": outstanding, "recorded": bool(block)}
 
 
-def authorisation(summary: Mapping[str, Any]) -> Dict[str, Any]:
-    """Who released this, and when. A named person and a time, or nothing.
+def authorisation(summary: Mapping[str, Any],
+                  price: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """Who released this, when, and whether it is still the figure they released.
 
     An authorisation with no name on it is not an authorisation: the point of the record is
     that somebody is answerable for the figure that went out.
+
+    ── AND A SIGNATURE COVERS WHAT IT WAS GIVEN ────────────────────────────────────────
+    #
+    Dave authorises 401912-02 at £149.87. A drawing is revised, the job is re-estimated, the
+    unit cost comes back £212.40 — and a record that says only "Dave authorised this job"
+    releases the new figure on the old signature. Nobody was careless and a price goes out
+    that nobody approved.
+
+    So where the record names the figure it was signed against, it is checked against what the
+    estimate says now, and a job whose price has moved goes back to the portal for somebody to
+    look at again. Same tolerance as `publishable_total`: half a penny is two reads of one
+    number, not a change anybody made.
+
+    An older record carrying no figure is accepted on its name and time alone — that is what
+    it is, and refusing it would invalidate authorisations made before this existed rather
+    than protecting anybody.
     """
     block = _mapping(summary.get("quote_release"))
     by = _clean(block.get("authorised_by"))
     at = _clean(block.get("authorised_at"))
-    return {"authorised": bool(by and at), "by": by, "at": at}
+    signed = _num(block.get("authorised_unit_gbp"))
+    now = _num((price or {}).get("amount"))
+
+    stale = ""
+    if by and at and signed is not None:
+        if now is None:
+            stale = (f"{by} authorised a unit figure of £{signed:,.2f} and this estimate no "
+                     f"longer produces a traceable one")
+        elif abs(now - signed) > 0.005:
+            stale = (f"{by} authorised £{signed:,.2f} and this estimate now reads "
+                     f"£{now:,.2f} — the price has moved since it was released")
+    return {"authorised": bool(by and at) and not stale,
+            "by": by, "at": at, "signed_for": signed, "stale": stale}
 
 
 def quote_state(summary: Any) -> Dict[str, Any]:
@@ -197,7 +236,7 @@ def quote_state(summary: Any) -> Dict[str, Any]:
     source = _mapping(summary)
     price = _price_fact(source)
     inputs = commercial_inputs(source)
-    auth = authorisation(source)
+    auth = authorisation(source, price)
 
     # ── TWO LENGTHS, ONE PRODUCER ────────────────────────────────────────────────
     #
@@ -261,8 +300,10 @@ def quote_state(summary: Any) -> Dict[str, Any]:
     if not auth["authorised"]:
         blocking.append({
             "gate": "authorisation",
-            "what": "no estimator has authorised this quotation for release",
-            "short": "no estimator has authorised release",
+            "what": (auth["stale"] or
+                     "no estimator has authorised this quotation for release"),
+            "short": ("the price has moved since it was released — it needs authorising again"
+                      if auth["stale"] else "no estimator has authorised release"),
         })
 
     return {

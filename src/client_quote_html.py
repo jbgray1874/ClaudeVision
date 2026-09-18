@@ -113,6 +113,7 @@ _OPS_HIDE = {"handling"}
 # ── helpers ─────────────────────────────────────────────────────────────────
 from quote_state import (CUSTOMER, NotReleasable, PORTAL,  # noqa: E402
                          quote_state, release_meta_tag)
+from release_record import apply_to_summary  # noqa: E402
 
 def _esc(s: Any) -> str:
     return html.escape(str(s if s is not None else ""))
@@ -1843,6 +1844,14 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
         os.environ.get("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes", "on"})
 
     stem = job_stem or summary.get("job_output_stem") or jp.stem
+    out_dir_p = Path(out_dir) if out_dir else jp.parent
+    # ── THE ESTIMATOR'S OWN DECISION, PICKED UP HERE ────────────────────────────────
+    #
+    # The commercial inputs and the release authorisation are a PERSON'S record and outlive
+    # the run they were made about, so they do not live in the summary — the engine rewrites
+    # that whole on every estimate. They sit beside the deliverables and are merged in at the
+    # one point a quote is built. See `release_record`.
+    apply_to_summary(summary, out_dir_p, stem)
     # THE AUDIENCE IS THE RECORD'S TO DECIDE, and this asks rather than assuming: a caller
     # that wanted the customer document and cannot have one gets the portal view, because
     # generating nothing was never the answer.
@@ -1856,7 +1865,6 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
               "identical to a full-run quote so the two can be laid side by side; which "
               "readers ran is in section 4.1 of the job report.",
               flush=True)
-    out_dir_p = Path(out_dir) if out_dir else jp.parent
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
     # IN THE NAME, because a file is identified from a folder listing far more often than it

@@ -44,9 +44,11 @@ cost of holding one back is an email asking for it.
 """
 from __future__ import annotations
 
+import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Mapping, Optional
 
 # Must match `src/quote_state.py`. Restated rather than imported: this service runs from its
 # own checkout and importing the engine to read one meta tag would drag the whole estimator in.
@@ -117,3 +119,87 @@ def why_held(path: Any) -> str:
         return ("this quotation does not declare that it was released for customer issue, "
                 "so it is held")
     return "this quotation is not released for customer issue"
+
+
+# ══ AND THE OTHER DIRECTION: RECORDING THAT SOMEBODY RELEASED IT ════════════════════
+#
+# James Gray, 18 September 2026:
+#
+#     "The portal must write the commercial-input completion and named release
+#      authorisation. Until then every quote correctly stays portal-only."
+#
+# D-145 built the release model and nothing could open it: the engine read
+# `commercial_inputs.complete` and `quote_release.authorised_by`, and nothing anywhere wrote
+# either. Every estimate produced a portal copy — correct, and permanently correct, which is a
+# gate with no key and eventually a gate somebody removes.
+#
+# THE RECORD GOES BESIDE THE DELIVERABLES, NOT INTO THE SUMMARY. The summary is a run artefact
+# the engine rewrites whole on every estimate, so an authorisation written there is destroyed
+# by the next run of the same job. A person's decision is the opposite kind of fact: made
+# once, outliving the run it was made about.
+#
+# THE WRITER IS HERE AND THE READER IS IN THE ENGINE because the two are not on the same
+# machine — that separation is the whole reason the runner exists. What they share is the
+# share, and a record on it in an agreed shape. `src/release_record.py` reads it, and
+# `test_the_portal_can_release_a_quote_the_engine_then_issues` writes with this and reads with
+# that, so the two cannot drift.
+
+# Must match `src/release_record.py`.
+RECORD_SCHEMA = "quote_release_record.v1"
+
+
+def _safe_stem(stem: Any) -> str:
+    return re.sub(r"[^\w\- ]", "", str(stem or "").strip()).strip() or "job"
+
+
+def record_path(out_dir: Any, stem: Any) -> Path:
+    return Path(str(out_dir)) / f"{_safe_stem(stem)}_release.json"
+
+
+def write_release_record(out_dir: Any, stem: Any, *, authorised_by: Any,
+                         unit_gbp: Any, unit_cell: Any = "",
+                         commercial_inputs: Any = None,
+                         at: Any = None) -> Dict[str, Any]:
+    """Record that a named person completed the inputs and released THIS figure.
+
+    WHY THE FIGURE IS REQUIRED. Dave authorises 401912-02 at £149.87. A drawing is revised,
+    the job is re-estimated, the unit cost comes back £212.40 — and a record saying only "Dave
+    authorised this job" releases the new figure on the old signature. Nobody did anything
+    careless and a price goes out that nobody approved. So what was signed is recorded, and
+    the engine refuses the authorisation once the estimate says something else.
+    """
+    who = str(authorised_by or "").strip()
+    if not who:
+        raise ValueError("an authorisation needs the name of the person making it")
+    try:
+        figure = float(unit_gbp)
+    except (TypeError, ValueError):
+        raise ValueError("an authorisation must name the unit figure it authorises")
+    when = str(at or "").strip() or datetime.now(timezone.utc).isoformat(timespec="seconds")
+    inputs = commercial_inputs if isinstance(commercial_inputs, Mapping) else {}
+    record = {
+        "schema": RECORD_SCHEMA,
+        "job_output_stem": str(stem or "").strip(),
+        "commercial_inputs": {"complete": True, "items": dict(inputs)},
+        "quote_release": {
+            "authorised_by": who,
+            "authorised_at": when,
+            "authorised_unit_gbp": figure,
+            "authorised_unit_cell": str(unit_cell or "").strip(),
+        },
+    }
+    path = record_path(out_dir, stem)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Written whole and replaced: a half-written record reads as a shorter one rather than as
+    # a broken file, and a shorter one here is a different authorisation.
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    return record
+
+
+def clear_release_record(out_dir: Any, stem: Any) -> bool:
+    """Withdraw an authorisation. The next quote for this job is the portal copy again."""
+    try:
+        record_path(out_dir, stem).unlink()
+        return True
+    except OSError:
+        return False

@@ -477,6 +477,21 @@ class RecipientsRequest(BaseModel):
     recipients: str = ""
 
 
+class ReleaseRequest(BaseModel):
+    """What an estimator records when they release a quotation.
+
+    `folder` and `stem` identify the estimate on the share; `unit_gbp` is the figure being
+    authorised, which the record keeps so a later re-run at a different price cannot go out
+    on this signature.
+    """
+    folder: str
+    stem: str
+    authorised_by: str = ""
+    unit_gbp: Optional[float] = None
+    unit_cell: str = ""
+    commercial_inputs: Dict[str, Any] = {}
+
+
 class SendRequest(BaseModel):
     recipients: str = ""
     # Which of the run's OWN deliverables to attach. Empty means all of them except the
@@ -842,6 +857,58 @@ def _email_finished_run(snapshot: Dict[str, Any], deliverables: List[Dict[str, s
 
 
 # ══ THE PAGE'S ENDPOINTS ═════════════════════════════════════════════════════
+@router.post("/release")
+def release(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Record that the commercial inputs are complete and a named estimator has released it.
+
+    THE KEY TO THE GATE. D-145 built the release model and nothing could open it: the engine
+    read `commercial_inputs.complete` and `quote_release.authorised_by` and nothing anywhere
+    wrote either, so every estimate produced a portal copy — correct, and permanently correct.
+
+    The record goes BESIDE THE DELIVERABLES, not into the summary. The summary is a run
+    artefact the engine rewrites whole on every estimate; this is a person's decision, made
+    once, outliving the run it was made about. `release_record` is the engine's half.
+
+    IT IS NOT AN OVERRIDE. Everything else `quote_state` asks — a traceable price, nothing
+    open on the costed record, money that can be evidenced, the right batch — is still asked
+    when the quote is built. This endpoint records the two facts only a person can supply.
+    """
+    _check_key(x_sdi_key)
+    folder = _within_a_root(req.folder)
+    if folder is None:
+        raise HTTPException(
+            403, "That folder is outside the shares this service may write to.")
+    if not folder.is_dir():
+        raise HTTPException(404, "No such folder.")
+    who = (req.authorised_by or "").strip()
+    if not who:
+        raise HTTPException(
+            400, "An authorisation needs the name of the person making it.")
+    if req.unit_gbp is None:
+        raise HTTPException(
+            400, "An authorisation must name the unit figure it authorises, so a later "
+                 "re-run at a different price cannot go out on this signature.")
+    try:
+        record = quote_release.write_release_record(
+            folder, req.stem, authorised_by=who, unit_gbp=req.unit_gbp,
+            unit_cell=req.unit_cell, commercial_inputs=req.commercial_inputs)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(400, str(exc))
+    return {"ok": True, "record": record,
+            "path": str(quote_release.record_path(folder, req.stem)),
+            "note": "The next quote generated for this job is the customer document."}
+
+
+@router.post("/release/withdraw")
+def release_withdraw(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Take an authorisation back. The next quote for this job is the portal copy again."""
+    _check_key(x_sdi_key)
+    folder = _within_a_root(req.folder)
+    if folder is None:
+        raise HTTPException(403, "That folder is outside the shares this service may write.")
+    return {"ok": True, "withdrawn": quote_release.clear_release_record(folder, req.stem)}
+
+
 @router.get("/recipients")
 def recipients_get(x_sdi_key: Optional[str] = Header(default=None)):
     """The list the estimating page pre-fills its box with."""
