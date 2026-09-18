@@ -8,9 +8,29 @@ def _safe_float(value: Any) -> Any:
         return None
 
 
+def _rollup(part: Dict[str, Any]) -> Dict[str, Any]:
+    """The part's geometry rollup, or an empty one — never a KeyError.
+
+    A PART WITHOUT ONE IS NOT AN IMPOSSIBLE PART, AND IT KILLED A WHOLE JOB. Every read in
+    this module was a bare `part["geometry_rollup"]`, which is safe only because the one
+    caller -- `_interpret_part` -- guarantees the key. The moment a second caller appears
+    (costing a part mid-route, where a bought-in has no rollup at all: 401912-02's magnetic
+    tape is "25.4mm ADHESIVE MAGNETIC TAPE, L: 450mm" and nothing has ever measured it),
+    the whole estimate dies with a KeyError and the run files nothing. That happened on
+    401912-02: the traceback ends here, and everything upstream of it -- the DXF, the model
+    extract, the SQL price lookups, sixty-nine seconds of work -- is thrown away.
+
+    A missing rollup means "nothing measured this part", which is an ANSWER, and the rungs
+    below already handle it: no geometry bends, no dashed lines, fall through to the
+    drawing's own text. So the absence is given its meaning here, once, instead of every
+    reader having to remember."""
+    _r = part.get("geometry_rollup")
+    return _r if isinstance(_r, dict) else {}
+
+
 def infer_hole_count(part: Dict[str, Any], geometry_confidence: float) -> int:
     text_hole_sizes = len(part.get("hole_sizes_mm", []))
-    geometry_hole_count = part["geometry_rollup"].get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
+    geometry_hole_count = _rollup(part).get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
     pitch_values = [_safe_float(value) for value in part.get("pitch_values_mm", []) if _safe_float(value) is not None]
     largest_span = max(
         [value for value in [_safe_float(part.get("overall_length_mm")), _safe_float(part.get("overall_width_mm"))] if value is not None],
@@ -81,8 +101,8 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
     angle_count = len(part.get("angles_deg", []))
     fold_value_count = len(part.get("fold_values_mm", []))
     fold_text_count = part.get("fold_count_textual", 0)
-    geometry_bends = part["geometry_rollup"].get("estimated_bend_line_count", 0) if geometry_confidence >= 0.55 else 0
-    dashed_lines = part["geometry_rollup"].get("dashed_long_axis_lines", 0)
+    geometry_bends = _rollup(part).get("estimated_bend_line_count", 0) if geometry_confidence >= 0.55 else 0
+    dashed_lines = _rollup(part).get("dashed_long_axis_lines", 0)
     overall_length = part.get("overall_length_mm") or 0
     overall_width = part.get("overall_width_mm") or 0
     long_strip = bool(overall_length and overall_width and overall_length >= overall_width * 8)
@@ -117,11 +137,11 @@ def infer_bend_count(part: Dict[str, Any], geometry_confidence: float) -> int:
 
 
 def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
-    geometry_confidence = part["geometry_rollup"].get("confidence", {}).get("geometry_reliability", 0.0) if isinstance(part["geometry_rollup"].get("confidence"), dict) else 0.0
+    geometry_confidence = _rollup(part).get("confidence", {}).get("geometry_reliability", 0.0) if isinstance(_rollup(part).get("confidence"), dict) else 0.0
     text_hole_count = len(part.get("hole_sizes_mm", []))
     text_slot_count = len(part.get("slot_sizes_mm", [])) + (1 if part.get("slot_detected") else 0)
-    geometry_hole_count = part["geometry_rollup"].get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
-    geometry_slot_count = part["geometry_rollup"].get("estimated_slot_like_features", 0) if geometry_confidence >= 0.55 else 0
+    geometry_hole_count = _rollup(part).get("estimated_hole_count", 0) if geometry_confidence >= 0.55 else 0
+    geometry_slot_count = _rollup(part).get("estimated_slot_like_features", 0) if geometry_confidence >= 0.55 else 0
     # WHATEVER THE MODEL ALREADY SAID, BEFORE THIS FUNCTION REPLACES THE DICT IT SAID IT IN.
     # This returns a FRESH manufacturing_features that `_interpret_part` assigns straight over
     # the old one, so a source the SOLIDWORKS connector stamped — the plate gate's measured
@@ -194,8 +214,8 @@ def synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
         "slot_sizes_mm": part.get("slot_sizes_mm", []),
         "bend_angles_deg": part.get("angles_deg", []),
         "fold_values_mm": part.get("fold_values_mm", []),
-        "cut_length_mm": round((part["geometry_rollup"].get("estimated_cut_length_mm", 0.0) or 0.0) * max(0.25, geometry_confidence), 2),
-        "raw_cut_length_mm": round(part["geometry_rollup"].get("estimated_cut_length_mm", 0.0) or 0.0, 2),
+        "cut_length_mm": round((_rollup(part).get("estimated_cut_length_mm", 0.0) or 0.0) * max(0.25, geometry_confidence), 2),
+        "raw_cut_length_mm": round(_rollup(part).get("estimated_cut_length_mm", 0.0) or 0.0, 2),
         "geometry_reliability": geometry_confidence,
         "feature_confidence": confidence,
         "source_summary": {

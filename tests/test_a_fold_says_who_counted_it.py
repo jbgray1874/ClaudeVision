@@ -30,6 +30,8 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -141,6 +143,48 @@ def test_the_estimator_recognises_a_measured_source():
     for inferred in ("drawing_text", "inferred_dashed_lines", "no_bend_evidence",
                      "inferred_mirrored_return_flange", "geometry_rollup"):
         assert inferred not in estimator._MEASURED_BEND_SOURCES
+
+
+# ── a part nothing measured is an answer, not a crash ───────────────────────────────
+
+_TAPE = {"part_number": "MAGNET45", "is_bought_in": True,
+         "description": "25.4mm ADHESIVE MAGNETIC TAPE, L: 450mm"}
+
+
+def test_a_bought_in_with_no_rollup_does_not_kill_the_job():
+    """401912-02 DIED HERE. Every read in this module was a bare `part["geometry_rollup"]`,
+    safe only because the one caller guaranteed the key. A second caller — costing a part
+    mid-route — reached it with the magnetic tape, which nothing has ever measured, and the
+    KeyError took the whole estimate down: the DXF, the model extract, the SQL price lookups
+    and sixty-nine seconds of work, filed nowhere. A missing rollup means "nothing measured
+    this part", which is an answer the rungs below already know how to handle."""
+    from feature_synthesis import infer_bend_count, infer_hole_count
+    part = dict(_TAPE)
+    assert infer_bend_count(part, 0.0) == 0
+    assert infer_hole_count(part, 0.0) == 0
+    assert part["bend_count_source"] == "no_bend_evidence"
+
+
+def test_the_synthesis_survives_it_too():
+    mf = synthesize_manufacturing_features(dict(_TAPE))
+    assert mf["bend_count"] == 0
+    assert mf["cut_length_mm"] == 0.0
+    assert mf["fold_required"] is False
+
+
+@pytest.mark.parametrize("rollup", [None, [], "", 0])
+def test_a_rollup_that_is_not_a_dict_is_treated_as_an_absent_one(rollup):
+    """An empty rollup arrives as several different falsy shapes depending on which reader
+    gave up. None of them should be subscripted."""
+    from feature_synthesis import infer_bend_count
+    assert infer_bend_count({"geometry_rollup": rollup}, 0.9) == 0
+
+
+def test_a_real_rollup_is_still_read():
+    """The control: hardening a read must not quietly stop it reading."""
+    from feature_synthesis import infer_bend_count
+    assert infer_bend_count(
+        {"geometry_rollup": {"dashed_long_axis_lines": 2}}, 0.9) == 2
 
 
 # ── and the powder is spread over the measured count, not the loudest one ───────────
