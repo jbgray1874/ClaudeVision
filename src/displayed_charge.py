@@ -186,16 +186,33 @@ def publishable_total(record: Mapping[str, Any]) -> Dict[str, Any]:
     the engine's part estimates before the sheet's blocks, its absorption divisor and its
     customer terms, and on 401912-02 that was £321.88 against a workbook reading £150.32.
 
-    Where the sheet's total cannot be read, this returns None and says so, which is the honest
-    answer: a sentence with no total in it is better than a sentence with an untraceable one.
+    AND THE AMOUNT AND THE CELL MUST BE THE SAME READ.
+
+    The first cut checked only that a cell EXISTED. The amount arrived from
+    `workbook_equivalent_pricing.m105_total_unit_cost_gbp` and the cell from
+    `final_estimate.totals.unit_cell` — two different records, paired by a renderer and
+    vouched for by nothing. That publishes "£149.87, Estimate!M105" without ever establishing
+    that M105 holds £149.87, which is a WORSE failure than the untraceable figure it replaced:
+    an unsourced number invites checking, and a wrong citation stops it.
+
+    So a reader that finds the cell records the value it found there in the same breath, and
+    a proposed amount from anywhere else must AGREE with it. Where they disagree the total is
+    refused and the two figures are named, because that disagreement is a real fault in the
+    read-back or the pricing and neither is something to paper over.
+
+    Where the sheet's total cannot be read, this returns None and says so: a sentence with no
+    total is better than a sentence with an untraceable one.
     """
     if not isinstance(record, Mapping):
         return {"amount": None, "cell": None, "basis": NOTHING,
                 "why": "no costed record"}
     run = record.get("run") if isinstance(record.get("run"), Mapping) else {}
-    # The cell the read-back located by scanning for the unit-cost label. Not "Estimate!G6" —
-    # hard-coding that would be the same guess this whole module refuses to make.
     cell = str(run.get("unit_cell") or record.get("unit_cell") or "").strip() or None
+    # What the reader actually found IN that cell, recorded by the same pass that located it.
+    cell_value = _num(run.get("unit_cell_value"))
+    if cell_value is None:
+        cell_value = _num(record.get("unit_cell_value"))
+
     for holder, key in ((run, "unit_cost_gbp"), (run, "unit_gbp"),
                         (record, "unit_cost_gbp")):
         value = _num((holder or {}).get(key))
@@ -206,6 +223,16 @@ def publishable_total(record: Mapping[str, Any]) -> Dict[str, Any]:
             return {"amount": None, "cell": None, "basis": NOTHING,
                     "why": ("the sheet's total was read but the cell it came from was not "
                             "recorded, so it cannot be published as a traceable figure")}
+        if cell_value is None:
+            return {"amount": None, "cell": cell, "basis": NOTHING,
+                    "why": (f"a cell ({cell}) was recorded but not what it held, so the "
+                            f"figure and its citation come from different reads and nothing "
+                            f"establishes that they agree")}
+        if abs(cell_value - value) > 0.005:
+            return {"amount": None, "cell": cell, "basis": NOTHING,
+                    "why": (f"the proposed total (£{value:,.2f}) does not match what "
+                            f"{cell} holds (£{cell_value:,.2f}) — one of the two readings "
+                            f"is wrong and publishing either would cite the other")}
         return {"amount": value, "cell": cell, "basis": WORKBOOK, "why": ""}
     return {"amount": None, "cell": None, "basis": NOTHING,
             "why": ("the sheet's own total could not be read, and an engine aggregate is "

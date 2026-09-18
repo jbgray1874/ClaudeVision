@@ -140,7 +140,9 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
     # figure, and "£149.87" with nowhere to check it is the £321.88 shape.
     _fe_tot = (_get(summary, "final_estimate", "totals", default={}) or {})
     from displayed_charge import publishable_total as _pub            # noqa: PLC0415
-    _pt = _pub({"run": {"unit_cost_gbp": unit, "unit_cell": _fe_tot.get("unit_cell")}})
+    _pt = _pub({"run": {"unit_cost_gbp": unit,
+                        "unit_cell": _fe_tot.get("unit_cell"),
+                        "unit_cell_value": _fe_tot.get("unit_cell_value")}})
     return {
         "unit": unit, "material": material, "labour": labour,
         "unit_publishable": _pt.get("amount"),

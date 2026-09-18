@@ -91,7 +91,8 @@ def _summary():
         "final_estimate": {
             "schema": "final_estimate.v2",
             "totals": {"material_gbp": 3.07, "labour_gbp": 131.34,
-                       "unit_gbp": 149.87, "unit_cell": "Estimate!M105"},
+                       "unit_gbp": 149.87, "unit_cell": "Estimate!M105",
+                       "unit_cell_value": 149.87},
             "material_rows": [
                 {"part_number": "401912-02-01M", "block": "steel", "workbook_row": 63,
                  "charged_cell": "Estimate!M63", "total_value_gbp": 3.07},
@@ -116,7 +117,8 @@ def full_report():
     _real = J._record_for
     J._record_for = lambda s: {"lines": [_steel_line(), _pending_line()],
                                "run": {"unit_cost_gbp": 149.87,
-                                       "unit_cell": "Estimate!M105"}}
+                                       "unit_cell": "Estimate!M105",
+                                       "unit_cell_value": 149.87}}
     try:
         html = J.build_report_html(_summary())
     finally:
@@ -177,7 +179,8 @@ def test_no_published_amount_lacks_a_recorded_cell():
     # A TOTAL with no cell is refused outright. That is the £321.88 rule.
     assert publishable_total({"run": {"unit_cost_gbp": 149.87}})["amount"] is None
     assert publishable_total(
-        {"run": {"unit_cost_gbp": 149.87, "unit_cell": "Estimate!G6"}})["amount"] == 149.87
+        {"run": {"unit_cost_gbp": 149.87, "unit_cell": "Estimate!G6",
+                  "unit_cell_value": 149.87}})["amount"] == 149.87
 
 
 # ── and the covering email, rendered ────────────────────────────────────────────────
@@ -223,7 +226,8 @@ def _hl(unit=149.87, cell="Estimate!M105"):
     return J._extract_headline({
         "estimate_summary": {"workbook_equivalent_pricing": {
             "m105_total_unit_cost_gbp": unit}},
-        "final_estimate": {"totals": {"unit_gbp": unit, "unit_cell": cell}},
+        "final_estimate": {"totals": {"unit_gbp": unit, "unit_cell": cell,
+                                      "unit_cell_value": unit}},
     })
 
 
@@ -292,3 +296,92 @@ def test_the_three_pending_states_are_distinguishable():
     assert displayed_charge({"engine_ext_gbp": 4.40})["basis"] == "pending"
     assert displayed_charge({"charged_ext_gbp": 9.99})["basis"] == "pending_traceability"
     assert displayed_charge({})["basis"] == "none"
+
+
+# ── the two rendered cases, not source checks ───────────────────────────────────────
+#
+# James Gray, 18 Sep 2026: "The tests also need two real rendered cases, rather than source
+# checks: quote built with a missing/invalid traceable total → no customer price; report/quote
+# where the recorded cell's value disagrees with the proposed total → PENDING, not a figure."
+#
+# THE SECOND CASE IS THE ONE THAT MATTERS. Pairing an amount from
+# `workbook_equivalent_pricing` with a cell from `final_estimate.totals` and checking only
+# that the cell EXISTS publishes "£149.87, Estimate!M105" without ever establishing that M105
+# holds £149.87. A wrong citation is worse than none: an unsourced number invites checking and
+# a cited one stops it.
+
+def _quote_summary(unit=149.87, cell="Estimate!M105", cell_value=149.87):
+    totals = {"unit_gbp": unit}
+    if cell:
+        totals["unit_cell"] = cell
+    if cell_value is not None:
+        totals["unit_cell_value"] = cell_value
+    return {
+        "job_output_stem": "401912-02",
+        "client": "tesco",
+        "estimate_summary": {
+            "workbook_equivalent_pricing": {"m105_total_unit_cost_gbp": unit},
+            "order_quantity": 3,
+        },
+        "final_estimate": {"totals": totals, "material_rows": [], "labour_rows": []},
+    }
+
+
+def _quote_text(summary):
+    import client_quote_html as Q
+    return re.sub(r"<[^>]+>", " ", Q.build_quote_html(summary))
+
+
+def test_a_quote_with_no_traceable_total_carries_no_customer_price():
+    """The rendered case. A quote is the one deliverable a customer keeps."""
+    said = _quote_text(_quote_summary(cell=None, cell_value=None))
+    assert "149.87" not in said
+    assert "224.81" not in said, "a marked-up price was computed from an untraceable cost"
+
+
+def test_a_quote_whose_cell_disagrees_carries_no_customer_price():
+    """The citation says Estimate!M105; M105 holds something else. Neither may be published."""
+    said = _quote_text(_quote_summary(unit=149.87, cell_value=321.88))
+    assert "149.87" not in said
+    assert "321.88" not in said
+
+
+def test_a_quote_with_a_verified_total_does_price():
+    """The control. A guard that refuses everything is not a guard."""
+    said = _quote_text(_quote_summary())
+    assert "149.87" in said or "224" in said, "the verified case must still produce a price"
+
+
+def test_the_report_refuses_a_total_its_cell_disagrees_with():
+    """Same fact, rendered report."""
+    import job_report_html as J
+    hl = J._extract_headline({
+        "estimate_summary": {"workbook_equivalent_pricing": {
+            "m105_total_unit_cost_gbp": 149.87}},
+        "final_estimate": {"totals": {"unit_gbp": 149.87,
+                                      "unit_cell": "Estimate!M105",
+                                      "unit_cell_value": 321.88}},
+    })
+    said = J._unit_text(hl)
+    assert "PENDING" in said
+    assert "149.87" not in said and "321.88" not in said
+
+
+def test_the_refusal_names_both_figures():
+    """A disagreement between the read and the citation is a real fault in one of them, and
+    an estimator can only chase it if the page says which two numbers differ."""
+    from displayed_charge import publishable_total
+    why = publishable_total({"run": {"unit_cost_gbp": 149.87,
+                                     "unit_cell": "Estimate!M105",
+                                     "unit_cell_value": 321.88}})["why"]
+    assert "149.87" in why and "321.88" in why and "Estimate!M105" in why
+
+
+def test_the_quote_fails_closed_when_the_check_cannot_run():
+    """It was wrapped in `except Exception: pass`, which leaves the cost SET when the guard
+    itself breaks — the one failure mode a guard exists for, on the page a customer keeps."""
+    import client_quote_html as Q
+    src = open(Q.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
+    at = src.index("_q_tot = publishable_total(")
+    window = src[at:at + 400]
+    assert "except Exception" not in window, "the traceability check can still fail open"

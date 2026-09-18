@@ -113,6 +113,8 @@ def read_estimate_figures(workbook_path: str | Path) -> Dict[str, Any]:
         # The cell the price was read from. A quote is the one deliverable a customer keeps,
         # so it is the last place an untraceable figure should be allowed.
         "price_cell": cells.get(source_label, ""),
+        # The value that cell held — this scan read it, so it can vouch for it.
+        "price_cell_value": price,
     }
 
 
@@ -221,6 +223,7 @@ def _summary_from_figures(figures: Dict[str, Any], *, units: int, drawing_number
         _fe = dict(summary.get("final_estimate") or {})
         _fe_tot = dict(_fe.get("totals") or {})
         _fe_tot["unit_cell"] = figures["price_cell"]
+        _fe_tot["unit_cell_value"] = figures.get("price_cell_value")
         _fe["totals"] = _fe_tot
         summary["final_estimate"] = _fe
     _inputs = dict(_es.get("estimate_workbook_inputs") or {})

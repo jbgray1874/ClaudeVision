@@ -111,6 +111,8 @@ _OPS_HIDE = {"handling"}
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
+from displayed_charge import publishable_total  # noqa: E402
+
 def _esc(s: Any) -> str:
     return html.escape(str(s if s is not None else ""))
 
@@ -1316,15 +1318,22 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # Where the cost cannot be traced, no unit price is computed, so the quote renders its
     # own missing-price path rather than a confident figure resting on nothing.
     unit_cost = _get(es, "workbook_equivalent_pricing", "m105_total_unit_cost_gbp")
-    try:
-        from displayed_charge import publishable_total as _pub_q       # noqa: PLC0415
-        _q_tot = _pub_q({"run": {
-            "unit_cost_gbp": unit_cost,
-            "unit_cell": (_get(summary, "final_estimate", "totals", "unit_cell") or "")}})
-        if _q_tot.get("amount") is None:
-            unit_cost = None
-    except Exception:                                                  # noqa: BLE001
-        pass
+    # ── AND IT FAILS CLOSED ──────────────────────────────────────────────────────
+    #
+    # The first cut wrapped this in `except Exception: pass`, which leaves `unit_cost` SET
+    # when the traceability check itself breaks — so the one failure mode a guard exists for
+    # is the one where it lets the figure through. On the page a customer keeps.
+    #
+    # There is no broad except any more: the import is at module scope with the rest, and a
+    # check that cannot run refuses the price rather than waving it past.
+    _fe_totals = _get(summary, "final_estimate", "totals") or {}
+    _q_tot = publishable_total({"run": {
+        "unit_cost_gbp": unit_cost,
+        "unit_cell": _fe_totals.get("unit_cell") or "",
+        "unit_cell_value": _fe_totals.get("unit_cell_value"),
+    }})
+    if _q_tot.get("amount") is None:
+        unit_cost = None
     unit_price = (unit_cost * MARKUP_FACTOR) if isinstance(unit_cost, (int, float)) else None
     order_value = (unit_price * qty) if (unit_price is not None and qty) else None
 

@@ -292,7 +292,7 @@ def seventy_three_thirty_two() -> dict:
             # The read-back records the cell it scanned the unit cost from. A published total
             # names where a reader checks it; one that cannot is refused.
             "totals": {"material_gbp": 40.89, "labour_gbp": 33.59, "unit_gbp": 80.09,
-                       "unit_cell": "Estimate!M105"},
+                       "unit_cell": "Estimate!M105", "unit_cell_value": 80.09},
             "labour_rows": [calc for calc, _ in labour],
             "material_rows": material_rows,
         },

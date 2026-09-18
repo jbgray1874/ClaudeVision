@@ -276,6 +276,11 @@ def read_unit_price_composition(com_ws, material: Optional[float], labour: Optio
     try:
         from openpyxl.utils import get_column_letter as _cl            # noqa: PLC0415
         out["unit_cell"] = f"Estimate!{_cl(int(cell[1]))}{int(cell[0])}"
+        # AND WHAT IT HELD, from the same read. A cell reference recorded without its value
+        # lets a renderer pair any amount with any citation — "£149.87, Estimate!M105" with
+        # nothing establishing that M105 holds £149.87. A wrong citation is worse than none:
+        # an unsourced number invites checking and a cited one stops it.
+        out["unit_cell_value"] = _safe_float(com_ws.Cells(cell[0], cell[1]).Value)
     except Exception:                                                  # noqa: BLE001
         pass
     try:
@@ -830,6 +835,8 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
                 # refuses to publish a job total with no cell behind it, and hard-coding
                 # "Estimate!G6" there would be the same guess this read-back exists to avoid.
                 **({"unit_cell": _comp["unit_cell"]} if (_comp or {}).get("unit_cell") else {}),
+                **({"unit_cell_value": _comp["unit_cell_value"]}
+                   if (_comp or {}).get("unit_cell_value") is not None else {}),
                 # DECLARED, not residual. Present only when the unit cell's formula
                 # accounted for the gap; absent when it did not, so the reconciliation
                 # invariant still fires rather than being satisfied by its own arithmetic.

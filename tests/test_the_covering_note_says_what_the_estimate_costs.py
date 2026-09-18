@@ -99,7 +99,7 @@ def _scan(path: Path) -> Path:
             # The read-back records the cell it scanned the unit cost from — a published
             # total names where a reader checks it, and one that cannot is refused.
             "totals": {"material_gbp": 541.42, "labour_gbp": 323.84, "unit_gbp": 930.39,
-                       "unit_cell": "Estimate!M105"},
+                       "unit_cell": "Estimate!M105", "unit_cell_value": 930.39},
             "labour_rows": [
                 {"operation": "P.Coat", "description": "P.Coat, 16 parts",
                  "department": "P/C", "batch_hours": 0.344,
@@ -349,7 +349,8 @@ def test_the_quality_grade_is_refused_rather_than_guessed_from_a_trimmed_extract
     from a trimmed one produces a confident wrong assessment of Design's work."""
     import json as _json
     (tmp_path / "trim.json").write_text(_json.dumps({
-        "final_estimate": {"totals": {"unit_gbp": 1.0, "unit_cell": "Estimate!M105"},
+        "final_estimate": {"totals": {"unit_gbp": 1.0, "unit_cell": "Estimate!M105",
+                                     "unit_cell_value": 1.0},
                            "labour_rows": [],
                            "material_rows": []},
         "parts": [{"part_number": "01-01M", "pages": [6]}],   # numbers and pages only

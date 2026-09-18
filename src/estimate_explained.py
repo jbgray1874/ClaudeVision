@@ -200,6 +200,10 @@ def _sheet_totals(wb, final: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                         if key == "unit":
                             from openpyxl.utils import get_column_letter as _cl  # noqa: PLC0415
                             out["unit_cell"] = f"Estimate!{_cl(c)}{r}"
+                            # The value FROM that cell, in the same breath. See
+                            # `publishable_total`: a citation whose value nobody recorded
+                            # cannot vouch for the figure printed beside it.
+                            out["unit_cell_value"] = round(value, 2)
                         break
     return _fill_totals_from_final(out, final)
 
@@ -223,6 +227,8 @@ def _fill_totals_from_final(out: Dict[str, Any],
     # then refuses to publish rather than inventing "Estimate!G6".
     if totals.get("unit_cell"):
         out["unit_cell"] = str(totals["unit_cell"])
+    if totals.get("unit_cell_value") is not None:
+        out["unit_cell_value"] = _money(totals["unit_cell_value"])
     return out
 
 
@@ -2647,7 +2653,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # not, the reader is told rather than shown a figure that cannot be checked.
     from displayed_charge import publishable_total as _pub_total       # noqa: PLC0415
     _job_total = _pub_total({"run": {"unit_cost_gbp": _money(totals.get("unit")),
-                                     "unit_cell": totals.get("unit_cell")}})
+                                     "unit_cell": totals.get("unit_cell"),
+                                     "unit_cell_value": totals.get("unit_cell_value")}})
     # AND IT PRINTS WHAT THE FACT VOUCHED FOR. The first cut called `publishable_total` and
     # then printed `totals["unit"]` anyway, using the fact only to decide whether to append a
     # cell reference — so a total the fact had REFUSED still appeared, merely without its

@@ -136,7 +136,8 @@ def test_rubbish_in_does_not_crash_a_renderer():
 
 def test_a_narrative_total_comes_from_the_sheet():
     got = publishable_total({"run": {"unit_cost_gbp": 149.87,
-                                     "unit_cell": "Estimate!G6"}})
+                                     "unit_cell": "Estimate!G6",
+                                     "unit_cell_value": 149.87}})
     assert got["amount"] == 149.87
     assert got["cell"] == "Estimate!G6"
 
