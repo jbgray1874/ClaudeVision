@@ -12,15 +12,15 @@ and, 17 September, on where settings live:
     "config needs to be in config files. not json files lying around and being copied
      manually around."
 
-EVERY DEPARTMENT RATE IN THE SHOP LIVED IN A GITIGNORED FILE. `tim_rate_card_ingest` reads
+EVERY DEPARTMENT RATE IN THE SHOP LIVED IN A GITIGNORED FILE. `rate_card_ingest` reads
 the estimate template's own "Labour / Rate / Dept" block — the estimator's card, the one they
-amend — and wrote it to `tim_rate_card.json` BESIDE config.py, which `src/.gitignore`'s
+amend — and wrote it to a JSON BESIDE config.py, which `src/.gitignore`'s
 blanket `*.json` rule has always excluded. config then overlaid it at import. So:
 
   * the numbers that price every route were outside version control
   * two machines could hold different cards and produce different money from one commit,
     with nothing on either book to compare
-  * it was SILENT — `TIM_RATE_CARD_LOADED` was assigned and read by NOTHING, so a run with
+  * it was SILENT — the loaded-flag was assigned and read by NOTHING, so a run with
     a card and a run without looked identical on the page
   * and the overlay wrote INSIDE its loop, so a throw part-way left a rate card HALF
     APPLIED: some departments on this year's numbers and some on last year's
@@ -29,8 +29,10 @@ That last one is the reason this is not merely tidying. A half-applied card is t
 outcome nobody would choose and the one nothing would have reported.
 
 The open £355.43-vs-£331.42 question is the same fault wearing a different hat: `_rate_table_find`
-records that "Tim's 1310 books P.Coat at 331.42, dept POWDER. Ours books 355.43, dept P/C",
-and the answer was always in the live template, which nothing read.
+records a completed estimate booking P.Coat at 331.42 under dept POWDER while the engine
+booked 355.43 under P/C. Neither of those settles anything -- a figure copied off one
+estimator's sheet cannot validate or replace the current template rate -- and the answer was
+always in the live template, which nothing read.
 """
 from __future__ import annotations
 
@@ -85,10 +87,10 @@ def test_the_templates_labour_block_is_read(card_from):
 
 
 def test_the_open_powder_question_is_answered_by_the_sheet(card_from):
-    """£355.43 (P/C) against £331.42 (POWDER) has been an open question waiting on Tim, on a
-    rate worth about sixty per cent of 401912-02's unit cost. The live template answers it
-    and nothing was reading it: the sheet's figure is taken WHICHEVER WAY it differs from
-    the built-in default, which is the whole of the ruling."""
+    """£355.43 (P/C) against £331.42 (POWDER) was an open question, on a rate worth about
+    sixty per cent of 401912-02's unit cost. It is not settled by either figure: it is settled
+    by the TEMPLATE, which is the sheet an estimator amends. Whichever way the template's
+    figure differs from the built-in default, the template's is taken -- that is the ruling."""
     card, _ = card_from(_ORDINARY)
     assert card["powder_coating"] == 331.42
     assert card["powder_coating"] != 355.43, "the config default is still deciding"
@@ -149,8 +151,8 @@ def test_a_label_the_engine_does_not_cost_is_ignored_quietly(card_from):
 def test_the_ingester_and_the_engine_share_one_label_mapping():
     """Two copies of this mapping is two answers to 'what does p.coat cost' waiting to
     happen. The ingester imports config's."""
-    import tim_rate_card_ingest
-    assert tim_rate_card_ingest.TIM_LABEL_TO_OP is config.ESTIMATE_LABOUR_LABEL_TO_OP
+    import rate_card_ingest
+    assert rate_card_ingest.LABEL_TO_OP is config.ESTIMATE_LABOUR_LABEL_TO_OP
 
 
 def test_every_rate_the_engine_holds_can_name_its_source():
@@ -169,7 +171,7 @@ def test_an_operation_with_no_rate_says_that_rather_than_inventing_one():
 # ── and the run says which card priced it ────────────────────────────────────────────
 
 def test_the_run_states_where_its_rates_came_from():
-    """`TIM_RATE_CARD_LOADED` was assigned and read by nothing. A silent rate card is how
+    """The loaded-flag was assigned and read by nothing. A silent rate card is how
     two machines price one job differently and neither book can be blamed."""
     assert config.RATE_CARD_NOTES, "the run has nothing to say about its own rates"
     assert any("rate" in n.lower() for n in config.RATE_CARD_NOTES)
@@ -193,7 +195,7 @@ def test_a_disagreement_between_the_file_and_the_sheet_is_reported(tmp_path, mon
     monkeypatch.setattr(config, "RATE_CARD_NOTES", [])
     monkeypatch.setattr(config, "HOURLY_RATE_SOURCE", dict(config.HOURLY_RATE_SOURCE))
     monkeypatch.setattr(config, "HOURLY_RATES_GBP", dict(config.HOURLY_RATES_GBP))
-    rc = tmp_path / "tim_rate_card.json"
+    rc = tmp_path / "rate_card.json"
     rc.write_text(json.dumps({"by_op": {"folding": 38.0, "oven": 26.5}, "source": "1310"}))
     monkeypatch.setattr(config, "INGESTED_RATE_CARD_PATH", str(rc))
     config._apply_rate_cards()
@@ -201,3 +203,62 @@ def test_a_disagreement_between_the_file_and_the_sheet_is_reported(tmp_path, mon
     assert "DISAGREES" in said and "folding" in said
     assert config.HOURLY_RATES_GBP["folding"] == 42.00, "the file overruled the sheet"
     assert config.HOURLY_RATES_GBP["oven"] == 26.5, "the file was ignored where the sheet was silent"
+
+
+# ── named for what it is, not for whose sheet it first read ─────────────────────────
+#
+# James Gray, 18 September 2026: "this sheet is dave not tim. we have a team of four
+# estimators." The whole mechanism was named after one of them -- the file, the ingester,
+# the loaded-flag. A shared office rate table named after one estimator is read as that
+# person's personal figures: over-trusted by some, dismissed by others, and argued about by
+# anybody who knows it is not their sheet. Per-figure attribution belongs in
+# SHOP_STATED_PROVENANCE, where a name is attached to a ruling somebody actually made.
+
+def test_no_estimator_name_is_baked_into_the_rate_card_mechanism():
+    import inspect
+    import rate_card_ingest
+    for mod in (config, rate_card_ingest):
+        src = inspect.getsource(mod)
+        # The history may be recounted; the machinery may not carry the name.
+        code = "\n".join(ln for ln in src.split("\n")
+                          if not ln.lstrip().startswith("#") and '"""' not in ln)
+        assert "TIM_RATE_CARD" not in code, f"{mod.__name__} still names an estimator"
+
+
+def test_the_card_is_looked_for_under_its_own_name():
+    assert config.INGESTED_RATE_CARD_PATH.endswith("rate_card.json")
+    assert not config.INGESTED_RATE_CARD_PATH.endswith("tim_rate_card.json")
+
+
+def test_a_runner_holding_the_old_filename_keeps_its_rates(tmp_path, monkeypatch):
+    """A rename must not silently change a price. The old name is still read where it is the
+    only one there -- and using it is SAID, so the legacy name cannot quietly outlive this."""
+    import json
+    monkeypatch.setattr(config, "AI_ESTIMATE_XLSX_TEMPLATE", tmp_path / "absent.xlsx")
+    monkeypatch.setattr(config, "RATE_CARD_NOTES", [])
+    monkeypatch.setattr(config, "HOURLY_RATES_GBP", dict(config.HOURLY_RATES_GBP))
+    monkeypatch.setattr(config, "HOURLY_RATE_SOURCE", dict(config.HOURLY_RATE_SOURCE))
+    monkeypatch.setattr(config, "INGESTED_RATE_CARD_PATH", str(tmp_path / "rate_card.json"))
+    legacy = tmp_path / "tim_rate_card.json"
+    legacy.write_text(json.dumps({"by_op": {"oven": 27.5}, "source": "an older estimate"}))
+    monkeypatch.setattr(config, "LEGACY_RATE_CARD_PATH", str(legacy))
+    config._apply_rate_cards()
+    assert config.HOURLY_RATES_GBP["oven"] == 27.5
+    assert any("legacy filename" in n for n in config.RATE_CARD_NOTES)
+
+
+def test_the_new_name_is_preferred_where_both_exist(tmp_path, monkeypatch):
+    import json
+    monkeypatch.setattr(config, "AI_ESTIMATE_XLSX_TEMPLATE", tmp_path / "absent.xlsx")
+    monkeypatch.setattr(config, "RATE_CARD_NOTES", [])
+    monkeypatch.setattr(config, "HOURLY_RATES_GBP", dict(config.HOURLY_RATES_GBP))
+    monkeypatch.setattr(config, "HOURLY_RATE_SOURCE", dict(config.HOURLY_RATE_SOURCE))
+    current = tmp_path / "rate_card.json"
+    current.write_text(json.dumps({"by_op": {"oven": 31.0}, "source": "current"}))
+    legacy = tmp_path / "tim_rate_card.json"
+    legacy.write_text(json.dumps({"by_op": {"oven": 27.5}, "source": "older"}))
+    monkeypatch.setattr(config, "INGESTED_RATE_CARD_PATH", str(current))
+    monkeypatch.setattr(config, "LEGACY_RATE_CARD_PATH", str(legacy))
+    config._apply_rate_cards()
+    assert config.HOURLY_RATES_GBP["oven"] == 31.0
+    assert not any("legacy filename" in n for n in config.RATE_CARD_NOTES)

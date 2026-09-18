@@ -39,7 +39,7 @@ def test_every_register_the_engine_reads_is_on_the_map():
 
 
 def test_the_data_overlays_are_on_the_map():
-    for name in ("tim_rate_card.json", "batch_ingest_historical", "BoughtInCatalogue",
+    for name in ("rate_card.json", "batch_ingest_historical", "BoughtInCatalogue",
                  "JobBoughtInMaterials", "UDEF_PARTS_TABLE_FOR_ESTIMATING",
                  "_THROUGHPUT_DEFAULTS"):
         assert name in MAP, name

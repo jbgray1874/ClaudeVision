@@ -76,7 +76,7 @@ lines on every run, which is why the acrylic sheet priced £48.89 on 8 Sep and �
 |---|---|---|
 | Historical estimating workbooks (the estimates share) | Priced BOM lines, sheet prices, labour lines from jobs quoted and won | Harvested into `AIEstimating.*` by `batch_ingest_historical.py`. **Only 32 rows / 2 workbooks landed as at 15 Sep 2026 — the re-ingest over the share is the open action.** |
 | The live `spreadsheet` price connector | — | Points at the **blank** template, so it contributes nothing on any job. The corpus road above is the real one. |
-| `src/tim_rate_card.json` | Department hourly £ rates, from Tim's own sheet | The card wins; the config table is only the fallback when it is absent |
+| `src/rate_card.json` | Department hourly £ rates ingested from a completed estimate workbook | The estimating TEMPLATE's own Labour/Rate/Dept block wins (D-122); this fills gaps where the template is silent, and is reported when it disagrees. Legacy filename `tim_rate_card.json` still read, and said |
 | Per-job answers files (`docs/7332-01_confirmed.example.json` pattern) | Job-scoped confirmed facts an estimator has ruled on | Governs that job only — a rate correction is never left here (see Laser (Acrylic), which moved to the register because "a rate correction is how the department runs, not a decision about one stand") |
 
 ## Tier 3 — `src/config.py` (one file; the named registers inside it)
@@ -95,7 +95,7 @@ the tests police the boundary.
 | `ACRYLIC_PRICE_GBP_PER_M2`, `ACRYLIC_SHEET_PRICE_GBP` | Offline fallback snapshot of the UDEF-derived rates | The live Tier-1 derivation wins when the database answers |
 | `BOARD_SHEET_PRICE_GBP` | Board sheet prices at thicknesses SDI has actually bought | Interpolated between purchases, never extrapolated beyond them |
 | `MATERIAL_PRICE_GBP_PER_KG`, `MATERIAL_DENSITY_KG_M3`, `SHEET_SIZES_MM` | Material physics and stock facts | |
-| Operation rate fallbacks (the £/hr table) | Fallback when `tim_rate_card.json` is absent | The card is the source of truth |
+| Operation rate fallbacks (the £/hr table) | Fallback when neither the template nor an ingested card answers | The estimating template's own rate block is the source of truth |
 | `wb_populate._THROUGHPUT_DEFAULTS` | Corpus-measured throughputs (1,982 historical jobs, line counts recorded per entry) | Stated entries are overwritten from `SHOP_STATED` at build time |
 | `WELD_TIME_MODEL`, `ACRYLIC_OP_DRIVERS` | Time models; per-joint and per-bend figures **derived from** `SHOP_STATED`, never hand-copied | |
 | `DIRECTIONAL_FINISH_TOKENS` | Which finishes forbid turning a blank on the sheet | Tokens, never part numbers |

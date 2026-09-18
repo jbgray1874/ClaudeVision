@@ -2242,10 +2242,19 @@ LABOUR_RULES = {
     },
 }
 
-# Department labour rates (£/hr). DEFAULTS are Tim's ACTUAL card values, ingested
-# from his 1282 estimate and cross-checked against his labour lines (dept code in
-# the comment). These are OVERLAID at import by tim_rate_card.json when present, so
-# re-running tim_rate_card_ingest.py on ANY SDI estimate refreshes them with no code edit.
+# Department labour rates (£/hr). THE DEPARTMENT'S CARD, NOT ANY ONE ESTIMATOR'S.
+#
+# These defaults were ingested from a completed SDI estimate workbook (job 1282) and
+# cross-checked against its labour lines, dept code in the comment. They are the FALLBACK:
+# since D-122 the controlling source is the estimating template's own Labour / Rate / Dept
+# block, read at import.
+#
+# NAMED FOR WHAT IT IS. Every part of this mechanism used to be named after Tim -- the file,
+# the loaded-flag, the ingester, the label map. SDI has FOUR estimators, the template this
+# reads is Dave's, and a shared office rate table named after one of them is read as that
+# person's personal figures: over-trusted by some readers, dismissed by others, and argued
+# about by anybody who knows it is not their sheet. Per-figure attribution belongs in
+# SHOP_STATED_PROVENANCE, where a name is attached to a ruling somebody actually made.
 HOURLY_RATES_GBP = {
     "laser_cutting": 68.19,          # LASM
     "laser_cutting_acrylic": 41.21,  # LASA
@@ -2322,7 +2331,7 @@ HOURLY_RATES_GBP = {
 
 # The ONE stable mapping between the estimate sheet's own labour labels and the engine's
 # operation names. The RATES come from the sheet; only these names are maintained here.
-# `tim_rate_card_ingest` imports it rather than keeping a second copy — one mapping, one home.
+# `rate_card_ingest` imports it rather than keeping a second copy — one mapping, one home.
 ESTIMATE_LABOUR_LABEL_TO_OP = {
     "punch": "punch", "fold": "folding", "guillotine": "guillotine",
     "laser (metal)": "laser_cutting", "laser (acrylic)": "laser_cutting_acrylic",
@@ -2347,16 +2356,16 @@ HOURLY_RATE_PLAUSIBLE_GBP = (1.0, 2000.0)
 # James Gray's steel ruling, 18 Sep 2026, applies word for word to labour: "the spreadsheet
 # rate is the controlling rate... It should not independently substitute... a config
 # fallback." The estimate template carries a "Labour / Rate / Dept" block — the estimator's
-# own card, the one they amend — and `tim_rate_card_ingest` has always known how to read it.
+# own card, the one they amend — and `rate_card_ingest` has always known how to read it.
 #
-# WHAT IT DID WITH IT IS THE FAULT. The ingester wrote `tim_rate_card.json` BESIDE THIS FILE
+# WHAT IT DID WITH IT IS THE FAULT. The ingester wrote a rate-card JSON BESIDE THIS FILE
 # and this block overlaid it at import. Three consequences, all of them D-111 again:
 #
 #   * the blanket `*.json` rule means git has never carried that file, so every department
 #     rate in the shop — the numbers that price every route — lived outside version control
 #   * two machines could hold different rate cards and produce different money from the same
 #     commit, with nothing on either book to compare
-#   * it was SILENT. `TIM_RATE_CARD_LOADED` was assigned here and read by nothing, so a run
+#   * it was SILENT. `INGESTED_RATE_CARD_SOURCE` was assigned here and read by nothing, so a run
 #     with a rate card and a run without it looked identical on the page
 #
 # And a fourth, worse than the others: the overlay applied INSIDE the loop, so an exception
@@ -2370,14 +2379,19 @@ HOURLY_RATE_PLAUSIBLE_GBP = (1.0, 2000.0)
 # locked template leaves the defaults standing and says so.
 HOURLY_RATE_SOURCE = {_op: "config.HOURLY_RATES_GBP (default)" for _op in HOURLY_RATES_GBP}
 RATE_CARD_NOTES: list = []
-TIM_RATE_CARD_LOADED = None
+INGESTED_RATE_CARD_SOURCE = None
 
 # Where an ingested card is looked for. A path is a setting, so it is named here rather than
 # rebuilt from __file__ inside the loader — which also means a test can point at one without
 # reaching into the os module.
+#
+# The legacy name is still read where it is the only one present, because a runner holding a
+# tim_rate_card.json today must not lose its rates to a rename. Using it is REPORTED, so the
+# old name cannot quietly outlive the rename.
 import os as _os_cfg
-INGESTED_RATE_CARD_PATH = _os_cfg.path.join(
-    _os_cfg.path.dirname(_os_cfg.path.abspath(__file__)), "tim_rate_card.json")
+_RATE_CARD_DIR = _os_cfg.path.dirname(_os_cfg.path.abspath(__file__))
+INGESTED_RATE_CARD_PATH = _os_cfg.path.join(_RATE_CARD_DIR, "rate_card.json")
+LEGACY_RATE_CARD_PATH = _os_cfg.path.join(_RATE_CARD_DIR, "tim_rate_card.json")
 
 
 def _plausible_hourly_rate(value) -> bool:
@@ -2456,12 +2470,21 @@ def _apply_rate_cards() -> None:
         RATE_CARD_NOTES.append(
             f"department rates are config defaults — {_tpl_src}")
 
-    global TIM_RATE_CARD_LOADED
+    global INGESTED_RATE_CARD_SOURCE
     try:
         import os as _os_rc, json as _json_rc
         _rc_path = INGESTED_RATE_CARD_PATH
         if not _os_rc.path.exists(_rc_path):
-            return
+            # The name this file had before it was named for what it is. Read, and SAID --
+            # a runner still holding the old file keeps its rates, and nobody is left
+            # wondering why a rename appeared to change a price.
+            if _os_rc.path.exists(LEGACY_RATE_CARD_PATH):
+                _rc_path = LEGACY_RATE_CARD_PATH
+                RATE_CARD_NOTES.append(
+                    "an ingested rate card was read from the legacy filename "
+                    "tim_rate_card.json — rename it to rate_card.json")
+            else:
+                return
         with open(_rc_path) as _fh_rc:
             _rc = _json_rc.load(_fh_rc)
         # Built whole, then applied whole. The old loop wrote as it read.
@@ -2485,15 +2508,15 @@ def _apply_rate_cards() -> None:
             continue
         _used.append(_op)
         HOURLY_RATES_GBP[_op] = _rate
-        HOURLY_RATE_SOURCE[_op] = f"tim_rate_card.json ({_rc.get('source') or 'ingested'})"
-    TIM_RATE_CARD_LOADED = _rc.get("source")
+        HOURLY_RATE_SOURCE[_op] = f"the ingested rate card ({_rc.get('source') or 'ingested'})"
+    INGESTED_RATE_CARD_SOURCE = _rc.get("source")
     if _used:
         RATE_CARD_NOTES.append(
-            f"{len(_used)} rate(s) supplied by tim_rate_card.json where the template was "
+            f"{len(_used)} rate(s) supplied by the ingested rate card where the template was "
             f"silent: {', '.join(sorted(_used))}")
     if _ignored:
         RATE_CARD_NOTES.append(
-            f"tim_rate_card.json DISAGREES with the template and the template was used: "
+            f"the ingested rate card DISAGREES with the template and the template was used: "
             f"{'; '.join(sorted(_ignored))}")
 
 
