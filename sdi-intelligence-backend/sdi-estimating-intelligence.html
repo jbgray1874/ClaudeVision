@@ -2428,8 +2428,7 @@ function releaseFormHTML(){
        + 'placeholder="Unit cost (workbook) you are approving" '
        + 'style="flex:1 1 240px;min-width:180px">'
        + '</div>'
-       + '<textarea id="relInputs" rows="2" placeholder="Commercial inputs, one per line: '
-       + 'margin=0.25, delivery=45.00, packaging=12.00" '
+       + '<textarea id="relInputs" rows="3" placeholder="Commercial inputs, one per line, with where each figure came from: &#10;margin = 0.25 @ SDI standard for this customer&#10;delivery = 45.00 @ Tuffnells quote 18/09&#10;packaging = 12.00 @ SDI Live" '
        + 'style="width:100%;margin-top:8px"></textarea>'
        + '<div style="margin-top:8px">'
        + '<button id="relGo" class="btn-measure" type="button">Release</button> '
@@ -2438,20 +2437,32 @@ function releaseFormHTML(){
        + '<p class="hint" id="relHint" style="margin:6px 0 0"></p>'
        + '</div>';
 }
-/* "margin=0.25" per line. Anything without an = is a heading the estimator still owes, which
-   the engine lists as outstanding — so an empty value is a real state, not a parse failure. */
+/* "margin = 0.25 @ SDI Live" per line — a name, a figure, and WHERE THE FIGURE CAME FROM.
+   Anything without an = is a heading the estimator still owes; anything without an @ is a
+   figure with nothing behind it. Both are real states the engine reports back, not parse
+   failures, and neither releases the quotation.
+
+   THE SOURCE IS NOT DECORATION. Every other number on the estimate names where it came from —
+   the material lines carry the system that answered, the totals carry their workbook cell,
+   the labour carries the department rate card. These are the figures with no drawing to check
+   them against, which makes the reference the only evidence there will ever be. */
 function _parseCommercialInputs(text){
   const out = {};
   (text || "").split(/[\n;]+/).forEach(row => {
     const line = row.trim();
     if(!line) return;
     const at = line.indexOf("=");
-    if(at < 0){ out[line] = null; return; }
+    if(at < 0){ out[line] = {value: null, source: ""}; return; }
     const key = line.slice(0, at).trim();
-    const raw = line.slice(at + 1).trim();
     if(!key) return;
+    let rest = line.slice(at + 1);
+    let source = "";
+    const mark = rest.indexOf("@");
+    if(mark >= 0){ source = rest.slice(mark + 1).trim(); rest = rest.slice(0, mark); }
+    const raw = rest.trim();
     const num = Number(raw.replace(/[£,\s]/g, ""));
-    out[key] = (raw !== "" && isFinite(num)) ? num : (raw || null);
+    out[key] = {value: (raw !== "" && isFinite(num)) ? num : (raw || null),
+                source: source};
   });
   return out;
 }

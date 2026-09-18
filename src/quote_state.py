@@ -168,22 +168,57 @@ def commercial_inputs(summary: Mapping[str, Any]) -> Dict[str, Any]:
 
     Absent means not complete. An estimate nobody has priced commercially is not one an
     estimator has silently approved.
+
+    ── AND A FIGURE WITHOUT A SOURCE IS NOT A COMPLETED INPUT ──────────────────────────
+
+    James Gray, 18 September 2026: "commercial inputs should ultimately record a
+    source/reference alongside the value -- not only `name=value` -- so a completed input
+    remains traceable to SDI Live, a supplier quote, or evidenced research."
+
+    THIS IS THE PRICING WATERFALL, ARRIVING AT THE LAST FIELDS THAT ESCAPED IT. Every other
+    number on the estimate names where it came from: the material lines carry
+    `price_provenance.source_system_label`, the totals carry their workbook cell, the labour
+    carries the department rate card. The commercial inputs were the one place a figure could
+    be typed and released with nothing behind it -- and they are exactly the figures with no
+    drawing to check them against, which is what makes the reference the only evidence there
+    will ever be.
+
+    "A number copied from an estimator's sheet is not a price source, even as a reference."
+    The point of the field is that six months later somebody can ask where £45 delivery came
+    from and get an answer that is not "somebody typed it".
     """
     block = _mapping(summary.get("commercial_inputs"))
     items = block.get("items")
     outstanding: List[str] = []
+    unsourced: List[str] = []
+
+    def _judge(name: str, value: Any, source: Any) -> None:
+        name = _clean(name) or "an unnamed input"
+        if value in (None, "", []):
+            outstanding.append(name)
+        elif not _clean(source):
+            unsourced.append(name)
+
     if isinstance(items, Mapping):
         for name, value in items.items():
-            if value in (None, "", []) or (isinstance(value, Mapping)
-                                           and not value.get("value")):
-                outstanding.append(_clean(name))
+            # EITHER SHAPE. A bare `{"margin": 0.25}` is the old record and still readable --
+            # it is simply missing its source, which is the thing being asked for, so it
+            # reports as unsourced rather than as broken.
+            if isinstance(value, Mapping):
+                _judge(name, value.get("value"), value.get("source") or value.get("reference"))
+            else:
+                _judge(name, value, "")
     elif isinstance(items, (list, tuple)):
         for item in items:
             row = _mapping(item)
-            if not row.get("value") and not row.get("complete"):
-                outstanding.append(_clean(row.get("name")) or "an unnamed input")
-    complete = bool(block.get("complete")) and not outstanding
-    return {"complete": complete, "outstanding": outstanding, "recorded": bool(block)}
+            if row.get("complete") and not row.get("value"):
+                continue
+            _judge(row.get("name"), row.get("value"),
+                   row.get("source") or row.get("reference"))
+
+    complete = bool(block.get("complete")) and not outstanding and not unsourced
+    return {"complete": complete, "outstanding": outstanding, "unsourced": unsourced,
+            "recorded": bool(block)}
 
 
 def authorisation(summary: Mapping[str, Any],
@@ -289,14 +324,22 @@ def quote_state(summary: Any) -> Dict[str, Any]:
 
     if not inputs["complete"]:
         _named = ", ".join(inputs["outstanding"])
-        blocking.append({
-            "gate": "commercial_inputs",
-            "what": (f"the commercial inputs are still open: {_named}" if _named else
-                     "the estimator has not recorded the commercial inputs as complete"),
-            # The estimator's OWN headings are safe to print: they are their words, not ours.
-            "short": (f"commercial inputs outstanding: {_named}" if _named else
-                      "the commercial inputs are not recorded as complete"),
-        })
+        _unsourced = ", ".join(inputs.get("unsourced") or [])
+        if _named:
+            _what = f"the commercial inputs are still open: {_named}"
+            _short = f"commercial inputs outstanding: {_named}"
+        elif _unsourced:
+            # A DIFFERENT SENTENCE, BECAUSE IT IS A DIFFERENT JOB. "Still open" sends somebody
+            # looking for a figure that is already there; what is missing is where it came
+            # from, and saying so is the difference between a minute's work and a puzzle.
+            _what = (f"these commercial inputs carry a figure with no source: {_unsourced} — "
+                     f"name SDI Live, the supplier quote or the evidenced research behind it")
+            _short = f"no source recorded against: {_unsourced}"
+        else:
+            _what = "the estimator has not recorded the commercial inputs as complete"
+            _short = "the commercial inputs are not recorded as complete"
+        # The estimator's OWN headings are safe to print: they are their words, not ours.
+        blocking.append({"gate": "commercial_inputs", "what": _what, "short": _short})
     if not auth["authorised"]:
         blocking.append({
             "gate": "authorisation",

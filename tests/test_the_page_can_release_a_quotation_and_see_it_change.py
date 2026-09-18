@@ -106,7 +106,9 @@ def test_releasing_then_rebuilding_turns_the_portal_copy_into_the_document(route
     routes.release(routes.ReleaseRequest(
         folder=str(tmp_path), stem=_STEM, authorised_by="Dave Shepherd",
         unit_gbp=_UNIT, unit_cell="Estimate!M105",
-        commercial_inputs={"margin": 0.25, "delivery": 45.0}), None)
+        commercial_inputs={
+            "margin": {"value": 0.25, "source": "SDI standard for this customer"},
+            "delivery": {"value": 45.0, "source": "Tuffnells quote 18/09"}}), None)
 
     second = routes.quote_regenerate(
         routes.RegenerateQuoteRequest(json_path=str(jp), folder=str(tmp_path)), None)
@@ -189,5 +191,14 @@ def test_the_commercial_inputs_parser_keeps_an_unanswered_heading():
     engine lists it as outstanding. Dropping it would silently release the job."""
     block = PAGE[PAGE.index("function _parseCommercialInputs"):]
     block = block[:block.index("\nfunction ")]
-    assert "out[line] = null" in block
+    assert "{value: null, source: \"\"}" in block
     assert re.search(r"split\(/\[\\n;\]\+/\)", block)
+
+
+def test_the_commercial_inputs_parser_captures_where_the_figure_came_from():
+    """`margin = 0.25 @ SDI Live`. The source is not decoration: these are the only figures on
+    the estimate with no drawing to check them against."""
+    block = PAGE[PAGE.index("function _parseCommercialInputs"):]
+    block = block[:block.index("\nfunction ")]
+    assert 'rest.indexOf("@")' in block
+    assert "source: source" in block

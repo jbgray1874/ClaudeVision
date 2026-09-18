@@ -74,7 +74,13 @@ def _release(folder, unit=_UNIT, who="Dave Shepherd"):
     """The portal's half — the service writes this, on the machine that holds the share."""
     return portal_side.write_release_record(
         folder, _STEM, authorised_by=who, unit_gbp=unit, unit_cell="Estimate!M105",
-        commercial_inputs={"margin": 0.25, "delivery": 45.0, "packaging": 12.0})
+        commercial_inputs={
+            # EACH FIGURE NAMES WHERE IT CAME FROM. These are the only numbers on the estimate
+            # with no drawing to check them against, which makes the reference the only
+            # evidence there will ever be — so a value with no source does not complete.
+            "margin": {"value": 0.25, "source": "SDI standard for this customer"},
+            "delivery": {"value": 45.0, "source": "Tuffnells quote 18/09"},
+            "packaging": {"value": 12.0, "source": "SDI Live"}})
 
 
 # ── the joint: written by the service, read by the engine ───────────────────────────
@@ -241,3 +247,43 @@ def test_the_endpoint_will_not_record_an_unsigned_or_unpriced_release(tmp_path, 
     assert out["ok"] is True
     assert read_release_record(tmp_path, _STEM)["quote_release"]["authorised_by"] == \
         "Dave Shepherd"
+
+
+# ── and a figure with nothing behind it is not a completed input ────────────────────
+
+def test_a_commercial_input_with_no_source_does_not_release_it(tmp_path):
+    """James Gray, 18 Sep 2026: "commercial inputs should ultimately record a
+    source/reference alongside the value... so a completed input remains traceable to SDI
+    Live, a supplier quote, or evidenced research."
+
+    THE PRICING WATERFALL REACHING THE LAST FIELDS THAT ESCAPED IT. Every other number on the
+    estimate names where it came from. These were the one place a figure could be typed and
+    released with nothing behind it.
+    """
+    portal_side.write_release_record(
+        tmp_path, _STEM, authorised_by="Dave Shepherd", unit_gbp=_UNIT,
+        commercial_inputs={"delivery": 45.0})          # a figure, and nothing behind it
+    state = quote_state(apply_to_summary(_summary(), tmp_path, _STEM))
+    assert state["customer_releasable"] is False
+    said = [b["what"] for b in state["blocking"] if b["gate"] == "commercial_inputs"]
+    assert said and "delivery" in said[0] and "no source" in said[0], said
+    assert state["commercial_inputs"]["unsourced"] == ["delivery"]
+
+
+def test_an_input_with_no_figure_says_something_different(tmp_path):
+    """"Still open" sends somebody looking for a figure that is already there. The two states
+    are different jobs and the sentence says which."""
+    portal_side.write_release_record(
+        tmp_path, _STEM, authorised_by="Dave Shepherd", unit_gbp=_UNIT,
+        commercial_inputs={"delivery": {"value": None, "source": ""}})
+    state = quote_state(apply_to_summary(_summary(), tmp_path, _STEM))
+    said = [b["what"] for b in state["blocking"] if b["gate"] == "commercial_inputs"]
+    assert said and "still open" in said[0]
+
+
+def test_a_sourced_figure_completes(tmp_path):
+    """The control."""
+    portal_side.write_release_record(
+        tmp_path, _STEM, authorised_by="Dave Shepherd", unit_gbp=_UNIT,
+        commercial_inputs={"delivery": {"value": 45.0, "source": "Tuffnells quote 18/09"}})
+    assert quote_state(apply_to_summary(_summary(), tmp_path, _STEM))["customer_releasable"]
