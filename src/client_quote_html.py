@@ -21,7 +21,7 @@ Field sources (all confirmed against real 1282 JSON):
   GA image     <- primary_pdf.path -> render page 1 to PNG (PyMuPDF) -> base64 embed
 
 Standalone:
-    python client_quote_html.py --json <summary.json> --out <quote>.html
+    python client_quote_html.py --json <summary.json> [--out-dir <folder>]
 Convenience API (for the --deliverables hook):
     generate_quote_files(json_path, out_dir=None, job_stem=None) -> written html path
 
@@ -1889,16 +1889,23 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
 
 
 def main() -> None:
+    """The CLI, which goes through `generate_quote_files` like everything else.
+
+    IT DID NOT, AND THAT WAS A HOLE. It called `build_quote_html` and wrote the result to
+    `<stem>_quote.html` unconditionally — so a portal working copy regenerated from the
+    command line landed on the share under the RELEASED document's name, and the release
+    model's naming rule was true of every path but this one. Two files that differ only in
+    what is inside them is exactly the failure `_quote_PORTAL.html` exists to prevent.
+
+    The FILENAME is the engine's to choose, so `--out` became `--out-dir`.
+    """
     ap = argparse.ArgumentParser(description="Generate a we.are.sdi client quotation HTML from a summary JSON.")
     ap.add_argument("--json", required=True, help="Summary JSON path")
-    ap.add_argument("--out", help="Output HTML path (default: <job>_quote.html next to the JSON)")
+    ap.add_argument("--out-dir", dest="out_dir",
+                    help="Folder to write into (default: beside the JSON). The FILENAME is "
+                         "the engine's, because it says which document this is.")
     a = ap.parse_args()
-    summary = json.loads(Path(a.json).read_text(encoding="utf-8"))
-    stem = summary.get("job_output_stem") or Path(a.json).stem
-    html_str = build_quote_html(summary, job_stem=stem)
-    out = a.out or str(Path(a.json).parent / (re.sub(r"[^\w\- ]", "", str(stem)).strip() + "_quote.html"))
-    Path(out).write_text(html_str, encoding="utf-8")
-    print(f"Wrote quote: {out}")
+    print(f"Wrote quote: {generate_quote_files(a.json, out_dir=a.out_dir)}")
 
 
 if __name__ == "__main__":

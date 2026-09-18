@@ -142,6 +142,12 @@
   .btn-stop{width:100%;background:transparent;color:#ff9b9b;border:1px solid #7d3a3a;padding:11px 18px;font-size:14px;font-weight:600;margin-top:9px;border-radius:7px;cursor:pointer}
   .btn-stop:hover:not(:disabled){background:#3a1f1f}
   .btn-stop:disabled{opacity:.5;cursor:default}
+  /* The secondary action beside a primary one — withdrawing a release, and whatever
+     comes next that undoes rather than does. Not btn-stop, which is full-width by
+     design because it stands alone at the foot of the run panel. */
+  .btn-quiet{background:transparent;color:var(--muted);border:1px solid var(--line);padding:11px 18px;font-size:14px;font-weight:600;border-radius:7px;cursor:pointer}
+  .btn-quiet:hover:not(:disabled){background:var(--line);color:var(--ink)}
+  .btn-quiet:disabled{opacity:.5;cursor:default}
 
   /* ── drawings list ─────────────────────────────────────────────────── */
   .files{list-style:none;margin:0 0 12px;padding:0;max-height:230px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:var(--panel-2)}
@@ -2316,7 +2322,11 @@ runBtn.onclick = async () => {
            person to see, would otherwise have to be mailed by hand from the folder. */
         const box=document.createElement("input");
         box.type="checkbox"; box.className="sendPick"; box.value=d.path;
-        box.checked = !/_quote\.html?$/i.test(d.path);   /* the quote is opt-in, as always */
+        /* THE TICK CHOOSES WHICH FILES, NOT WHETHER A QUOTATION MAY GO OUT. It used to be
+           the only thing standing between an unreleased quote and a customer; the send route
+           now reads the document's own declaration and holds it whatever is ticked. Left
+           unticked all the same: an estimator should have to mean it. */
+        box.checked = !/_quote(_[A-Za-z-]+)?\.html?$/i.test(d.path);
         box.style.marginRight="8px";
         const li=document.createElement("li");
         li.appendChild(box); li.appendChild(a); out.appendChild(li);
@@ -2344,9 +2354,11 @@ function showSendPanel(s){
     + 'Email the ticked files to</label>'
     + '<input id="sendTo" type="text" autocomplete="off" style="width:100%;max-width:520px">'
     + ' <button id="sendGo" class="btn-measure" type="button" style="margin-left:8px">Send</button>'
-    + '<p class="hint" id="sendHint" style="margin:6px 0 0">The customer quote is unticked by '
-    + 'default. Tick it only when the estimate is ready to leave the building.</p>';
+    + '<p class="hint" id="sendHint" style="margin:6px 0 0">A quotation is attached only once '
+    + 'it has been released below. Everything else goes to estimating as usual.</p>'
+    + releaseFormHTML();
   out.parentNode.appendChild(wrap);
+  wireReleaseForm(s);
   $("sendTo").value = (emailTo && emailTo.value) || "";
   $("sendGo").addEventListener("click", async () => {
     const picks = Array.from(document.querySelectorAll(".sendPick"))
@@ -2363,6 +2375,168 @@ function showSendPanel(s){
         ? ("Sent to " + (d.recipients||[]).join(", ") + " — "
            + ((d.attached||[]).join(", ") || "no attachments"))
         : (d.detail || "The mail could not be sent.");
+    }catch(e){ hint.textContent = "Could not reach the server."; }
+  });
+}
+
+/* ══ RELEASING A QUOTATION ════════════════════════════════════════════════════
+   THE KEY TO THE GATE. Every estimate produces the portal working copy — an editable page
+   with no customer price on it — and stays there until two things a person has to supply are
+   on the record: the commercial inputs are complete, and a named estimator has released it.
+   Nothing in the engine can supply either, which is the point.
+
+   THE FIGURE IS TYPED, NOT PRE-FILLED, AND THAT IS DELIBERATE. What is being authorised is a
+   number, so the person authorising it states the number. The record binds to it and the
+   engine refuses the authorisation if the estimate says anything else — so a typo, a stale
+   page or a workbook somebody amended in between produces a quote that stays in the portal
+   rather than a customer price nobody checked. It is a double entry, and it costs one field.
+
+   AND RELEASING DOES NOT REWRITE THE FILE BY ITSELF. The record is read when a quote is
+   BUILT, so the page rebuilds it — otherwise an estimator authorises a job and goes on
+   looking at a page headed PORTAL VIEW with a send button that refuses, which reads as the
+   form not working. */
+function _quoteDeliverable(){
+  const box = Array.from(document.querySelectorAll(".sendPick"))
+                   .find(b => /_quote(_[A-Za-z-]+)?\.html?$/i.test(b.value));
+  return box ? box.value : "";
+}
+function _summaryDeliverable(){
+  const box = Array.from(document.querySelectorAll(".sendPick"))
+                   .find(b => /\.json$/i.test(b.value));
+  return box ? box.value : "";
+}
+/* Folder and stem come off the quote's own path, because the engine composed that name from
+   exactly those two things. Deriving them from the job number instead is the mistake the
+   runner's `collect` already records: the quote is named from the job STEM and the workbook
+   from the job NUMBER, and one matcher against two conventions files the wrong thing. */
+function _jobFromQuotePath(p){
+  const cut = Math.max(p.lastIndexOf("\\"), p.lastIndexOf("/"));
+  const folder = cut >= 0 ? p.slice(0, cut) : "";
+  const name = cut >= 0 ? p.slice(cut + 1) : p;
+  return {folder: folder, stem: name.replace(/_quote(_[A-Za-z-]+)?\.html?$/i, "")};
+}
+function releaseFormHTML(){
+  return '<div id="releaseBox" style="margin-top:14px;padding-top:12px;'
+       + 'border-top:1px solid var(--line)">'
+       + '<div style="font-weight:600;margin-bottom:6px">Release this quotation</div>'
+       + '<p class="hint" style="margin:0 0 8px">The quotation stays in the portal until the '
+       + 'commercial inputs are complete and a named estimator releases it.</p>'
+       + '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">'
+       + '<input id="relBy" type="text" placeholder="Released by (your name)" '
+       + 'autocomplete="off" style="flex:1 1 220px;min-width:180px">'
+       + '<input id="relUnit" type="text" inputmode="decimal" '
+       + 'placeholder="Unit cost (workbook) you are approving" '
+       + 'style="flex:1 1 240px;min-width:180px">'
+       + '</div>'
+       + '<textarea id="relInputs" rows="2" placeholder="Commercial inputs, one per line: '
+       + 'margin=0.25, delivery=45.00, packaging=12.00" '
+       + 'style="width:100%;margin-top:8px"></textarea>'
+       + '<div style="margin-top:8px">'
+       + '<button id="relGo" class="btn-measure" type="button">Release</button> '
+       + '<button id="relOff" class="btn-quiet" type="button">Withdraw</button>'
+       + '</div>'
+       + '<p class="hint" id="relHint" style="margin:6px 0 0"></p>'
+       + '</div>';
+}
+/* "margin=0.25" per line. Anything without an = is a heading the estimator still owes, which
+   the engine lists as outstanding — so an empty value is a real state, not a parse failure. */
+function _parseCommercialInputs(text){
+  const out = {};
+  (text || "").split(/[\n;]+/).forEach(row => {
+    const line = row.trim();
+    if(!line) return;
+    const at = line.indexOf("=");
+    if(at < 0){ out[line] = null; return; }
+    const key = line.slice(0, at).trim();
+    const raw = line.slice(at + 1).trim();
+    if(!key) return;
+    const num = Number(raw.replace(/[£,\s]/g, ""));
+    out[key] = (raw !== "" && isFinite(num)) ? num : (raw || null);
+  });
+  return out;
+}
+function wireReleaseForm(s){
+  const quote = _quoteDeliverable();
+  const hint = $("relHint");
+  if(!quote){
+    const box = $("releaseBox");
+    if(box) box.innerHTML = '<p class="hint">This run produced no quotation to release.</p>';
+    return;
+  }
+  const job = _jobFromQuotePath(quote);
+
+  async function rebuild(){
+    const summary = _summaryDeliverable();
+    if(!summary){
+      hint.textContent += "  The quote will be the customer document the next time this job "
+                        + "is estimated — this run filed no summary to rebuild it from.";
+      return;
+    }
+    const r = await api("/api/estimate/quote/regenerate", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({json_path: summary, folder: job.folder})});
+    const d = await r.json();
+    if(!r.ok){ hint.textContent += "  The quote could not be rebuilt: "
+                                 + (d.detail || "unknown error"); return; }
+    hint.textContent = d.released
+      ? ("Released. The customer quotation is " + (d.path || "written")
+         + " — tick it above to attach it.")
+      : ("Recorded, but the quotation is still the portal copy: something else on this "
+         + "estimate is outstanding. Open it to see what.");
+    refreshDeliverableList(d.path, job);
+  }
+
+  /* The list on screen was built from the finished run and still names the OLD file. Leaving
+     it would have somebody tick a path that no longer exists, or worse, the portal copy. */
+  function refreshDeliverableList(newPath, job){
+    if(!newPath) return;
+    Array.from(document.querySelectorAll(".sendPick")).forEach(b => {
+      if(!/_quote(_[A-Za-z-]+)?\.html?$/i.test(b.value)) return;
+      b.value = newPath;
+      const a = b.parentNode.querySelector("a");
+      if(a){
+        a.href = "/api/file?path=" + encodeURIComponent(newPath);
+        const cut = Math.max(newPath.lastIndexOf("\\"), newPath.lastIndexOf("/"));
+        a.textContent = cut >= 0 ? newPath.slice(cut + 1) : newPath;
+      }
+    });
+  }
+
+  $("relGo").addEventListener("click", async () => {
+    const by = ($("relBy").value || "").trim();
+    const unit = Number(($("relUnit").value || "").replace(/[£,\s]/g, ""));
+    if(!by){ hint.textContent = "Put your name to it."; return; }
+    if(!isFinite(unit) || !unit){
+      hint.textContent = "Type the unit cost you are approving. The record binds to it, so a "
+                       + "later estimate at a different price cannot go out on this release.";
+      return;
+    }
+    hint.textContent = "Recording…";
+    try{
+      const r = await api("/api/estimate/release", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({folder: job.folder, stem: job.stem, authorised_by: by,
+                              unit_gbp: unit,
+                              commercial_inputs: _parseCommercialInputs($("relInputs").value)})});
+      const d = await r.json();
+      if(!r.ok){ hint.textContent = d.detail || "That could not be recorded."; return; }
+      hint.textContent = "Recorded. Rebuilding the quotation…";
+      await rebuild();
+    }catch(e){ hint.textContent = "Could not reach the server."; }
+  });
+
+  $("relOff").addEventListener("click", async () => {
+    hint.textContent = "Withdrawing…";
+    try{
+      const r = await api("/api/estimate/release/withdraw", {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({folder: job.folder, stem: job.stem})});
+      const d = await r.json();
+      hint.textContent = r.ok
+        ? (d.withdrawn ? "Withdrawn. Rebuilding the portal copy…"
+                       : "There was no release on this job.")
+        : (d.detail || "That could not be withdrawn.");
+      if(r.ok && d.withdrawn) await rebuild();
     }catch(e){ hint.textContent = "Could not reach the server."; }
   });
 }

@@ -47,6 +47,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -897,6 +898,50 @@ def release(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)
     return {"ok": True, "record": record,
             "path": str(quote_release.record_path(folder, req.stem)),
             "note": "The next quote generated for this job is the customer document."}
+
+
+class RegenerateQuoteRequest(BaseModel):
+    """The run's summary JSON, and where the quote should land."""
+    json_path: str
+    folder: str = ""
+
+
+@router.post("/quote/regenerate")
+def quote_regenerate(req: RegenerateQuoteRequest,
+                     x_sdi_key: Optional[str] = Header(default=None)):
+    """Rebuild this job's quotation from its summary, picking up the release record.
+
+    WITHOUT THIS THE FORM APPEARS TO DO NOTHING. Releasing writes a record the ENGINE reads
+    when it builds a quote — so until a quote is built again, the file on the share is still
+    the portal copy, and every delivery route goes on holding it. Correct, and invisible: an
+    estimator who has just authorised a job would be looking at a page that says PORTAL VIEW
+    and a send button that refuses.
+
+    It runs the engine's own generator rather than reproducing any of it, so the audience, the
+    filename and the declaration in the document are decided in exactly one place.
+    """
+    _check_key(x_sdi_key)
+    summary = _within_a_root(req.json_path)
+    if summary is None or not summary.is_file():
+        raise HTTPException(403, "That summary is outside the shares this service may read.")
+    out_dir = _within_a_root(req.folder) if req.folder else summary.parent
+    if out_dir is None or not out_dir.is_dir():
+        raise HTTPException(403, "That folder is outside the shares this service may write.")
+    cmd = [sys.executable, str(_REPO_ROOT / "src" / "client_quote_html.py"),
+           "--json", str(summary), "--out-dir", str(out_dir)]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except Exception as exc:                                     # noqa: BLE001
+        raise HTTPException(502, f"The quote generator could not be run: {exc}")
+    if proc.returncode != 0:
+        raise HTTPException(
+            502, (proc.stderr or proc.stdout or "The quote generator failed.").strip()[-800:])
+    written = ""
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("Wrote quote:"):
+            written = line.split(":", 1)[1].strip()
+    return {"ok": True, "path": written,
+            "released": bool(written) and quote_release.may_go_to_a_customer(written)}
 
 
 @router.post("/release/withdraw")
