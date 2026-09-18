@@ -3475,6 +3475,60 @@ WORKBOOK_SOURCE_MAP = {
     "ignored_sales_markup": {"cells": ["M109", "M111"], "notes": "Sales markup — excluded from manufacturing-only output"},
 }
 
+
+# ── THE SHEET'S OWN CELL IS THE RATE ─────────────────────────────────────────────────
+#
+# James Gray, 18 Sep 2026, on 401912-02: "the spreadsheet rate is the controlling rate. The
+# engine should read the steel £/tonne input from the workbook, use that same figure in its
+# calculation/report, and let the estimator amend it in the sheet when required. It should
+# not independently substitute £1.45/kg, £950/t or a config fallback."
+#
+# FOUR RATES FOR ONE MATERIAL, AND THE BOOK CARRIED TWO OF THEM AT ONCE. 401912-02's divider
+# charged £3.07 from the workbook's own L5 (£900/tonne) and reported £3.88 beside it from
+# another path entirely. The duplication is admitted two hundred lines above in a comment
+# that reads "Blank sheet = £900" on a default of 950 — two people being right in two files,
+# which is the shape `test_a_rate_lives_in_one_place` was written to freeze.
+#
+# So the ESTIMATING TEMPLATE's cell is read, and the config default becomes what it should
+# always have been: the answer when the template cannot be reached, not a second opinion.
+# An estimator changes the rate where they already change it — in the sheet — and the engine
+# follows without anybody editing Python.
+#
+# Cached per key for the life of the process: it is one cell in a file that does not change
+# mid-run, and a workbook opened per part would be a real cost on a big job.
+_WORKBOOK_INPUT_CACHE: dict = {}
+
+
+def workbook_input_value(key: str):
+    """(value, where it came from) for a workbook input the engine also needs.
+
+    The template's own cell first, the config default second. Never raises: a missing
+    template, a locked file or an empty cell all fall back, and the SOURCE says which
+    happened so a sheet can state where its rate came from instead of asserting one.
+    """
+    if key in _WORKBOOK_INPUT_CACHE:
+        return _WORKBOOK_INPUT_CACHE[key]
+    _default = (WORKBOOK_INPUT_DEFAULTS or {}).get(key)
+    _out = (_default, f"config.WORKBOOK_INPUT_DEFAULTS[{key!r}]")
+    _where = (WORKBOOK_SOURCE_MAP or {}).get(key) or {}
+    _sheet, _cell = _where.get("sheet"), _where.get("cell")
+    if _sheet and _cell:
+        try:
+            import openpyxl as _oxl
+            _wb = _oxl.load_workbook(AI_ESTIMATE_XLSX_TEMPLATE, data_only=True,
+                                     read_only=True)
+            try:
+                _v = _wb[_sheet][_cell].value
+            finally:
+                _wb.close()
+            if isinstance(_v, (int, float)) and float(_v) > 0:
+                _out = (float(_v),
+                        f"the estimating template's {_sheet}!{_cell}")
+        except Exception:                                            # noqa: BLE001
+            pass
+    _WORKBOOK_INPUT_CACHE[key] = _out
+    return _out
+
 # Rounding policy:
 # - final_total_only: preserve precision through lines; round final rollups/output fields.
 # - per_line: round line-level costs before aggregation.

@@ -5641,21 +5641,35 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "GALVANIZED STEEL", "STAINLESS STEEL", "STAINLESS_STEEL",
         "MILD_STEEL_SPCC", "STAINLESS_STEEL_304", "STAINLESS_STEEL_316",
     }
-    sheet_steel_per_tonne = float(wb_defaults.get("sheet_steel_cost_per_tonne_gbp") or 0.0)
+    sheet_steel_per_tonne, _steel_rate_from = config.workbook_input_value(
+        "sheet_steel_cost_per_tonne_gbp")
+    sheet_steel_per_tonne = float(sheet_steel_per_tonne or 0.0)
     cfg_defaults = getattr(config, "WORKBOOK_INPUT_DEFAULTS", {}) or {}
     sane_default_tonne = float(cfg_defaults.get("sheet_steel_cost_per_tonne_gbp") or 800.0)
     if sheet_steel_per_tonne > 2500.0 or sheet_steel_per_tonne < 200.0:
         sheet_steel_per_tonne = sane_default_tonne
+        _steel_rate_from = (f"config.WORKBOOK_INPUT_DEFAULTS — the sheet's own figure was "
+                            f"outside £200–£2,500/tonne and was not used")
     scrap_frac = float(getattr(config, "SCRAP_PERCENTAGE", 0.04))
     parts_per_sheet = sheet_estimate.get("parts_per_sheet")
     if not parts_per_sheet or int(parts_per_sheet) < 1:
         parts_per_sheet = 1
 
-    if density is None or price_per_kg is None:
+    # ── ONE RATE FOR STEEL SHEET, AND IT IS THE SHEET'S ─────────────────────────────
+    #
+    # "No parallel steel-price resolver for this route" — James Gray, 18 Sep 2026. A steel
+    # part with a blank is bought as its share of a sheet at the rate the estimator holds in
+    # the workbook, and the per-kilo path below must not offer a second answer to a question
+    # the sheet has already answered. `density is None` still refuses (no mass, no cost) but
+    # a MISSING per-kg rate is no longer a reason to abandon the sheet formula: the formula
+    # does not use one.
+    _steel_sheet_route = bool(is_steel and sheet_steel_per_tonne > 0 and parts_per_sheet > 0
+                              and density is not None and area_m2 and thickness_m)
+    if not _steel_sheet_route and (density is None or price_per_kg is None):
         mass_kg = None
         material_cost = None
         cost_method = "no_price"
-    elif is_steel and sheet_steel_per_tonne > 0 and parts_per_sheet > 0:
+    elif _steel_sheet_route:
         # Exact workbook formula: cost/part = (£/tonne × kg/sheet) / (1000 × parts/sheet)
         sheet_dims = sheet_estimate.get("candidate_sheet_size_mm") or [2500.0, 1250.0]
         sheet_area_m2 = (float(sheet_dims[0]) * float(sheet_dims[1])) / 1_000_000.0
@@ -5665,6 +5679,29 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         mass_kg = area_m2 * thickness_m * density
         material_cost = cost_per_part * (1.0 + scrap_frac)
         cost_method = "workbook_sheet_steel_formula"
+        # THE RATE AND WHERE IT CAME FROM, ON THE RECORD. The report and the workbook then
+        # state the same figure for the same reason, instead of publishing two numbers and
+        # leaving the reader to guess which is the money.
+        part["steel_rate_used"] = {
+            "gbp_per_tonne": round(float(sheet_steel_per_tonne), 2),
+            "source": _steel_rate_from,
+            "parts_per_sheet": int(parts_per_sheet),
+            "sheet_mm": [sheet_dims[0], sheet_dims[1]],
+        }
+        # SAID ONLY WHERE THERE WAS A REAL SECOND ANSWER. The config £/kg fallback exists
+        # for every steel on the books and was never going to price this line — flagging it
+        # would put a sentence on every steel part in the shop, which is how a warning stops
+        # being read. An APPLIED per-kilo rate is different: the price service found one,
+        # for this part, and it is being refused.
+        if applied_price_per_kg is not None and abs(
+                float(applied_price_per_kg) * 1000.0 - float(sheet_steel_per_tonne)) > 1.0:
+            part.setdefault("review_flags", []).append(
+                f"STEEL RATE: costed at £{sheet_steel_per_tonne:,.0f}/tonne from "
+                f"{_steel_rate_from}. A live per-kilo rate of "
+                f"£{float(applied_price_per_kg):.2f}/kg "
+                f"(£{float(applied_price_per_kg) * 1000.0:,.0f}/tonne) was also available "
+                f"and was NOT used — the sheet's own cell is the controlling rate and an "
+                f"estimator changes it there.")
     else:
         mass_kg = area_m2 * thickness_m * density
         cap_kg = float((getattr(config, "MATERIAL_PRICE_POLICY", {}) or {}).get("max_sane_gbp_per_kg", 15.0))
