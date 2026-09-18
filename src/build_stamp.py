@@ -174,6 +174,39 @@ def build_stamp_line() -> str:
     return line
 
 
+def behind_origin_warning() -> Optional[str]:
+    """This checkout is costing jobs with code that is not the branch it was told to use.
+
+    THE THIRD THING A STALE RUN CAN BE, AND THE ONLY ONE NOTHING COULD SEE. The two tells
+    above both compare the PROCESS against the CHECKOUT, so they are silent when the two
+    agree perfectly — and they agree perfectly on a runner that simply never pulled.
+    401912-02 ran three times against `2314342 +local edits` while the branch it was
+    supposed to be on had moved four commits ahead, including the fix for the very crash
+    that was ending each run. The banner said "+local edits" every time, which is true and
+    is not the problem, and said nothing at all about the four commits.
+
+    Read from the git tree only — no fetch, no network, no delay on a runner that may have
+    neither. That means it reports what the last fetch knew, so it can UNDERSTATE how far
+    behind a checkout is and can never overstate it: a warning that appears is always real.
+    A checkout that has never fetched says nothing, which is the honest answer.
+    """
+    try:
+        _upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+        if not _upstream:
+            return None
+        _behind = _git("rev-list", "--count", "HEAD..@{u}")
+        _n = int(_behind) if _behind and _behind.isdigit() else 0
+        if _n <= 0:
+            return None
+        _subject = _git("log", "-1", "--format=%h %s", "@{u}") or _upstream
+        return (f"BEHIND THE BRANCH — this checkout is {_n} commit(s) behind {_upstream}, "
+                f"whose tip is {_subject}. Those commits are not in this run and anything "
+                f"they fixed is still broken here. `git pull` and restart the runner. "
+                f"(Read from the last fetch, so the real gap may be larger.)")
+    except Exception:                                                # noqa: BLE001
+        return None
+
+
 def stale_process_warning() -> Optional[str]:
     """The run is about to be costed by code older than the checkout it was told to use.
 
@@ -234,6 +267,13 @@ def print_build_stamp() -> None:
         _warn = stale_process_warning()
     except Exception:                                                # noqa: BLE001
         _warn = None
+    if not _warn:
+        # Only where the process and the checkout agree — otherwise the louder fault is the
+        # one to act on first, and two banners compete for the same attention.
+        try:
+            _warn = behind_origin_warning()
+        except Exception:                                            # noqa: BLE001
+            _warn = None
     if _warn:
         # Loud, and above the run rather than inside it. A stale engine invalidates every
         # number that follows, so it is not a footnote.

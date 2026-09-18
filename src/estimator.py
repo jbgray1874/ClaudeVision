@@ -10224,6 +10224,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     _finish_std = customer_finish_standard(job_customer(summary)) if summary else None
 
     part_estimates: List[Dict[str, Any]] = []
+    _failed_parts: List[Dict[str, Any]] = []
     for idx, part in enumerate(estimable_parts, start=1):
         part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
         if debug:
@@ -10233,13 +10234,60 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             )
         if _finish_std and not part.get("_customer_finish_standard"):
             part["_customer_finish_standard"] = dict(_finish_std)
-        part_estimate = estimate_part(part, job_quantity=_order_qty)
+        # ONE PART MUST NOT DESTROY THE JOB.
+        #
+        # 401912-02, twice in twenty minutes: a `KeyError` costing the magnetic tape ended
+        # the process, and the DXF augment, the SolidWorks extract, the SQL price lookups and
+        # every other part on the job went in the bin with it. "The engine exited with code
+        # 1. Nothing was filed." Forty-nine seconds of work, and an estimator with nothing to
+        # look at — not even the parts that costed perfectly well.
+        #
+        # The trade here is not "hide the error". It is WHICH failure an estimator is handed:
+        # a job with one line marked NOT COSTED and a traceback attached to it, or no job at
+        # all. The first can be read, priced by hand and sent; the second cannot be anything.
+        #
+        # So the part is dropped from the costed record rather than half-built — nothing
+        # downstream should ever meet a partially costed part, which is how a £0 reaches a
+        # total — and the failure is made impossible to miss: on the log, on the summary, and
+        # on the job's own outstanding list. The rule this engine already follows everywhere
+        # else: SAID, NOT STOPPED.
+        try:
+            part_estimate = estimate_part(part, job_quantity=_order_qty)
+        except Exception as _exc_part:                               # noqa: BLE001
+            import traceback as _tb_part
+            _why_part = f"{type(_exc_part).__name__}: {_exc_part}"
+            _failed_parts.append({
+                "part_number": part_number,
+                "description": part.get("description") or "",
+                "error": _why_part,
+                "traceback": _tb_part.format_exc(),
+            })
+            print(f"   [cost] {part_number} COULD NOT BE COSTED — {_why_part}. The rest of "
+                  f"the job is costed and this line is on the outstanding list.", flush=True)
+            continue
         part_estimates.append(part_estimate)
         if debug:
             print(
                 f"[DEBUG] estimate_document done part {idx}/{len(estimable_parts)}: "
                 f"{part_number} (+{round(time.time()-started,2)}s)"
             )
+    # AND THE JOB SAYS WHAT IS MISSING FROM IT. A part dropped from the costed record is a
+    # hole in the total, so it goes on the summary's own review flags — the list an estimator
+    # reads before sending anything — rather than only into a log line that scrolls away.
+    if _failed_parts and summary is not None:
+        try:
+            _rf_job = summary.setdefault("review_flags", [])
+            if isinstance(_rf_job, list):
+                for _fp in _failed_parts:
+                    _rf_job.append(
+                        f"NOT COSTED — {_fp['part_number']}"
+                        + (f" ({_fp['description']})" if _fp.get("description") else "")
+                        + f": {_fp['error']}. This line is MISSING FROM THE TOTAL and must "
+                          f"be priced by hand before the estimate is sent.")
+            summary["parts_that_failed_to_cost"] = list(_failed_parts)
+        except Exception:                                        # noqa: BLE001
+            pass
+
     # ALWAYS A NUMBER. After every part is costed, any REAL line still reading as free gets a
     # per-each market/LLM indicative so £0 never sits on a part the shop actually buys. Runs
     # AFTER the loop (so the seal's early return has already fired) AND refuses the seal markers
