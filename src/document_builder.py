@@ -693,6 +693,40 @@ def _synthesize_manufacturing_features(part: Dict[str, Any]) -> Dict[str, Any]:
     return _synthesize_manufacturing_features_impl(part)
 
 
+def _one_reading(part: Dict[str, Any]) -> bool:
+    """Whether this part's blank length and width came from the SAME reader.
+
+    ── A BLANK IS A PAIR, AND IT WAS ARBITRATED AS TWO SCALARS ──────────────────────────
+    #
+    0355255, the phantom "DXF flat 792 x 760.3mm is 377% of the model flat", reported twice
+    and hunted three times. Neither number is wrong and neither came from the DXF:
+
+        760.3   page 1 — the ACRYLIC L-STAND's flat length. The DXF agrees: 760.252 x 210.
+        792     page 2 — the PAPER GRAPHIC. Material PAPER, weight 3g. A different part.
+
+    `source_precedence` writes one FIELD at a time, each winning its own arbitration, so
+    `blank_length_mm` can be taken from the reading that won for length while
+    `blank_width_mm` is taken from the one that won for width. Two parts' dimensions, from
+    two pages, assembled into one "blank" that was never measured off anything — and then
+    handed to `_dxf_blank_mm`, which labelled it DXF because that is what its caller is for.
+
+    The 377% is arithmetic on a pair that does not exist. It survived three fixes to the DXF
+    reader because the DXF was never involved.
+
+    NARROW ON PURPOSE. A pair is refused only where both halves carry a RECORDED source and
+    the two differ. Where nothing recorded a source — a legacy record, a reader that predates
+    the stamps — the pair is taken as it always was, because refusing it would throw away
+    every blank the engine has rather than the ones it assembled.
+    """
+    if not isinstance(part, dict):
+        return True
+    ls = str(part.get("blank_length_mm_source") or "").strip().lower()
+    ws = str(part.get("blank_width_mm_source") or "").strip().lower()
+    if not ls or not ws:
+        return True
+    return ls == ws
+
+
 def flat_blank_mm(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
     """The DEVELOPED blank on a part record, whichever of the three shapes it is in.
 
@@ -723,7 +757,7 @@ def flat_blank_mm(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float
     if l and w:
         return l, w
     l, w = _n((part or {}).get("blank_length_mm")), _n((part or {}).get("blank_width_mm"))
-    if l and w:
+    if l and w and _one_reading(part):
         return l, w
     box = ng.get("bounding_box_flat_mm")
     if isinstance(box, dict):

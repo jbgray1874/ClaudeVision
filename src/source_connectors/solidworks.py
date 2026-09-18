@@ -1239,7 +1239,29 @@ def _dxf_blank_mm(part: Dict[str, Any]):
     # the same question of the same module — a second copy is how one goes stale while the
     # other is fixed.
     from document_builder import flat_blank_mm
-    return flat_blank_mm(part)
+    _l, _w = flat_blank_mm(part)
+
+    # ── AND IT MUST ACTUALLY BE THE DXF'S, BECAUSE THE CALLER SAYS SO ────────────────
+    #
+    # The one caller hands this pair to `arbitrate_flat`, which prints "DXF flat {l} x {w}mm"
+    # in every sentence it produces. `flat_blank_mm` answers the general question — what is
+    # this part's developed blank, from whichever reader put one there — so a blank written by
+    # the PDF's overall dimensions or by geometry inference came back here and was reported to
+    # an estimator as a DXF measurement that disagreed with the model.
+    #
+    # A WRONG CITATION IS WORSE THAN NO FIGURE, which this codebase has now paid for twice:
+    # an unsourced number invites checking and a cited one stops it. On 0355255 that sentence
+    # sent three people to the DXF reader over a pair the DXF never produced.
+    #
+    # Where the blank is not the DXF's, nothing is returned and the arbitration says "no DXF
+    # blank could be measured" — which is true, and is the sentence that would have ended the
+    # hunt on the first reading.
+    if _l and _w and not _dxf_backed(part):
+        return None, None
+    _src = str(part.get("blank_length_mm_source") or "").strip().lower()
+    if _l and _w and _src and "dxf" not in _src:
+        return None, None
+    return _l, _w
 
 
 def _dxf_backed(part: Dict[str, Any]) -> bool:

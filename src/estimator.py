@@ -8054,8 +8054,24 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             ";".join(_part_ops(part) or []),
         ]
     ).upper()
-    # BOUGHT_IN normalised material means customer supplies it — SDI cost = £0
-    if (part.get("normalized_material") or "").upper() in {"BOUGHT_IN", "PAPER", "PRINTED_PAPER"}:
+    # ── BOUGHT_IN MEANS THE CUSTOMER SUPPLIES IT. PAPER MEANS IT IS MADE OF PAPER. ──
+    #
+    # James Gray, 18 September 2026: "we need to still price everything and we have our
+    # pipeline precedence model."
+    #
+    # PAPER and PRINTED_PAPER sat in this set beside BOUGHT_IN and took its rule with them, so
+    # any printed line short-circuited to £0.00 `customer_supplied` BEFORE reaching a single
+    # pricing rung. On 0355255 that is the GRAPHIC — 792 x 210, MATERIAL: PAPER, WEIGHT: 3g,
+    # "COLOUR: CLIENT ARTWORK - SEE PRINT SPEC". The ARTWORK is the client's. Whether SDI
+    # prints it, buys the print, or receives it finished is a commercial fact about the job,
+    # and the word PAPER is not evidence of any of the three.
+    #
+    # BOUGHT_IN KEEPS ITS MEANING, because that one IS the stated rule: the material has been
+    # normalised to "the customer supplies this", which is a decision somebody made about the
+    # line. A material name is not a decision. So a printed line goes down the ordinary
+    # waterfall like every other line, and where nothing prices it the estimator gets one
+    # action rather than a zero that sums as free.
+    if (part.get("normalized_material") or "").upper() in {"BOUGHT_IN"}:
         return {
             "part_number": part.get("part_number"),
             "description": part.get("description"),
