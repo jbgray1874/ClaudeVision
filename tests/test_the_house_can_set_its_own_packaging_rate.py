@@ -139,4 +139,7 @@ def test_a_commercial_line_with_no_stated_order_says_so_rather_than_guessing():
 def test_an_ordinary_bought_in_indication_is_unaffected():
     got = _src({"code": "01-02X", "price": 85.62, "supplier": "xAI market indication",
                 "text": "CONCRETE SLAB"})
-    assert "NOT A QUOTE, replace it" in got and "WHOLE ORDER" not in got
+    # Plain words: "AI market indication ... NOT A QUOTE" is internal system language on a
+    # note that goes to an estimator. What they need is that it is researched rather than
+    # quoted, and that it must be replaced before it reaches a customer.
+    assert "not a quotation, replace before quoting" in got and "WHOLE ORDER" not in got

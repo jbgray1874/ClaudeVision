@@ -2207,10 +2207,26 @@ def main() -> None:
                       f"price ({(_mp_block or {}).get('state')}); the covering email is "
                       f"replaced by a refusal and the quote is held", flush=True)
 
+            # ── WHAT A PERSON IS ACTUALLY SENT ───────────────────────────────────────
+            #
+            # James Gray, 18 Sep 2026, on the 401912-02 note: "It lists internal files such as
+            # logs, SQL, CSV exports and diagnostic workbooks as 'Attached'."
+            #
+            # THIS WAS A BLACKLIST, so every output path the engine has ever learned to write
+            # became an attachment the moment somebody added it -- source drawing data, the
+            # BOMs-and-routes exports, parity bundles, the variant workbooks. None of those is
+            # a thing you send an estimator, and naming a log file as an attachment on a note
+            # to the head of estimating is the kind of error that costs the whole document its
+            # credibility.
+            #
+            # A WHITELIST, so a new deliverable has to be added here deliberately before it can
+            # appear on somebody's email. Three things are sendable: the estimate workbook, the
+            # review report, and the customer quote once it is issued.
+            _SENDABLE = ("estimate_xlsx", "report", "quote")
             _attach = []
-            for _k, _v in _sop.items():
-                if _k in ("json", "covering_email", "quantity_variants") or not _v \
-                        or isinstance(_v, (list, dict)):
+            for _k in _SENDABLE:
+                _v = _sop.get(_k)
+                if not _v or isinstance(_v, (list, dict)):
                     continue
                 if _k == "quote" and _provisional:
                     continue        # the service holds the quote while the estimate is provisional

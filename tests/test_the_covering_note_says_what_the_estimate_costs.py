@@ -295,7 +295,9 @@ def test_the_note_never_calls_itself_ai_in_the_subject(note):
 
 
 def test_the_quote_is_named_as_withheld_while_provisional(note):
-    assert "No customer quote" in note["text"]
+    # "No customer quote" reads as "we did not produce one" when a draft exists and is being
+    # held deliberately. The distinction decides what somebody sends.
+    assert "No customer quotation is attached or issued" in note["text"]
 
 
 # ── section 6: the route, which is half the estimate ───────────────────────────

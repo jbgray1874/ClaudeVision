@@ -1172,9 +1172,12 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
     # ONLY A GENUINE AI/MARKET LOOKUP GETS THE MARKET WRAP. A configured SDI rate stamped
     # "(INDICATIVE)" is a house figure to verify, not a model guess to replace.
     if any(token in supplier.lower() for token in _MARKET_AI):
-        return f"AI market indication ({supplier}) — NOT A QUOTE, replace it"
+        # PLAIN WORDS. "AI market indication" is internal system language on a note that goes
+        # to an estimator; what they need to know is that it is researched rather than quoted,
+        # and that it must be replaced before it reaches a customer.
+        return f"researched market price ({supplier}) — not a quotation, replace before quoting"
     if any(token in named.lower() for token in _MARKET_AI):
-        return f"AI market indication ({named}) — NOT A QUOTE, replace it"
+        return f"researched market price ({named}) — not a quotation, replace before quoting"
     if supplier:
         return f"catalogue — {supplier}"
     if named:
@@ -1576,7 +1579,7 @@ def build(workbook: Path, scan_json: Optional[Path],
         + (f"{len(_market)} line(s) worth {_gbp(_market_gbp)} are AI market "
            f"indications, not catalogue prices: "
            + ", ".join(r["code"] or _description(r) for r in _market[:8]) + ". "
-           if _market else "No line rests on an AI market indication. ")
+           if _market else "No line rests on a researched market price. ")
         + (f"{len(_house)} line(s) worth {_gbp(_house_gbp)} are priced on an SDI house "
            f"rate marked INDICATIVE — a figure to verify, not to replace: "
            + ", ".join(r["code"] or _description(r) for r in _house[:8]) + "."
@@ -1650,8 +1653,8 @@ def build(workbook: Path, scan_json: Optional[Path],
             _label = str(((_record_line(record_lines, row) or {}).get("price_origin")
                           or {}).get("label") or "")
             add(f"| {row['code'] or '—'} | {_description(row)} | {_fmt(row.get('qty'))} "
-                + (f"| {_gbp(_ext)} — an AI market indication, not a catalogue price "
-                   f"| **Overwrite it, or accept it deliberately.** It moves between runs, "
+                + (f"| {_gbp(_ext)} — a researched market price, not a catalogue price "
+                   f"| **Replace it, or accept it deliberately.** It can move between runs, "
                    f"so an estimate resting on it cannot be reproduced. "
                    if kind == "market" else
                    f"| {_gbp(_ext)} — an SDI house rate marked INDICATIVE "
@@ -2558,6 +2561,15 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
 
     h: List[str] = [f'<div style="{_EMAIL_CSS}">']
     add = h.append
+    # IT OPENS AS A MESSAGE, BECAUSE IT IS ONE. James Gray, 18 Sep 2026: "It starts as a
+    # report, not a message to Dave." It led with a job/client/quantity strap and a large
+    # number, which is a document header; a person opening their email needs a sentence first
+    # saying what this is and what is wanted of them. The detail below is unchanged -- what
+    # was missing was the line that makes it a note rather than an artefact.
+    add(f"<p>Here is the estimate for <b>{_e(job)}</b>"
+        f"{' (' + _e(client) + ')' if client else ''}, costed at {order_qty} off. "
+        f"The figures come from the workbook's own calculated cells — please read the "
+        f"outstanding items below before anything goes to the customer.</p>")
     add(f"<p><b>{_e(job)}</b>{' &middot; ' + _e(client) if client else ''} &middot; "
         f"{order_qty} of &middot; {_e(_state.strip().rstrip('.') or 'FOR REVIEW')}</p>")
     add(f'<p style="font-size:26px;margin:12px 0 4px"><b>{_e(_gbp(totals.get("unit")))}</b>'
@@ -2568,7 +2580,10 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     if deliverables:
         add("<p>Attached: " + " &middot; ".join(f"<b>{_e(_basename(d))}</b>"
                                                 for d in deliverables) + ".")
-        add(" No customer quote — it stays unissued until the lines in §5 are settled.</p>"
+        # "No customer quote" reads as "we did not produce one", when a draft exists and is
+        # deliberately being held. The distinction matters to anybody deciding what to send.
+        add(" No customer quotation is attached or issued — it is held until the "
+            "outstanding lines below are settled.</p>"
             if provisional else "</p>")
 
     # WHERE THE PANEL GOES. Built at the very end, from the same values the sections are
@@ -2635,10 +2650,19 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                       else f"{(_money(r['unit']) / _at_one - 1) * 100:+.0f}%")]
                     for r in _qs_rows], numeric={0, 1, 2, 3, 4}))
         _saved = [str(v) for v in ((quantity_sweep or {}).get("variants") or [])]
+        # THE QUANTITIES THIS RUN ACTUALLY COSTED, NOT AN ILLUSTRATIVE 500.
+        #
+        # James Gray, 18 Sep 2026: "It discusses 500-off although this job was tested at 1 and
+        # 3." The prose carried 500 as a rhetorical example from whichever job it was written
+        # for, and an estimator reading a note about their own job has no way to know that --
+        # it reads as a quantity somebody priced. The sentence says the same thing using the
+        # breaks in front of them.
+        _q_lo = _fmt(_qs_rows[0].get("quantity")) if _qs_rows else str(_base)
+        _q_hi = _fmt(_qs_rows[-1].get("quantity")) if _qs_rows else str(_base)
         add(f"<p>{_plural(len(_qs_rows), 'quantity')} priced from this one estimate by "
-            f"recalculating the sheet, not by re-running the job — a blank is a blank at 1 "
-            f"off and at 500, and re-reading the drawings five times would take five hours "
-            f"to produce the same geometry. "
+            f"recalculating the sheet, not by re-running the job — a blank is a blank at "
+            f"{_q_lo} off and at {_q_hi}, and re-reading the drawings once per quantity "
+            f"would take hours to produce the same geometry. "
             + (f"{_plural(len(_saved), 'workbook')} filed alongside this one, one per "
                f"quantity, each opening on a page that says what it is. "
                if _saved else
@@ -2663,11 +2687,11 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
                                            .get("freight_on_sheet") or {}).values()) else
                 "<b>Packaging and delivery are unpriced (£0) at every quantity</b> — the "
                 "estimator's own per-order figures go in before any of these is quoted. "))
-            + (("<b>Bought-in prices do not step down</b> — the template's quantity "
-                "price-break lookup is overwritten with a fixed price, so every bought-in "
-                "line costs the same at 500 off as at 1. Treat the larger quantities as the "
-                "top of the range and the shape of the curve as sound; the quantity you "
-                "intend to quote should be run properly.</p>")
+            + ((f"<b>Bought-in prices do not step down</b> — the template's quantity "
+                f"price-break lookup is overwritten with a fixed price, so every bought-in "
+                f"line costs the same at {_q_hi} off as at {_q_lo}. Treat the larger quantities as the "
+                f"top of the range and the shape of the curve as sound; the quantity you "
+                f"intend to quote should be run properly.</p>")
                if any(_r.get("block") == "bom" and _money(_r.get("total_value_gbp"))
                       for _r in material_rows) else
                "The quantity you intend to quote should be run properly.</p>"))
@@ -2776,7 +2800,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         if _market:
             _one = len(_market) == 1
             add(f"<p><b>{len(_market)} of those lines "
-                f"{'is an AI market indication' if _one else 'are AI market indications'} "
+                f"{'is a researched market price' if _one else 'are researched market prices'} "
                 f"rather than "
                 f"{'a catalogue price' if _one else 'catalogue prices'} — {_gbp(_market_gbp)}"
                 f"{'' if _one else ' between them'}.</b> "
@@ -2938,8 +2962,8 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             _nrows.append([
                 row.get("code") or "—", _description(row),
                 _gbp_or(round(_u * _q, 2) if _u and _q else None, "£0.00"),
-                ("An AI market indication, not a catalogue price. Overwrite it, or accept it "
-                 "deliberately." if _is_market else
+                ("A researched market price, not a catalogue price. Replace it, or accept "
+                 "it deliberately." if _is_market else
                  f"An SDI house rate marked INDICATIVE — verify it, or accept it "
                  f"deliberately. {_label}".strip() if _is_house else
                  "The line is costing nothing — nothing we can query holds a rate for this."),

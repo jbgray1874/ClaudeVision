@@ -2785,7 +2785,7 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
                      f"{_esc(', '.join(gaps['unpriced']))}. The unit cost is understated by "
                      f"whatever they are worth.")
     if gaps.get("indicative_market"):
-        facts.append(f"<b>{len(gaps['indicative_market'])} on an AI market indication</b> "
+        facts.append(f"<b>{len(gaps['indicative_market'])} on a researched market price</b> "
                      f"({_money(gaps.get('indicative_market_gbp'))}) — replace before issue: "
                      f"{_esc(', '.join(gaps['indicative_market']))}.")
     if gaps.get("indicative_house"):

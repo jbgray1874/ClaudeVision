@@ -48,16 +48,34 @@ def test_the_note_is_told_whether_the_job_is_provisional():
     i = SRC.index("from estimate_explained import covering_email as _covering_email")
     call = SRC[i:i + 900]
     assert "provisional=_provisional" in call, "the flag defaults to True and is never passed"
-    block = SRC[i - 4500:i]   # widened 16 Sep: the order-qty refusal block sits between the release read and the call
+    # ANCHORED, NOT WINDOWED. This measured 4,500 characters back from the call and had
+    # already been widened once when a block grew between the two. It broke again the day the
+    # attachment list became a whitelist. A window that has to be re-tuned whenever the file
+    # changes is measuring the file's length, not its behaviour — so it starts where the
+    # release is read and ends at the call.
+    block = SRC[SRC.index("_rel3 = ") if "_rel3 = " in SRC else max(0, i - 6000):i]
     assert "_rel3.get(\"draft\")" in block and "may_quote_firm" in block, (
         "the flag is not read from the record's release and the checks' verdict")
 
 
 def test_the_attached_line_names_what_the_service_will_attach():
     i = SRC.index("from estimate_explained import covering_email as _covering_email")
-    block = SRC[i - 4500:i]   # widened 16 Sep: the order-qty refusal block sits between the release read and the call
-    for excluded in ('"json"', '"covering_email"', '"quantity_variants"'):
-        assert excluded in block, f"{excluded} is listed as attached and it is not"
+    # ANCHORED, NOT WINDOWED. This measured 4,500 characters back from the call and had
+    # already been widened once when a block grew between the two. It broke again the day the
+    # attachment list became a whitelist. A window that has to be re-tuned whenever the file
+    # changes is measuring the file's length, not its behaviour — so it starts where the
+    # release is read and ends at the call.
+    block = SRC[SRC.index("_rel3 = ") if "_rel3 = " in SRC else max(0, i - 6000):i]
+    # A WHITELIST NOW, NOT A BLACKLIST. It listed everything the engine had ever learned to
+    # write — logs, SQL, CSV exports, diagnostic workbooks — as "Attached", because each new
+    # output path joined the list the moment somebody added it. Three things are sendable, and
+    # a fourth has to be added here deliberately before it can reach anybody's email.
+    assert "_SENDABLE" in block, "the attachment list is not a whitelist"
+    for sendable in ('"estimate_xlsx"', '"report"', '"quote"'):
+        assert sendable in block, f"{sendable} is not on the sendable list"
+    _after = block.split("_SENDABLE", 1)[1][:400]
+    for internal in ("source_drawing_data", "boms_and_routes", "parity"):
+        assert internal not in _after, f"{internal} can still reach somebody's email"
     assert '_k == "quote" and _provisional' in block, (
         "the quote is named as attached while the service holds it")
     assert '["report"] = str(_rhtml)' in SRC and '["quote"] = str(_qpath)' in SRC, (
