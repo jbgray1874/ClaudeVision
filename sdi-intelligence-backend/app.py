@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 import config
+import quote_release
 
 config.validate()
 
@@ -358,6 +359,26 @@ def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None
     media_type, _ = mimetypes.guess_type(str(target))
     inline = target.suffix.lower() in _VIEWABLE
     headers = {}
+
+    # ── AN UNRELEASED QUOTATION IS NOT A DOWNLOAD ───────────────────────────────
+    #
+    # "download/share/export routes must enforce `customer_releasable`." This is that route:
+    # it takes a path and hands back a file, and a quotation is just another path to it.
+    #
+    # WHAT IS ENFORCED, AND WHAT HONESTLY CANNOT BE. The estimator must keep their page —
+    # `portal_editable` is a promise and refusing outright would break it — so an unreleased
+    # quotation is still SERVED, and still rendered, for the person whose job is to close the
+    # items on it. What it may not do is arrive as a saved file: no attachment disposition, no
+    # download filename. A viewer can still use Save As, and this does not pretend otherwise;
+    # the boundary that matters is that the SYSTEM never hands one over as a document, and
+    # that is held here and on both email routes.
+    #
+    # The verdict comes out of the file's own head, not its name and not a record elsewhere.
+    if quote_release.looks_like_a_quote(target) and \
+            not quote_release.may_go_to_a_customer(target):
+        inline = True
+        headers["X-SDI-Quote-Release"] = "portal"
+        headers["X-SDI-Quote-Held"] = quote_release.why_held(target)
     if inline:
         # SANDBOXED, because these roots are shares. An .html served from this
         # origin can script the page that served it and reach every endpoint with

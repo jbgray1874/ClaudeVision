@@ -16,9 +16,14 @@ import pytest
 pytest.importorskip("fastapi")
 BACKEND = Path(__file__).resolve().parents[1] / "sdi-intelligence-backend"
 sys.path.insert(0, str(BACKEND))
+# The engine, for `release_meta_tag` — the quotation's own declaration of its audience, which
+# the service reads off the file. Written here by the same helper the engine writes it with,
+# so a fixture cannot describe a document shape the engine does not produce.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import estimate_email                                                    # noqa: E402
 import estimate_routes                                                   # noqa: E402
+from fastapi import HTTPException                                        # noqa: E402
 
 
 # ── who it goes to ───────────────────────────────────────────────────────────
@@ -58,23 +63,51 @@ def test_a_typo_is_refused_before_the_drawings_are_staged(monkeypatch):
 
 # ── what it attaches ─────────────────────────────────────────────────────────
 
-def test_the_customer_quote_is_withheld_while_the_estimate_is_provisional():
+def _quote_file(tmp_path, released, name="12349_quote.html"):
+    """A quotation that declares its own audience, as the engine writes it.
+
+    The fixtures here used to be bare path strings that pointed at nothing. That worked while
+    the only question was the filename; it stopped working when the gate started reading the
+    document, and the tests failed CLOSED — which is the right direction to fail, and is why
+    they now carry a real file.
+    """
+    from quote_state import CUSTOMER, PORTAL, release_meta_tag
+    p = tmp_path / name
+    p.write_text("<html><head>"
+                 + release_meta_tag(CUSTOMER if released else PORTAL)
+                 + "</head><body>Quotation</body></html>", encoding="utf-8")
+    return str(p)
+
+
+def test_the_customer_quote_is_withheld_while_the_estimate_is_provisional(tmp_path):
     """It is the one deliverable written to be read by a customer, and on a provisional
     estimate it looks exactly like a quotation for a figure nobody has stood behind."""
+    quote = _quote_file(tmp_path, released=True)
     files = [{"path": "out/12349_20260902.xlsx"}, {"path": "out/12349_report.html"},
-             {"path": "out/12349_explained.md"}, {"path": "out/12349_quote.html"}]
+             {"path": "out/12349_explained.md"}, {"path": quote}]
     keep, held = estimate_email.choose_attachments(files, provisional=True,
                                                    include_quote=False)
-    assert "out/12349_quote.html" not in keep
+    assert quote not in keep
     assert len(keep) == 3
     assert held[0]["why"].startswith("the customer quote is not sent")
 
 
-def test_the_quote_goes_when_it_is_asked_for():
-    files = [{"path": "out/12349_quote.html"}]
-    keep, held = estimate_email.choose_attachments(files, provisional=True,
+def test_the_quote_goes_when_it_is_asked_for(tmp_path):
+    quote = _quote_file(tmp_path, released=True)
+    keep, held = estimate_email.choose_attachments([{"path": quote}], provisional=True,
                                                    include_quote=True)
-    assert keep == ["out/12349_quote.html"] and not held
+    assert keep == [quote] and not held
+
+
+def test_an_unreleased_quote_is_held_however_it_was_asked_for(tmp_path):
+    """RELEASE IS NOT A PREFERENCE. `include_quote` says what somebody wants sent; whether
+    this document may go to a customer was decided on the estimate, by a person who completed
+    the commercial inputs and authorised it, and a tick-box is neither of those."""
+    quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
+    keep, held = estimate_email.choose_attachments([{"path": quote}], provisional=False,
+                                                   include_quote=True)
+    assert keep == []
+    assert "commercial inputs" in held[0]["why"]
 
 
 def test_a_file_this_service_cannot_reach_is_named_rather_than_lost(tmp_path):
@@ -239,9 +272,10 @@ def test_sending_to_nobody_is_refused_rather_than_quietly_doing_nothing():
     assert "at least one address" in str(caught.value.detail)
 
 
-def test_an_explicit_choice_of_files_includes_the_quote_if_it_was_ticked():
-    """The automatic send withholds the quote. A person ticking it has decided."""
-    _finished_run()
+def _send_choosing(files, deliverable_paths):
+    """Drive the route with an explicit file list, and report what it actually sent."""
+    run = _finished_run()
+    run.deliverables = [{"path": p} for p in deliverable_paths]
     sent = {}
 
     def _fake(recipients, subject, html, text, paths):
@@ -252,11 +286,44 @@ def test_an_explicit_choice_of_files_includes_the_quote_if_it_was_ticked():
     estimate_email.send = _fake
     try:
         estimate_routes.email_run(
-            "r1", estimate_routes.SendRequest(recipients="a@b.co",
-                                              files=["out/12349_quote.html"]), None)
+            "r1", estimate_routes.SendRequest(recipients="a@b.co", files=files), None)
     finally:
         estimate_email.send = original
-    assert sent["paths"] == ["out/12349_quote.html"]
+    return sent
+
+
+def test_an_explicit_choice_of_files_sends_a_released_quote(tmp_path):
+    """A person ticking it has decided WHICH of this run's files to send."""
+    quote = _quote_file(tmp_path, released=True)
+    sent = _send_choosing([quote], [quote])
+    assert sent["paths"] == [quote]
+
+
+def test_an_explicit_choice_cannot_release_an_unreleased_quote(tmp_path):
+    """THE HOLE THE AUDIT WAS FOR.
+
+    This route read "An explicit choice is a decision, quote included" and sent the list
+    untouched, so a tick-box put an unreleased quotation in front of a customer past the only
+    gate there was — and that gate is a keyword scan of the run's console which returns True
+    unconditionally, so there was nothing behind it.
+
+    A choice is about WHICH files. Whether the quotation may leave the building is recorded on
+    the estimate by the person who authorised it.
+    """
+    quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
+    book = str(tmp_path / "12349.xlsx")
+    Path(book).write_text("x", encoding="utf-8")
+    sent = _send_choosing([quote, book], [quote, book])
+    assert sent["paths"] == [book], "an unreleased quotation was sent on a tick-box"
+
+
+def test_a_selection_of_nothing_sendable_says_so_rather_than_mailing_nothing(tmp_path):
+    """Silently sending an empty mail is how somebody believes a quote went out."""
+    quote = _quote_file(tmp_path, released=False, name="12349_quote_PORTAL.html")
+    with pytest.raises(HTTPException) as caught:
+        _send_choosing([quote], [quote])
+    assert caught.value.status_code == 409
+    assert "commercial inputs" in str(caught.value.detail)
 
 
 def test_with_no_choice_it_follows_the_same_rule_as_the_automatic_send():

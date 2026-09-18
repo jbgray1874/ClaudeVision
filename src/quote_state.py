@@ -48,6 +48,32 @@ SCHEMA = "quote_state.v1"
 PORTAL = "portal"
 CUSTOMER = "customer"
 
+# ── THE VERDICT TRAVELS INSIDE THE DOCUMENT ─────────────────────────────────────────
+#
+# James Gray, 18 September 2026:
+#
+#     "Print CSS and `_PORTAL` filenames deter misuse but are not the actual security
+#      boundary; download/share/export routes must enforce `customer_releasable`."
+#
+# He is right, and the awkward part is that the delivery routes live in a service that has
+# never read an estimate and should not start: it holds no engine, no summary and no costed
+# record, and giving it one would put a second opinion about the same question on the other
+# side of a network boundary.
+#
+# So the quotation DECLARES its own audience, in its head, and every delivery route reads the
+# file it is about to hand over. The check is then on the artefact being delivered rather than
+# on a record that refers to it — a record can be stale, can describe a different run, or can
+# be absent, and each of those failure modes releases the document. A file cannot disagree
+# with itself.
+RELEASE_META = "sdi-quote-release"
+
+
+def release_meta_tag(audience: str) -> str:
+    """The one line a delivery route reads. Kept here so the writer and the readers of this
+    declaration cannot drift apart in wording."""
+    value = CUSTOMER if audience == CUSTOMER else PORTAL
+    return f'<meta name="{RELEASE_META}" content="{value}">'
+
 
 class NotReleasable(RuntimeError):
     """Raised when a CUSTOMER document is asked for and the record does not allow one.

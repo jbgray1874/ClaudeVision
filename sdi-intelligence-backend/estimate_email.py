@@ -28,6 +28,8 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import quote_release
+
 # ── where the saved list lives ───────────────────────────────────────────────
 # OUTSIDE THE REPOSITORY. A list of who gets estimates is operational state, not code: it
 # should survive a checkout, not travel in one, and it must never be a file somebody can
@@ -376,6 +378,15 @@ def choose_attachments(deliverables: List[Dict[str, str]], *, provisional: bool,
         if any(m in path.lower() for m in _NOTE_MARKERS):
             continue
         if is_customer_quote(path):
+            # ── THE RELEASE GATE, AND IT IS NOT A PREFERENCE ────────────────────────
+            #
+            # FIRST, because `include_quote` is a request and this is a permission. An
+            # unreleased quotation is held whatever anybody asked for: the estimator has not
+            # completed the commercial inputs and nobody has authorised release, and a
+            # tick-box on a page is not either of those things.
+            if not quote_release.may_go_to_a_customer(path):
+                held.append({"path": path, "why": quote_release.why_held(path)})
+                continue
             if provisional and not include_quote:
                 held.append({"path": path,
                              "why": "the customer quote is not sent while the estimate is "

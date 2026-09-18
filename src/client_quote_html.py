@@ -112,7 +112,7 @@ _OPS_HIDE = {"handling"}
 
 # ── helpers ─────────────────────────────────────────────────────────────────
 from quote_state import (CUSTOMER, NotReleasable, PORTAL,  # noqa: E402
-                         quote_state)
+                         quote_state, release_meta_tag)
 
 def _esc(s: Any) -> str:
     return html.escape(str(s if s is not None else ""))
@@ -1304,6 +1304,9 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             + "; ".join(b["what"] for b in _state["blocking"]))
     audience = audience or (CUSTOMER if _state["customer_releasable"] else PORTAL)
     _for_customer = (audience == CUSTOMER)
+    # Declared in the document, because that is what the delivery routes read. See
+    # `quote_state.release_meta_tag`.
+    _release_meta = release_meta_tag(audience)
     stem = job_stem or summary.get("job_output_stem") or summary.get("job_folder", "").split("\\")[-1] or "Job"
     stem = str(stem)
 
@@ -1615,6 +1618,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+{_release_meta}
 <title>Quotation {_esc(job_number)} — {_esc(product)}</title>
 <style>
   :root {{ --sdi-yellow:#F5D947; --sdi-ink:#282928; --ink:#1f2321; --muted:#6b6f6c;
