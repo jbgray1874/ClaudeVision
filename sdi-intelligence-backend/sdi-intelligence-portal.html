@@ -900,6 +900,174 @@
         what runs.</p></div>
 
       <!-- ══════════════════════════════════════════════════════════════════
+           RUNNING IT — THE THREE DEPLOYMENTS AND THE RUNNER
+           ══════════════════════════════════════════════════════════════════ -->
+      <h2>Running it &mdash; which box, which command</h2>
+
+      <div class="note reveal">
+        <h4>The distinction that costs afternoons</h4>
+        <b>The service queues jobs. The runner costs them.</b> They are different processes, usually on different
+        machines, and only one of them runs the estimating engine.<br><br>
+        A <code>git pull</code> on the <b>service</b> box changes nothing about how a job is priced. A pull on the
+        <b>runner</b> box changes everything &mdash; but <b>only after the runner process is restarted</b>, because a
+        running Python process holds the code it imported at start-up and will go on holding it all day.<br><br>
+        <b style="color:var(--warn)">18 Sep 2026:</b> job 401912-02 was run three times in twenty minutes. Every run
+        printed <code>[build] engine source: 2314342 +local edits</code> while the branch had moved four commits
+        ahead &mdash; one of them the fix for the crash that ended each run. The pull had been done. The runner had
+        not been restarted, so the pull could not reach it. Three identical tracebacks, nothing filed.<br><br>
+        <b>Read the first three lines of every job.</b> They name the commit, and since <code>0262c3e</code> they
+        also say if the checkout is behind its branch and which rate card priced the job.
+      </div>
+
+      <h3 style="font-family:var(--disp);font-weight:700;font-size:17px;margin:28px 0 8px">The three deployments</h3>
+      <table>
+        <thead><tr><th>Address</th><th>Machine</th><th>What it is</th><th>Has git</th><th>How it is updated</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="path">localhost:8072</td>
+            <td><b>Estimating laptop</b></td>
+            <td>Hand-started service. Deliberately a different port from 8071 so it can run without stopping the
+                installed one.</td>
+            <td>Yes</td>
+            <td class="path">git pull &rarr; restart-service.ps1</td>
+          </tr>
+          <tr>
+            <td class="path">localhost:8071</td>
+            <td><b>Estimating laptop</b></td>
+            <td>The installed service, run by the <code>SDI Intelligence Service</code> scheduled task.</td>
+            <td>Yes</td>
+            <td class="path">git pull &rarr; restart-service.ps1 -Port 8071</td>
+          </tr>
+          <tr>
+            <td class="path">10.0.0.5:8071</td>
+            <td><b>SDI-APP01</b> &mdash; the main server</td>
+            <td>Serves the portal and <b>queues</b> estimates. No SOLIDWORKS seat, no Excel, no runner: it cannot
+                cost a job and never does.</td>
+            <td><b style="color:var(--warn)">No</b></td>
+            <td class="path">push-to-server.ps1 -Apply <i>(from the laptop)</i></td>
+          </tr>
+          <tr>
+            <td class="path">&mdash;</td>
+            <td><b>The runner</b> (e.g. DESKTOP-GFAAP80)</td>
+            <td><b>This is what actually prices jobs.</b> Needs a SOLIDWORKS seat, Excel and an interactive logged-in
+                desktop, because COM has no session 0. Dials out to whichever service answers; nothing connects to it.</td>
+            <td>Yes</td>
+            <td class="path">restart-runner.ps1 -Pull</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:10px">Every box has a <code>C:\ClaudeVision</code> and an identical prompt,
+      so there is nothing on screen to tell them apart. Each script below refuses to act on the wrong machine rather
+      than reporting a success that happened somewhere else.</p>
+
+      <div class="tools" style="margin-top:18px">
+
+        <div class="tool reveal">
+          <div class="th"><span class="nm">restart-runner.ps1</span><span class="chip c-prog">Runner</span></div>
+          <div class="ds"><b>Stop and restart the runner.</b> Stops the scheduled task <i>and</i> ends every runner
+          process by name &mdash; stopping the task alone leaves the Python child holding on, which is why a
+          &ldquo;restart&rdquo; can restart nothing. Then reports the commit the engine will now run, and shouts if
+          the checkout is still behind its branch.</div>
+          <code>.\tools\start\restart-runner.ps1 -Pull</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>Run on:</b> the runner machine<br>
+            <b><code>-Pull</code></b> pulls first and <b>refuses on a dirty tree</b> &mdash; local edits are somebody's
+            work, never merged over, stashed or discarded<br>
+            <b><code>-Clean</code></b> deletes <code>__pycache__</code>. Only for stale bytecode, whose tell is a
+            traceback printing <b>nonsense source lines</b> (a comment where a call must be)<br>
+            <b><code>-StopOnly</code></b> stops it and does not start it again
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.05s">
+          <div class="th"><span class="nm">start-runner.ps1</span><span class="chip c-done">Runner</span></div>
+          <div class="ds">Start a runner in a window you leave open. Probes <code>SDI_PORT</code>, then 8072, then
+          8071, and serves whichever answers <code>/api/health</code>; with an explicit <code>-Server</code> it
+          <b>refuses to start</b> if nothing answers rather than polling into silence. Refuses to start a second
+          runner on one machine.</div>
+          <code>.\tools\start\start-runner.ps1</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            Closing the window stops the runner; the service notices within ~90s and the page goes red.<br>
+            <b>Stop it by hand:</b><br>
+            <code style="display:block;margin-top:4px;white-space:pre-wrap">Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+  Where-Object CommandLine -like '*sdi_estimate_runner*' |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }</code>
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.1s">
+          <div class="th"><span class="nm">install-runner-task.ps1</span><span class="chip c-done">Runner</span></div>
+          <div class="ds">Installs the runner as the <code>SDI Estimating Runner</code> scheduled task so it starts
+          at logon and restarts if it dies. <b>A scheduled task, never a Windows service</b>: a service runs in
+          session 0 with no desktop, would install and start cleanly, and then fail on every estimate the moment it
+          opened SOLIDWORKS.</div>
+          <code>.\tools\start\install-runner-task.ps1</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <code>-Remove</code> uninstalls it. It cannot survive the machine being logged out or locked &mdash;
+            nothing can, because without a desktop session there is no SOLIDWORKS.
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.15s">
+          <div class="th"><span class="nm">restart-service.ps1</span><span class="chip c-done">Service</span></div>
+          <div class="ds">Restart a service so it serves the code on disk. Stops the task, <b>names and ends whatever
+          is actually holding the port</b>, starts it again, then checks the commit the <b>site reports</b> against
+          the checkout &mdash; &ldquo;it restarted&rdquo; and &ldquo;it is running the new code&rdquo; are different
+          claims. Exits non-zero if still stale, and refuses if this machine does not serve that port.</div>
+          <code>.\tools\start\restart-service.ps1 -Port 8072</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>8072</b> (laptop, the default) &middot; <b>8071</b> pass <code>-Port 8071</code><br>
+            Restarting a service does <b>not</b> change how any job is priced.
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.2s">
+          <div class="th"><span class="nm">start-service.ps1</span><span class="chip c-done">Service</span></div>
+          <div class="ds">Start a service by hand. The port is passed rather than read from
+          <code>$env:SDI_PORT</code>, because a PowerShell environment variable belongs to <b>one window</b> &mdash;
+          set it, open a second window, come back after lunch, and the fallback collides with whatever holds the
+          port. Refuses a port already held, so it cannot trample a running site.</div>
+          <code>.\tools\start\start-service.ps1 -Port 8072</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <code>-Force</code> takes a held port anyway &middot; <code>-Log</code> tees to a file (used by the task,
+            which has no window)
+          </div>
+        </div>
+
+        <div class="tool reveal" style="animation-delay:.25s">
+          <div class="th"><span class="nm">push-to-server.ps1</span><span class="chip c-prog">Main server</span></div>
+          <div class="ds"><b>The only way code reaches SDI-APP01</b>, which has no git. Run it <b>on the laptop</b>:
+          it reads this checkout and writes to the server's admin share. Lists what differs by default and copies
+          nothing until <code>-Apply</code>.</div>
+          <code>.\tools\start\push-to-server.ps1 -Apply</code>
+          <div class="muted" style="margin-top:8px;font-size:12px">
+            <b>A <code>.env</code> can never travel.</b> The file list comes from <code>git ls-files</code> and a
+            <code>.env</code> is gitignored, so it cannot be in the list &mdash; the guard is the reason the list
+            cannot contain it, not a rule applied afterwards. The two machines hold different roots, staging paths
+            and service accounts.<br>
+            It sends what the server <i>runs</i>: the backend, the start/repair scripts and seven src modules &mdash;
+            not the tests or the probes. <code>-All</code> overrides.
+          </div>
+        </div>
+
+      </div>
+
+      <div class="note reveal" style="margin-top:18px">
+        <h4>Getting a stuck job running &mdash; the whole sequence</h4>
+        On the <b>runner</b> machine, in <code>C:\ClaudeVision</code>:
+        <code style="display:block;margin:10px 0;white-space:pre-wrap;font-family:var(--mono);font-size:12px">.\tools\start\restart-runner.ps1 -Pull</code>
+        Then requeue the job and <b>read the first three lines</b>. They should say:
+        <ul>
+          <li><code>[build] engine source: &lt;the commit you expect&gt;</code> &mdash; with <b>no</b>
+              <code>+local edits</code>, and no <code>BEHIND THE BRANCH</code> banner</li>
+          <li><code>[rates] &hellip;</code> &mdash; which rate card priced this job: the estimating template's own
+              labour block, or the config defaults</li>
+        </ul>
+        If it still says <code>+local edits</code>, another session is writing into that tree. If the traceback
+        prints source lines that <b>cannot</b> be the code being run, add <code>-Clean</code>.
+      </div>
+
+      <!-- ══════════════════════════════════════════════════════════════════
            ENTRY POINTS
            ══════════════════════════════════════════════════════════════════ -->
       <h2>Entry Points</h2>
