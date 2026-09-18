@@ -377,11 +377,25 @@ def test_the_refusal_names_both_figures():
     assert "149.87" in why and "321.88" in why and "Estimate!M105" in why
 
 
-def test_the_quote_fails_closed_when_the_check_cannot_run():
+def test_the_quote_fails_closed_when_the_check_cannot_run(monkeypatch):
     """It was wrapped in `except Exception: pass`, which leaves the cost SET when the guard
-    itself breaks — the one failure mode a guard exists for, on the page a customer keeps."""
+    itself breaks — the one failure mode a guard exists for, on the page a customer keeps.
+
+    AND THIS TEST WAS A SOURCE GREP. It asserted that the string `except Exception` did not
+    appear within 400 characters of the call, which is a check on how the fix is spelled and
+    not on what it does. It then failed against the CORRECT fix: the quote must catch, because
+    a check that raises must not take the whole quotation down — a draft is always generated
+    in the portal for an estimator to edit. A grep cannot tell the two handlers apart. Running
+    the document can, so it does.
+    """
     import client_quote_html as Q
-    src = open(Q.__file__.replace(".pyc", ".py"), encoding="utf-8").read()
-    at = src.index("_q_tot = publishable_total(")
-    window = src[at:at + 400]
-    assert "except Exception" not in window, "the traceability check can still fail open"
+
+    def _raise(*_a, **_k):
+        raise RuntimeError("the check exploded")
+
+    monkeypatch.setattr(Q, "publishable_total", _raise)
+    html = Q.build_quote_html(_quote_summary())
+    assert html and "<html" in html.lower(), "the draft quotation must still be generated"
+    said = re.sub(r"<[^>]+>", " ", html)
+    assert "149.87" not in said, "the traceability check failed open"
+    assert "224.81" not in said, "a marked-up price survived a failed check"

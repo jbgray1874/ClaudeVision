@@ -1327,15 +1327,65 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # There is no broad except any more: the import is at module scope with the rest, and a
     # check that cannot run refuses the price rather than waving it past.
     _fe_totals = _get(summary, "final_estimate", "totals") or {}
-    _q_tot = publishable_total({"run": {
-        "unit_cost_gbp": unit_cost,
-        "unit_cell": _fe_totals.get("unit_cell") or "",
-        "unit_cell_value": _fe_totals.get("unit_cell_value"),
-    }})
+    try:
+        _q_tot = publishable_total({"run": {
+            "unit_cost_gbp": unit_cost,
+            "unit_cell": _fe_totals.get("unit_cell") or "",
+            "unit_cell_value": _fe_totals.get("unit_cell_value"),
+        }})
+    except Exception as _exc_tr:                                       # noqa: BLE001
+        # FAIL CLOSED ON THE PRICE, NOT ON THE DOCUMENT.
+        #
+        # Two wrong shapes were tried before this one. `except Exception: pass` left the old
+        # price LIVE when the guard broke — the one failure mode a guard exists for. Removing
+        # the guard's handling altogether then made a raising check CRASH quote generation,
+        # which breaks the release rule: a draft quote is always generated in the portal so an
+        # estimator can edit it. Refusing the figure and keeping the page is the only version
+        # that satisfies both.
+        _q_tot = {"amount": None,
+                  "why": f"the traceability check could not run ({_exc_tr})"}
     if _q_tot.get("amount") is None:
         unit_cost = None
     unit_price = (unit_cost * MARKUP_FACTOR) if isinstance(unit_cost, (int, float)) else None
     order_value = (unit_price * qty) if (unit_price is not None and qty) else None
+
+    # ── AND THE PAGE SAYS WHICH IT IS ────────────────────────────────────────────
+    #
+    # Refusing the figure is only half of failing closed. Rendered as a bare em-dash in the
+    # same box as always, a refused price reads as a page somebody has not finished filling
+    # in — and an estimator's next move is to type a number into it from memory, which is the
+    # exact thing `publishable_total` exists to stop. So the box says PRICE PENDING and the
+    # note underneath says why, in the estimator's language rather than the engine's.
+    #
+    # This is not a disclaimer. It is a state: the workbook total could not be tied to a cell,
+    # nobody is being warned about anything, and the sentence disappears the moment it can be.
+    if unit_price is None:
+        _price_class = _order_class = "pending"
+        _unit_figure = _order_figure = "PRICE PENDING"
+        _unit_caption = _order_caption = "awaiting a traceable price"
+        # ── AND THE REASON DOES NOT COME ONTO THIS PAGE ──────────────────────────
+        #
+        # The first cut printed `publishable_total`'s own `why` here, which reads: "the
+        # proposed total (£149.87) does not match what Estimate!M105 holds (£321.88)". On the
+        # one document that leaves the building. It names two figures neither of which may be
+        # published, cites a cell in somebody else's spreadsheet, and hands a customer the
+        # workings of a disagreement inside our own estimate — the same mistake the invariant
+        # banner was taken off this page for.
+        #
+        # The reason is NOT lost: the internal job report prints it under the unit cost, in
+        # the language and with the figures an estimator needs to chase it. This page says
+        # which state it is in and nothing about how it got there.
+        _pending_note = (
+            '\n      <div class="pending-note"><b>PRICE PENDING</b> — no price is shown on '
+            'this quotation yet. The specification, quantity and scope below are complete; '
+            'the price follows once the estimate has been confirmed.</div>')
+    else:
+        _price_class, _order_class = "unit", "ov"
+        _unit_figure, _order_figure = _money(unit_price), _money(order_value)
+        _unit_caption = ("per unit, ex VAT · indicative"
+                         + ((' · ' + _num(qty) + ' of') if qty else ''))
+        _order_caption = "ex VAT · indicative"
+        _pending_note = ""
 
     # ONE part list across every deliverable (costed_facts.job_parts): the canonical
     # list the Estimate sheet was built from, not the engine's pre-canonical one. They are
@@ -1600,6 +1650,11 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
   .price-box .per {{ font-size:13px; color:#c9cac7; margin-top:4px; }}
   .price-box .right {{ text-align:right; }}
   .price-box .right .ov {{ font-size:20px; font-weight:600; }}
+  .price-box .pending {{ font-size:34px; font-weight:700; color:#c9cac7; line-height:1; }}
+  .pending-note {{ border:1px solid var(--line); border-left:4px solid var(--sdi-ink);
+                   border-radius:4px; padding:12px 16px; margin:-14px 0 26px;
+                   font-size:13px; color:var(--muted); }}
+  .pending-note b {{ color:var(--sdi-ink); letter-spacing:.08em; }}
   .inc h3 {{ font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 10px; }}
   .inc ul {{ margin:0; padding:0; list-style:none; columns:2; column-gap:32px; }}
   .inc li {{ padding:6px 0 6px 22px; position:relative; font-size:13.5px; break-inside:avoid; }}
@@ -1646,7 +1701,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         <div class="spec">
           <h3>Commercial</h3>
           <table>
-            <tr><td>Unit price (ex VAT · indicative)</td><td>{_money(unit_price)}</td></tr>
+            <tr><td>Unit price (ex VAT · indicative)</td><td>{_unit_figure}</td></tr>
             <tr><td>Order quantity</td><td>{_num(qty) if qty else '—'}</td></tr>
             <tr><td>Quotation date</td><td>{_esc(today)}</td></tr>
             {_validity_row}
@@ -1656,15 +1711,15 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       <div class="price-box">
         <div>
           <div class="u">Unit price</div>
-          <div class="unit">{_money(unit_price)}</div>
-          <div class="per">per unit, ex VAT · indicative{(' · ' + _num(qty) + ' of') if qty else ''}</div>
+          <div class="{_price_class}">{_unit_figure}</div>
+          <div class="per">{_unit_caption}</div>
         </div>
         <div class="right">
           <div class="u">Order value</div>
-          <div class="ov">{_money(order_value)}</div>
-          <div class="per">ex VAT · indicative</div>
+          <div class="{_order_class}">{_order_figure}</div>
+          <div class="per">{_order_caption}</div>
         </div>
-      </div>
+      </div>{_pending_note}
       <div class="inc">
         <h3>What's included</h3>
         <ul>

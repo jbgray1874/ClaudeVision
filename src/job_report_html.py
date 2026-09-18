@@ -717,8 +717,21 @@ def _render_headline(hl: Dict[str, Any], h: Dict[str, Any], streams: List[Dict[s
     src_note = ""
     if hl.get("source_of_truth") == "populated_xlsx_excel_com":
         src_note = "Workbook-computed (Excel)"
+    # ── AND THE INTERNAL PAGE SAYS WHY, BECAUSE THE WHY IS THE ACTIONABLE PART ──────
+    #
+    # `publishable_total` refuses for three quite different reasons — the cell was never
+    # recorded, the cell was recorded but not its value, or the cell holds a DIFFERENT figure
+    # from the one proposed. Only the third is a fault in the pricing, and it is the one an
+    # estimator must chase. Printing "PENDING" alone tells them the outcome and hides the
+    # instruction; `unit_withheld_why` was computed for this and rendered nowhere.
+    #
+    # It goes HERE and not on the quotation: it names figures and cells, which is the
+    # estimator's business and not the customer's.
+    _why = str(hl.get("unit_withheld_why") or "").strip()
+    _note = (f'Not publishable — {_esc(_why)}' if (_why and hl.get("unit_publishable") is None)
+             else (src_note or 'Deliverable figure'))
     return f"""<div class="headline">
-  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_unit_text(hl)}</div><div class="note">{src_note or 'Deliverable figure'} &middot; qty {_esc(h['quantity'])}</div></div>
+  <div class="fig"><div class="lab">Unit Cost (workbook)</div><div class="val">{_unit_text(hl)}</div><div class="note">{_note} &middot; qty {_esc(h['quantity'])}</div></div>
   <div class="fig"><div class="lab">Material</div><div class="val">{_money(hl['material'])}</div><div class="note">Steel + BOM + boards + powder</div></div>
   <div class="fig"><div class="lab">Labour</div><div class="val">{_money(hl['labour'])}</div><div class="note">{_num(hl['hours'],2)} hrs · all depts</div></div>
   <div class="fig"><div class="lab">Parts costed</div><div class="val">{parts}</div><div class="note">across material streams</div></div>
