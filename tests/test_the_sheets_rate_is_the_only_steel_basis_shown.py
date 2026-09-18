@@ -295,3 +295,58 @@ def test_the_model_reading_is_still_named_either_way():
     for part in ({"bend_count_dxf": 1, "solidworks_bend_features": 3},
                  {"fold_count_textual": 1, "solidworks_bend_features": 3}):
         assert "read 3" in press_brake_folds(part)["disagreement"]
+
+
+# ── the fifth surface: the reassurance that quoted the figure we had withheld ───────
+#
+# "1 line(s) show zero here and ARE costed... These are not waiting on anybody:
+# 401912-02-01M (£3.88). The per-part figures are on the AI Provenance tab."
+#
+# Section 11 exists to stop a reader chasing a price that already exists, and it did that by
+# publishing the ENGINE's figure — the one just removed from four other surfaces — and then
+# sending them to a Provenance column that now correctly reads a dash. A pointer to a number
+# we had deliberately withheld.
+
+def _section(charged=None, engine=3.88):
+    import job_report_html as J
+    _real = J._record_for
+    J._record_for = lambda s: {"lines": ([{"part_number": "401912-02-01M",
+                                           "charged_ext_gbp": charged}] if charged else [])}
+    try:
+        import re
+        html = J._unpriced_section({
+            "estimate_summary": {"part_estimates": [
+                {"part_number": "401912-02-01M",
+                 "material_estimate": {"extended_material_cost_gbp": engine}}]},
+            "final_estimate": {"material_rows": [
+                {"part_number": "401912-02-01M", "total_value_gbp": 0}]}})
+        return re.sub(r"<[^>]+>", " ", html)
+    finally:
+        J._record_for = _real
+
+
+def test_the_reassurance_quotes_what_the_sheet_charged():
+    said = _section(charged=3.07)
+    assert "£3.07" in said
+    assert "3.88" not in said
+
+
+def test_it_no_longer_points_at_a_column_we_withheld():
+    """It sent the reader to the AI Provenance per-part figure, which for this route is now
+    a dash. Naming the block row is the answer that survives the ruling."""
+    said = _section(charged=3.07)
+    assert "AI Provenance tab" not in said
+    assert "what the sheet charges" in said
+
+
+def test_the_engine_figure_still_answers_where_the_sheet_charged_nothing():
+    """The fallback is the only case where the engine's number is the only number there is."""
+    said = _section(charged=None, engine=12.40)
+    assert "£12.40" in said
+
+
+def test_the_line_is_still_named_as_costed_rather_than_dropped():
+    """The section's whole purpose: a row that vanishes looks like a suppressed finding."""
+    said = _section(charged=3.07)
+    assert "401912-02-01M" in said
+    assert "ARE costed" in said

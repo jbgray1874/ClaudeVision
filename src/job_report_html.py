@@ -2120,6 +2120,31 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         if _v:
             _costed_elsewhere[_pn] = _v
 
+    # THE FIGURE IN THIS SENTENCE IS WHAT THE SHEET CHARGED, NOT WHAT THE ENGINE RESOLVED.
+    #
+    # THE FIFTH PLACE THE COMPARATOR REACHED A PAGE. The loop above reads the ENGINE's
+    # material estimate, so this reassurance -- "these are not waiting on anybody:
+    # 401912-02-01M (£3.88)" -- published the very figure that had just been removed from the
+    # HTML report, the Provenance tab and both AI Explanation surfaces. It then sent the
+    # reader to "the per-part figures on the AI Provenance tab", where that column now
+    # correctly reads a dash. A pointer to a number we have deliberately withheld.
+    #
+    # The costed record carries what the sheet actually charged, per line. Where it has an
+    # answer it is used; the engine's figure remains the fallback for a line the sheet never
+    # charged, which is the only case where it is the only number there is.
+    for _l in ((_record_for(summary) or {}).get("lines") or []):
+        if not isinstance(_l, dict):
+            continue
+        _lp = str(_l.get("part_number") or "").strip().upper()
+        _lc = _l.get("charged_ext_gbp")
+        if _lp and _lc is not None:
+            try:
+                _lcf = float(_lc)
+            except (TypeError, ValueError):
+                continue
+            if _lcf:
+                _costed_elsewhere[_lp] = _lcf
+
     blanks, _elsewhere = [], []
     for r in rows:
         if not isinstance(r, dict):
@@ -2150,8 +2175,8 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
             f'<p class="mini"><b>{len(_elsewhere)} line(s) show zero here and ARE costed.</b> '
             f'Their material sits on another row — a sheet-steel stream line covers every part '
             f'nested from that sheet, so the part\'s own row reads as a dash meaning "costed '
-            f'below". These are not waiting on anybody: {_bits}{_more}. The per-part figures '
-            f'are on the AI Provenance tab.</p>')
+            f'below". These are not waiting on anybody: {_bits}{_more}. The figure shown is '
+            f'what the sheet charges, on its own block row.</p>')
 
     if not blanks:
         return ('<h2>11 &nbsp;Why these lines carry no price</h2>'

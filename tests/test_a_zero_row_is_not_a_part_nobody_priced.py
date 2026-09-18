@@ -100,7 +100,13 @@ def test_the_moved_rows_are_named_and_say_where_the_money_is():
     txt = _text(jrh._unpriced_section(JOB))
     assert "2 line(s) show zero here and ARE costed" in txt
     assert "£40.62" in txt and "£0.21" in txt
-    assert "AI Provenance" in txt, "it does not say where to find the figures"
+    # WHERE TO FIND THE FIGURES — and it is no longer the AI Provenance per-part column.
+    # That column is withheld on the sheet-steel route (D-128..D-134), so pointing at it sent
+    # a reader to a dash. The block row is the answer that survives the ruling, and the test's
+    # intent is unchanged: this sentence must say where the money is, not merely that it
+    # exists.
+    assert "what the sheet charges" in txt and "block row" in txt, \
+        "it does not say where to find the figures"
     assert "not waiting on anybody" in txt or "not waiting on anyone" in txt
 
 
