@@ -65,14 +65,28 @@ def keys_in_portal_history() -> set[str]:
     return found
 
 
-def committed_env() -> dict[str, str] | None:
-    """The .env as git has it, or None if it is not tracked (which is the goal)."""
+def committed_env() -> tuple[dict[str, str], str, bool] | None:
+    """The most recent .env in git history, where it came from, and whether it is
+    still tracked.
+
+    History is what matters, not HEAD. Untracking the file stops it being
+    redistributed but leaves every previously committed value recoverable, so the
+    rotation check has to keep comparing against the last version that existed.
+    """
     try:
-        out = subprocess.run(["git", "show", f"HEAD:{REPO_ENV_PATH}"],
-                             cwd=HERE.parent, capture_output=True, text=True, timeout=20)
-        return read_env(out.stdout) if out.returncode == 0 else None
+        tracked = subprocess.run(["git", "ls-files", "--error-unmatch", REPO_ENV_PATH],
+                                 cwd=HERE.parent, capture_output=True, text=True,
+                                 timeout=20).returncode == 0
+        revs = subprocess.run(["git", "rev-list", "--max-count=50", "HEAD", "--", REPO_ENV_PATH],
+                              cwd=HERE.parent, capture_output=True, text=True, timeout=30)
+        for rev in revs.stdout.split():
+            blob = subprocess.run(["git", "show", f"{rev}:{REPO_ENV_PATH}"],
+                                  cwd=HERE.parent, capture_output=True, text=True, timeout=20)
+            if blob.returncode == 0 and blob.stdout.strip():
+                return read_env(blob.stdout), rev[:8], tracked
     except (OSError, subprocess.SubprocessError):
-        return None
+        pass
+    return None
 
 
 # ── 1. Credential rotation ───────────────────────────────────────────────────
@@ -95,13 +109,17 @@ def check_rotation(live: dict) -> None:
                   "The gate is off; sign-in is the only way in.")
 
     if repo is None:
-        check(PASS, "`.env` is not tracked in git",
-              "Nothing to compare — confirm the history was also dealt with.")
+        check(PASS, "`.env` has never been committed", "Nothing to compare.")
         return
 
-    check(WARN, "`.env` is still tracked in git",
-          "Run `git rm --cached sdi-intelligence-backend/.env` and commit. The values "
-          "stay in history either way, which is why rotation is the real fix.")
+    repo_env, rev, tracked = repo
+    if tracked:
+        check(WARN, "`.env` is still tracked in git",
+              "Run `git rm --cached sdi-intelligence-backend/.env` and commit.")
+    else:
+        check(PASS, "`.env` is no longer tracked",
+              f"Still recoverable from history (last seen in {rev}), so the values below "
+              "must be rotated regardless.")
 
     watched = {
         "SDI_DB_PASSWORD": "AIBot SQL login",
@@ -111,14 +129,15 @@ def check_rotation(live: dict) -> None:
     if not exposed_keys:
         watched["SDI_API_KEY"] = "portal / service key"
     for key, what in watched.items():
-        live_v, repo_v = live.get(key, ""), repo.get(key, "")
+        live_v, repo_v = live.get(key, ""), repo_env.get(key, "")
         if not repo_v or repo_v.startswith("<"):
             check(PASS, f"{key} — nothing exposed in git", f"({what})")
         elif not live_v:
             check(WARN, f"{key} is not set locally", f"({what}) — set it, or remove the feature.")
         elif live_v == repo_v:
             check(FAIL, f"{key} has NOT been rotated",
-                  f"The {what} in the repository is still the live one.")
+                  f"The {what} in commit {rev} is still the live one. Anyone with the "
+                  "repository can recover it.")
         else:
             check(PASS, f"{key} has been rotated", f"({what})")
 
