@@ -179,6 +179,43 @@ async def _stamp_version(request, call_next):
     response.headers["X-SDI-Commit"] = SDI_COMMIT
     return response
 
+# ── Public-surface guard ─────────────────────────────────────────────────────
+# When the portal is reached over the internet (via the tunnel / App Proxy),
+# ONLY the app portal and its own APIs are allowed. The file browser, the
+# database, the estimating pages and the architecture/server pages never leave
+# the network, whatever the edge is configured to forward. Internal access
+# (10.0.0.5, sdi-intelligence.sdi.local, localhost) is unaffected.
+#
+# Set SDI_PUBLIC_HOSTS in .env to the public hostname(s), comma separated, e.g.
+#   SDI_PUBLIC_HOSTS=apps.wearesdi.com
+# Empty (the default) means nothing is treated as public and the guard is off.
+_PUBLIC_HOSTS = {h.strip().lower() for h in os.getenv("SDI_PUBLIC_HOSTS", "").split(",") if h.strip()}
+
+# What the app portal itself needs to function, and nothing else.
+_PUBLIC_ALLOW = (
+    "/app",                    # the portal page, its assets, and the app screens
+    "/auth",                   # sign-in / callback / logout
+    "/api/services",           # the catalogue
+    "/api/me",                 # who am I
+    "/api/voicecrm",           # Nick's app
+    "/favicon.ico",
+)
+
+
+@app.middleware("http")
+async def _public_surface_guard(request, call_next):
+    if _PUBLIC_HOSTS:
+        # Host header, minus any :port, lowered.
+        host = (request.headers.get("host", "").split(":")[0]).lower()
+        if host in _PUBLIC_HOSTS:
+            path = request.url.path
+            if not any(path == a or path.startswith(a + "/") or path == a for a in _PUBLIC_ALLOW):
+                # Indistinguishable from a route that does not exist — the public
+                # surface simply has no file browser, DB or intranet pages.
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    return await call_next(request)
+
+
 
 # ── Access gate ─────────────────────────────────────────────────────────────
 def check_key(x_sdi_key: str | None, request: Request | None = None) -> None:
