@@ -36,3 +36,9 @@ output/
 # Secrets. NOTE: .env is ALREADY TRACKED — this line stops future ones being
 # added, it does NOT untrack the existing file. See appportal/README.md.
 .env
+
+# Runtime databases — sessions (encrypted) and the Voice CRM update journal.
+# Never commit these: one holds refresh tokens, the other is an audit trail.
+sdi-intelligence-backend/*.db
+sdi-intelligence-backend/*.db-wal
+sdi-intelligence-backend/*.db-shm

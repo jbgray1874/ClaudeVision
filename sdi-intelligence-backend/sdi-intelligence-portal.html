@@ -1039,12 +1039,12 @@
 
       <div class="note reveal" style="margin-top:16px;animation-delay:.1s">
         <h4>Security boundary</h4>
-        The browser only ever talks to the FastAPI backend on port 8071 — same origin, no CORS complexity. The backend validates every request with <code>X-SDI-Key</code>, enforces UNC root containment on every file path, and is the only process that touches SDILive or the file shares. The browser never has credentials, never sees a UNC path directly, and never touches the VPN.
+        The browser only ever talks to the FastAPI backend on port 8071 — same origin, no CORS complexity. The backend authenticates every request against your Microsoft Entra sign-in (a shared <code>X-SDI-Key</code> remains only for scheduled scripts, and is retired by setting <code>SDI_ALLOW_API_KEY=no</code>), enforces UNC root containment on every file path, and is the only process that touches SDILive or the file shares. The browser never has credentials, never sees a UNC path directly, and never touches the VPN.
       </div>
       <div class="note reveal" style="margin-top:12px;animation-delay:.16s">
         <h4>To harden for wider access</h4>
         <ul style="margin:8px 0 0 16px;line-height:1.9">
-          <li>Set <code>SDI_API_KEY</code> in <code>.env</code> (currently blank — gate is off)</li>
+          <li>Sign in with your SDI Microsoft account — the portal uses Entra ID SSO, not a shared key</li>
           <li>Add Azure Entra ID SSO in front of the portal for user-level authentication</li>
           <li>Restrict <code>SDI_ALLOWED_ORIGINS</code> to the exact portal URL once hosted</li>
           <li>Move the service account to Windows auth (<code>SDI_DB_AUTH=windows</code>) to eliminate the SQL password from the env file</li>
@@ -1826,9 +1826,15 @@
 
   // ---- Live Files browser + health (backend serves this page, so same-origin) ----
   const API_BASE = "";   // same-origin
-  const API_KEY  = "2ff633ca8aeb4c54bfe4e2af56e82a48c791a47b05ba412d90d60558235f532c";   // set ONLY if your backend has SDI_API_KEY; leave blank for local
-  function _hdr(){ return API_KEY ? {"X-SDI-Key": API_KEY} : {}; }
-  async function _get(p){ const r=await fetch(API_BASE+p,{headers:_hdr()}); if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,160)); return r.json(); }
+  // No API key lives in this page. The browser is authenticated by the Entra
+  // session cookie, which the server set at sign-in and which JavaScript cannot
+  // read. A key embedded here would be handed to every visitor.
+  async function _get(p){
+    const r=await fetch(API_BASE+p,{credentials:"same-origin"});
+    if(r.status===401){ location.href="/auth/login?next="+encodeURIComponent(location.pathname+location.hash); throw new Error("Signing in\u2026"); }
+    if(!r.ok) throw new Error(r.status+" "+(await r.text()).slice(0,160));
+    return r.json();
+  }
   function _sz(b){ if(b==null)return""; const u=["B","KB","MB","GB"];let i=0,n=b;while(n>=1024&&i<3){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+u[i]; }
   async function filesInit(){
     const list=document.getElementById('files-list'), crumb=document.getElementById('files-crumb');
@@ -1860,7 +1866,7 @@
   });
   async function _openFile(path, ext){
     const v=document.getElementById('file-view'); v.classList.add('show'); v.textContent='Opening '+path+' …';
-    try{ const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{headers:_hdr()});
+    try{ const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{credentials:'same-origin'});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,160));
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
@@ -1917,7 +1923,7 @@
   });
   async function _openReport(path, ext){
     const v=document.getElementById('reports-view'); v.classList.add('show'); v.textContent='Opening '+path+' \u2026';
-    try{ const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{headers:_hdr()});
+    try{ const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{credentials:'same-origin'});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,160));
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
@@ -2044,7 +2050,7 @@
     if(!v) return;
     v.style.display='block'; v.textContent='Opening '+path+' …';
     try{
-      const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{headers:_hdr()});
+      const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{credentials:'same-origin'});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,160));
       const blob=await r.blob();
       if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
@@ -2073,7 +2079,7 @@
     btn.disabled=true; btn.textContent='Checking\u2026';
     out.style.color='var(--ink-dim)'; out.textContent='Querying BrightHR Blip (~20s)\u2026';
     try{
-      var r=await fetch(API_BASE+'/api/hr/blip',{method:'POST',headers:_hdr()});
+      var r=await fetch(API_BASE+'/api/hr/blip',{method:'POST',credentials:'same-origin'});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,200));
       var d=await r.json();
       var when=(d.timestamp||'').replace('T',' ').slice(0,19);

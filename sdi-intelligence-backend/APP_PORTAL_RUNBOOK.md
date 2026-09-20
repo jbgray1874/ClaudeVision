@@ -13,17 +13,17 @@ a click, it says so.
 These are live in the repository right now and this portal is about to become
 reachable from more places, so do this first.
 
-1. **`SDI_API_KEY` is hardcoded in `sdi-intelligence-portal.html`** (search for
-   `const API_KEY`). Every browser that loads the portal receives it.
+1. ~~`SDI_API_KEY` hardcoded in `sdi-intelligence-portal.html`~~ — **removed.**
+   The portal now authenticates with the Entra session cookie, which JavaScript
+   cannot read. **The old key value is still in git history, so rotate it.**
 2. **`.env` is tracked in git**, including `SDI_DB_PASSWORD` (the AIBot login to
    SDILive), `BH_CLIENT_SECRET` and `BH_PAT`.
 
 Adding `.env` to `.gitignore` (already done) does not untrack it and does not
 remove it from history. **Rotating the values is the fix.** Specifically:
 
-- Generate a new `SDI_API_KEY`, put it in `.env` only, and delete the constant
-  from the portal HTML — once SSO is on (step 2) the page no longer needs a key,
-  because the browser sends a session cookie instead.
+- Generate a new `SDI_API_KEY` and put it in `.env` only. It is now used solely
+  by scheduled scripts, and `SDI_ALLOW_API_KEY=no` retires it entirely.
 - Change the AIBot SQL password and update `.env`.
 - Regenerate the BrightHR PAT / client secret.
 
@@ -171,8 +171,11 @@ A Progressive Web App installs and works offline only in a **secure context** �
 - the service worker will **not** register, so no offline,
 - `SDI_COOKIE_SECURE=no` is required or sign-in breaks.
 
-So installation on phones effectively requires step 5 (a real HTTPS hostname)
-first. You can browse to it over http in the meantime; it just won't install.
+So installation on phones requires step 5 first. You can browse to it over http
+in the meantime; it just will not install.
+
+**`Install-SDITunnel.ps1` in this folder does step 5 for you** — see below. Run
+that, then come back here.
 
 ### 3.2 iPhone / iPad
 
@@ -295,7 +298,44 @@ is: which setting is missing, whether the scope was consented, what Graph itself
 said, or that the List read fine but no record has `AMOwner = NG`. It never shows
 an invented record to look finished.
 
-#### Why it does not write
+#### Turning writing on (only when the List exists and Nick has approved)
+
+The write path is built and tested, and **off** behind two independent gates:
+
+```ini
+SDI_VOICECRM_WRITE=yes
+SDI_VOICECRM_APPROVED_BY=Nick Garrish, 2026-09-__   # stamped on every entry
+SDI_VOICECRM_EDITABLE=Status,NextAction,NextActionDate
+SDI_GRAPH_SCOPES=User.Read Sites.ReadWrite.All
+```
+
+Both gates must be open, `SDI_VOICECRM_EDITABLE` is an allow-list (nothing
+outside it can ever be written), and the Graph scope must be upgraded from
+`Sites.Read.All` to `Sites.ReadWrite.All` with fresh admin consent.
+
+How a change is made — this is the loop from the architecture, and it is what
+the voice agent will drive:
+
+| Step | Endpoint | What happens |
+|------|----------|--------------|
+| 1 | `POST /api/voicecrm/propose` | Validates the field is editable and the record is Nick's, reads the current value, records a proposal, returns a `readback` sentence and a `proposal_id`. **Writes nothing.** |
+| 2 | — | The agent reads the sentence back and takes an explicit yes. |
+| 3 | `POST /api/voicecrm/confirm` | Re-reads the record, re-checks the owner, checks the version has not moved, writes with `If-Match`, journals the outcome. |
+| — | `GET /api/voicecrm/journal` | The audit trail: who, when, old value, new value, and what actually happened. |
+
+The guarantees, each tested:
+
+- **A retry never repeats a saved change.** The `proposal_id` is the idempotency
+  key; a second confirm returns the first outcome and writes nothing. This is the
+  dropped-call case.
+- **A concurrent edit is never overwritten.** If the record changed between
+  propose and confirm, the proposal is abandoned with `conflict` and Nick is told
+  to look again.
+- **A failed write is never reported as success.** The journal records `failed`
+  with the real reason from Graph.
+- **Only the proposer can confirm**, and only their own records.
+
+#### Why it does not write *yet*
 
 Writing a record by voice needs the loop the architecture specifies: validate the
 change, read it back, take explicit confirmation, re-check the owner and the
@@ -348,23 +388,28 @@ this is the usual blocker.
 You will be signed in twice conceptually (once at the proxy, once by the app) but
 it is silent in practice — the second is satisfied by existing SSO.
 
-### Option B — Cloudflare Tunnel
+### Option B — Cloudflare Tunnel (scripted)
 
-No Entra licensing requirement, also no inbound ports. You take on a second
-vendor, and access control is Cloudflare Access rather than Entra assignment.
+No Entra licensing requirement, no inbound ports either. You take on a second
+vendor, and you can optionally add Cloudflare Access as a second gate.
 
-```yaml
-# config.yml
-tunnel: sdi-intelligence
-credentials-file: C:\Users\<svc>\.cloudflared\<tunnel-id>.json
-ingress:
-  - hostname: apps.wearesdi.com
-    service: http://localhost:8071
-  - service: http_status:404
+From an elevated PowerShell on the portal host:
+
+```powershell
+.\Install-SDITunnel.ps1 -Hostname apps.wearesdi.com -LocalPort 8071
 ```
 
-`cloudflared service install` to run it permanently. Then set the redirect URI
-and `SDI_REDIRECT_URI` to `https://apps.wearesdi.com/auth/callback`.
+It installs `cloudflared`, authorises it against your Cloudflare account,
+creates the tunnel, writes the config, points the DNS record at it, and installs
+it as a Windows service. It is idempotent — safe to re-run.
+
+**It refuses to run if Entra SSO is not configured.** That check is deliberate:
+the moment the hostname resolves, the portal is on the internet, and sign-in is
+the only thing in front of it.
+
+Afterwards it prints the remaining manual steps — adding the HTTPS redirect URI
+to the app registration, updating `SDI_REDIRECT_URI` and `SDI_ALLOWED_ORIGINS`,
+removing `SDI_COOKIE_SECURE=no`, and restarting.
 
 ### Either way, before you expose it
 
@@ -383,10 +428,11 @@ and `SDI_REDIRECT_URI` to `https://apps.wearesdi.com/auth/callback`.
 
 Honest list, so none of these surprise you later.
 
-- **Sessions are in process memory.** Restarting the service signs everyone out,
-  and it will not survive `uvicorn --workers > 1`. Move to Redis or a signed
-  stateless token before this carries real load.
-- **One worker.** Same reason.
+- **Sessions are in SQLite on one machine.** They survive restarts and are
+  shared by workers on that host. Two hosts behind a load balancer would need
+  Redis — keep the `session_store.py` interface and swap the backend.
+- **Rotating `SDI_SESSION_SECRET` signs everyone out immediately.** That is the
+  emergency lever if a session database is ever copied.
 - **Group overage.** If you use `SDI_ALLOWED_GROUPS` and someone is in more than
   ~200 groups, Entra omits the claim and they are denied. Enterprise-app
   assignment (2.4) does not have this problem — prefer it.

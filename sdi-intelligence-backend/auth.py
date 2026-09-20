@@ -30,10 +30,11 @@ Optional:
     SDI_COOKIE_SECURE    "no" only while testing over plain http on the intranet
     SDI_ALLOW_API_KEY    "yes" keeps X-SDI-Key working for scheduled scripts
 
-KNOWN LIMITS — deliberate for the pilot, fix before this carries real load:
-  * Sessions live in process memory. Restarting the service signs everyone out,
-    and it will not work across multiple workers. Move to Redis or a signed
-    token before running uvicorn with --workers > 1.
+Sessions are stored in SQLite (see session_store.py), encrypted under
+SDI_SESSION_SECRET. They survive a restart and are shared by workers on the same
+machine. Two hosts would need Redis instead — keep the same interface.
+
+KNOWN LIMIT:
   * Group claims are omitted by Entra when a user is in more than ~200 groups
     (the "overage" case). SDI_ALLOWED_GROUPS would then deny a legitimate user.
     Left unhandled on purpose rather than silently letting them through.
@@ -46,6 +47,7 @@ from typing import Optional
 from urllib.parse import urlencode, quote
 
 import msal
+import session_store
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from itsdangerous import URLSafeSerializer, BadSignature
@@ -82,9 +84,12 @@ FLOW_COOKIE = "sdi_flow"
 
 _serializer = URLSafeSerializer(SESSION_SECRET or "unconfigured", salt="sdi-session")
 
-# session id -> {"claims": {...}, "cache": MSAL cache blob, "expires": epoch}
-_SESSIONS: dict[str, dict] = {}
-# short-lived auth-code flow state, keyed by its own id
+# Sessions live in SQLite (encrypted) so a restart does not sign everyone out.
+_STORE = session_store.SessionStore(SESSION_SECRET) if SESSION_SECRET else None
+
+# Short-lived auth-code state. This one stays in memory deliberately: it lives
+# for the few seconds between /auth/login and /auth/callback, and losing it on a
+# restart just means starting the sign-in again.
 _FLOWS: dict[str, dict] = {}
 
 router = APIRouter()
@@ -96,13 +101,18 @@ def _msal_app(cache: Optional[msal.SerializableTokenCache] = None):
     )
 
 
+_last_reap = 0.0
+
+
 def _reap() -> None:
-    """Drop expired sessions and stale login attempts."""
+    """Drop expired sessions and stale login attempts (at most once a minute)."""
+    global _last_reap
     now = time.time()
-    for sid in [s for s, v in _SESSIONS.items() if v["expires"] < now]:
-        _SESSIONS.pop(sid, None)
     for fid in [f for f, v in _FLOWS.items() if v.get("_created", 0) < now - 900]:
         _FLOWS.pop(fid, None)
+    if _STORE and now - _last_reap > 60:
+        _last_reap = now
+        _STORE.reap()
 
 
 def current_user(request: Request) -> Optional[dict]:
@@ -119,8 +129,10 @@ def current_user(request: Request) -> Optional[dict]:
             sid = _serializer.loads(raw)
         except BadSignature:
             sid = None
-        if sid and sid in _SESSIONS:
-            return _SESSIONS[sid]["claims"] | {"kind": "user"}
+        if sid and _STORE:
+            sess = _STORE.get(sid)
+            if sess:
+                return sess["claims"] | {"kind": "user"}
 
     # Machine callers (Task Scheduler, the estimating host) may still use the key.
     if ALLOW_API_KEY:
@@ -215,11 +227,8 @@ def callback(request: Request):
                         "'groups' claim by the app registration."))
 
     sid = secrets.token_urlsafe(32)
-    _SESSIONS[sid] = {
-        "claims": claims,
-        "cache": cache.serialize(),
-        "expires": time.time() + SESSION_HOURS * 3600,
-    }
+    _STORE.put(sid, {"claims": claims, "cache": cache.serialize()},
+               expires=time.time() + SESSION_HOURS * 3600)
     resp = RedirectResponse(url=flow.get("_next", "/"), status_code=302)
     resp.set_cookie(COOKIE_NAME, _serializer.dumps(sid), max_age=SESSION_HOURS * 3600,
                     httponly=True, secure=COOKIE_SECURE, samesite="lax", path="/")
@@ -230,9 +239,9 @@ def callback(request: Request):
 @router.get("/auth/logout")
 def logout(request: Request):
     raw = request.cookies.get(COOKIE_NAME)
-    if raw:
+    if raw and _STORE:
         try:
-            _SESSIONS.pop(_serializer.loads(raw), None)
+            _STORE.delete(_serializer.loads(raw))
         except BadSignature:
             pass
     # Sign out of Entra too, otherwise the next login silently reuses the session.
@@ -268,7 +277,7 @@ def graph_token(request: Request) -> Optional[str]:
         sid = _serializer.loads(raw)
     except BadSignature:
         return None
-    sess = _SESSIONS.get(sid)
+    sess = _STORE.get(sid) if _STORE else None
     if not sess:
         return None
 
@@ -280,5 +289,7 @@ def graph_token(request: Request) -> Optional[str]:
         return None
     result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
     if cache.has_state_changed:
-        sess["cache"] = cache.serialize()
+        # A refreshed token must be persisted, or the next call refreshes again.
+        _STORE.put(sid, {"claims": sess["claims"], "cache": cache.serialize()},
+                   expires=sess["expires"])
     return result.get("access_token") if result else None

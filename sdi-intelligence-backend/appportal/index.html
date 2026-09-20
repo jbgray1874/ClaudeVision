@@ -42,6 +42,7 @@
     backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
     padding:calc(12px + var(--safe-t)) 16px 12px;
   }
+  .top > *{max-width:1180px;margin-left:auto;margin-right:auto}
   .bar{display:flex;align-items:center;gap:12px}
   .mark{width:32px;height:32px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none}
   .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:19px;line-height:1;letter-spacing:-1px}
@@ -65,18 +66,26 @@
   body.detail .search{display:none}
 
   /* ---------- Layout ---------- */
-  .wrap{padding:18px 16px calc(28px + var(--safe-b));max-width:840px;margin:0 auto}
+  .wrap{padding:18px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto}
   .grp{
     font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
     text-transform:uppercase;margin:24px 0 10px
   }
   .grp:first-child{margin-top:4px}
 
+  /* One column on a phone; a grid once there is room. Category headings span
+     the full width so the grouping still reads on a laptop. */
+  #list{display:grid;grid-template-columns:1fr;gap:9px;align-content:start}
+  #list .grp{grid-column:1/-1}
+  @media (min-width:680px){ #list{grid-template-columns:1fr 1fr} }
+  @media (min-width:1040px){ #list{grid-template-columns:repeat(3,1fr)} }
+
   .card{
-    display:block;width:100%;text-align:left;background:var(--surface);border:1px solid var(--line);
-    border-radius:var(--r);padding:14px;margin-bottom:9px;cursor:pointer;
+    display:flex;flex-direction:column;width:100%;text-align:left;background:var(--surface);
+    border:1px solid var(--line);border-radius:var(--r);padding:14px;cursor:pointer;
     font-family:var(--body);color:var(--ink);transition:.14s
   }
+  .card:hover{border-color:var(--ink-faint)}
   .card:active{background:var(--surface-2);transform:scale(.995)}
   .card .ch{display:flex;gap:9px;align-items:flex-start;justify-content:space-between}
   .card .nm{font-weight:600;font-size:15px;line-height:1.3}
@@ -91,7 +100,7 @@
   .c-plan{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
 
   /* ---------- Detail ---------- */
-  #detail{display:none}
+  #detail{display:none;max-width:720px}
   body.detail #detail{display:block}
   body.detail #list{display:none}
   .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
