@@ -8,7 +8,27 @@ a click, it says so.
 
 ---
 
-## 0. Before anything else — rotate two credentials
+## 0. Check where you are — `preflight.py`
+
+Before publishing to the company, run:
+
+```powershell
+C:\ClaudeVision\.venv\Scripts\python.exe preflight.py
+```
+
+It verifies credential rotation (by comparing the live values against the ones
+in git — including the key that was hardcoded in the portal page, which `.env`
+alone would miss), that SSO is configured and this host can reach Entra for your
+tenant, whether the shared key is retired, whether cookies are Secure and the
+redirect URI is HTTPS, and that no app with live controls is listed off-network.
+It prints the three things it cannot check for you and where to click them.
+
+Exit code 0 means every automatic check passed. It changes nothing and never
+prints a secret.
+
+---
+
+## 0b. Rotate the credentials
 
 These are live in the repository right now and this portal is about to become
 reachable from more places, so do this first.
@@ -238,7 +258,25 @@ Edit **`services.json`**. One object, and both portals pick it up:
 > `surface` decides what is *listed*. It is not a security control — it does not
 > stop anyone calling an endpoint. Protect endpoints in code.
 
-### 4.2 An app with a real screen
+### 4.2 Saying what an app cannot do from a phone
+
+Some apps are real but are started on the engine host — the estimating engine,
+the DXF export, the tech radar. Hiding those from the app portal would be wrong
+(people want to read about them), and letting someone think they can launch the
+estimator from a bus is also wrong. So label them instead:
+
+```json
+"requires": "Runs on the engine host — started from the command line, not from here."
+```
+
+That shows as an amber line on the card and a panel on the detail page.
+
+Reserve `surface: intranet` for apps whose **controls** need the network —
+today that is BrightHR Ingestion alone, because its buttons write to the
+InVentry watched folder. `preflight.py` fails if an app with live controls is
+ever listed off-network.
+
+### 4.3 An app with a real screen
 
 Add an HTML file to `appportal/` and point at it:
 
@@ -250,7 +288,7 @@ An **Open** button then appears on the app's detail page. `appportal/voice-crm.h
 is the worked example. Every screen there is gated — only the manifest, icons and
 `sw.js` are reachable without signing in.
 
-### 4.3 Nick's Voice CRM app specifically
+### 4.4 Nick's Voice CRM app specifically
 
 The screen exists and is wired to Microsoft Graph. It is **read-only** — see
 "Why it does not write" below. To make it show real records:

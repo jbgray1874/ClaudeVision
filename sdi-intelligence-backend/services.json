@@ -31,7 +31,8 @@
         "pyodbc → SQL Server"
       ],
       "phase": "Phase 1 · GO-LIVE JULY 2026",
-      "invoke": "Invoked from the command line by the estimating team during the parallel run. See <b>AI Tools</b> for the exact commands and arguments. UI-triggered runs are planned post-go-live."
+      "invoke": "Invoked from the command line by the estimating team during the parallel run. See <b>AI Tools</b> for the exact commands and arguments. UI-triggered runs are planned post-go-live.",
+      "requires": "Runs on the engine host — started from the command line, not from here."
     },
     {
       "id": "brief",
@@ -307,7 +308,8 @@
         "document_builder.py"
       ],
       "phase": "Priority 3",
-      "invoke": "DXF batch export automation is the most-requested first feature."
+      "invoke": "DXF batch export automation is the most-requested first feature.",
+      "requires": "Runs on the engine host / SolidWorks workstation."
     },
     {
       "id": "production-agent",
@@ -532,7 +534,8 @@
         "InVentry watched-folder CSV"
       ],
       "phase": "Built — gated on BrightHR API credentials",
-      "invoke": "Once API access is granted: the COO or any director with permission clicks <b>Run Sync</b> above. Also schedulable from Windows Task Scheduler. Endpoints: <code>POST /api/hr/sync</code> (pull+load), <code>/api/hr/pull</code>, <code>/api/hr/load</code>."
+      "invoke": "Once API access is granted: the COO or any director with permission clicks <b>Run Sync</b> above. Also schedulable from Windows Task Scheduler. Endpoints: <code>POST /api/hr/sync</code> (pull+load), <code>/api/hr/pull</code>, <code>/api/hr/load</code>.",
+      "requires": "Needs the SDI network — its controls write to the InVentry watched folder."
     },
     {
       "id": "wearesdi",
@@ -711,7 +714,8 @@
         "HTML report + JSON snapshot"
       ],
       "phase": "Live — ten areas, six in the default run",
-      "invoke": "Run <code>python tech_radar.py</code> on the engine host (<code>--full</code> for all areas). Reports land in <code>output\\reports</code> and surface in Status Reports."
+      "invoke": "Run <code>python tech_radar.py</code> on the engine host (<code>--full</code> for all areas). Reports land in <code>output\\reports</code> and surface in Status Reports.",
+      "requires": "Runs on the engine host — reports appear in Status Reports."
     },
     {
       "id": "roadmap",
