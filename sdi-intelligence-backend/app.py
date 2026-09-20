@@ -26,11 +26,12 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 import config
+import auth
 import quote_release
 
 config.validate()
@@ -180,9 +181,16 @@ async def _stamp_version(request, call_next):
 
 
 # ── Access gate ─────────────────────────────────────────────────────────────
-def check_key(x_sdi_key: str | None) -> None:
+def check_key(x_sdi_key: str | None, request: Request | None = None) -> None:
+    """Allow a signed-in person, or a machine still using the shared key.
+
+    Once every scheduled script has its own identity, SDI_ALLOW_API_KEY=no
+    retires the key and every request becomes attributable to a person.
+    """
+    if request is not None and auth.ENABLED and auth.current_user(request) is not None:
+        return
     if config.API_KEY and x_sdi_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+        raise HTTPException(status_code=401, detail="Sign in, or present a valid X-SDI-Key")
 
 
 # ── Path safety: only ever serve from inside an allowed root ─────────────────
@@ -238,8 +246,8 @@ def _listable_ext(p: Path) -> bool:
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/api/health")
-def health(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def health(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     roots_ok = []
     for root in config.FILE_ROOTS:
         roots_ok.append({"root": root, "reachable": os.path.isdir(root)})
@@ -299,14 +307,14 @@ def health(x_sdi_key: str | None = Header(default=None)):
 
 
 @app.get("/api/roots")
-def roots(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def roots(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     return {"roots": [{"name": Path(r).name or r, "path": r} for r in config.FILE_ROOTS]}
 
 
 @app.get("/api/files")
-def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def list_files(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     folder = _within_a_root(path)
     if folder is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
@@ -346,8 +354,8 @@ _VIEWABLE = {".html", ".htm", ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".svg",
 
 
 @app.get("/api/file")
-def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def get_file(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     target = _within_a_root(path)
     if target is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
@@ -429,8 +437,8 @@ def db_status() -> dict:
 
 
 @app.get("/api/db/ping")
-def db_ping(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def db_ping(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     result = db_status()
     code = 200 if result["status"] in ("ok", "not_configured") else 503
     return JSONResponse(status_code=code, content=result)
@@ -459,8 +467,10 @@ _PAGE_HEADERS = {"Cache-Control": "no-store, must-revalidate"}
 
 
 @app.get("/estimating")
-def estimating_page():
+def estimating_page(request: Request):
     """The estimator's page, same-origin with the API it calls."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     if _ESTIMATOR.exists():
         return FileResponse(str(_ESTIMATOR), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,
@@ -469,11 +479,13 @@ def estimating_page():
 
 
 @app.get("/guide")
-def estimating_guide():
+def estimating_guide(request: Request):
     """What each deliverable means and what it is asking the estimator to decide.
 
     Served from the same origin as the page it explains, so it is one click from the run
     button rather than a document somebody has to be sent and then find again."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     if _GUIDE.exists():
         return FileResponse(str(_GUIDE), headers=_PAGE_HEADERS)
     return JSONResponse(status_code=404,
@@ -512,17 +524,17 @@ def _serve_repo_doc(name: str):
 
 
 @app.get("/api/change-register")
-def change_register(x_sdi_key: str | None = Header(default=None)):
+def change_register(request: Request, x_sdi_key: str | None = Header(default=None)):
     """docs/CHANGE_REGISTER.md — every estimator finding and rule change, with who
     decided it, where it is implemented, the commit and the proof. Rendered on the
     architecture page beside the knowledge map, per James's review: a register the
     estimators cannot see is a register only the repo knows about."""
-    check_key(x_sdi_key)
+    check_key(x_sdi_key, request)
     return _serve_repo_doc("change-register")
 
 
 @app.get("/api/knowledge-map")
-def knowledge_map(x_sdi_key: str | None = Header(default=None)):
+def knowledge_map(request: Request, x_sdi_key: str | None = Header(default=None)):
     """docs/KNOWLEDGE_SOURCES.md, served from the repo so the architecture page cannot
     drift from the code.
 
@@ -532,7 +544,7 @@ def knowledge_map(x_sdi_key: str | None = Header(default=None)):
     two HTML files. The repo side is held honest by test_the_knowledge_map_is_not_stale:
     a register that leaves the code fails the suite until the map says where it went.
     """
-    check_key(x_sdi_key)
+    check_key(x_sdi_key, request)
     return _serve_repo_doc("knowledge-map")
 
 
@@ -578,13 +590,87 @@ def brand_logo():
 
 
 @app.get("/")
-def home():
+def home(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     if _PORTAL.exists():
         # Same as /estimating and /guide: the portal is a document that changes with every
         # deploy, and a browser left to its own heuristic will serve the one it already has.
         return FileResponse(str(_PORTAL), headers=_PAGE_HEADERS)
     return JSONResponse({"status": "backend up",
                          "note": "place sdi-intelligence-portal.html next to app.py to serve it here"})
+
+
+# ── App catalogue + mobile app portal ────────────────────────────────────────
+# services.json is the single source of truth for the intranet portal and the
+# mobile app portal alike. See APP_PORTAL_RUNBOOK.md.
+_SERVICES = Path(__file__).with_name("services.json")
+_APP_DIR = Path(__file__).parent / "appportal"
+
+# A browser fetches these before any session exists and they carry nothing
+# sensitive. Everything else under /app/ — including app screens — needs a user.
+_OPEN_ASSETS = {"manifest.webmanifest", "sw.js",
+                "icon-192.png", "icon-512.png", "icon-maskable-512.png"}
+
+
+@app.get("/services.json")
+def services_json(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    return FileResponse(str(_SERVICES), media_type="application/json", headers=_PAGE_HEADERS)
+
+
+@app.get("/api/services")
+def api_services(request: Request,
+                 surface: str | None = Query(default=None, pattern="^(intranet|app|both)$"),
+                 x_sdi_key: str | None = Header(default=None)):
+    """The catalogue, optionally filtered to one surface.
+
+    `surface=app` excludes anything marked `intranet` — the apps whose controls
+    need the shares or SDILive.
+    """
+    check_key(x_sdi_key, request)
+    if not _SERVICES.exists():
+        raise HTTPException(status_code=404, detail="services.json not found")
+    import json as _json
+    data = _json.loads(_SERVICES.read_text(encoding="utf-8"))
+    items = data.get("services", [])
+    if surface:
+        items = [x for x in items if x.get("surface") in (surface, "both")]
+    return {"version": data.get("version"), "count": len(items), "services": items}
+
+
+@app.get("/app")
+def app_portal_redirect():
+    # The trailing slash matters: without it every relative URL in the page
+    # (manifest, icons, sw.js) resolves against "/" instead of "/app/".
+    return RedirectResponse(url="/app/", status_code=308)
+
+
+@app.get("/app/")
+def app_portal(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    index = _APP_DIR / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=404, detail="app portal not installed")
+    return FileResponse(str(index), headers=_PAGE_HEADERS)
+
+
+@app.get("/app/{filename}")
+def app_portal_asset(filename: str, request: Request):
+    if "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=400, detail="Bad asset name")
+    if filename not in _OPEN_ASSETS and auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    target = _APP_DIR / filename
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    media_type, _ = mimetypes.guess_type(str(target))
+    if filename.endswith(".webmanifest"):
+        media_type = "application/manifest+json"
+    return FileResponse(str(target), media_type=media_type or "application/octet-stream")
 
 
 # ── HR pipeline (BrightHR -> InVentry) ──
@@ -594,6 +680,16 @@ app.include_router(hr_router)
 # ── Estimating (the SDI Estimating Intelligence page) ──
 from estimate_routes import router as estimate_router
 app.include_router(estimate_router)
+
+# ── Identity, and the apps that need it ──
+app.include_router(auth.router)
+
+from voicecrm import router as voicecrm_router
+app.include_router(voicecrm_router)
+
+if not auth.ENABLED:
+    print("[WARN] Entra SSO is NOT configured — every visitor is anonymous. "
+          "Do not expose this service outside the network until it is.")
 
 
 if __name__ == "__main__":

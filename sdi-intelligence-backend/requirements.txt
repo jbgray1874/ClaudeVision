@@ -39,3 +39,7 @@ pyodbc>=5.0,<6.0       # /api/db/ping, SQL Server via ODBC Driver 18
 # Optional. tech_radar.py imports this lazily inside a function, so the service
 # starts and every endpoint works without it; only the radar feature needs it.
 anthropic               # tech_radar.py
+msal>=1.28,<2.0        # Entra ID sign-in (auth.py) — OIDC auth code + PKCE
+itsdangerous>=2.1,<3.0 # signs the session cookie (auth.py)
+httpx>=0.27,<1.0       # Microsoft Graph calls (voicecrm.py)
+cryptography>=42.0     # encrypts the session store at rest (session_store.py)

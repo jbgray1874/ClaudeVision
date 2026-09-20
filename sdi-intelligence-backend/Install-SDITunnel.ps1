@@ -1,0 +1,172 @@
+<#
+.SYNOPSIS
+    Puts the SDI Intelligence portal on HTTPS via a Cloudflare Tunnel.
+
+.DESCRIPTION
+    This is what makes the app installable on phones. A Progressive Web App only
+    installs, and only runs a service worker, in a secure context — https:// or
+    localhost. On http://10.0.0.5:8071 iOS will never offer "Add to Home Screen".
+
+    A tunnel is used rather than a firewall rule because cloudflared makes an
+    OUTBOUND connection to Cloudflare and traffic returns down it. Nothing
+    inbound is opened on the SDI perimeter, and the portal host is never
+    addressable from the internet. That matters here: this service can reach the
+    file shares and SDILive.
+
+    The script is idempotent — safe to re-run.
+
+.NOTES
+    Run in an elevated PowerShell on the machine hosting app.py.
+
+    You need, once, in the Cloudflare dashboard:
+      * the wearesdi.com zone (or a subdomain delegated to Cloudflare)
+      * a Cloudflare account with Zero Trust enabled (the free tier is enough
+        for a tunnel)
+
+    ORDER MATTERS. Do not run this until Entra SSO is working, because the
+    moment the hostname resolves, the portal is reachable from the internet and
+    the only thing standing in front of it is sign-in.
+#>
+
+[CmdletBinding()]
+param(
+    [string]$Hostname   = "apps.wearesdi.com",
+    [string]$TunnelName = "sdi-intelligence",
+    [int]   $LocalPort  = 8071
+)
+
+$ErrorActionPreference = "Stop"
+
+function Step($n, $msg) { Write-Host "`n[$n] $msg" -ForegroundColor Cyan }
+
+# ── 0. Refuse to run if the thing we are exposing is not protected ───────────
+Step 0 "Checking the portal is behind sign-in before exposing it"
+
+$envFile = Join-Path $PSScriptRoot ".env"
+if (-not (Test-Path $envFile)) { throw "No .env beside this script. Configure the service first." }
+
+$envText   = Get-Content $envFile -Raw
+$ssoKeys   = @("SDI_TENANT_ID", "SDI_CLIENT_ID", "SDI_CLIENT_SECRET", "SDI_SESSION_SECRET")
+$missing   = $ssoKeys | Where-Object { $envText -notmatch "(?m)^\s*$_\s*=\s*\S" }
+
+if ($missing) {
+    throw ("Entra SSO is not configured — missing: {0}. " -f ($missing -join ", ")) +
+          "Exposing the portal now would publish it to the internet with no sign-in. " +
+          "See APP_PORTAL_RUNBOOK.md section 2."
+}
+
+if ($envText -match "(?m)^\s*SDI_COOKIE_SECURE\s*=\s*(no|false|0)") {
+    Write-Warning ("SDI_COOKIE_SECURE is off. That is only for plain-http testing. " +
+                   "Remove the line once this tunnel is up, or session cookies will be " +
+                   "sent over insecure connections too.")
+}
+Write-Host "    SSO configured." -ForegroundColor Green
+
+# ── 1. cloudflared ───────────────────────────────────────────────────────────
+Step 1 "Installing cloudflared"
+
+if (Get-Command cloudflared -ErrorAction SilentlyContinue) {
+    Write-Host "    Already installed: $((cloudflared --version) -join ' ')"
+} elseif (Get-Command winget -ErrorAction SilentlyContinue) {
+    winget install --id Cloudflare.cloudflared -e --accept-source-agreements --accept-package-agreements
+} else {
+    $dest = "C:\Program Files\cloudflared"
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+    Write-Host "    Downloading $url"
+    Invoke-WebRequest -Uri $url -OutFile (Join-Path $dest "cloudflared.exe")
+    $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    if ($machinePath -notlike "*$dest*") {
+        [Environment]::SetEnvironmentVariable("Path", "$machinePath;$dest", "Machine")
+    }
+    $env:Path += ";$dest"
+}
+
+# ── 2. Authenticate ──────────────────────────────────────────────────────────
+Step 2 "Authorising this machine against the Cloudflare account"
+Write-Host "    A browser will open. Pick the wearesdi.com zone."
+$certPath = Join-Path $env:USERPROFILE ".cloudflared\cert.pem"
+if (Test-Path $certPath) { Write-Host "    Already authorised ($certPath)." }
+else { cloudflared tunnel login }
+
+# ── 3. Tunnel ────────────────────────────────────────────────────────────────
+Step 3 "Creating the tunnel '$TunnelName'"
+$existing = (cloudflared tunnel list 2>$null) -match "\s$TunnelName\s"
+if ($existing) { Write-Host "    Tunnel already exists." }
+else { cloudflared tunnel create $TunnelName }
+
+$tunnelId = ((cloudflared tunnel list 2>$null) -split "`n" |
+             Where-Object { $_ -match "\s$TunnelName\s" } |
+             ForEach-Object { ($_ -split "\s+")[0] } | Select-Object -First 1)
+if (-not $tunnelId) { throw "Could not determine the tunnel ID. Run 'cloudflared tunnel list'." }
+Write-Host "    Tunnel ID: $tunnelId"
+
+# ── 4. Config ────────────────────────────────────────────────────────────────
+Step 4 "Writing the tunnel configuration"
+$cfgDir = Join-Path $env:USERPROFILE ".cloudflared"
+$cfg    = Join-Path $cfgDir "config.yml"
+
+@"
+# SDI Intelligence — Cloudflare Tunnel
+# Generated by Install-SDITunnel.ps1
+
+tunnel: $tunnelId
+credentials-file: $cfgDir\$tunnelId.json
+
+ingress:
+  - hostname: $Hostname
+    service: http://localhost:$LocalPort
+    originRequest:
+      # The origin is on the same host; only this tunnel can reach it.
+      noTLSVerify: true
+      connectTimeout: 30s
+
+  # Anything that is not the portal hostname gets nothing.
+  - service: http_status:404
+"@ | Set-Content -Path $cfg -Encoding UTF8
+
+Write-Host "    Wrote $cfg"
+
+# ── 5. DNS ───────────────────────────────────────────────────────────────────
+Step 5 "Pointing $Hostname at the tunnel"
+cloudflared tunnel route dns $TunnelName $Hostname
+
+# ── 6. Service ───────────────────────────────────────────────────────────────
+Step 6 "Installing cloudflared as a Windows service"
+if (Get-Service cloudflared -ErrorAction SilentlyContinue) {
+    Restart-Service cloudflared
+    Write-Host "    Service restarted."
+} else {
+    cloudflared service install
+    Start-Service cloudflared
+}
+
+# ── Done ─────────────────────────────────────────────────────────────────────
+Write-Host "`n─────────────────────────────────────────────────────────────" -ForegroundColor Green
+Write-Host " Portal should now be live at https://$Hostname/" -ForegroundColor Green
+Write-Host " App portal:                  https://$Hostname/app/" -ForegroundColor Green
+Write-Host "─────────────────────────────────────────────────────────────" -ForegroundColor Green
+
+Write-Host @"
+
+STILL TO DO — the tunnel alone does not finish the job:
+
+  1. Entra app registration -> Authentication -> add redirect URI:
+         https://$Hostname/auth/callback
+
+  2. .env on this machine:
+         SDI_REDIRECT_URI=https://$Hostname/auth/callback
+         SDI_ALLOWED_ORIGINS=https://$Hostname
+         (and remove SDI_COOKIE_SECURE=no)
+
+  3. Restart the portal service.
+
+  4. Confirm sign-in works over https, THEN set SDI_ALLOW_API_KEY=no.
+
+  5. Optional but recommended — Cloudflare Zero Trust -> Access -> add an
+     application policy for $Hostname. That puts a second gate in front of the
+     portal, so a future bug in the app cannot expose it on its own.
+
+Then send staff the URL. iPhone: Safari -> Share -> Add to Home Screen.
+Android: Chrome -> Install app.
+"@ -ForegroundColor Yellow
