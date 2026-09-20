@@ -65,6 +65,21 @@ def keys_in_portal_history() -> set[str]:
     return found
 
 
+def git_available() -> bool:
+    """Whether this machine can answer questions about history at all.
+
+    The portal host is a file-copy deployment with no git and no .git directory,
+    so the rotation checks cannot run there. Saying so is the point: a check that
+    silently passes because the tool is missing is worse than no check.
+    """
+    try:
+        ok = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=HERE.parent,
+                            capture_output=True, text=True, timeout=15).returncode == 0
+        return ok
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def committed_env() -> tuple[dict[str, str], str, bool] | None:
     """The most recent .env in git history, where it came from, and whether it is
     still tracked.
@@ -91,6 +106,13 @@ def committed_env() -> tuple[dict[str, str], str, bool] | None:
 
 # ── 1. Credential rotation ───────────────────────────────────────────────────
 def check_rotation(live: dict) -> None:
+    if not git_available():
+        check(MANUAL, "Credential rotation cannot be checked on this machine",
+              "No git repository here — this looks like a file-copy deployment. Run "
+              "preflight.py on the machine that holds the git checkout to verify the "
+              "database and BrightHR credentials were actually rotated.")
+        return
+
     repo = committed_env()
 
     # The portal key was committed in the HTML, so check that separately.
