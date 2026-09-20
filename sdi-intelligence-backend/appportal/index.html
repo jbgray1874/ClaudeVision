@@ -118,6 +118,15 @@
     padding:11px 16px;border-radius:var(--r);margin-top:18px;border:0;font-family:var(--body)
   }
 
+  .who{
+    display:none;margin-top:9px;font-family:var(--mono);font-size:10.5px;
+    color:var(--ink-faint);letter-spacing:.06em;align-items:center;gap:8px
+  }
+  .who.on{display:flex}
+  .who b{color:var(--ink-dim);font-weight:500}
+  .who a{color:var(--ink-faint);text-decoration:underline}
+  body.detail .who{display:none}
+
   .msg{color:var(--ink-faint);font-size:14px;padding:26px 2px;text-align:center}
   .banner{
     background:rgba(255,157,66,.1);border:1px solid rgba(255,157,66,.3);color:var(--warn);
@@ -144,6 +153,7 @@
     </div>
   </div>
   <input class="search" id="q" type="search" placeholder="Search apps…" autocomplete="off">
+  <div class="who" id="who"></div>
 </header>
 
 <div class="wrap">
@@ -170,6 +180,7 @@ async function load(){
     let r;
     try{ r=await fetch('../api/services?surface=app',{cache:'no-cache',signal:ctl.signal}); }
     finally{ clearTimeout(timer); }
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/'); return; }
     if(!r.ok) throw new Error('HTTP '+r.status);
     const d=await r.json();
     SERVICES=d.services||[];
@@ -181,6 +192,7 @@ async function load(){
     else{ $('list').innerHTML='<div class="msg">Couldn\'t reach the SDI Intelligence service.<br>'
         +'Check you\'re on the SDI network or VPN, then pull to refresh.</div>'; return; }
   }
+  whoami();
   if(offline) $('banner').innerHTML='<div class="banner">Offline — showing the last catalogue this device downloaded.</div>';
   $('foot').textContent=SERVICES.length+' apps · '+(offline?'cached':'live');
   renderList();
@@ -226,6 +238,7 @@ function renderDetail(s){
   if(s.tech)     h+='<div class="note"><h4>Built with</h4>'+tags(s.tech)+'</div>';
   if(s.invoke)   h+='<div class="note"><h4>How to use it</h4><div>'+s.invoke+'</div></div>';
   if(s.next)     h+='<div class="note"><h4>Next</h4><div>'+s.next+'</div></div>';
+  if(s.app_url)  h+='<a class="btn" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' →</a>';
   if(s.link)     h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
   $('detail').innerHTML=h;
 }
@@ -252,6 +265,19 @@ $('list').addEventListener('click',e=>{
 $('back').addEventListener('click',close);
 $('q').addEventListener('input',e=>renderList(e.target.value));
 window.addEventListener('hashchange',route);
+
+async function whoami(){
+  try{
+    const r=await fetch('../api/me',{cache:'no-store'});
+    if(!r.ok) return;
+    const m=await r.json();
+    if(!m.signed_in) return;
+    const el=$('who'); el.className='who on';
+    el.innerHTML = m.sso_enabled
+      ? '<b>'+esc(m.name)+'</b> · <a href="/auth/logout">sign out</a>'
+      : '<b>Not signed in</b> · SSO is not configured on this server';
+  }catch(e){}
+}
 
 load();
 

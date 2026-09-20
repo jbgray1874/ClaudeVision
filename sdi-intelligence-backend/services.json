@@ -428,8 +428,8 @@
     {
       "id": "voice-crm",
       "name": "Voice-Activated CRM · Sandbox Pilot",
-      "status": "Proposed · awaiting approval",
-      "cls": "c-plan",
+      "status": "Pilot · read-only",
+      "cls": "c-prog",
       "category": "Co-worker agents",
       "surface": "both",
       "desc": "Morning outbound call updates Nick’s NG project records by voice — read back, confirmed, audited.",
@@ -503,7 +503,8 @@
         "Power Automate or Azure timer"
       ],
       "phase": "Proposed · sandbox pilot — gated on IT approval and SharePoint access",
-      "invoke": "Not yet built. Next steps: confirm the sandbox List schema and unique Project IDs, grant the application selected-permissions access to that List only, and agree the Azure spend allowance. The live tracker stays untouched until the pilot is reviewed and formally approved."
+      "invoke": "Not yet built. Next steps: confirm the sandbox List schema and unique Project IDs, grant the application selected-permissions access to that List only, and agree the Azure spend allowance. The live tracker stays untouched until the pilot is reviewed and formally approved.",
+      "app_url": "voice-crm.html"
     },
     {
       "id": "brighthr",

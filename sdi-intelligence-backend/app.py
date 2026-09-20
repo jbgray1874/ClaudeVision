@@ -23,11 +23,12 @@ import os
 import mimetypes
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Header, Query
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 
 import config
+import auth
 
 config.validate()
 
@@ -42,9 +43,16 @@ app.add_middleware(
 
 
 # ── Access gate ─────────────────────────────────────────────────────────────
-def check_key(x_sdi_key: str | None) -> None:
+def check_key(x_sdi_key: str | None, request: Request | None = None) -> None:
+    """Allow a signed-in person, or a machine still using the shared key.
+
+    Once every scheduled script is moved onto its own identity, set
+    SDI_ALLOW_API_KEY=no and the key stops working entirely.
+    """
+    if request is not None and auth.ENABLED and auth.current_user(request) is not None:
+        return
     if config.API_KEY and x_sdi_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+        raise HTTPException(status_code=401, detail="Sign in, or present a valid X-SDI-Key")
 
 
 # ── Path safety: only ever serve from inside an allowed root ─────────────────
@@ -64,8 +72,8 @@ def _allowed_ext(p: Path) -> bool:
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 @app.get("/api/health")
-def health(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def health(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     roots_ok = []
     for root in config.FILE_ROOTS:
         roots_ok.append({"root": root, "reachable": os.path.isdir(root)})
@@ -75,14 +83,14 @@ def health(x_sdi_key: str | None = Header(default=None)):
 
 
 @app.get("/api/roots")
-def roots(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def roots(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     return {"roots": [{"name": Path(r).name or r, "path": r} for r in config.FILE_ROOTS]}
 
 
 @app.get("/api/files")
-def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def list_files(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     folder = _within_a_root(path)
     if folder is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
@@ -110,8 +118,8 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
 
 
 @app.get("/api/file")
-def get_file(path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def get_file(request: Request, path: str = Query(...), x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     target = _within_a_root(path)
     if target is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
@@ -138,8 +146,8 @@ def db_status() -> dict:
 
 
 @app.get("/api/db/ping")
-def db_ping(x_sdi_key: str | None = Header(default=None)):
-    check_key(x_sdi_key)
+def db_ping(request: Request, x_sdi_key: str | None = Header(default=None)):
+    check_key(x_sdi_key, request)
     result = db_status()
     code = 200 if result["status"] in ("ok", "not_configured") else 503
     return JSONResponse(status_code=code, content=result)
@@ -153,7 +161,9 @@ _APP_DIR = _HERE / "appportal"
 
 
 @app.get("/")
-def home():
+def home(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     if _PORTAL.exists():
         return FileResponse(str(_PORTAL))
     return JSONResponse({"status": "backend up",
@@ -166,14 +176,15 @@ def home():
 # no paths, no data — so it is served without the X-SDI-Key gate, exactly like
 # the portal page itself.
 @app.get("/services.json")
-def services_json():
+def services_json(user: dict = Depends(auth.require_user)):
     if not _SERVICES.exists():
         raise HTTPException(status_code=404, detail="services.json not found")
     return FileResponse(str(_SERVICES), media_type="application/json")
 
 
 @app.get("/api/services")
-def api_services(surface: str | None = Query(default=None, pattern="^(intranet|app|both)$")):
+def api_services(surface: str | None = Query(default=None, pattern="^(intranet|app|both)$"),
+                 user: dict = Depends(auth.require_user)):
     """The catalogue as JSON, optionally filtered to one surface.
 
     `surface=app` returns only what is safe to show outside the network — it
@@ -190,10 +201,10 @@ def api_services(surface: str | None = Query(default=None, pattern="^(intranet|a
 
 
 # ── Mobile app portal (PWA) ──────────────────────────────────────────────────
-# Served at /app. Static shell only — it reads the catalogue from /api/services.
-# NOTE: this is intranet-only until Entra ID SSO is in front of it. Do NOT
-# expose this route publicly while the service still authenticates with a
-# shared X-SDI-Key.
+# Served at /app/. Static shell only — it reads the catalogue from /api/services.
+# The page itself requires sign-in; the manifest, icons and service worker do
+# not, because a browser fetches them before any session exists and they carry
+# nothing sensitive. Everything with data behind it is gated.
 @app.get("/app")
 def app_portal_redirect():
     # The trailing slash matters: without it every relative URL in the page
@@ -202,18 +213,29 @@ def app_portal_redirect():
 
 
 @app.get("/app/")
-def app_portal():
+def app_portal(request: Request):
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
     index = _APP_DIR / "index.html"
     if not index.exists():
         raise HTTPException(status_code=404, detail="app portal not installed")
     return FileResponse(str(index))
 
 
+# A browser fetches these before any session exists, and they carry nothing
+# sensitive. Everything else under /app/ — including app screens — needs a user.
+_OPEN_ASSETS = {"manifest.webmanifest", "sw.js",
+                "icon-192.png", "icon-512.png", "icon-maskable-512.png"}
+
+
 @app.get("/app/{filename}")
-def app_portal_asset(filename: str):
+def app_portal_asset(filename: str, request: Request):
     # Flat directory, no nesting — reject anything with a path separator.
     if "/" in filename or "\\" in filename or filename.startswith("."):
         raise HTTPException(status_code=400, detail="Bad asset name")
+    if filename not in _OPEN_ASSETS:
+        if auth.current_user(request) is None:
+            return auth.login_redirect(request)
     target = _APP_DIR / filename
     if not target.is_file():
         raise HTTPException(status_code=404, detail="Not found")
@@ -226,6 +248,16 @@ def app_portal_asset(filename: str):
 # ── HR pipeline (BrightHR -> InVentry) ──
 from hr_routes import router as hr_router
 app.include_router(hr_router)
+
+# ── Identity, and the apps that need it ──
+app.include_router(auth.router)
+
+from voicecrm import router as voicecrm_router
+app.include_router(voicecrm_router)
+
+if not auth.ENABLED:
+    print("[WARN] Entra SSO is NOT configured — every visitor is anonymous. "
+          "Do not expose this service outside the network until it is.")
 
 
 if __name__ == "__main__":
