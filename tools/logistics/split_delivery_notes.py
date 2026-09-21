@@ -404,7 +404,23 @@ def main() -> int:
     print(f"  source: {source}")
     print(f"  out   : {out}")
     if not source.exists():
-        print(f"  !! that folder does not exist, or this account cannot reach it.")
+        print("  !! that folder does not exist, or this session cannot reach it.")
+        # ── A MAPPED DRIVE DOES NOT CROSS THE ELEVATION BOUNDARY ────────────────────
+        #
+        # An elevated shell is a DIFFERENT LOGON SESSION from the desktop, and a mapped
+        # drive belongs to the session that mapped it. So `K:` is there in Explorer, there
+        # in an ordinary PowerShell, and simply absent in "Administrator: Windows
+        # PowerShell" — where this reports a folder that plainly exists as missing.
+        #
+        # Exactly the same reason a scheduled task cannot see it, which is why the default
+        # is a UNC path. Said here because the symptom looks like a typo and is not.
+        if re.match(r"^[A-Za-z]:", str(source)):
+            print("     That is a mapped drive. If this is an elevated (Administrator)")
+            print("     shell, the drive belongs to your ordinary logon session and is not")
+            print("     visible here — the same reason a scheduled task cannot see it.")
+            print("     Run in a normal PowerShell, or give the UNC path instead:")
+            print("       (Get-PSDrive " + str(source)[0].upper()
+                  + ").DisplayRoot     # prints the real \\\\server\\share")
         return 2
     if not source.is_dir():
         print(f"  !! that is a file, not a folder.")
