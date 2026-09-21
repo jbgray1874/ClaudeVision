@@ -72,12 +72,34 @@ $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
 if (-not $python) { throw 'Python is not on PATH. Install it, or edit this script to give the full path.' }
 
+# PATH FIRST, THEN WHERE THE INSTALLER ACTUALLY PUTS IT. UB-Mannheim's package lands in
+# C:\Program Files\Tesseract-OCR and leaves PATH alone, so `winget install` completes,
+# reports success, and `tesseract` is still "not recognized". Refusing on PATH alone would
+# send somebody to reinstall software that is already installed.
 $tess = (Get-Command tesseract -ErrorAction SilentlyContinue).Source
 if (-not $tess) {
+    foreach ($candidate in @(
+        "$env:ProgramFiles\Tesseract-OCR\tesseract.exe",
+        "${env:ProgramFiles(x86)}\Tesseract-OCR\tesseract.exe",
+        "$env:LOCALAPPDATA\Programs\Tesseract-OCR\tesseract.exe")) {
+        if (Test-Path $candidate) { $tess = $candidate; break }
+    }
+    if ($tess) {
+        Write-Host "tesseract is installed but not on PATH. Put its full path in .env as"
+        Write-Host "  SDI_TESSERACT_PATH=$tess"
+        Write-Host "or add its folder to the SYSTEM PATH -- a scheduled task does not get"
+        Write-Host "your profile's PATH, so a user-only entry works by hand and not on the"
+        Write-Host "schedule, which is the hardest version of this to diagnose."
+    }
+}
+if (-not $tess) {
     throw @'
-Tesseract is not on PATH, and the scans have no text layer at all, so nothing can be read
-without it. Install it (winget install UB-Mannheim.TesseractOCR) and make sure its folder is
-on the system PATH, not just yours -- a scheduled task does not get your profile's PATH.
+Tesseract is not on PATH and is not in the usual install folders, and the scans have no text
+layer at all, so nothing can be read without it. Install it:
+    winget install UB-Mannheim.TesseractOCR
+Then open a NEW shell -- a PATH change does not reach a window that was already open. Put its
+folder on the SYSTEM PATH, not just yours: a scheduled task does not get your profile's PATH,
+so a user-only entry works by hand and does nothing on the schedule.
 '@
 }
 

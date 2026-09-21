@@ -39,6 +39,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -106,14 +107,59 @@ def _where_settings_live() -> str:
 
 # ── OCR ─────────────────────────────────────────────────────────────────────────────
 
+class NoOCR(RuntimeError):
+    """Tesseract could not be run at all.
+
+    ITS OWN TYPE BECAUSE IT IS NOT A BAD SCAN. One corrupt PDF must not cost the day, so
+    `run()` catches per file and carries on — which turned a missing binary into 947
+    identical error lines and an exit code of 0. A tool that is not installed is a fact about
+    the machine, true before the first page is read and true after the last, and it stops the
+    run rather than being reported 947 times.
+    """
+
+
+def find_tesseract(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate tesseract, or None. In order: an explicit path, config, PATH, install roots.
+
+    THE INSTALLER DOES NOT PUT IT ON PATH. UB-Mannheim's package lands in
+    `C:\\Program Files\\Tesseract-OCR` and leaves PATH alone, so `winget install` completes,
+    reports success, and `tesseract` is still "not recognized" — and a PATH edit needs a new
+    shell before it takes, which makes the same command work or fail depending on which
+    window it is typed in. Looking in the usual places costs nothing and ends all of that.
+
+    Same shape as `cad_inputs.find_converter` for the ODA converter, deliberately: two ways
+    of finding an external tool is two places to fix when one of them stops working.
+    """
+    if explicit and Path(explicit).is_file():
+        return str(explicit)
+    configured = _configured("TESSERACT_PATH")
+    if configured and Path(configured).is_file():
+        return str(configured)
+    found = shutil.which("tesseract") or shutil.which("tesseract.exe")
+    if found:
+        return found
+    for candidate in (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                      r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                      r"C:\Users\%s\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+                      % os.getenv("USERNAME", ""),
+                      "/usr/bin/tesseract", "/usr/local/bin/tesseract",
+                      "/opt/homebrew/bin/tesseract"):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return None
+
+
 def _tesseract(image_path: str, *, psm: str = "6", whitelist: str = "") -> str:
-    cmd = ["tesseract", image_path, "-", "--psm", psm]
+    exe = find_tesseract()
+    if not exe:
+        raise NoOCR("tesseract is not installed, or cannot be found")
+    cmd = [exe, image_path, "-", "--psm", psm]
     if whitelist:
         cmd += ["-c", f"tessedit_char_whitelist={whitelist}"]
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"tesseract could not be run: {exc}") from exc
+        raise NoOCR(f"tesseract could not be run ({exe}): {exc}") from exc
     return done.stdout or ""
 
 
@@ -506,6 +552,11 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         try:
             result = split_pdf(pdf, out_dir, dry_run=dry_run)
             results.append(result)
+        except NoOCR:
+            # NOT A BAD SCAN — A MACHINE WITH NO OCR ON IT. Catching this per file turned a
+            # missing binary into 947 identical error lines and an exit code of 0. It is
+            # true before the first page and true after the last, so it stops the run.
+            raise
         except Exception as exc:                                     # noqa: BLE001
             # ONE BAD SCAN DOES NOT COST THE DAY. A corrupt or password-protected PDF is
             # reported and the rest of the folder is still split.
@@ -673,8 +724,32 @@ def main() -> int:
             if census["folders"] and not a.recurse:
                 print("     the scans may be in subfolders — try again with --recurse")
 
-    report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                 recurse=a.recurse)
+    # ── CHECKED BEFORE A SINGLE PAGE IS RENDERED ────────────────────────────────────
+    #
+    # The scans have no text layer at all, so without OCR there is nothing to do — and
+    # finding that out per file produced one error line per scan and an exit code of 0.
+    if chosen and not find_tesseract():
+        print("  !! tesseract is not installed on this machine, or cannot be found.")
+        print("     The scans are photographs of paper with no text layer, so nothing can")
+        print("     be read without it. Install it:")
+        print("       winget install UB-Mannheim.TesseractOCR")
+        print("     Then open a NEW shell: the installer adds it to PATH, and a PATH change")
+        print("     does not reach a window that was already open — which makes the same")
+        print("     command work or fail depending on which one you type it in.")
+        print("     It is also looked for in the usual install folders, so a PATH that was")
+        print("     never updated is not fatal. If it is somewhere else, put it in")
+        print(f"     {_where_settings_live()} as")
+        print(r"       SDI_TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe")
+        return 2
+
+    try:
+        report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
+                     recurse=a.recurse)
+    except NoOCR as exc:
+        # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
+        # times, and not with an exit code that says the day went fine.
+        print(f"  !! {exc}")
+        return 2
     notes = unsorted = 0
     for result in report["results"]:
         if result.get("error"):

@@ -145,6 +145,88 @@ def test_an_uppercase_extension_is_still_a_scan(tmp_path):
         "SCAN21092026.PDF"]
 
 
+def test_a_machine_with_no_ocr_is_said_once_and_exits_two(tmp_path, capsys, monkeypatch):
+    """IT WAS SAID ONCE PER SCAN AND THE RUN EXITED 0.
+
+    `run()` catches per file so one corrupt PDF does not cost the day — which turned a
+    missing binary into four identical error lines on a `--since 1` run, and would have been
+    947 of them on a full one, ending in "0 delivery note(s)" and a success code.
+
+    A tool that is not installed is a fact about the machine: true before the first page is
+    read and true after the last. It is checked once, before anything is rendered.
+    """
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(S, "find_tesseract", lambda explicit=None: None)
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    assert S.main() == 2
+    said = capsys.readouterr().out
+    assert said.count("tesseract") < 4, "it is one machine, not one message per scan"
+    assert "winget install" in said
+    assert "NEW shell" in said, "a PATH change does not reach an open window"
+    assert "SDI_TESSERACT_PATH" in said
+
+
+def test_ocr_vanishing_mid_run_does_not_report_a_good_day(tmp_path, monkeypatch):
+    """An update or a share going away mid-run must not be swallowed per file either."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+
+    def _gone(pdf, out_dir, **kw):
+        raise S.NoOCR("tesseract could not be run")
+
+    monkeypatch.setattr(S, "split_pdf", _gone)
+    with pytest.raises(S.NoOCR):
+        S.run(source, out, dry_run=True)
+
+
+def test_one_bad_scan_still_does_not_cost_the_day(tmp_path, monkeypatch):
+    """The other half of the same rule: a corrupt or password-protected PDF is reported and
+    the rest of the folder is still split. Narrowing the catch must not have lost this."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    for name in ("a.pdf", "b.pdf"):
+        (source / name).write_bytes(b"%PDF-1.4\n")
+
+    def _one_is_broken(pdf, out_dir, **kw):
+        if pdf.name == "a.pdf":
+            raise ValueError("cannot open broken document")
+        return {"source": pdf.name, "pages": 1, "notes": [], "unsorted": []}
+
+    monkeypatch.setattr(S, "split_pdf", _one_is_broken)
+    report = S.run(source, out, dry_run=True)
+    assert [r.get("error", "") != "" for r in report["results"]] == [True, False]
+    assert "cannot open broken document" in report["results"][0]["error"]
+
+
+def test_tesseract_is_found_where_its_installer_actually_puts_it(tmp_path, monkeypatch):
+    """UB-Mannheim's package lands in C:\\Program Files\\Tesseract-OCR and leaves PATH
+    alone, so `winget install` completes, reports success, and `tesseract` is still "not
+    recognized". Looking in the usual places costs nothing and ends that."""
+    import split_delivery_notes as S
+
+    monkeypatch.setattr(S.shutil, "which", lambda _name: None)
+    assert S.find_tesseract() is None or Path(S.find_tesseract()).is_file()
+
+    # An explicit path wins, and a configured one is honoured.
+    exe = tmp_path / "tesseract.exe"
+    exe.write_bytes(b"")
+    assert S.find_tesseract(str(exe)) == str(exe)
+    monkeypatch.setattr(S, "_configured", lambda name: str(exe) if "TESSERACT" in name else "")
+    assert S.find_tesseract() == str(exe)
+
+
 def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
     """THE FAILURE THIS REPLACES. `source.glob("*.pdf")` returns nothing when the folder
     cannot be enumerated, nothing when the scans are one level down, and nothing when the

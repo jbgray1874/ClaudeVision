@@ -1509,6 +1509,16 @@ MANUAL_OVERRIDE_XLSX_DIR = os.getenv("SDI_OVERRIDE_XLSX_DIR", MANUAL_OVERRIDE_QU
 SCAN_SOURCE_DIR = os.getenv("SDI_SCAN_SOURCE_DIR", "").strip()
 SCAN_SPLIT_DIR = os.getenv("SDI_SCAN_SPLIT_DIR", "").strip()
 
+# Where tesseract.exe is, when it is not on PATH and not in the usual install folders. Leave
+# unset to auto-detect — PATH first, then C:\Program Files\Tesseract-OCR and the rest, the
+# same order `cad_inputs.find_converter` uses for the ODA converter.
+#
+# UB-Mannheim's installer does NOT add it to PATH, so `winget install` completes, reports
+# success, and `tesseract` is still "not recognized" — and a PATH edit needs a new shell
+# before it takes, which makes the same command work or fail depending on which window it is
+# typed in. Both are why the usual folders are searched rather than trusted to PATH.
+TESSERACT_PATH = os.getenv("SDI_TESSERACT_PATH", "").strip()
+
 
 def dot_env_path() -> str:
     """The .env this process actually loaded — the repo root is tried before src/, and only
