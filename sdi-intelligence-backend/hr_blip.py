@@ -101,35 +101,70 @@ def _write_output_file(on_site: list, summary: dict):
     """
     Write a clean, dated, browsable output file to HR_OUTPUT_DIR
     so the COO can view who is on site in the portal Files view.
-    Email stripped — names only. NON-FATAL.
+    Email stripped — names only.
+
+    NON-FATAL, but never silent: returns (path, error). The snapshot is already
+    saved by the time this runs, so a failure here loses nothing - but it used
+    to vanish from the response entirely, leaving a run that said OK with no
+    file to show for it. The caller now surfaces the reason.
     """
     out_dir = getattr(cfg, "HR_OUTPUT_DIR", "").strip()
     if not out_dir:
         _log("HR_OUTPUT_DIR not set — skipping browsable output file.")
-        return None
+        return None, "HR_OUTPUT_DIR is not set."
+    # Built before any I/O so the fallback copy below still has it if the
+    # share turns out to be unreachable.
+    payload = {
+        "generated": summary["timestamp"],
+        "query_type": "point_in_time",
+        "employees_checked": summary["employees_checked"],
+        "on_site": summary["on_site"],
+        "status": summary["status"],
+        "staff_on_site": [
+            {
+                "first_name": e.get("first_name", ""),
+                "surname": e.get("surname", ""),
+                "clocked_in": e.get("clocking", {}).get("start", ""),
+            }
+            for e in on_site
+        ],
+    }
     try:
         Path(out_dir).mkdir(parents=True, exist_ok=True)
         out_path = Path(out_dir) / f"blip_onsite_{_stamp()}.json"
-        payload = {
-            "generated": summary["timestamp"],
-            "query_type": "point_in_time",
-            "employees_checked": summary["employees_checked"],
-            "on_site": summary["on_site"],
-            "status": summary["status"],
-            "staff_on_site": [
-                {
-                    "first_name": e.get("first_name", ""),
-                    "surname": e.get("surname", ""),
-                    "clocked_in": e.get("clocking", {}).get("start", ""),
-                }
-                for e in on_site
-            ],
-        }
         _atomic_write_json(out_path, payload)
         _log(f"Output file written -> {out_path}")
-        return str(out_path)
+        return str(out_path), None
     except OSError as exc:
-        _log(f"OUTPUT FILE FAILED ({out_dir}): {exc}.")
+        reason = f"Could not write to HR_OUTPUT_DIR ({out_dir}): {exc}"
+        # A drive letter is the usual culprit: a Windows service runs under an
+        # account that has no user drive mappings, so K:\ simply does not exist
+        # for it even though it works interactively.
+        if _looks_like_mapped_drive(out_dir):
+            reason += (
+                f". {out_dir[:2]} is a mapped drive - a Windows service cannot see user "
+                f"drive mappings. Set HR_OUTPUT_DIR to the UNC path instead "
+                f"(e.g. \\\\sdi-dc01\\shareddata$\\Shared\\IT\\HRSystemsOutput)."
+            )
+        _log(f"OUTPUT FILE FAILED: {reason}")
+        fallback = _write_fallback_copy(payload)
+        if fallback:
+            reason += f" A local copy was written to {fallback} instead."
+        return None, reason
+
+
+def _looks_like_mapped_drive(path: str) -> bool:
+    """True for 'K:\...' style paths, false for UNC ('\\server\share')."""
+    return len(path) > 1 and path[1] == ":" and path[0].isalpha()
+
+
+def _write_fallback_copy(payload: dict):
+    """Keep a copy beside the snapshot when the output share is unreachable."""
+    try:
+        path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_onsite_{_stamp()}.json"
+        _atomic_write_json(path, payload)
+        return str(path)
+    except OSError:
         return None
 
 
@@ -211,9 +246,14 @@ def run_blip() -> dict:
                        {"summary": summary, "on_site": on_site})
 
     # ── browsable output for the COO ──
-    out_file = _write_output_file(on_site, summary)
+    out_file, out_error = _write_output_file(on_site, summary)
     if out_file:
         summary["output_file"] = out_file
+    if out_error:
+        # Visible in the portal and in hr_status.json, rather than a run that
+        # claims success with no file to show for it.
+        summary["warnings"].append(out_error)
+        summary["output_file_error"] = out_error
 
     _log(f"BLIP {summary['status']}: {len(on_site)} on site of {len(emp_list)} "
          f"({failures} query failure(s)) -> {snap_path}")

@@ -2291,11 +2291,13 @@
       var d=await r.json();
       var when=(d.timestamp||'').replace('T',' ').slice(0,19);
       var file=d.output_file ? d.output_file.split('\\').pop() : '';
-      out.style.color = d.status==='ok' ? 'var(--ok)' : 'var(--warn)';
+      var warn=(d.warnings||[]).join('\n');
+      out.style.color = (d.status==='ok' && !warn) ? 'var(--ok)' : 'var(--warn)';
       out.textContent=d.on_site+' staff on site (of '+d.employees_checked+' checked)'
         +'\nStatus: '+d.status.toUpperCase()
-        +(file ? '\nFile: '+file : '')
-        +'\nAt: '+when+' UTC';
+        +(file ? '\nFile: '+file : '\nFile: NOT WRITTEN \u2014 see below')
+        +'\nAt: '+when+' UTC'
+        +(warn ? '\n\n'+warn : '');
     }catch(e){
       out.style.color='var(--fail)';
       out.textContent='Blip failed: '+e.message;
