@@ -944,6 +944,65 @@ def quote_regenerate(req: RegenerateQuoteRequest,
             "released": bool(written) and quote_release.may_go_to_a_customer(written)}
 
 
+class SplitScansRequest(BaseModel):
+    """One run of the delivery-note splitter."""
+    source: str = ""
+    out: str = ""
+    dry_run: bool = False
+
+
+@router.post("/logistics/split-scans")
+def logistics_split_scans(req: SplitScansRequest,
+                          x_sdi_key: Optional[str] = Header(default=None)):
+    """Split the day's scanned delivery notes into one PDF per note.
+
+    James Gray, 21 September 2026: "to start with I can run manually, then we add it to the
+    SDI Intelligence suite of apps for a user to run."
+
+    THE SAME SCRIPT THE SCHEDULED TASK RUNS, not a second implementation of it. A button and
+    a nightly task that read a document differently is two answers to one question, and the
+    one nobody is watching is the one that goes wrong.
+
+    RUNNING IT TWICE IS THE ORDINARY CASE, so it is safe: a note whose file is already on the
+    share is recognised by its number and not written again. That is asked of the folder
+    rather than of a record about the folder, which is why a button somebody leans on does
+    not produce eleven copies of Tuesday.
+    """
+    _check_key(x_sdi_key)
+    source = _within_a_root(req.source) if req.source else None
+    if source is None or not source.is_dir():
+        raise HTTPException(
+            403, "That scan folder is outside the shares this service may read.")
+    out = _within_a_root(req.out) if req.out else None
+    if req.out and out is None:
+        raise HTTPException(
+            403, "That output folder is outside the shares this service may write.")
+
+    cmd = [sys.executable,
+           str(_REPO_ROOT / "tools" / "logistics" / "split_delivery_notes.py"),
+           "--source", str(source)]
+    if out is not None:
+        cmd += ["--out", str(out)]
+    if req.dry_run:
+        cmd.append("--dry-run")
+    try:
+        # OCR IS SLOW AND THAT IS NORMAL. A forty-page batch is a few minutes; the limit is
+        # here so a wedged tesseract cannot hold a worker open all afternoon.
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "The splitter took longer than 30 minutes and was stopped.")
+    except Exception as exc:                                     # noqa: BLE001
+        raise HTTPException(502, f"The splitter could not be run: {exc}")
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "The splitter failed.").strip()
+        if "tesseract" in detail.lower():
+            detail += ("  The scans have no text layer, so nothing can be read without "
+                       "Tesseract on this machine's PATH.")
+        raise HTTPException(502, detail[-1200:])
+    lines = [l for l in (proc.stdout or "").splitlines() if l.strip()]
+    return {"ok": True, "summary": lines[-1] if lines else "", "lines": lines}
+
+
 @router.post("/release/withdraw")
 def release_withdraw(req: ReleaseRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """Take an authorisation back. The next quote for this job is the portal copy again."""
