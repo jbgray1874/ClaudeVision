@@ -69,7 +69,7 @@ def test_a_case_insensitive_filesystem_does_not_double_every_scan(tmp_path, monk
 
     Globbing both and adding the lists is right on the Linux box this was written on and
     doubles every file on the machine it runs on — each scan read, OCR'd and split twice.
-    The glob is faked here because this filesystem is case-sensitive and cannot show it.
+    The listing is faked here because this filesystem is case-sensitive and cannot show it.
     """
     from split_delivery_notes import scans_to_read
     source = tmp_path / "Scans"
@@ -77,9 +77,82 @@ def test_a_case_insensitive_filesystem_does_not_double_every_scan(tmp_path, monk
     out.mkdir(parents=True)
     one = source / "scan21092026.pdf"
     one.write_bytes(b"%PDF-1.4\n")
-    # What Windows returns: the same file for both patterns.
-    monkeypatch.setattr(type(source), "glob", lambda self, pattern: iter([one]))
+    # What a doubled listing looks like: the same file twice.
+    monkeypatch.setattr(type(source), "iterdir", lambda self: iter([one, one]))
     assert [p.name for p in scans_to_read(source, out)] == ["scan21092026.pdf"]
+
+
+def test_an_uppercase_extension_is_still_a_scan(tmp_path):
+    """The scanner's naming is not ours to rely on, and .PDF is a PDF."""
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    (source / "SCAN21092026.PDF").write_bytes(b"%PDF-1.4\n")
+    (source / "notes.txt").write_bytes(b"not a scan")
+    assert [p.name for p in scans_to_read(source, source / "SplitScan")] == [
+        "SCAN21092026.PDF"]
+
+
+def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
+    """THE FAILURE THIS REPLACES. `source.glob("*.pdf")` returns nothing when the folder
+    cannot be enumerated, nothing when the scans are one level down, and nothing when the
+    day was genuinely quiet — three different situations, one line of output. The real share
+    reported `0 PDF(s) in the folder` for a folder Explorer shows 948 items in."""
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    source.mkdir()
+    out = source / "SplitScan"
+
+    def _refuse(self):
+        raise PermissionError(13, "Access is denied")
+
+    original = type(source).iterdir
+    try:
+        type(source).iterdir = _refuse
+        with pytest.raises(RuntimeError) as caught:
+            scans_to_read(source, out)
+    finally:
+        type(source).iterdir = original
+    assert "cannot list" in str(caught.value)
+    assert str(source) in str(caught.value)
+
+
+def test_scans_in_subfolders_are_reached_only_when_asked_for(tmp_path):
+    """The share may file by date. Recursing by default would also pull in whatever else
+    lives under Scans, so it is a flag — but the flag has to work."""
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    day = source / "21-09-2026"
+    day.mkdir(parents=True)
+    (source / "SplitScan").mkdir()
+    (day / "scan001.pdf").write_bytes(b"%PDF-1.4\n")
+    out = source / "SplitScan"
+    assert scans_to_read(source, out) == []
+    assert [p.name for p in scans_to_read(source, out, recurse=True)] == ["scan001.pdf"]
+
+
+def test_recursing_still_does_not_read_back_what_it_wrote(tmp_path):
+    """SplitScan is a CHILD of Scans, so --recurse walks straight into the output folder
+    unless it is excluded by name — every note re-split into a one-page note named after
+    itself, for ever."""
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    (out / "_Unsorted").mkdir(parents=True)
+    (source / "scan21092026.pdf").write_bytes(b"%PDF-1.4\n")
+    (out / "30022230 Tesco.pdf").write_bytes(b"%PDF-1.4\n")
+    (out / "_Unsorted" / "scan21092026 p3.pdf").write_bytes(b"%PDF-1.4\n")
+    assert [p.name for p in scans_to_read(source, out, recurse=True)] == [
+        "scan21092026.pdf"]
+
+
+def test_two_date_folders_may_each_hold_a_scan_of_the_same_name(tmp_path, monkeypatch):
+    """A ledger keyed on the bare filename lets one day's scan001.pdf mask another's."""
+    from split_delivery_notes import _ledger_key
+    source = tmp_path / "Scans"
+    a = source / "21-09-2026" / "scan001.pdf"
+    b = source / "22-09-2026" / "scan001.pdf"
+    assert _ledger_key(a, source) != _ledger_key(b, source)
 
 
 def test_only_recent_scans_can_be_asked_for(tmp_path):
@@ -225,3 +298,45 @@ def test_it_always_says_where_it_looked_and_what_it_found(tmp_path, capsys):
     assert str(source) in said
     assert "1 PDF(s) in the folder" in said
     assert "last 7 day(s)" in said
+
+
+def test_a_folder_with_no_pdfs_says_what_is_in_it(tmp_path, capsys):
+    """"0 PDF(s) in the folder" is the same sentence for a quiet day and for a folder of 948
+    things none of which the job could see. It has to say which."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    (source / "21-09-2026").mkdir()
+    (source / "index.csv").write_bytes(b"a,b\n")
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    S.main()
+    said = capsys.readouterr().out
+    assert "0 PDF(s) in the folder" in said
+    assert "1 file(s)" in said and "folder(s)" in said
+    assert ".csv" in said
+    assert "--recurse" in said, "a folder of subfolders must point at the flag that reads them"
+
+
+def test_a_folder_that_refuses_to_be_listed_is_not_reported_as_a_quiet_day(tmp_path, capsys):
+    """Exit 2, not 0. A job that cannot read the share must not report success."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    source.mkdir()
+
+    def _refuse(self):
+        raise PermissionError(13, "Access is denied")
+
+    original = type(source).iterdir
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    try:
+        type(source).iterdir = _refuse
+        assert S.main() == 2
+    finally:
+        type(source).iterdir = original
+    said = capsys.readouterr().out
+    assert "cannot list" in said
+    assert "Access is denied" in said
