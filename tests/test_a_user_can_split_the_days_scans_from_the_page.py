@@ -184,3 +184,44 @@ def test_a_missing_tesseract_is_explained_rather_than_echoed(routes, tmp_path, m
             routes.SplitScansRequest(source=str(source), out=str(tmp_path)), None)
     assert caught.value.status_code == 502
     assert "no text layer" in str(caught.value.detail)
+
+
+# ── the front door ──────────────────────────────────────────────────────────────────
+
+def test_a_missing_source_folder_is_refused_loudly(tmp_path, capsys):
+    """THE FIRST LIVE RUN PRINTED "0 delivery note(s)" AND EXITED 0.
+
+    Nothing was wrong with the reading — nothing had been read, because `Path.glob` on a
+    folder that does not exist returns no files and no error. A typo, a VPN down, a task with
+    no drive mapping and a permissions problem all look identical from inside the loop, and
+    all of them are obvious the moment the path is printed.
+
+    This file has comments about that failure mode in three places and did not guard its own
+    front door.
+    """
+    import split_delivery_notes as S
+
+    code = S.main.__wrapped__ if hasattr(S.main, "__wrapped__") else S.main
+    sys.argv = ["split", "--source", str(tmp_path / "not-there"),
+                "--out", str(tmp_path / "out")]
+    assert code() == 2
+    said = capsys.readouterr().out
+    assert "does not exist" in said
+    assert str(tmp_path / "not-there") in said, "it must name the folder it could not reach"
+
+
+def test_it_always_says_where_it_looked_and_what_it_found(tmp_path, capsys):
+    """A run that finds nothing and a run that was pointed at the wrong share read the same
+    on the console unless it says which folder and how many files."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    (source / "a.pdf").write_bytes(b"%PDF-1.4\n")
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run", "--since", "7"]
+    S.main()
+    said = capsys.readouterr().out
+    assert str(source) in said
+    assert "1 PDF(s) in the folder" in said
+    assert "last 7 day(s)" in said
