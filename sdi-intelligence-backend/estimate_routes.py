@@ -949,6 +949,8 @@ class SplitScansRequest(BaseModel):
     source: str = ""
     out: str = ""
     dry_run: bool = False
+    since_days: int = 0
+    recurse: bool = False
 
 
 @router.post("/logistics/split-scans")
@@ -985,6 +987,10 @@ def logistics_split_scans(req: SplitScansRequest,
         cmd += ["--out", str(out)]
     if req.dry_run:
         cmd.append("--dry-run")
+    if req.since_days and req.since_days > 0:
+        cmd += ["--since", str(int(req.since_days))]
+    if req.recurse:
+        cmd.append("--recurse")
     try:
         # OCR IS SLOW AND THAT IS NORMAL. A forty-page batch is a few minutes; the limit is
         # here so a wedged tesseract cannot hold a worker open all afternoon.

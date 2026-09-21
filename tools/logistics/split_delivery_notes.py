@@ -261,6 +261,13 @@ def split_pdf(pdf_path: Path, out_dir: Path, *, dry_run: bool = False) -> Dict[s
             "notes": written, "unsorted": [i + 1 for i in unsorted]}
 
 
+def _ledger_key(pdf: Path, source_dir: Path) -> str:
+    try:
+        return pdf.relative_to(source_dir).as_posix()
+    except ValueError:
+        return pdf.name
+
+
 def _ledger(out_dir: Path) -> Dict[str, Any]:
     try:
         data = json.loads((out_dir / LEDGER).read_text(encoding="utf-8"))
@@ -298,52 +305,138 @@ def already_filed(out_dir: Path, number: Any) -> Optional[Path]:
     return None
 
 
-def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0) -> List[Path]:
+def _resolved(path: Path) -> str:
+    """A comparable absolute form, falling back to the path as given.
+
+    `Path.resolve()` goes to the filesystem, and on a UNC share it can fail where the path is
+    perfectly good. Falling back keeps the folder-exclusion check working instead of throwing
+    inside a listing.
+    """
+    try:
+        return str(path.resolve()).rstrip("\\/").lower()
+    except OSError:
+        return str(path).rstrip("\\/").lower()
+
+
+def folder_listing(folder: Path, *, recurse: bool = False,
+                   skip: Optional[set] = None) -> List[Path]:
+    """Every FILE in the folder, listed once, with the listing error surfaced if there is one.
+
+    ── LISTED, NOT GLOBBED ─────────────────────────────────────────────────────────
+
+    `source_dir.glob("*.pdf")` returns nothing on a folder that cannot be enumerated, nothing
+    on a folder of subfolders, and nothing on a folder that does not exist — three quite
+    different situations that all read as "the folder is empty" from the caller's side. The
+    first live run against the real share printed `0 PDF(s) in the folder` for a folder that
+    Explorer shows 948 items in.
+
+    `iterdir` raises when it cannot list, which is what we want: a permissions problem should
+    say so rather than be reported as an empty day's post.
+
+    It also settles the case question for good. "*.pdf" and "*.PDF" are the SAME files on
+    Windows and separate patterns on Linux, so globbing both and adding the lists reads every
+    scan twice on the machine this actually runs on. One listing, one suffix comparison, one
+    entry per file, on both.
+    """
+    skip = {s.lower() for s in (skip or set())}
+    try:
+        entries = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        raise RuntimeError(f"cannot list {folder}: {exc}") from exc
+
+    files: List[Path] = []
+    for entry in entries:
+        try:
+            is_dir = entry.is_dir()
+        except OSError:                                              # a dead reparse point
+            continue
+        if not is_dir:
+            files.append(entry)
+            continue
+        if recurse and entry.name.lower() not in skip:
+            files.extend(folder_listing(entry, recurse=True, skip=skip))
+    return files
+
+
+def folder_census(folder: Path, *, recurse: bool = False) -> Dict[str, Any]:
+    """What is in the folder — for the run that found no scans and has to say why.
+
+    A day with no post, a share nobody can list, and a folder of date-named subfolders are
+    the same line of output unless the job says what it saw.
+    """
+    census: Dict[str, Any] = {"files": 0, "pdfs": 0, "folders": 0,
+                              "suffixes": {}, "sample": [], "error": None}
+    try:
+        entries = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+    except OSError as exc:
+        census["error"] = f"{type(exc).__name__}: {exc}"
+        return census
+    for entry in entries:
+        try:
+            is_dir = entry.is_dir()
+        except OSError:
+            continue
+        if is_dir:
+            census["folders"] += 1
+        else:
+            census["files"] += 1
+            suffix = entry.suffix.lower() or "(none)"
+            census["suffixes"][suffix] = census["suffixes"].get(suffix, 0) + 1
+            if suffix == ".pdf":
+                census["pdfs"] += 1
+        if len(census["sample"]) < 5:
+            census["sample"].append(entry.name + ("\\" if is_dir else ""))
+    return census
+
+
+def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0,
+                  recurse: bool = False) -> List[Path]:
     """The PDFs in the scan folder that are this run's business.
 
     ── THE OUTPUT FOLDER LIVES INSIDE THE INPUT FOLDER ──────────────────────────────
 
     K:\\Logistics\\Scans\\SplitScan is a child of K:\\Logistics\\Scans, so everything this
-    job writes lands inside the folder it reads. Non-recursive globbing happens not to see it
-    today, which puts one line of code between the job and eating its own output for ever —
-    every note re-split into a note of one page, named after itself, on every run. It is
-    excluded by name as well, so the guard survives somebody reaching for `rglob`.
-
-    ── AND "*.pdf" AND "*.PDF" ARE THE SAME FILES ON WINDOWS ────────────────────────
-
-    Globbing both and adding the lists is correct on Linux, where this was written and
-    tested, and DOUBLES every file on the machine it actually runs on, where the filesystem
-    is case-insensitive. Every scan read, OCR'd and split twice. Resolved paths, in a set.
+    job writes lands inside the folder it reads. Nothing but this exclusion stands between
+    the job and eating its own output for ever — every note re-split into a note of one page,
+    named after itself, on every run. It is excluded by name as well as by path, so the guard
+    survives `--recurse`.
     """
     seen, out = set(), []
-    resolved_out = out_dir.resolve()
+    resolved_out = _resolved(out_dir)
     cutoff = time.time() - (since_days * 86400) if since_days and since_days > 0 else 0.0
-    for pattern in ("*.pdf", "*.PDF"):
-        for pdf in source_dir.glob(pattern):
-            key = str(pdf.resolve()).lower()
-            if key in seen:
+    for pdf in folder_listing(source_dir, recurse=recurse,
+                              skip={out_dir.name, UNSORTED}):
+        if pdf.suffix.lower() != ".pdf":
+            continue
+        key = _resolved(pdf)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _resolved(pdf.parent) == resolved_out:
+            continue
+        try:
+            if cutoff and pdf.stat().st_mtime < cutoff:
                 continue
-            seen.add(key)
-            if pdf.parent.resolve() == resolved_out:
-                continue
-            try:
-                if cutoff and pdf.stat().st_mtime < cutoff:
-                    continue
-            except OSError:
-                continue
-            out.append(pdf)
+        except OSError:
+            continue
+        out.append(pdf)
     return sorted(out, key=lambda p: p.name.lower())
 
 
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
-        force: bool = False, since_days: int = 0) -> Dict[str, Any]:
+        force: bool = False, since_days: int = 0,
+        recurse: bool = False) -> Dict[str, Any]:
     """One day's run over a folder of scans."""
     out_dir.mkdir(parents=True, exist_ok=True)
     done = _ledger(out_dir)
     results, skipped = [], []
-    for pdf in scans_to_read(source_dir, out_dir, since_days=since_days):
+    for pdf in scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse):
         mark = _fingerprint(pdf)
-        record = done.get(pdf.name) or {}
+        # Keyed on the path within the scan folder, not the bare name: with --recurse two
+        # date folders can each hold a "scan001.pdf" and one would otherwise mask the other.
+        # Old ledgers are keyed on the name alone, so that is still honoured.
+        key = _ledger_key(pdf, source_dir)
+        record = done.get(key) or done.get(pdf.name) or {}
         # ── SKIPPING IS A SPEED DECISION, AND IT CHECKS ITS OWN WORK ────────────────
         #
         # Re-OCRing a forty-page batch that has not changed is minutes of nothing, so a scan
@@ -363,8 +456,8 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
             results.append({"source": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
             continue
         if not dry_run:
-            done[pdf.name] = {"mark": mark,
-                              "files": [n["file"] for n in result["notes"] if n["file"]]}
+            done[key] = {"mark": mark,
+                         "files": [n["file"] for n in result["notes"] if n["file"]]}
     if not dry_run:
         (out_dir / LEDGER).write_text(json.dumps(done, indent=1), encoding="utf-8")
     return {"when": datetime.now().isoformat(timespec="seconds"),
@@ -386,6 +479,8 @@ def main() -> int:
                     help="Read and report, write nothing")
     ap.add_argument("--force", action="store_true",
                     help="Re-split scans this has already done")
+    ap.add_argument("--recurse", action="store_true",
+                    help="Also read scans in subfolders of the source folder")
     a = ap.parse_args()
 
     source, out = Path(a.source), Path(a.out)
@@ -426,15 +521,45 @@ def main() -> int:
         print(f"  !! that is a file, not a folder.")
         return 2
 
-    every = scans_to_read(source, out)
-    chosen = scans_to_read(source, out, since_days=a.since)
+    try:
+        every = scans_to_read(source, out, recurse=a.recurse)
+        chosen = scans_to_read(source, out, since_days=a.since, recurse=a.recurse)
+    except RuntimeError as exc:
+        # The folder is there and cannot be listed — a permissions problem, or a share that
+        # answers Test-Path and refuses enumeration. Said out loud, because the alternative
+        # is reporting somebody's day of post as an empty folder.
+        print(f"  !! {exc}")
+        return 2
+
     print(f"  {len(every)} PDF(s) in the folder"
           + (f", {len(chosen)} modified in the last {a.since} day(s)" if a.since else "")
           + (" — nothing to do" if not chosen else ""))
     if every and not chosen and a.since:
         print(f"     (run without --since, or with a larger number, to reach the rest)")
 
-    report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since)
+    # ── NO PDFs IS A FINDING, NOT A RESULT ──────────────────────────────────────────
+    #
+    # The real share reported "0 PDF(s) in the folder" for a folder Explorer shows 948 items
+    # in. There is no way to tell from that line whether the day was quiet, the scans are one
+    # level down in date folders, or the listing came back empty — so say which.
+    if not every:
+        census = folder_census(source, recurse=a.recurse)
+        if census["error"]:
+            print(f"     the folder could not be listed: {census['error']}")
+        elif not census["files"] and not census["folders"]:
+            print("     the folder listed as completely empty.")
+        else:
+            kinds = ", ".join(f"{n} {s}" for s, n in
+                              sorted(census["suffixes"].items(), key=lambda kv: -kv[1])[:6])
+            print(f"     it holds {census['files']} file(s) and "
+                  f"{census['folders']} folder(s)" + (f": {kinds}" if kinds else ""))
+            if census["sample"]:
+                print(f"     first few: {', '.join(census['sample'])}")
+            if census["folders"] and not a.recurse:
+                print("     the scans may be in subfolders — try again with --recurse")
+
+    report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
+                 recurse=a.recurse)
     notes = unsorted = 0
     for result in report["results"]:
         if result.get("error"):
