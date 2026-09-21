@@ -439,6 +439,24 @@ def test_the_scheduled_task_installer_does_not_carry_its_own_guess():
     assert _re.search(r"\$Out\s*=\s*''", declared), declared
 
 
+def test_the_scheduled_task_reads_a_week_not_a_day_and_not_everything():
+    """James Gray: "it runs for the current day only and won't duplicate runs?"
+
+    `--since 1` is a rolling 24 hours from the moment the task fires, so at 06:30 a scan
+    made at 06:00 the previous morning is already outside it, and a machine off over a
+    weekend loses three days. And no `--since` at all would OCR all 947 on the first night.
+    Seven catches the missed days and costs nothing, because a scan already split is
+    skipped by its ledger without being read: the window is what gets LOOKED AT, not what
+    gets done twice.
+    """
+    import re as _re
+    ps1 = (ROOT / "tools" / "logistics" / "Install-SplitScanTask.ps1").read_text(
+        encoding="utf-8")
+    block = _re.search(r"^param\((.*?)^\)", ps1, _re.S | _re.M).group(1)
+    assert _re.search(r"\$SinceDays\s*=\s*7\b", block), block
+    assert _re.search(r"--since \{0\}' -f \$SinceDays", ps1), "the window must reach the task"
+
+
 # ── the endpoint ────────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
