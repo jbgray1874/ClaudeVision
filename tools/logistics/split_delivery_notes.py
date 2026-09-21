@@ -221,11 +221,21 @@ def split_pdf(pdf_path: Path, out_dir: Path, *, dry_run: bool = False) -> Dict[s
 
     for n, note in enumerate(notes, start=1):
         name = note_filename(note, f"{pdf_path.stem} note {n}")
+        existing = already_filed(out_dir, note.get("number"))
+        if existing is not None:
+            written.append({
+                "file": existing.name, "written": False, "path": str(existing),
+                "number": note.get("number"), "client": note.get("client"),
+                "account": note.get("account"), "pages": [i + 1 for i in note["pages"]],
+                "already": True,
+            })
+            continue
         where = _carve(note["pages"], out_dir / name)
         written.append({
             "file": name, "written": bool(where), "path": str(where or ""),
             "number": note.get("number"), "client": note.get("client"),
             "account": note.get("account"), "pages": [i + 1 for i in note["pages"]],
+            "already": False,
         })
 
     for index in unsorted:
@@ -239,9 +249,39 @@ def split_pdf(pdf_path: Path, out_dir: Path, *, dry_run: bool = False) -> Dict[s
 
 def _ledger(out_dir: Path) -> Dict[str, Any]:
     try:
-        return json.loads((out_dir / LEDGER).read_text(encoding="utf-8"))
+        data = json.loads((out_dir / LEDGER).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def already_filed(out_dir: Path, number: Any) -> Optional[Path]:
+    """The file this note is already in, or None.
+
+    ── THE OUTPUT FOLDER IS THE LEDGER ─────────────────────────────────────────────
+    #
+    James Gray, 21 September 2026: "We can run as often as we want but how do we make sure it
+    doesn't re generate the same individual invoices again over and over?"
+
+    ASKED OF THE FOLDER, NOT OF A RECORD ABOUT THE FOLDER. A note is already done when a file
+    for it is sitting there — which is the same question a person answers by looking, and it
+    cannot drift from what is actually on the share.
+
+    A separate record of "what I have done" can, and every way it goes wrong is silent:
+    somebody deletes a file and it never comes back; somebody restores the folder from backup
+    and everything is filed twice; the record is on a share that was offline at 06:30. The
+    folder is the one thing that cannot be wrong about its own contents.
+
+    Matched on the NUMBER, not the whole filename, so a note re-scanned on a day when the
+    client line reads differently is still recognised as the same note.
+    """
+    number = safe_name(number)
+    if not number:
+        return None
+    for candidate in (out_dir.glob(f"{number}.pdf"), out_dir.glob(f"{number} *.pdf")):
+        for found in candidate:
+            return found
+    return None
 
 
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
@@ -252,18 +292,28 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
     results, skipped = [], []
     for pdf in sorted(source_dir.glob("*.pdf")) + sorted(source_dir.glob("*.PDF")):
         mark = _fingerprint(pdf)
-        if not force and done.get(pdf.name) == mark:
+        record = done.get(pdf.name) or {}
+        # ── SKIPPING IS A SPEED DECISION, AND IT CHECKS ITS OWN WORK ────────────────
+        #
+        # Re-OCRing a forty-page batch that has not changed is minutes of nothing, so a scan
+        # whose fingerprint matches is skipped — but ONLY while every note it produced is
+        # still on the share. Delete one and the next run puts it back, because the claim
+        # "I did this already" is verified against the folder rather than believed.
+        if (not force and isinstance(record, dict) and record.get("mark") == mark
+                and all((out_dir / name).exists() for name in record.get("files") or [])):
             skipped.append(pdf.name)
             continue
         try:
-            results.append(split_pdf(pdf, out_dir, dry_run=dry_run))
+            result = split_pdf(pdf, out_dir, dry_run=dry_run)
+            results.append(result)
         except Exception as exc:                                     # noqa: BLE001
             # ONE BAD SCAN DOES NOT COST THE DAY. A corrupt or password-protected PDF is
             # reported and the rest of the folder is still split.
             results.append({"source": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
             continue
         if not dry_run:
-            done[pdf.name] = mark
+            done[pdf.name] = {"mark": mark,
+                              "files": [n["file"] for n in result["notes"] if n["file"]]}
     if not dry_run:
         (out_dir / LEDGER).write_text(json.dumps(done, indent=1), encoding="utf-8")
     return {"when": datetime.now().isoformat(timespec="seconds"),
@@ -291,6 +341,8 @@ def main() -> int:
         for note in result["notes"]:
             notes += 1
             where = "written" if note["written"] else "already filed"
+            if note.get("already"):
+                where = f"already filed as {note['file']}"
             print(f"  {note['file']}  ({where}, page(s) "
                   f"{', '.join(str(p) for p in note['pages'])} of {result['source']})")
         for page in result["unsorted"]:

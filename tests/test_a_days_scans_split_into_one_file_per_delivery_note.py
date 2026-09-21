@@ -201,3 +201,70 @@ def test_a_filename_cannot_break_windows():
     assert safe_name('Marks & Spencer plc <"/\\|?*>') == "Marks & Spencer plc"
     assert safe_name("Trailing dot.") == "Trailing dot"
     assert safe_name("  spaced  out  ") == "spaced out"
+
+
+# ── running it as often as you like ─────────────────────────────────────────────────
+
+def test_a_note_already_on_the_share_is_recognised_by_its_number(tmp_path):
+    """James Gray, 21 September 2026: "We can run as often as we want but how do we make sure
+    it doesn't re generate the same individual invoices again over and over?"
+
+    ASKED OF THE FOLDER, NOT OF A RECORD ABOUT THE FOLDER. A note is already done when a file
+    for it is sitting there — the same question a person answers by looking — so the answer
+    cannot drift from what is actually on the share.
+
+    Matched on the NUMBER, so a note re-scanned on a day when the client line reads
+    differently is still recognised as the same note rather than filed twice.
+    """
+    from split_delivery_notes import already_filed
+    (tmp_path / "30022230 Tesco.pdf").write_bytes(b"%PDF-1.4\n")
+    assert already_filed(tmp_path, "30022230") is not None
+    # Same note, a different reading of the client line.
+    assert already_filed(tmp_path, "30022230") is not None
+    assert already_filed(tmp_path, "30022231") is None
+    assert already_filed(tmp_path, None) is None
+
+
+def test_a_number_is_not_matched_by_a_longer_one(tmp_path):
+    """3002223 must not be answered by 30022230's file."""
+    from split_delivery_notes import already_filed
+    (tmp_path / "30022230 Tesco.pdf").write_bytes(b"%PDF-1.4\n")
+    assert already_filed(tmp_path, "3002223") is None
+
+
+def test_a_deleted_note_comes_back_and_the_rest_do_not_move(tmp_path, monkeypatch):
+    """THE FAILURE A SEPARATE RECORD HAS AND THE FOLDER DOES NOT.
+
+    Skipping a scan that has not changed is a speed decision — re-OCRing forty unchanged
+    pages is minutes of nothing — but a ledger that is simply believed means a note somebody
+    deleted never comes back. The skip verifies its own claim against the share.
+    """
+    import split_delivery_notes as S
+
+    calls = []
+
+    def _fake_split(pdf, out_dir, dry_run=False):
+        calls.append(pdf.name)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{pdf.stem}-note.pdf"
+        (out_dir / name).write_bytes(b"%PDF-1.4\n")
+        return {"source": pdf.name, "pages": 1, "unsorted": [],
+                "notes": [{"file": name, "written": True, "path": str(out_dir / name),
+                           "number": "30022230", "client": "Tesco", "account": "TES01",
+                           "pages": [1], "already": False}]}
+
+    monkeypatch.setattr(S, "split_pdf", _fake_split)
+    source, out = tmp_path / "in", tmp_path / "out"
+    source.mkdir()
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+
+    S.run(source, out)
+    assert calls == ["scan.pdf"]
+
+    S.run(source, out)
+    assert calls == ["scan.pdf"], "an unchanged scan was read again"
+
+    (out / "scan-note.pdf").unlink()
+    S.run(source, out)
+    assert calls == ["scan.pdf", "scan.pdf"], "a deleted note did not come back"
+    assert (out / "scan-note.pdf").exists()
