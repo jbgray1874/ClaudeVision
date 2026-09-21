@@ -227,6 +227,39 @@ def test_tesseract_is_found_where_its_installer_actually_puts_it(tmp_path, monke
     assert S.find_tesseract() == str(exe)
 
 
+def test_ocr_output_is_read_as_utf8_whatever_the_machines_codepage(monkeypatch, tmp_path):
+    """THREE REAL DELIVERY NOTES WENT TO _Unsorted ON THE FIRST WORKING RUN.
+
+    Tesseract writes UTF-8. `subprocess.run(text=True)` decodes in the locale codepage,
+    which on the logistics machine is cp1252 — and cp1252 has no character at 0x9d, the
+    last byte of a curly quote. The reader thread died with a traceback, the page's text was
+    lost, and a page with no text is not a delivery note.
+
+    This fakes what Windows does: bytes decoded strictly in cp1252 unless an encoding is
+    named. The text must come back whole.
+    """
+    import split_delivery_notes as S
+
+    raw = 'Delivery Note N” 30022351\n'.encode("utf-8")   # …”… carries 0x9d
+
+    class _Done:
+        def __init__(self, text):
+            self.stdout, self.stderr, self.returncode = text, "", 0
+
+    def _windows_run(cmd, **kw):
+        enc = kw.get("encoding")
+        if enc is None:
+            # What the locale does: strict cp1252, which raises on 0x9d.
+            return _Done(raw.decode("cp1252"))
+        return _Done(raw.decode(enc, kw.get("errors", "strict")))
+
+    monkeypatch.setattr(S, "find_tesseract", lambda explicit=None: "tesseract")
+    monkeypatch.setattr(S.subprocess, "run", _windows_run)
+    text = S._tesseract(str(tmp_path / "values.png"))
+    assert "30022351" in text
+    assert "”" in text, "the curly quote must survive, not kill the read"
+
+
 def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
     """THE FAILURE THIS REPLACES. `source.glob("*.pdf")` returns nothing when the folder
     cannot be enumerated, nothing when the scans are one level down, and nothing when the
