@@ -157,7 +157,13 @@ def _tesseract(image_path: str, *, psm: str = "6", whitelist: str = "") -> str:
     if whitelist:
         cmd += ["-c", f"tessedit_char_whitelist={whitelist}"]
     try:
-        done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        # TESSERACT WRITES UTF-8; `text=True` ALONE DECODES IN THE LOCALE CODEPAGE. On the
+        # logistics machine that is cp1252, which has no character at 0x9d — the last byte
+        # of a curly quote — so the reader thread died with a traceback, the page's text was
+        # lost, and three real delivery notes were filed as "not a delivery note". Named
+        # encoding, and a byte it still cannot place becomes U+FFFD rather than nothing.
+        done = subprocess.run(cmd, capture_output=True, encoding="utf-8",
+                              errors="replace", timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
         raise NoOCR(f"tesseract could not be run ({exe}): {exc}") from exc
     return done.stdout or ""
