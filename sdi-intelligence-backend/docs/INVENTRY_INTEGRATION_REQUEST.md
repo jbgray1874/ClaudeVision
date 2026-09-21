@@ -282,3 +282,109 @@ InVentry: we already know who BrightHR says is on site, so comparing that
 against InVentry's register and reporting the difference gives H&S most of the
 safety value. Worth putting that to Simon as a decision rather than continuing
 to chase the vendor.
+
+---
+
+## Round 2 reply — Charlotte Fastenbauer (Product Coordinator), 16 Sep 2026
+
+Sent the Partner API documentation: *Customer API Overview*, *Partner API field
+information*, and *Linking your system to your partner*. This answered the
+integration question — see `docs/INVENTRY_API_NOTES.md`. The API supports
+writes, and staff sign-in/out through it is an established pattern.
+
+Client and push built against it (`hr_inventry_api.py`, `hr_onsite_push.py`).
+
+## Round 3 — to send
+
+The Postman collection was mentioned but did not arrive, and it holds the
+endpoint paths — the only thing now blocking a live run.
+
+> Hi Charlotte,
+>
+> Thank you for sending these over — they answered the main question. We've now
+> built the integration against the Partner API: it reads the personnel list,
+> matches our staff on the `PersonID` field, and posts sign-in events for whoever
+> our HR system shows as currently on site. It's tested against a local stub and
+> running in dry-run mode, so nothing is being written to InVentry yet.
+>
+> A few things before we can point it at our live system.
+>
+> **The one blocker:**
+>
+> 1. **The Postman collection.** Your email mentions it, but only the three PDFs
+>    came through — and the endpoint URLs are in the collection rather than the
+>    documents. Could you re-send it? A list of the request URLs would do just as
+>    well if that's easier.
+>
+> **To connect:**
+>
+> 2. **The partner secret.** The documentation says this is issued by InVentry
+>    Ltd. I don't believe we've had one — could you issue ours, or let me know if
+>    it came separately?
+>
+> 3. **Our API host.** Which machine serves the API for our site — the main
+>    reception touchscreen, or do we have the dedicated VM setup? And which
+>    scheme and port should we use?
+>
+> 4. **The Partner dropdown.** When creating the API key in the console, your
+>    guide notes the correct option should be confirmed with a manager. For an
+>    integration we've written ourselves, is **"End User Developer"** the right
+>    choice?
+>
+> 5. **The certificate.** As the API certificate is self-signed, we'd rather
+>    trust it explicitly than disable TLS verification. Can we export it from the
+>    InVentry machine, or can you supply it?
+>
+> 6. **Sandbox credentials.** You mention a sandbox at 162.13.119.241 with keys
+>    issued by InVentry. Could we have a set? We'd much rather prove this against
+>    the sandbox with dummy data than test on our live reception system.
+>
+> **On staff presence specifically:**
+>
+> 7. **The correct calls for signing a member of staff in and out.** The ANPR
+>    section lists exactly this capability. Are those the same endpoints we should
+>    use, and does anything need enabling on our account — a console toggle or a
+>    particular licence — as the ANPR endpoints appear to?
+>
+> 8. **Is there a field recording the source of a sign-in?** This one matters to
+>    us. We can't currently tell a sign-in we made from one made at the reception
+>    touchscreen, so we've deliberately disabled automatic sign-*out* — we don't
+>    want to sign someone out of the fire roll who signed themselves in and is
+>    still in the building. If any field distinguishes the two, we can enable
+>    sign-out safely.
+>
+> 9. **Matching on `PersonID`.** Can we query or filter personnel by `PersonID`,
+>    or should we retrieve the full list and match locally? And is `PersonID`
+>    expected to be unique per person? We plan to store our HR system's employee
+>    ID there (a 36-character GUID, so within the 40-character limit).
+>
+> 10. **POST volume.** We understand POST calls are exempt from the 20-per-minute
+>     limit. To sanity-check: we have around 190 staff, and a shift change could
+>     mean a burst of 50–100 sign-in posts within a minute or two. Is that
+>     comfortable for the system, or would you rather we paced it?
+>
+> 11. **Version.** Which version of InVentry are we running, and is there a
+>     minimum version or licence requirement for the Partner API?
+>
+> Happy to jump on a call if that's quicker than working through this by email.
+>
+> Kind regards,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+> james.gray@wearesdi.com · 07585 816501
+
+### Why each ask matters
+
+| Ask | Unblocks |
+|---|---|
+| 1. Postman collection | `INVENTRY_PATH_*` — nothing can run without the real paths |
+| 2. Partner secret | `INVENTRY_PARTNER_SECRET`; one of two required headers |
+| 3. API host | `INVENTRY_API_BASE_URL` |
+| 4. Partner dropdown | A key scoped to the wrong partner may be refused or mislogged |
+| 5. Certificate | `INVENTRY_API_CA_BUNDLE`, so TLS verification stays on |
+| 6. Sandbox keys | Proving the integration without touching the live reception system |
+| 7. Staff sign-in calls + licence | Confirms the endpoints and whether anything needs enabling |
+| 8. Source-of-sign-in field | Would let `INVENTRY_ENABLE_SIGN_OUT` be turned on safely |
+| 9. PersonID query/uniqueness | Whether we can filter server-side or must pull all personnel each run |
+| 10. POST burst | `SYNC_INTERVAL_MINUTES` and whether to pace writes |
+| 11. Version/licence | Whether anything here is gated |
