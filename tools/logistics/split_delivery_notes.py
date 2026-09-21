@@ -42,6 +42,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -70,7 +71,8 @@ LEDGER = ".splitscan-done.json"
 #
 # The same share by its UNC name is reachable from all of them, and from Explorer, and means
 # the same thing in a config file on any machine.
-DEFAULT_OUT = r"\\sdi-dc01\shareddata$\IT\DeliveryNotesOutput"
+DEFAULT_SOURCE = r"\\sdi-dc01\shareddata$\Logistics\Scans"
+DEFAULT_OUT = r"\\sdi-dc01\shareddata$\Logistics\Scans\SplitScan"
 
 
 # ── OCR ─────────────────────────────────────────────────────────────────────────────
@@ -296,13 +298,50 @@ def already_filed(out_dir: Path, number: Any) -> Optional[Path]:
     return None
 
 
+def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0) -> List[Path]:
+    """The PDFs in the scan folder that are this run's business.
+
+    ── THE OUTPUT FOLDER LIVES INSIDE THE INPUT FOLDER ──────────────────────────────
+
+    K:\\Logistics\\Scans\\SplitScan is a child of K:\\Logistics\\Scans, so everything this
+    job writes lands inside the folder it reads. Non-recursive globbing happens not to see it
+    today, which puts one line of code between the job and eating its own output for ever —
+    every note re-split into a note of one page, named after itself, on every run. It is
+    excluded by name as well, so the guard survives somebody reaching for `rglob`.
+
+    ── AND "*.pdf" AND "*.PDF" ARE THE SAME FILES ON WINDOWS ────────────────────────
+
+    Globbing both and adding the lists is correct on Linux, where this was written and
+    tested, and DOUBLES every file on the machine it actually runs on, where the filesystem
+    is case-insensitive. Every scan read, OCR'd and split twice. Resolved paths, in a set.
+    """
+    seen, out = set(), []
+    resolved_out = out_dir.resolve()
+    cutoff = time.time() - (since_days * 86400) if since_days and since_days > 0 else 0.0
+    for pattern in ("*.pdf", "*.PDF"):
+        for pdf in source_dir.glob(pattern):
+            key = str(pdf.resolve()).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if pdf.parent.resolve() == resolved_out:
+                continue
+            try:
+                if cutoff and pdf.stat().st_mtime < cutoff:
+                    continue
+            except OSError:
+                continue
+            out.append(pdf)
+    return sorted(out, key=lambda p: p.name.lower())
+
+
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
-        force: bool = False) -> Dict[str, Any]:
+        force: bool = False, since_days: int = 0) -> Dict[str, Any]:
     """One day's run over a folder of scans."""
     out_dir.mkdir(parents=True, exist_ok=True)
     done = _ledger(out_dir)
     results, skipped = [], []
-    for pdf in sorted(source_dir.glob("*.pdf")) + sorted(source_dir.glob("*.PDF")):
+    for pdf in scans_to_read(source_dir, out_dir, since_days=since_days):
         mark = _fingerprint(pdf)
         record = done.get(pdf.name) or {}
         # ── SKIPPING IS A SPEED DECISION, AND IT CHECKS ITS OWN WORK ────────────────
@@ -335,7 +374,12 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--source", required=True, help="Folder the scanner writes into")
+    ap.add_argument("--source", default=DEFAULT_SOURCE,
+                    help="Folder the scanner writes into")
+    ap.add_argument("--since", type=int, default=0, metavar="DAYS",
+                    help="Only scans modified in the last DAYS days. The scan folder holds "
+                         "months of them, so the first run is the long one; after it, a "
+                         "day's work is a handful of files.")
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="Folder to write one PDF per delivery note into")
     ap.add_argument("--dry-run", action="store_true",
@@ -344,7 +388,8 @@ def main() -> int:
                     help="Re-split scans this has already done")
     a = ap.parse_args()
 
-    report = run(Path(a.source), Path(a.out), dry_run=a.dry_run, force=a.force)
+    report = run(Path(a.source), Path(a.out), dry_run=a.dry_run, force=a.force,
+                 since_days=a.since)
     notes = unsorted = 0
     for result in report["results"]:
         if result.get("error"):

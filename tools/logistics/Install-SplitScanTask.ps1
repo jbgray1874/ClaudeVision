@@ -12,11 +12,14 @@
     change the time or the folders; it replaces the task rather than adding a second one.
 
 .PARAMETER Source
-    The folder the scanner writes into. Required, because guessing it is how a job runs every
-    night against an empty directory and nobody notices for a fortnight.
+    The folder the scanner writes into. Defaults to \\sdi-dc01\shareddata$\Logistics\Scans.
+
+    NOTE the output folder sits INSIDE this one. The splitter excludes it by name, so the job
+    cannot read back what it just wrote -- but if you point -Source somewhere else, keep -Out
+    inside it or beside it, not the other way round.
 
 .PARAMETER Out
-    Where the split notes go. Defaults to \\sdi-dc01\shareddata$\IT\DeliveryNotesOutput.
+    Where the split notes go. Defaults to \\sdi-dc01\shareddata$\Logistics\Scans\SplitScan.
 
     A UNC PATH, NOT K:. A mapped drive belongs to a logged-on session, and a scheduled task
     does not have one -- so K:\IT\... is not there when this runs, the job creates a folder
@@ -33,15 +36,15 @@
     reading this there.
 
 .EXAMPLE
-    .\Install-SplitScanTask.ps1 -Source "K:\Logistics\Scans\Inbox"
+    .\Install-SplitScanTask.ps1
 
 .EXAMPLE
-    .\Install-SplitScanTask.ps1 -Source "K:\Logistics\Scans\Inbox" -At 05:45 -WhatIf
+    .\Install-SplitScanTask.ps1 -At 05:45 -WhatIf
 #>
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory = $true)][string]$Source,
-    [string]$Out = '\\sdi-dc01\shareddata$\IT\DeliveryNotesOutput',
+    [string]$Source = '\\sdi-dc01\shareddata$\Logistics\Scans',
+    [string]$Out = '\\sdi-dc01\shareddata$\Logistics\Scans\SplitScan',
     [string]$At = '06:30',
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
     [string]$TaskName = 'SDI Split Delivery Note Scans'

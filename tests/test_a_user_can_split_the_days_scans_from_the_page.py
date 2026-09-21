@@ -35,8 +35,69 @@ def test_the_default_output_is_a_unc_path_not_a_drive_letter():
     Nobody looks in C:\\Windows\\System32\\K: for a delivery note."""
     from split_delivery_notes import DEFAULT_OUT
     assert DEFAULT_OUT.startswith("\\\\"), DEFAULT_OUT
-    assert "sdi-dc01" in DEFAULT_OUT and "DeliveryNotesOutput" in DEFAULT_OUT
+    assert "sdi-dc01" in DEFAULT_OUT and "SplitScan" in DEFAULT_OUT
     assert ":" not in DEFAULT_OUT.replace("shareddata$", ""), "a drive letter crept back in"
+
+
+def test_the_default_source_is_a_unc_path_too():
+    """The input is a mapped drive on the screenshots as well, and a task cannot see it."""
+    from split_delivery_notes import DEFAULT_SOURCE
+    assert DEFAULT_SOURCE.startswith("\\\\"), DEFAULT_SOURCE
+    assert DEFAULT_SOURCE.endswith("Logistics\\Scans"), DEFAULT_SOURCE
+
+
+def test_the_output_folder_is_inside_the_input_folder_and_is_not_read_back(tmp_path):
+    """K:\\Logistics\\Scans\\SplitScan is a CHILD of K:\\Logistics\\Scans.
+
+    So everything this job writes lands in the folder it reads. Non-recursive globbing
+    happens not to see it, which puts one line of code between the job and eating its own
+    output for ever — every note re-split into a one-page note named after itself, on every
+    run, for as long as nobody looks.
+    """
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    (source / "scan21092026.pdf").write_bytes(b"%PDF-1.4\n")
+    (out / "30022230 Tesco.pdf").write_bytes(b"%PDF-1.4\n")
+    found = [p.name for p in scans_to_read(source, out)]
+    assert found == ["scan21092026.pdf"], found
+
+
+def test_a_case_insensitive_filesystem_does_not_double_every_scan(tmp_path, monkeypatch):
+    """`*.pdf` AND `*.PDF` ARE THE SAME FILES ON WINDOWS.
+
+    Globbing both and adding the lists is right on the Linux box this was written on and
+    doubles every file on the machine it runs on — each scan read, OCR'd and split twice.
+    The glob is faked here because this filesystem is case-sensitive and cannot show it.
+    """
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    one = source / "scan21092026.pdf"
+    one.write_bytes(b"%PDF-1.4\n")
+    # What Windows returns: the same file for both patterns.
+    monkeypatch.setattr(type(source), "glob", lambda self, pattern: iter([one]))
+    assert [p.name for p in scans_to_read(source, out)] == ["scan21092026.pdf"]
+
+
+def test_only_recent_scans_can_be_asked_for(tmp_path):
+    """The folder holds 948 items going back months, so the first run is the long one."""
+    import os
+    import time
+
+    from split_delivery_notes import scans_to_read
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    fresh, stale = source / "today.pdf", source / "august.pdf"
+    for f in (fresh, stale):
+        f.write_bytes(b"%PDF-1.4\n")
+    old = time.time() - (40 * 86400)
+    os.utime(stale, (old, old))
+    assert [p.name for p in scans_to_read(source, out, since_days=7)] == ["today.pdf"]
+    assert len(scans_to_read(source, out)) == 2, "no --since must still take everything"
 
 
 def test_the_scheduled_task_installer_defaults_to_the_same_place():
