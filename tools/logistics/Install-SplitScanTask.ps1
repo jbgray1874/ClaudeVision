@@ -16,7 +16,12 @@
     night against an empty directory and nobody notices for a fortnight.
 
 .PARAMETER Out
-    Where the split notes go. Defaults to K:\Logistics\Scans\SplitScan.
+    Where the split notes go. Defaults to \\sdi-dc01\shareddata$\IT\DeliveryNotesOutput.
+
+    A UNC PATH, NOT K:. A mapped drive belongs to a logged-on session, and a scheduled task
+    does not have one -- so K:\IT\... is not there when this runs, the job creates a folder
+    of that name on the local disk, writes the day's notes into it and exits 0. Give both
+    folders as UNC paths or this will appear to work and file nothing anybody can find.
 
 .PARAMETER At
     Time of day, 24h. Defaults to 06:30 — before the office opens, after the night's scanning.
@@ -36,7 +41,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory = $true)][string]$Source,
-    [string]$Out = 'K:\Logistics\Scans\SplitScan',
+    [string]$Out = '\\sdi-dc01\shareddata$\IT\DeliveryNotesOutput',
     [string]$At = '06:30',
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
     [string]$TaskName = 'SDI Split Delivery Note Scans'

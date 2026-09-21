@@ -60,6 +60,18 @@ REGION_SCALE = 2
 UNSORTED = "_Unsorted"
 LEDGER = ".splitscan-done.json"
 
+# ── A UNC PATH, NOT A DRIVE LETTER ──────────────────────────────────────────────────
+#
+# K: is a MAPPED DRIVE, and a mapping belongs to a logged-on session. A scheduled task, a
+# Windows service and the SDI Intelligence backend all run without one, so "K:\IT\..." is
+# simply not there for them — the job runs, finds no folder, creates one on the local disk
+# and writes the day's delivery notes somewhere nobody will ever look. It exits 0 while doing
+# it, which is the whole problem.
+#
+# The same share by its UNC name is reachable from all of them, and from Explorer, and means
+# the same thing in a config file on any machine.
+DEFAULT_OUT = r"\\sdi-dc01\shareddata$\IT\DeliveryNotesOutput"
+
 
 # ── OCR ─────────────────────────────────────────────────────────────────────────────
 
@@ -324,7 +336,7 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--source", required=True, help="Folder the scanner writes into")
-    ap.add_argument("--out", default=r"K:\Logistics\Scans\SplitScan",
+    ap.add_argument("--out", default=DEFAULT_OUT,
                     help="Folder to write one PDF per delivery note into")
     ap.add_argument("--dry-run", action="store_true",
                     help="Read and report, write nothing")
