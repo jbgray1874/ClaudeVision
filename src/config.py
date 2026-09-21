@@ -1484,6 +1484,38 @@ MANUAL_OVERRIDE_QUOTE_DIR = os.getenv(
     r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\AISheets")
 MANUAL_OVERRIDE_XLSX_DIR = os.getenv("SDI_OVERRIDE_XLSX_DIR", MANUAL_OVERRIDE_QUOTE_DIR)
 
+# ── THE SCANNED DELIVERY NOTES ──────────────────────────────────────────────────────
+#
+# tools/logistics/split_delivery_notes.py splits the day's scans into one PDF per note, and
+# both folders are SETTINGS with NO DEFAULT. That is deliberate.
+#
+# A GUESSED DEFAULT IS WORSE THAN NO DEFAULT. The first cut carried
+# \\sdi-dc01\shareddata$\Logistics\Scans, reasoned from two true facts -- the estimating
+# share IS \\sdi-dc01\shareddata$ (see above), and the drive in Explorer reads
+# K:\Logistics\Scans. The conclusion was still wrong, and the job then CREATED the folder
+# tree rather than refusing it. After that the path existed, Test-Path answered True, and
+# three rounds of diagnosis went looking at Path.glob, at enumeration and at permissions,
+# because the one thing nobody suspects is a folder the code made for itself.
+#
+# Unset means the splitter refuses and names this setting, which is the honest answer to
+# "where are the scans" when nobody has said. Put them in .env:
+#
+#     SDI_SCAN_SOURCE_DIR=\\server\share\Logistics\Scans
+#     SDI_SCAN_SPLIT_DIR=\\server\share\Logistics\Scans\SplitScan
+#
+# UNC, NEVER A DRIVE LETTER. A mapped drive belongs to a logged-on session; the scheduled
+# task and the backend service each run without one, and an elevated shell is a different
+# session again -- which is why `K:` is in Explorer and absent from an Administrator prompt.
+SCAN_SOURCE_DIR = os.getenv("SDI_SCAN_SOURCE_DIR", "").strip()
+SCAN_SPLIT_DIR = os.getenv("SDI_SCAN_SPLIT_DIR", "").strip()
+
+
+def dot_env_path() -> str:
+    """The .env this process actually loaded — the repo root is tried before src/, and only
+    the first one found is read, so an error that names the wrong one sends somebody to edit
+    a file nothing reads."""
+    return str(_DOT_ENV_PATH) if _DOT_ENV_PATH else str(BASE_DIR / ".env")
+
 # palletising.py counts an order into cartons and pallets from the blanks it already measured,
 # so a shipment is described as "~3 cartons on 1 pallet" and can be priced against a carton /
 # pallet catalogue. These are the limits it counts against; the module holds safe defaults, so

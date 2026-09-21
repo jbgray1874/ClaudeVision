@@ -61,18 +61,47 @@ REGION_SCALE = 2
 UNSORTED = "_Unsorted"
 LEDGER = ".splitscan-done.json"
 
-# ── A UNC PATH, NOT A DRIVE LETTER ──────────────────────────────────────────────────
+# ── THE FOLDERS COME FROM CONFIG, AND THERE IS NO GUESS BEHIND THEM ─────────────────
 #
-# K: is a MAPPED DRIVE, and a mapping belongs to a logged-on session. A scheduled task, a
-# Windows service and the SDI Intelligence backend all run without one, so "K:\IT\..." is
-# simply not there for them — the job runs, finds no folder, creates one on the local disk
-# and writes the day's delivery notes somewhere nobody will ever look. It exits 0 while doing
-# it, which is the whole problem.
+# James Gray: "config needs to be in config files. not json files lying around and being
+# copied manually around." So both folders are `SDI_SCAN_SOURCE_DIR` / `SDI_SCAN_SPLIT_DIR`
+# in the project's one .env, read through the project's one config module.
 #
-# The same share by its UNC name is reachable from all of them, and from Explorer, and means
-# the same thing in a config file on any machine.
-DEFAULT_SOURCE = r"\\sdi-dc01\shareddata$\Logistics\Scans"
-DEFAULT_OUT = r"\\sdi-dc01\shareddata$\Logistics\Scans\SplitScan"
+# UNSET IS AN ANSWER AND A GUESS IS NOT. This file used to carry
+# \\sdi-dc01\shareddata$\Logistics\Scans as a default, reasoned from two true facts: the
+# estimating share IS \\sdi-dc01\shareddata$, and the drive in Explorer reads
+# K:\Logistics\Scans. The conclusion was wrong, and the job CREATED that tree rather than
+# refusing it — after which the folder existed, `Test-Path` answered True, and the diagnosis
+# went to `Path.glob`, to enumeration and to permissions, because the last thing anybody
+# suspects is a folder the code made for itself.
+#
+# AND A UNC PATH, NOT A DRIVE LETTER. K: is a mapping, and a mapping belongs to a logged-on
+# session. A scheduled task, a Windows service and the backend each run without one — and an
+# elevated shell is a different session again, which is why K: is in Explorer and absent from
+# an Administrator prompt. Under a task, "K:\..." is not there at all: the job would create a
+# folder of that name on the local disk, file the day into it, and exit 0.
+def _configured(name: str) -> str:
+    """One setting, read through the project's config so .env is the only place it lives."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+        import config                                              # noqa: WPS433
+        return str(getattr(config, name, "") or "").strip()
+    except Exception:                                              # noqa: BLE001
+        # Runnable with nothing else installed: the shell still answers.
+        return os.getenv("SDI_" + name, "").strip()
+
+
+DEFAULT_SOURCE = _configured("SCAN_SOURCE_DIR")
+DEFAULT_OUT = _configured("SCAN_SPLIT_DIR")
+
+
+def _where_settings_live() -> str:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+        import config                                              # noqa: WPS433
+        return config.dot_env_path()
+    except Exception:                                              # noqa: BLE001
+        return str(Path(__file__).resolve().parents[2] / ".env")
 
 
 # ── OCR ─────────────────────────────────────────────────────────────────────────────
@@ -534,6 +563,24 @@ def main() -> int:
     ap.add_argument("--recurse", action="store_true",
                     help="Also read scans in subfolders of the source folder")
     a = ap.parse_args()
+
+    # ── NOBODY HAS SAID WHERE THE SCANS ARE ─────────────────────────────────────────
+    #
+    # This is what a guessed default used to hide. "I do not know" is a better answer than
+    # a plausible folder, because the plausible folder gets created and then believed.
+    for flag, setting, value in (("--source", "SDI_SCAN_SOURCE_DIR", a.source),
+                                 ("--out", "SDI_SCAN_SPLIT_DIR", a.out)):
+        if value:
+            continue
+        print(f"  !! no {flag} folder, and {setting} is not set.")
+        print(f"     Put it in {_where_settings_live()} as")
+        print(f"       {setting}=\\\\server\\share\\Logistics\\Scans"
+              + ("\\SplitScan" if flag == "--out" else ""))
+        print("     as a UNC path, not a drive letter: a scheduled task and the backend")
+        print("     each run without a logon session, so a mapped drive is not there for")
+        print("     them — and an elevated shell cannot see one either.")
+        _how_to_find_the_share(Path("K:"))
+        return 2
 
     source, out = Path(a.source), Path(a.out)
 

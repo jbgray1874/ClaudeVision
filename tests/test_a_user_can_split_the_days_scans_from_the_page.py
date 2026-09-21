@@ -17,6 +17,7 @@ folder of that name on the local disk, writes the day's delivery notes into it, 
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -29,21 +30,72 @@ sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
 
 # ── the path the whole thing writes to ──────────────────────────────────────────────
 
-def test_the_default_output_is_a_unc_path_not_a_drive_letter():
-    """THE SILENT FAILURE THIS PREVENTS. K: resolves to nothing under a service or a task,
-    the job invents a local folder of that name, files the day into it and reports success.
-    Nobody looks in C:\\Windows\\System32\\K: for a delivery note."""
-    from split_delivery_notes import DEFAULT_OUT
-    assert DEFAULT_OUT.startswith("\\\\"), DEFAULT_OUT
-    assert "sdi-dc01" in DEFAULT_OUT and "SplitScan" in DEFAULT_OUT
-    assert ":" not in DEFAULT_OUT.replace("shareddata$", ""), "a drive letter crept back in"
+def test_the_folders_are_a_setting_and_no_folder_is_guessed_in_source():
+    """A GUESSED DEFAULT IS WORSE THAN NO DEFAULT.
+
+    This file carried `\\\\sdi-dc01\\shareddata$\\Logistics\\Scans`, reasoned from two true
+    facts: the estimating share IS `\\\\sdi-dc01\\shareddata$`, and the drive in Explorer
+    reads `K:\\Logistics\\Scans`. The conclusion was wrong — and the job CREATED that tree
+    rather than refusing it, after which the folder existed, `Test-Path` answered True, and
+    the diagnosis went to `Path.glob`, to enumeration and to permissions, because the last
+    thing anybody suspects is a folder the code made for itself.
+
+    So: no server name in this source file at all. The folders are settings.
+    """
+    import importlib
+
+    import split_delivery_notes as S
+    # With nothing configured, there is no folder — not a plausible one.
+    for name in ("SDI_SCAN_SOURCE_DIR", "SDI_SCAN_SPLIT_DIR"):
+        os.environ.pop(name, None)
+    sys.path.insert(0, str(ROOT / "src"))
+    import config
+    importlib.reload(config)
+    assert importlib.reload(S).DEFAULT_SOURCE == ""
+    assert S.DEFAULT_OUT == ""
+
+    # And with the setting made, the default IS the setting — read, not guessed.
+    os.environ["SDI_SCAN_SOURCE_DIR"] = r"\\a-server\a-share\Logistics\Scans"
+    os.environ["SDI_SCAN_SPLIT_DIR"] = r"\\a-server\a-share\Logistics\Scans\SplitScan"
+    try:
+        importlib.reload(config)
+        assert importlib.reload(S).DEFAULT_SOURCE == r"\\a-server\a-share\Logistics\Scans"
+        assert S.DEFAULT_OUT.endswith("SplitScan")
+    finally:
+        for name in ("SDI_SCAN_SOURCE_DIR", "SDI_SCAN_SPLIT_DIR"):
+            os.environ.pop(name, None)
+        importlib.reload(config)
+        importlib.reload(S)
 
 
-def test_the_default_source_is_a_unc_path_too():
-    """The input is a mapped drive on the screenshots as well, and a task cannot see it."""
-    from split_delivery_notes import DEFAULT_SOURCE
-    assert DEFAULT_SOURCE.startswith("\\\\"), DEFAULT_SOURCE
-    assert DEFAULT_SOURCE.endswith("Logistics\\Scans"), DEFAULT_SOURCE
+def test_an_unset_folder_refuses_and_names_the_setting(tmp_path, capsys, monkeypatch):
+    """"I do not know where the scans are" is a better answer than a plausible folder,
+    because the plausible folder gets created and then believed."""
+    import split_delivery_notes as S
+
+    monkeypatch.setattr(S, "DEFAULT_SOURCE", "")
+    monkeypatch.setattr(S, "DEFAULT_OUT", "")
+    sys.argv = ["split", "--dry-run"]
+    assert S.main() == 2
+    said = capsys.readouterr().out
+    assert "SDI_SCAN_SOURCE_DIR" in said
+    assert ".env" in said
+    assert "not a drive letter" in said
+
+
+def test_the_setting_is_read_through_the_projects_one_config(monkeypatch):
+    """James Gray: "config needs to be in config files. not json files lying around and
+    being copied manually around." One .env, read by the module that reads every other
+    setting — not a second loader with its own search order."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import config
+    assert hasattr(config, "SCAN_SOURCE_DIR")
+    assert hasattr(config, "SCAN_SPLIT_DIR")
+    assert config.dot_env_path().endswith(".env")
+    # No default: unset must stay unset rather than become a share nobody named.
+    monkeypatch.delenv("SDI_SCAN_SOURCE_DIR", raising=False)
+    import importlib
+    assert importlib.reload(config).SCAN_SOURCE_DIR == ""
 
 
 def test_the_output_folder_is_inside_the_input_folder_and_is_not_read_back(tmp_path):
@@ -173,12 +225,19 @@ def test_only_recent_scans_can_be_asked_for(tmp_path):
     assert len(scans_to_read(source, out)) == 2, "no --since must still take everything"
 
 
-def test_the_scheduled_task_installer_defaults_to_the_same_place():
-    """Two defaults that disagree is how the button and the nightly run file to two folders."""
-    from split_delivery_notes import DEFAULT_OUT
+def test_the_scheduled_task_installer_does_not_carry_its_own_guess():
+    """Two defaults that disagree is how the button and the nightly run file to two folders,
+    and a guess repeated in a second file is a guess that outlives its correction."""
+    import re as _re
     ps1 = (ROOT / "tools" / "logistics" / "Install-SplitScanTask.ps1").read_text(
         encoding="utf-8")
-    assert DEFAULT_OUT in ps1
+    block = _re.search(r"^param\((.*?)^\)", ps1, _re.S | _re.M)
+    assert block, "the installer has no param block"
+    declared = block.group(1)
+    assert not _re.search(r"=\s*['\"]\\\\", declared), (
+        "a folder is hard-coded in the installer's parameters: " + declared)
+    assert _re.search(r"\$Source\s*=\s*''", declared), declared
+    assert _re.search(r"\$Out\s*=\s*''", declared), declared
 
 
 # ── the endpoint ────────────────────────────────────────────────────────────────────
