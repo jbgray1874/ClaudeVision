@@ -314,6 +314,36 @@ def test_the_front_door_lists_the_folder_once(tmp_path, monkeypatch, capsys):
     assert listings["n"] == 1, f"the folder was listed {listings['n']} times"
 
 
+def test_each_scan_is_announced_before_it_is_read(tmp_path, monkeypatch, capsys):
+    """OCR is a minute or two for a day's post and silent while it works. A run that prints
+    its count line and then nothing for ninety seconds is indistinguishable from one that
+    has hung — which is what the person watching it concluded, twice."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    for name in ("a.pdf", "b.pdf"):
+        (source / name).write_bytes(b"%PDF-1.4\n")
+    order = []
+
+    def _slow(pdf, out_dir, **kw):
+        order.append(("read", pdf.name))
+        return {"source": pdf.name, "pages": 1, "notes": [], "unsorted": []}
+
+    monkeypatch.setattr(S, "split_pdf", _slow)
+    S.run(source, out, dry_run=True,
+          progress=lambda text: order.append(("said", text)))
+    assert order == [("said", "  reading a.pdf (1 of 2) ..."), ("read", "a.pdf"),
+                     ("said", "  reading b.pdf (2 of 2) ..."), ("read", "b.pdf")]
+
+    # And the front door wires it up: the line reaches the console.
+    monkeypatch.setattr(S, "find_tesseract", lambda explicit=None: "tesseract")
+    sys.argv = ["split", "--source", str(source), "--out", str(out), "--dry-run"]
+    S.main()
+    assert "reading a.pdf (1 of 2)" in capsys.readouterr().out
+
+
 def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
     """THE FAILURE THIS REPLACES. `source.glob("*.pdf")` returns nothing when the folder
     cannot be enumerated, nothing when the scans are one level down, and nothing when the

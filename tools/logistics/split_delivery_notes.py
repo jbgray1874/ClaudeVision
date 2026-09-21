@@ -553,19 +553,24 @@ def prepare_out(out_dir: Path) -> None:
 
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         force: bool = False, since_days: int = 0, recurse: bool = False,
-        pdfs: Optional[List[Path]] = None) -> Dict[str, Any]:
+        pdfs: Optional[List[Path]] = None, progress=None) -> Dict[str, Any]:
     """One day's run over a folder of scans.
 
     `pdfs` is the listing when the caller already has one — the front door lists the folder
     to say what it found, and listing a share of 947 files again to read the same answer is
     the sort of thing that is free on a laptop and minutes on a busy server.
+
+    `progress(text)` is called before each scan is read. OCR is a minute or two for a day's
+    post and silent while it works, and a run that prints its count line and then nothing
+    for ninety seconds is indistinguishable from one that has hung — which is what the
+    person watching it concluded, twice.
     """
     prepare_out(out_dir)
     done = _ledger(out_dir)
     results, skipped = [], []
     if pdfs is None:
         pdfs = scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse)
-    for pdf in pdfs:
+    for n, pdf in enumerate(pdfs, start=1):
         mark = _fingerprint(pdf)
         # Keyed on the path within the scan folder, not the bare name: with --recurse two
         # date folders can each hold a "scan001.pdf" and one would otherwise mask the other.
@@ -582,6 +587,8 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
                 and all((out_dir / name).exists() for name in record.get("files") or [])):
             skipped.append(pdf.name)
             continue
+        if progress:
+            progress(f"  reading {pdf.name} ({n} of {len(pdfs)}) ...")
         try:
             result = split_pdf(pdf, out_dir, dry_run=dry_run)
             results.append(result)
@@ -778,7 +785,8 @@ def main() -> int:
 
     try:
         report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                     recurse=a.recurse, pdfs=chosen)
+                     recurse=a.recurse, pdfs=chosen,
+                     progress=lambda text: print(text, flush=True))
     except NoOCR as exc:
         # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
         # times, and not with an exit code that says the day went fine.
