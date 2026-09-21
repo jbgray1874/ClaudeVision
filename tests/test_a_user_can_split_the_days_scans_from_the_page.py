@@ -319,6 +319,75 @@ def test_a_folder_with_no_pdfs_says_what_is_in_it(tmp_path, capsys):
     assert "--recurse" in said, "a folder of subfolders must point at the flag that reads them"
 
 
+def test_the_job_does_not_build_the_share_it_was_told_to_check(tmp_path, capsys):
+    """HOW THE GUESSED UNC BECAME A REAL FOLDER.
+
+    `out_dir.mkdir(parents=True)` on \\\\...\\Logistics\\Scans\\SplitScan created Logistics,
+    then Scans, then SplitScan, on a share where none of them existed. The next run found
+    its source folder present — it had just been made — empty, and reported a quiet day.
+    Test-Path said True. The front-door guard added for exactly this could not fire, because
+    the job had already answered its own question.
+
+    It creates the output folder. It does not create the tree above it.
+    """
+    from split_delivery_notes import prepare_out
+    nowhere = tmp_path / "Logistics" / "Scans" / "SplitScan"
+    with pytest.raises(RuntimeError) as caught:
+        prepare_out(nowhere)
+    assert not (tmp_path / "Logistics").exists(), "it built the path it was checking"
+    assert str(nowhere.parent) in str(caught.value)
+
+    # The ordinary case is untouched: the folder above exists, so the output folder is made.
+    nowhere.parent.mkdir(parents=True)
+    prepare_out(nowhere)
+    assert nowhere.is_dir()
+
+
+def test_a_scan_folder_holding_only_our_own_output_is_not_a_quiet_day(tmp_path, capsys):
+    """The symptom on the real share: 0 files, 1 folder, and the folder was SplitScan.
+
+    That is not an empty day's post. It is a path that was created rather than found, and
+    saying "nothing to do" about it sends somebody looking at the scanner.
+    """
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    S.main()
+    said = capsys.readouterr().out
+    assert "this job's own output folder" in said
+    assert "CREATED rather than found" in said
+    assert "DisplayRoot" in said, "it must say how to find the real share"
+
+
+def test_the_front_door_refuses_an_output_path_with_no_parent(tmp_path, capsys):
+    """Exit 2 rather than manufacture the tree, and say how to get the real path."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    source.mkdir()
+    sys.argv = ["split", "--source", str(source),
+                "--out", str(tmp_path / "typo" / "Scans" / "SplitScan"), "--dry-run"]
+    assert S.main() == 2
+    assert not (tmp_path / "typo").exists()
+    said = capsys.readouterr().out
+    assert "Refusing to create it" in said
+
+
+def test_finding_a_mapped_drives_real_name_does_not_rest_on_net_use(capsys):
+    """`net use` printed "There are no entries in the list." for a drive that is mapped —
+    Group Policy and logon-script mappings do not appear there. Advice that stops at
+    `net use` reads as "the drive is not really mapped", which is how a guess gets made."""
+    from split_delivery_notes import _how_to_find_the_share
+    _how_to_find_the_share(Path(r"K:\Logistics\Scans"))
+    said = capsys.readouterr().out
+    assert "(Get-PSDrive K).DisplayRoot" in said
+    assert "Win32_LogicalDisk" in said
+    assert "net use" in said and "does not mean" in said
+
+
 def test_a_folder_that_refuses_to_be_listed_is_not_reported_as_a_quiet_day(tmp_path, capsys):
     """Exit 2, not 0. A job that cannot read the share must not report success."""
     import split_delivery_notes as S

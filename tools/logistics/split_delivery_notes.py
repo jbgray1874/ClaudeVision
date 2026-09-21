@@ -423,11 +423,38 @@ def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0,
     return sorted(out, key=lambda p: p.name.lower())
 
 
+def prepare_out(out_dir: Path) -> None:
+    """Make the output folder — and never the tree above it.
+
+    ── THE JOB MANUFACTURED ITS OWN SOURCE FOLDER ───────────────────────────────────
+
+    `out_dir.mkdir(parents=True)` on `\\\\sdi-dc01\\shareddata$\\Logistics\\Scans\\SplitScan`
+    created `Logistics`, then `Scans`, then `SplitScan`, on a share where none of them
+    existed — because the guessed UNC was not what `K:` points at. The next run then found
+    the source folder present (it had just been made), empty, and reported a quiet day.
+
+    `Test-Path` said True. `source.exists()` passed. The front-door guard added for exactly
+    this could not fire, because **the job had already answered its own question**.
+
+    So: this creates the output folder, and refuses when the folder above it is absent. A
+    path with a typo in it is then refused rather than built, which is the whole point of
+    checking a path at all.
+    """
+    if out_dir.is_dir():
+        return
+    if not out_dir.parent.is_dir():
+        raise RuntimeError(
+            f"the folder above the output folder does not exist: {out_dir.parent} — "
+            "refusing to create it, because a wrong path would then be built rather "
+            "than refused")
+    out_dir.mkdir(exist_ok=True)
+
+
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         force: bool = False, since_days: int = 0,
         recurse: bool = False) -> Dict[str, Any]:
     """One day's run over a folder of scans."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+    prepare_out(out_dir)
     done = _ledger(out_dir)
     results, skipped = [], []
     for pdf in scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse):
@@ -465,6 +492,31 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
             "results": results, "skipped": skipped}
 
 
+def _how_to_find_the_share(path: Path) -> None:
+    """How to get the real UNC name of a drive letter, and why the obvious answers lie.
+
+    `net use` lists nothing for a drive mapped by Group Policy or a logon script, which is
+    how most of them are made — so "no entries in the list" does not mean the drive is not
+    mapped. An elevated shell is a different logon session and cannot see the mapping at
+    all. Both are easy to read as "the drive is not really there", and it is.
+    """
+    text = str(path)
+    if re.match(r"^[A-Za-z]:", text):
+        letter = text[0].upper()
+        print("     That is a mapped drive. If this is an elevated (Administrator) shell,")
+        print("     the drive belongs to your ordinary logon session and is not visible")
+        print("     here — the same reason a scheduled task cannot see it.")
+    else:
+        letter = "K"
+        print("     If this UNC path was a guess, it is the wrong one. Get the real name")
+        print("     from the drive letter itself, in a NORMAL (not Administrator) shell:")
+    print(f"       (Get-PSDrive {letter}).DisplayRoot")
+    print(f"       Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{letter}:'\" "
+          "| Select-Object ProviderName")
+    print("     `net use` shows nothing for a drive mapped by Group Policy or a logon")
+    print("     script, so an empty list there does not mean the drive is not mapped.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--source", default=DEFAULT_SOURCE,
@@ -500,6 +552,7 @@ def main() -> int:
     print(f"  out   : {out}")
     if not source.exists():
         print("  !! that folder does not exist, or this session cannot reach it.")
+        _how_to_find_the_share(source)
         # ── A MAPPED DRIVE DOES NOT CROSS THE ELEVATION BOUNDARY ────────────────────
         #
         # An elevated shell is a DIFFERENT LOGON SESSION from the desktop, and a mapped
@@ -509,16 +562,22 @@ def main() -> int:
         #
         # Exactly the same reason a scheduled task cannot see it, which is why the default
         # is a UNC path. Said here because the symptom looks like a typo and is not.
-        if re.match(r"^[A-Za-z]:", str(source)):
-            print("     That is a mapped drive. If this is an elevated (Administrator)")
-            print("     shell, the drive belongs to your ordinary logon session and is not")
-            print("     visible here — the same reason a scheduled task cannot see it.")
-            print("     Run in a normal PowerShell, or give the UNC path instead:")
-            print("       (Get-PSDrive " + str(source)[0].upper()
-                  + ").DisplayRoot     # prints the real \\\\server\\share")
         return 2
     if not source.is_dir():
         print(f"  !! that is a file, not a folder.")
+        return 2
+
+    # ── AND REFUSE TO BUILD THE PATH YOU WERE ASKED TO CHECK ────────────────────────
+    #
+    # This is what went wrong last time: the output folder was made with its parents, so a
+    # guessed UNC that pointed at nothing became a real, empty folder tree on the share —
+    # and the next run found its source present and reported a quiet day. See `prepare_out`.
+    if not out.is_dir() and not out.parent.is_dir():
+        print(f"  !! the folder above the output folder does not exist: {out.parent}")
+        print("     Refusing to create it. A path with a typo in it would otherwise be")
+        print("     built rather than refused, and the next run would find it and report")
+        print("     an empty day's post.")
+        _how_to_find_the_share(out)
         return 2
 
     try:
@@ -546,6 +605,15 @@ def main() -> int:
         census = folder_census(source, recurse=a.recurse)
         if census["error"]:
             print(f"     the folder could not be listed: {census['error']}")
+        elif not census["files"] and census["folders"] == 1 and out.parent == source:
+            # THE SHARE THIS JOB BUILT FOR ITSELF. An empty scan folder whose only content
+            # is our own output folder is not a quiet day — it is a path that was created
+            # rather than found, and the scanner has never written a thing into it.
+            print(f"     — and that folder is {out.name}, this job's own output folder.")
+            print("     An empty scan folder holding nothing but our own output is a path")
+            print("     that was CREATED rather than found. The scanner has never written")
+            print("     here. This is not the share you are looking at in Explorer.")
+            _how_to_find_the_share(source)
         elif not census["files"] and not census["folders"]:
             print("     the folder listed as completely empty.")
         else:
