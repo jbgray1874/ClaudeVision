@@ -260,6 +260,60 @@ def test_ocr_output_is_read_as_utf8_whatever_the_machines_codepage(monkeypatch, 
     assert "”" in text, "the curly quote must survive, not kill the read"
 
 
+def test_a_listing_costs_one_round_trip_per_folder_not_per_file(tmp_path, monkeypatch):
+    """THE RUN PRINTED ITS TWO PATHS AND SAT THERE.
+
+    Every file was `resolve()`d — a call to the server each — and the front door listed the
+    folder three times over, so a share of 947 scans cost some 3,000 round trips before a
+    page was read. Free on a laptop; on a busy server, a run that appears to hang.
+    """
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    for n in range(40):
+        (source / f"scan{n:03d}.pdf").write_bytes(b"%PDF-1.4\n")
+
+    calls = {"resolve": 0}
+    real_resolve = Path.resolve
+
+    def _counted(self, *a, **kw):
+        calls["resolve"] += 1
+        return real_resolve(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "resolve", _counted)
+    found = S.scans_to_read(source, out)
+    assert len(found) == 40
+    assert calls["resolve"] <= 2, f"{calls['resolve']} resolves for 40 files in one folder"
+
+
+def test_the_front_door_lists_the_folder_once(tmp_path, monkeypatch, capsys):
+    """`every`, `chosen` and then `run()` each listed the share afresh to read the same
+    answer. The window is a filter on the listing, not a second listing."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    listings = {"n": 0}
+    real = S.folder_listing
+
+    def _counted(*a, **kw):
+        listings["n"] += 1
+        return real(*a, **kw)
+
+    monkeypatch.setattr(S, "folder_listing", _counted)
+    monkeypatch.setattr(S, "find_tesseract", lambda explicit=None: "tesseract")
+    monkeypatch.setattr(S, "split_pdf", lambda pdf, out_dir, **kw: {
+        "source": pdf.name, "pages": 1, "notes": [], "unsorted": []})
+    sys.argv = ["split", "--source", str(source), "--out", str(out),
+                "--dry-run", "--since", "7"]
+    assert S.main() == 0
+    assert listings["n"] == 1, f"the folder was listed {listings['n']} times"
+
+
 def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
     """THE FAILURE THIS REPLACES. `source.glob("*.pdf")` returns nothing when the folder
     cannot be enumerated, nothing when the scans are one level down, and nothing when the
