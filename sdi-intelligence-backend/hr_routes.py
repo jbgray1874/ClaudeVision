@@ -87,3 +87,65 @@ def blip_latest(x_sdi_key: str | None = Header(default=None)):
         return json.loads(p.read_text(encoding="utf-8"))
     except ValueError:
         return {"error": "blip_latest.json unreadable"}
+
+
+# ── Blip -> InVentry presence load (stage 3) ─────────────────────────────────
+import hr_blip_inventry
+
+
+@router.post("/blip/load")
+def blip_load(force: bool = False, dry_run: bool = False, source: str = "latest",
+              x_sdi_key: str | None = Header(default=None)):
+    """Write the current on-site list to the InVentry watched folder.
+
+    source: "latest" (snapshot, keeps emails), "output" (the on-site JSON the
+    portal Files view exposes, emails recovered from the roster), or a path.
+    dry_run writes the CSV beside the snapshot instead of into the watched
+    folder — use it until InVentry confirm the presence import.
+    """
+    _check_key(x_sdi_key)
+    return hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run, source=source)
+
+
+@router.post("/blip/sync")
+def blip_sync(force: bool = False, dry_run: bool = False, source: str = "latest",
+              x_sdi_key: str | None = Header(default=None)):
+    """Query Blip then load the result into InVentry — the COO's one click."""
+    _check_key(x_sdi_key)
+    blip_summary = hr_blip.run_blip()
+    if blip_summary.get("status") not in ("ok", "degraded"):
+        return {"blip": blip_summary,
+                "load": {"status": "skipped", "reason": "Blip query failed"}}
+    load_summary = hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run, source=source)
+    return {"blip": blip_summary, "load": load_summary}
+
+
+# ── Blip -> InVentry presence push over the Partner API (stage 3, API route) ──
+import hr_onsite_push
+
+
+@router.get("/inventry/check")
+def inventry_check(x_sdi_key: str | None = Header(default=None)):
+    """Read-only check of the InVentry Partner API. Writes nothing.
+
+    Confirms the base URL, credentials and TLS setup work, and reports how many
+    personnel records already carry our PersonID.
+    """
+    _check_key(x_sdi_key)
+    import hr_inventry_api
+    try:
+        return hr_inventry_api.InVentryAPI().check()
+    except hr_inventry_api.InVentryAPIError as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
+@router.post("/blip/push")
+def blip_push(apply: bool = False, force: bool = False, source: str = "latest",
+              x_sdi_key: str | None = Header(default=None)):
+    """Push the current on-site list into InVentry via the Partner API.
+
+    Defaults to a dry run: the plan is logged and returned, nothing is sent.
+    Pass apply=true to write. source is as for /blip/load.
+    """
+    _check_key(x_sdi_key)
+    return hr_onsite_push.run_push(apply=apply, force=force, source=source)
