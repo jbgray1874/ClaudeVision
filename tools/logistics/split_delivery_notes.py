@@ -482,26 +482,46 @@ def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0,
     named after itself, on every run. It is excluded by name as well as by path, so the guard
     survives `--recurse`.
     """
-    seen, out = set(), []
+    # ── ONE ROUND TRIP PER FOLDER, NOT PER FILE ──────────────────────────────────────
+    #
+    # This used to `resolve()` every file: 947 calls to the server per listing, and the
+    # front door listed three times over — some 3,000 round trips before a page was read.
+    # Idle share, a second or two; busy share, a run that prints its two paths and sits
+    # there. Nothing in a listing needs the file resolved: the same file cannot be listed
+    # twice by one `iterdir`, so the case-fold on the path as given is the dedupe, and the
+    # output-folder check is on the PARENT, of which a non-recursive run has exactly one.
+    seen, out, parents = set(), [], {}
     resolved_out = _resolved(out_dir)
-    cutoff = time.time() - (since_days * 86400) if since_days and since_days > 0 else 0.0
     for pdf in folder_listing(source_dir, recurse=recurse,
                               skip={out_dir.name, UNSORTED}):
         if pdf.suffix.lower() != ".pdf":
             continue
-        key = _resolved(pdf)
+        key = str(pdf).lower()
         if key in seen:
             continue
         seen.add(key)
-        if _resolved(pdf.parent) == resolved_out:
-            continue
-        try:
-            if cutoff and pdf.stat().st_mtime < cutoff:
-                continue
-        except OSError:
+        parent = str(pdf.parent)
+        if parent not in parents:
+            parents[parent] = _resolved(pdf.parent)
+        if parents[parent] == resolved_out:
             continue
         out.append(pdf)
-    return sorted(out, key=lambda p: p.name.lower())
+    return recent(sorted(out, key=lambda p: p.name.lower()), since_days=since_days)
+
+
+def recent(pdfs: List[Path], *, since_days: int = 0) -> List[Path]:
+    """The scans modified inside the window; every one of them when there is no window."""
+    if not since_days or since_days <= 0:
+        return list(pdfs)
+    cutoff = time.time() - (since_days * 86400)
+    kept = []
+    for pdf in pdfs:
+        try:
+            if pdf.stat().st_mtime >= cutoff:
+                kept.append(pdf)
+        except OSError:
+            continue
+    return kept
 
 
 def prepare_out(out_dir: Path) -> None:
@@ -532,13 +552,20 @@ def prepare_out(out_dir: Path) -> None:
 
 
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
-        force: bool = False, since_days: int = 0,
-        recurse: bool = False) -> Dict[str, Any]:
-    """One day's run over a folder of scans."""
+        force: bool = False, since_days: int = 0, recurse: bool = False,
+        pdfs: Optional[List[Path]] = None) -> Dict[str, Any]:
+    """One day's run over a folder of scans.
+
+    `pdfs` is the listing when the caller already has one — the front door lists the folder
+    to say what it found, and listing a share of 947 files again to read the same answer is
+    the sort of thing that is free on a laptop and minutes on a busy server.
+    """
     prepare_out(out_dir)
     done = _ledger(out_dir)
     results, skipped = [], []
-    for pdf in scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse):
+    if pdfs is None:
+        pdfs = scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse)
+    for pdf in pdfs:
         mark = _fingerprint(pdf)
         # Keyed on the path within the scan folder, not the bare name: with --recurse two
         # date folders can each hold a "scan001.pdf" and one would otherwise mask the other.
@@ -685,8 +712,9 @@ def main() -> int:
         return 2
 
     try:
+        # Listed ONCE. The window is a filter on the listing, not a second listing.
         every = scans_to_read(source, out, recurse=a.recurse)
-        chosen = scans_to_read(source, out, since_days=a.since, recurse=a.recurse)
+        chosen = recent(every, since_days=a.since)
     except RuntimeError as exc:
         # The folder is there and cannot be listed — a permissions problem, or a share that
         # answers Test-Path and refuses enumeration. Said out loud, because the alternative
@@ -750,7 +778,7 @@ def main() -> int:
 
     try:
         report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                     recurse=a.recurse)
+                     recurse=a.recurse, pdfs=chosen)
     except NoOCR as exc:
         # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
         # times, and not with an exit code that says the day went fine.
