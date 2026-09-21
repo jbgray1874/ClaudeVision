@@ -32,6 +32,18 @@
     does not have one -- so K:\... is not there when this runs. Give both folders as UNC
     paths or this will appear to work and file nothing anybody can find.
 
+.PARAMETER SinceDays
+    Only read scans modified in the last N days. Defaults to 7.
+
+    NOT 1. The window is a rolling N x 24 hours from the moment the task fires, so at 06:30
+    a scan made at 06:00 the previous morning is already outside a one-day window -- and a
+    machine that was off over a weekend would lose three days. Seven catches all of that, and
+    costs nothing: a scan the job has already split is skipped by its ledger without being
+    read, so the window is about what gets LOOKED AT, not what gets done twice.
+
+    And not 0 (everything): the folder holds 947 scans going back months, and the first night
+    would OCR the lot. Filing the back catalogue is a decision, taken by hand, once.
+
 .PARAMETER At
     Time of day, 24h. Defaults to 06:30 — before the office opens, after the night's scanning.
 
@@ -52,6 +64,7 @@ param(
     # Empty means "ask the config", which is the only place these live. See .PARAMETER Out.
     [string]$Source = '',
     [string]$Out = '',
+    [int]$SinceDays = 7,
     [string]$At = '06:30',
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
     [string]$TaskName = 'SDI Split Delivery Note Scans'
@@ -140,11 +153,13 @@ Write-Host "python    : $python"
 Write-Host "tesseract : $tess"
 Write-Host "source    : $(if ($Source) { $Source } else { 'from SDI_SCAN_SOURCE_DIR in .env' })"
 Write-Host "out       : $(if ($Out) { $Out } else { 'from SDI_SCAN_SPLIT_DIR in .env' })"
+Write-Host "window    : scans modified in the last $SinceDays day(s); older ones are left alone"
 Write-Host "runs at   : $At daily, as $RunAsUser"
 
 $arguments = '"{0}"' -f $script
 if ($Source) { $arguments += ' --source "{0}"' -f $Source }
 if ($Out) { $arguments += ' --out "{0}"' -f $Out }
+if ($SinceDays -gt 0) { $arguments += ' --since {0}' -f $SinceDays }
 $action    = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $here
 $trigger   = New-ScheduledTaskTrigger -Daily -At $At
 # StartWhenAvailable so a machine that was off at 06:30 still does the day's scans when it
@@ -160,8 +175,8 @@ if ($PSCmdlet.ShouldProcess($TaskName, 'Register scheduled task')) {
                            -Force | Out-Null
     Write-Host ''
     Write-Host "Registered '$TaskName'."
-    Write-Host 'Try it now without writing anything:'
-    Write-Host "  $python `"$script`" --source `"$Source`" --out `"$Out`" --dry-run"
+    Write-Host 'Try it now without writing anything (the same arguments the task will use):'
+    Write-Host "  $python $arguments --dry-run"
     Write-Host 'Run it for real once:'
     Write-Host "  Start-ScheduledTask -TaskName `"$TaskName`""
 }
