@@ -388,8 +388,37 @@ def main() -> int:
                     help="Re-split scans this has already done")
     a = ap.parse_args()
 
-    report = run(Path(a.source), Path(a.out), dry_run=a.dry_run, force=a.force,
-                 since_days=a.since)
+    source, out = Path(a.source), Path(a.out)
+
+    # ── SAY WHERE YOU LOOKED, AND REFUSE IF IT IS NOT THERE ─────────────────────────
+    #
+    # The first live run printed "0 delivery note(s)" and exited 0. Nothing was wrong with
+    # the reading — nothing had been READ, because `Path.glob` on a folder that does not
+    # exist returns no files and no error. This is the exact failure this file has comments
+    # about elsewhere and did not guard at its own front door: a job that runs, reports
+    # success and does nothing.
+    #
+    # A share can be missing for ordinary reasons — a typo, a VPN down, a scheduled task with
+    # no drive mapping, permissions. All of them look identical from inside the loop, and all
+    # of them are obvious the moment the path is printed.
+    print(f"  source: {source}")
+    print(f"  out   : {out}")
+    if not source.exists():
+        print(f"  !! that folder does not exist, or this account cannot reach it.")
+        return 2
+    if not source.is_dir():
+        print(f"  !! that is a file, not a folder.")
+        return 2
+
+    every = scans_to_read(source, out)
+    chosen = scans_to_read(source, out, since_days=a.since)
+    print(f"  {len(every)} PDF(s) in the folder"
+          + (f", {len(chosen)} modified in the last {a.since} day(s)" if a.since else "")
+          + (" — nothing to do" if not chosen else ""))
+    if every and not chosen and a.since:
+        print(f"     (run without --since, or with a larger number, to reach the rest)")
+
+    report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since)
     notes = unsorted = 0
     for result in report["results"]:
         if result.get("error"):
