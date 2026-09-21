@@ -17,6 +17,7 @@ folder of that name on the local disk, writes the day's delivery notes into it, 
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -29,21 +30,72 @@ sys.path.insert(0, str(ROOT / "sdi-intelligence-backend"))
 
 # ── the path the whole thing writes to ──────────────────────────────────────────────
 
-def test_the_default_output_is_a_unc_path_not_a_drive_letter():
-    """THE SILENT FAILURE THIS PREVENTS. K: resolves to nothing under a service or a task,
-    the job invents a local folder of that name, files the day into it and reports success.
-    Nobody looks in C:\\Windows\\System32\\K: for a delivery note."""
-    from split_delivery_notes import DEFAULT_OUT
-    assert DEFAULT_OUT.startswith("\\\\"), DEFAULT_OUT
-    assert "sdi-dc01" in DEFAULT_OUT and "SplitScan" in DEFAULT_OUT
-    assert ":" not in DEFAULT_OUT.replace("shareddata$", ""), "a drive letter crept back in"
+def test_the_folders_are_a_setting_and_no_folder_is_guessed_in_source():
+    """A GUESSED DEFAULT IS WORSE THAN NO DEFAULT.
+
+    This file carried `\\\\sdi-dc01\\shareddata$\\Logistics\\Scans`, reasoned from two true
+    facts: the estimating share IS `\\\\sdi-dc01\\shareddata$`, and the drive in Explorer
+    reads `K:\\Logistics\\Scans`. The conclusion was wrong — and the job CREATED that tree
+    rather than refusing it, after which the folder existed, `Test-Path` answered True, and
+    the diagnosis went to `Path.glob`, to enumeration and to permissions, because the last
+    thing anybody suspects is a folder the code made for itself.
+
+    So: no server name in this source file at all. The folders are settings.
+    """
+    import importlib
+
+    import split_delivery_notes as S
+    # With nothing configured, there is no folder — not a plausible one.
+    for name in ("SDI_SCAN_SOURCE_DIR", "SDI_SCAN_SPLIT_DIR"):
+        os.environ.pop(name, None)
+    sys.path.insert(0, str(ROOT / "src"))
+    import config
+    importlib.reload(config)
+    assert importlib.reload(S).DEFAULT_SOURCE == ""
+    assert S.DEFAULT_OUT == ""
+
+    # And with the setting made, the default IS the setting — read, not guessed.
+    os.environ["SDI_SCAN_SOURCE_DIR"] = r"\\a-server\a-share\Logistics\Scans"
+    os.environ["SDI_SCAN_SPLIT_DIR"] = r"\\a-server\a-share\Logistics\Scans\SplitScan"
+    try:
+        importlib.reload(config)
+        assert importlib.reload(S).DEFAULT_SOURCE == r"\\a-server\a-share\Logistics\Scans"
+        assert S.DEFAULT_OUT.endswith("SplitScan")
+    finally:
+        for name in ("SDI_SCAN_SOURCE_DIR", "SDI_SCAN_SPLIT_DIR"):
+            os.environ.pop(name, None)
+        importlib.reload(config)
+        importlib.reload(S)
 
 
-def test_the_default_source_is_a_unc_path_too():
-    """The input is a mapped drive on the screenshots as well, and a task cannot see it."""
-    from split_delivery_notes import DEFAULT_SOURCE
-    assert DEFAULT_SOURCE.startswith("\\\\"), DEFAULT_SOURCE
-    assert DEFAULT_SOURCE.endswith("Logistics\\Scans"), DEFAULT_SOURCE
+def test_an_unset_folder_refuses_and_names_the_setting(tmp_path, capsys, monkeypatch):
+    """"I do not know where the scans are" is a better answer than a plausible folder,
+    because the plausible folder gets created and then believed."""
+    import split_delivery_notes as S
+
+    monkeypatch.setattr(S, "DEFAULT_SOURCE", "")
+    monkeypatch.setattr(S, "DEFAULT_OUT", "")
+    sys.argv = ["split", "--dry-run"]
+    assert S.main() == 2
+    said = capsys.readouterr().out
+    assert "SDI_SCAN_SOURCE_DIR" in said
+    assert ".env" in said
+    assert "not a drive letter" in said
+
+
+def test_the_setting_is_read_through_the_projects_one_config(monkeypatch):
+    """James Gray: "config needs to be in config files. not json files lying around and
+    being copied manually around." One .env, read by the module that reads every other
+    setting — not a second loader with its own search order."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import config
+    assert hasattr(config, "SCAN_SOURCE_DIR")
+    assert hasattr(config, "SCAN_SPLIT_DIR")
+    assert config.dot_env_path().endswith(".env")
+    # No default: unset must stay unset rather than become a share nobody named.
+    monkeypatch.delenv("SDI_SCAN_SOURCE_DIR", raising=False)
+    import importlib
+    assert importlib.reload(config).SCAN_SOURCE_DIR == ""
 
 
 def test_the_output_folder_is_inside_the_input_folder_and_is_not_read_back(tmp_path):
@@ -91,6 +143,88 @@ def test_an_uppercase_extension_is_still_a_scan(tmp_path):
     (source / "notes.txt").write_bytes(b"not a scan")
     assert [p.name for p in scans_to_read(source, source / "SplitScan")] == [
         "SCAN21092026.PDF"]
+
+
+def test_a_machine_with_no_ocr_is_said_once_and_exits_two(tmp_path, capsys, monkeypatch):
+    """IT WAS SAID ONCE PER SCAN AND THE RUN EXITED 0.
+
+    `run()` catches per file so one corrupt PDF does not cost the day — which turned a
+    missing binary into four identical error lines on a `--since 1` run, and would have been
+    947 of them on a full one, ending in "0 delivery note(s)" and a success code.
+
+    A tool that is not installed is a fact about the machine: true before the first page is
+    read and true after the last. It is checked once, before anything is rendered.
+    """
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+    monkeypatch.setattr(S, "find_tesseract", lambda explicit=None: None)
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    assert S.main() == 2
+    said = capsys.readouterr().out
+    assert said.count("tesseract") < 4, "it is one machine, not one message per scan"
+    assert "winget install" in said
+    assert "NEW shell" in said, "a PATH change does not reach an open window"
+    assert "SDI_TESSERACT_PATH" in said
+
+
+def test_ocr_vanishing_mid_run_does_not_report_a_good_day(tmp_path, monkeypatch):
+    """An update or a share going away mid-run must not be swallowed per file either."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    (source / "scan.pdf").write_bytes(b"%PDF-1.4\n")
+
+    def _gone(pdf, out_dir, **kw):
+        raise S.NoOCR("tesseract could not be run")
+
+    monkeypatch.setattr(S, "split_pdf", _gone)
+    with pytest.raises(S.NoOCR):
+        S.run(source, out, dry_run=True)
+
+
+def test_one_bad_scan_still_does_not_cost_the_day(tmp_path, monkeypatch):
+    """The other half of the same rule: a corrupt or password-protected PDF is reported and
+    the rest of the folder is still split. Narrowing the catch must not have lost this."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    out = source / "SplitScan"
+    out.mkdir(parents=True)
+    for name in ("a.pdf", "b.pdf"):
+        (source / name).write_bytes(b"%PDF-1.4\n")
+
+    def _one_is_broken(pdf, out_dir, **kw):
+        if pdf.name == "a.pdf":
+            raise ValueError("cannot open broken document")
+        return {"source": pdf.name, "pages": 1, "notes": [], "unsorted": []}
+
+    monkeypatch.setattr(S, "split_pdf", _one_is_broken)
+    report = S.run(source, out, dry_run=True)
+    assert [r.get("error", "") != "" for r in report["results"]] == [True, False]
+    assert "cannot open broken document" in report["results"][0]["error"]
+
+
+def test_tesseract_is_found_where_its_installer_actually_puts_it(tmp_path, monkeypatch):
+    """UB-Mannheim's package lands in C:\\Program Files\\Tesseract-OCR and leaves PATH
+    alone, so `winget install` completes, reports success, and `tesseract` is still "not
+    recognized". Looking in the usual places costs nothing and ends that."""
+    import split_delivery_notes as S
+
+    monkeypatch.setattr(S.shutil, "which", lambda _name: None)
+    assert S.find_tesseract() is None or Path(S.find_tesseract()).is_file()
+
+    # An explicit path wins, and a configured one is honoured.
+    exe = tmp_path / "tesseract.exe"
+    exe.write_bytes(b"")
+    assert S.find_tesseract(str(exe)) == str(exe)
+    monkeypatch.setattr(S, "_configured", lambda name: str(exe) if "TESSERACT" in name else "")
+    assert S.find_tesseract() == str(exe)
 
 
 def test_a_folder_that_cannot_be_listed_says_so_rather_than_reading_as_empty(tmp_path):
@@ -173,12 +307,19 @@ def test_only_recent_scans_can_be_asked_for(tmp_path):
     assert len(scans_to_read(source, out)) == 2, "no --since must still take everything"
 
 
-def test_the_scheduled_task_installer_defaults_to_the_same_place():
-    """Two defaults that disagree is how the button and the nightly run file to two folders."""
-    from split_delivery_notes import DEFAULT_OUT
+def test_the_scheduled_task_installer_does_not_carry_its_own_guess():
+    """Two defaults that disagree is how the button and the nightly run file to two folders,
+    and a guess repeated in a second file is a guess that outlives its correction."""
+    import re as _re
     ps1 = (ROOT / "tools" / "logistics" / "Install-SplitScanTask.ps1").read_text(
         encoding="utf-8")
-    assert DEFAULT_OUT in ps1
+    block = _re.search(r"^param\((.*?)^\)", ps1, _re.S | _re.M)
+    assert block, "the installer has no param block"
+    declared = block.group(1)
+    assert not _re.search(r"=\s*['\"]\\\\", declared), (
+        "a folder is hard-coded in the installer's parameters: " + declared)
+    assert _re.search(r"\$Source\s*=\s*''", declared), declared
+    assert _re.search(r"\$Out\s*=\s*''", declared), declared
 
 
 # ── the endpoint ────────────────────────────────────────────────────────────────────
@@ -317,6 +458,75 @@ def test_a_folder_with_no_pdfs_says_what_is_in_it(tmp_path, capsys):
     assert "1 file(s)" in said and "folder(s)" in said
     assert ".csv" in said
     assert "--recurse" in said, "a folder of subfolders must point at the flag that reads them"
+
+
+def test_the_job_does_not_build_the_share_it_was_told_to_check(tmp_path, capsys):
+    """HOW THE GUESSED UNC BECAME A REAL FOLDER.
+
+    `out_dir.mkdir(parents=True)` on \\\\...\\Logistics\\Scans\\SplitScan created Logistics,
+    then Scans, then SplitScan, on a share where none of them existed. The next run found
+    its source folder present — it had just been made — empty, and reported a quiet day.
+    Test-Path said True. The front-door guard added for exactly this could not fire, because
+    the job had already answered its own question.
+
+    It creates the output folder. It does not create the tree above it.
+    """
+    from split_delivery_notes import prepare_out
+    nowhere = tmp_path / "Logistics" / "Scans" / "SplitScan"
+    with pytest.raises(RuntimeError) as caught:
+        prepare_out(nowhere)
+    assert not (tmp_path / "Logistics").exists(), "it built the path it was checking"
+    assert str(nowhere.parent) in str(caught.value)
+
+    # The ordinary case is untouched: the folder above exists, so the output folder is made.
+    nowhere.parent.mkdir(parents=True)
+    prepare_out(nowhere)
+    assert nowhere.is_dir()
+
+
+def test_a_scan_folder_holding_only_our_own_output_is_not_a_quiet_day(tmp_path, capsys):
+    """The symptom on the real share: 0 files, 1 folder, and the folder was SplitScan.
+
+    That is not an empty day's post. It is a path that was created rather than found, and
+    saying "nothing to do" about it sends somebody looking at the scanner.
+    """
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    (source / "SplitScan").mkdir(parents=True)
+    sys.argv = ["split", "--source", str(source), "--out", str(source / "SplitScan"),
+                "--dry-run"]
+    S.main()
+    said = capsys.readouterr().out
+    assert "this job's own output folder" in said
+    assert "CREATED rather than found" in said
+    assert "DisplayRoot" in said, "it must say how to find the real share"
+
+
+def test_the_front_door_refuses_an_output_path_with_no_parent(tmp_path, capsys):
+    """Exit 2 rather than manufacture the tree, and say how to get the real path."""
+    import split_delivery_notes as S
+
+    source = tmp_path / "Scans"
+    source.mkdir()
+    sys.argv = ["split", "--source", str(source),
+                "--out", str(tmp_path / "typo" / "Scans" / "SplitScan"), "--dry-run"]
+    assert S.main() == 2
+    assert not (tmp_path / "typo").exists()
+    said = capsys.readouterr().out
+    assert "Refusing to create it" in said
+
+
+def test_finding_a_mapped_drives_real_name_does_not_rest_on_net_use(capsys):
+    """`net use` printed "There are no entries in the list." for a drive that is mapped —
+    Group Policy and logon-script mappings do not appear there. Advice that stops at
+    `net use` reads as "the drive is not really mapped", which is how a guess gets made."""
+    from split_delivery_notes import _how_to_find_the_share
+    _how_to_find_the_share(Path(r"K:\Logistics\Scans"))
+    said = capsys.readouterr().out
+    assert "(Get-PSDrive K).DisplayRoot" in said
+    assert "Win32_LogicalDisk" in said
+    assert "net use" in said and "does not mean" in said
 
 
 def test_a_folder_that_refuses_to_be_listed_is_not_reported_as_a_quiet_day(tmp_path, capsys):

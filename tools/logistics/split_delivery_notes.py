@@ -39,6 +39,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -61,30 +62,104 @@ REGION_SCALE = 2
 UNSORTED = "_Unsorted"
 LEDGER = ".splitscan-done.json"
 
-# ── A UNC PATH, NOT A DRIVE LETTER ──────────────────────────────────────────────────
+# ── THE FOLDERS COME FROM CONFIG, AND THERE IS NO GUESS BEHIND THEM ─────────────────
 #
-# K: is a MAPPED DRIVE, and a mapping belongs to a logged-on session. A scheduled task, a
-# Windows service and the SDI Intelligence backend all run without one, so "K:\IT\..." is
-# simply not there for them — the job runs, finds no folder, creates one on the local disk
-# and writes the day's delivery notes somewhere nobody will ever look. It exits 0 while doing
-# it, which is the whole problem.
+# James Gray: "config needs to be in config files. not json files lying around and being
+# copied manually around." So both folders are `SDI_SCAN_SOURCE_DIR` / `SDI_SCAN_SPLIT_DIR`
+# in the project's one .env, read through the project's one config module.
 #
-# The same share by its UNC name is reachable from all of them, and from Explorer, and means
-# the same thing in a config file on any machine.
-DEFAULT_SOURCE = r"\\sdi-dc01\shareddata$\Logistics\Scans"
-DEFAULT_OUT = r"\\sdi-dc01\shareddata$\Logistics\Scans\SplitScan"
+# UNSET IS AN ANSWER AND A GUESS IS NOT. This file used to carry
+# \\sdi-dc01\shareddata$\Logistics\Scans as a default, reasoned from two true facts: the
+# estimating share IS \\sdi-dc01\shareddata$, and the drive in Explorer reads
+# K:\Logistics\Scans. The conclusion was wrong, and the job CREATED that tree rather than
+# refusing it — after which the folder existed, `Test-Path` answered True, and the diagnosis
+# went to `Path.glob`, to enumeration and to permissions, because the last thing anybody
+# suspects is a folder the code made for itself.
+#
+# AND A UNC PATH, NOT A DRIVE LETTER. K: is a mapping, and a mapping belongs to a logged-on
+# session. A scheduled task, a Windows service and the backend each run without one — and an
+# elevated shell is a different session again, which is why K: is in Explorer and absent from
+# an Administrator prompt. Under a task, "K:\..." is not there at all: the job would create a
+# folder of that name on the local disk, file the day into it, and exit 0.
+def _configured(name: str) -> str:
+    """One setting, read through the project's config so .env is the only place it lives."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+        import config                                              # noqa: WPS433
+        return str(getattr(config, name, "") or "").strip()
+    except Exception:                                              # noqa: BLE001
+        # Runnable with nothing else installed: the shell still answers.
+        return os.getenv("SDI_" + name, "").strip()
+
+
+DEFAULT_SOURCE = _configured("SCAN_SOURCE_DIR")
+DEFAULT_OUT = _configured("SCAN_SPLIT_DIR")
+
+
+def _where_settings_live() -> str:
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+        import config                                              # noqa: WPS433
+        return config.dot_env_path()
+    except Exception:                                              # noqa: BLE001
+        return str(Path(__file__).resolve().parents[2] / ".env")
 
 
 # ── OCR ─────────────────────────────────────────────────────────────────────────────
 
+class NoOCR(RuntimeError):
+    """Tesseract could not be run at all.
+
+    ITS OWN TYPE BECAUSE IT IS NOT A BAD SCAN. One corrupt PDF must not cost the day, so
+    `run()` catches per file and carries on — which turned a missing binary into 947
+    identical error lines and an exit code of 0. A tool that is not installed is a fact about
+    the machine, true before the first page is read and true after the last, and it stops the
+    run rather than being reported 947 times.
+    """
+
+
+def find_tesseract(explicit: Optional[str] = None) -> Optional[str]:
+    """Locate tesseract, or None. In order: an explicit path, config, PATH, install roots.
+
+    THE INSTALLER DOES NOT PUT IT ON PATH. UB-Mannheim's package lands in
+    `C:\\Program Files\\Tesseract-OCR` and leaves PATH alone, so `winget install` completes,
+    reports success, and `tesseract` is still "not recognized" — and a PATH edit needs a new
+    shell before it takes, which makes the same command work or fail depending on which
+    window it is typed in. Looking in the usual places costs nothing and ends all of that.
+
+    Same shape as `cad_inputs.find_converter` for the ODA converter, deliberately: two ways
+    of finding an external tool is two places to fix when one of them stops working.
+    """
+    if explicit and Path(explicit).is_file():
+        return str(explicit)
+    configured = _configured("TESSERACT_PATH")
+    if configured and Path(configured).is_file():
+        return str(configured)
+    found = shutil.which("tesseract") or shutil.which("tesseract.exe")
+    if found:
+        return found
+    for candidate in (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                      r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                      r"C:\Users\%s\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"
+                      % os.getenv("USERNAME", ""),
+                      "/usr/bin/tesseract", "/usr/local/bin/tesseract",
+                      "/opt/homebrew/bin/tesseract"):
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return None
+
+
 def _tesseract(image_path: str, *, psm: str = "6", whitelist: str = "") -> str:
-    cmd = ["tesseract", image_path, "-", "--psm", psm]
+    exe = find_tesseract()
+    if not exe:
+        raise NoOCR("tesseract is not installed, or cannot be found")
+    cmd = [exe, image_path, "-", "--psm", psm]
     if whitelist:
         cmd += ["-c", f"tessedit_char_whitelist={whitelist}"]
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"tesseract could not be run: {exc}") from exc
+        raise NoOCR(f"tesseract could not be run ({exe}): {exc}") from exc
     return done.stdout or ""
 
 
@@ -423,11 +498,38 @@ def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0,
     return sorted(out, key=lambda p: p.name.lower())
 
 
+def prepare_out(out_dir: Path) -> None:
+    """Make the output folder — and never the tree above it.
+
+    ── THE JOB MANUFACTURED ITS OWN SOURCE FOLDER ───────────────────────────────────
+
+    `out_dir.mkdir(parents=True)` on `\\\\sdi-dc01\\shareddata$\\Logistics\\Scans\\SplitScan`
+    created `Logistics`, then `Scans`, then `SplitScan`, on a share where none of them
+    existed — because the guessed UNC was not what `K:` points at. The next run then found
+    the source folder present (it had just been made), empty, and reported a quiet day.
+
+    `Test-Path` said True. `source.exists()` passed. The front-door guard added for exactly
+    this could not fire, because **the job had already answered its own question**.
+
+    So: this creates the output folder, and refuses when the folder above it is absent. A
+    path with a typo in it is then refused rather than built, which is the whole point of
+    checking a path at all.
+    """
+    if out_dir.is_dir():
+        return
+    if not out_dir.parent.is_dir():
+        raise RuntimeError(
+            f"the folder above the output folder does not exist: {out_dir.parent} — "
+            "refusing to create it, because a wrong path would then be built rather "
+            "than refused")
+    out_dir.mkdir(exist_ok=True)
+
+
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         force: bool = False, since_days: int = 0,
         recurse: bool = False) -> Dict[str, Any]:
     """One day's run over a folder of scans."""
-    out_dir.mkdir(parents=True, exist_ok=True)
+    prepare_out(out_dir)
     done = _ledger(out_dir)
     results, skipped = [], []
     for pdf in scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse):
@@ -450,6 +552,11 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         try:
             result = split_pdf(pdf, out_dir, dry_run=dry_run)
             results.append(result)
+        except NoOCR:
+            # NOT A BAD SCAN — A MACHINE WITH NO OCR ON IT. Catching this per file turned a
+            # missing binary into 947 identical error lines and an exit code of 0. It is
+            # true before the first page and true after the last, so it stops the run.
+            raise
         except Exception as exc:                                     # noqa: BLE001
             # ONE BAD SCAN DOES NOT COST THE DAY. A corrupt or password-protected PDF is
             # reported and the rest of the folder is still split.
@@ -463,6 +570,31 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
     return {"when": datetime.now().isoformat(timespec="seconds"),
             "source": str(source_dir), "out": str(out_dir),
             "results": results, "skipped": skipped}
+
+
+def _how_to_find_the_share(path: Path) -> None:
+    """How to get the real UNC name of a drive letter, and why the obvious answers lie.
+
+    `net use` lists nothing for a drive mapped by Group Policy or a logon script, which is
+    how most of them are made — so "no entries in the list" does not mean the drive is not
+    mapped. An elevated shell is a different logon session and cannot see the mapping at
+    all. Both are easy to read as "the drive is not really there", and it is.
+    """
+    text = str(path)
+    if re.match(r"^[A-Za-z]:", text):
+        letter = text[0].upper()
+        print("     That is a mapped drive. If this is an elevated (Administrator) shell,")
+        print("     the drive belongs to your ordinary logon session and is not visible")
+        print("     here — the same reason a scheduled task cannot see it.")
+    else:
+        letter = "K"
+        print("     If this UNC path was a guess, it is the wrong one. Get the real name")
+        print("     from the drive letter itself, in a NORMAL (not Administrator) shell:")
+    print(f"       (Get-PSDrive {letter}).DisplayRoot")
+    print(f"       Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{letter}:'\" "
+          "| Select-Object ProviderName")
+    print("     `net use` shows nothing for a drive mapped by Group Policy or a logon")
+    print("     script, so an empty list there does not mean the drive is not mapped.")
 
 
 def main() -> int:
@@ -483,6 +615,24 @@ def main() -> int:
                     help="Also read scans in subfolders of the source folder")
     a = ap.parse_args()
 
+    # ── NOBODY HAS SAID WHERE THE SCANS ARE ─────────────────────────────────────────
+    #
+    # This is what a guessed default used to hide. "I do not know" is a better answer than
+    # a plausible folder, because the plausible folder gets created and then believed.
+    for flag, setting, value in (("--source", "SDI_SCAN_SOURCE_DIR", a.source),
+                                 ("--out", "SDI_SCAN_SPLIT_DIR", a.out)):
+        if value:
+            continue
+        print(f"  !! no {flag} folder, and {setting} is not set.")
+        print(f"     Put it in {_where_settings_live()} as")
+        print(f"       {setting}=\\\\server\\share\\Logistics\\Scans"
+              + ("\\SplitScan" if flag == "--out" else ""))
+        print("     as a UNC path, not a drive letter: a scheduled task and the backend")
+        print("     each run without a logon session, so a mapped drive is not there for")
+        print("     them — and an elevated shell cannot see one either.")
+        _how_to_find_the_share(Path("K:"))
+        return 2
+
     source, out = Path(a.source), Path(a.out)
 
     # ── SAY WHERE YOU LOOKED, AND REFUSE IF IT IS NOT THERE ─────────────────────────
@@ -500,6 +650,7 @@ def main() -> int:
     print(f"  out   : {out}")
     if not source.exists():
         print("  !! that folder does not exist, or this session cannot reach it.")
+        _how_to_find_the_share(source)
         # ── A MAPPED DRIVE DOES NOT CROSS THE ELEVATION BOUNDARY ────────────────────
         #
         # An elevated shell is a DIFFERENT LOGON SESSION from the desktop, and a mapped
@@ -509,16 +660,22 @@ def main() -> int:
         #
         # Exactly the same reason a scheduled task cannot see it, which is why the default
         # is a UNC path. Said here because the symptom looks like a typo and is not.
-        if re.match(r"^[A-Za-z]:", str(source)):
-            print("     That is a mapped drive. If this is an elevated (Administrator)")
-            print("     shell, the drive belongs to your ordinary logon session and is not")
-            print("     visible here — the same reason a scheduled task cannot see it.")
-            print("     Run in a normal PowerShell, or give the UNC path instead:")
-            print("       (Get-PSDrive " + str(source)[0].upper()
-                  + ").DisplayRoot     # prints the real \\\\server\\share")
         return 2
     if not source.is_dir():
         print(f"  !! that is a file, not a folder.")
+        return 2
+
+    # ── AND REFUSE TO BUILD THE PATH YOU WERE ASKED TO CHECK ────────────────────────
+    #
+    # This is what went wrong last time: the output folder was made with its parents, so a
+    # guessed UNC that pointed at nothing became a real, empty folder tree on the share —
+    # and the next run found its source present and reported a quiet day. See `prepare_out`.
+    if not out.is_dir() and not out.parent.is_dir():
+        print(f"  !! the folder above the output folder does not exist: {out.parent}")
+        print("     Refusing to create it. A path with a typo in it would otherwise be")
+        print("     built rather than refused, and the next run would find it and report")
+        print("     an empty day's post.")
+        _how_to_find_the_share(out)
         return 2
 
     try:
@@ -546,6 +703,15 @@ def main() -> int:
         census = folder_census(source, recurse=a.recurse)
         if census["error"]:
             print(f"     the folder could not be listed: {census['error']}")
+        elif not census["files"] and census["folders"] == 1 and out.parent == source:
+            # THE SHARE THIS JOB BUILT FOR ITSELF. An empty scan folder whose only content
+            # is our own output folder is not a quiet day — it is a path that was created
+            # rather than found, and the scanner has never written a thing into it.
+            print(f"     — and that folder is {out.name}, this job's own output folder.")
+            print("     An empty scan folder holding nothing but our own output is a path")
+            print("     that was CREATED rather than found. The scanner has never written")
+            print("     here. This is not the share you are looking at in Explorer.")
+            _how_to_find_the_share(source)
         elif not census["files"] and not census["folders"]:
             print("     the folder listed as completely empty.")
         else:
@@ -558,8 +724,32 @@ def main() -> int:
             if census["folders"] and not a.recurse:
                 print("     the scans may be in subfolders — try again with --recurse")
 
-    report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                 recurse=a.recurse)
+    # ── CHECKED BEFORE A SINGLE PAGE IS RENDERED ────────────────────────────────────
+    #
+    # The scans have no text layer at all, so without OCR there is nothing to do — and
+    # finding that out per file produced one error line per scan and an exit code of 0.
+    if chosen and not find_tesseract():
+        print("  !! tesseract is not installed on this machine, or cannot be found.")
+        print("     The scans are photographs of paper with no text layer, so nothing can")
+        print("     be read without it. Install it:")
+        print("       winget install UB-Mannheim.TesseractOCR")
+        print("     Then open a NEW shell: the installer adds it to PATH, and a PATH change")
+        print("     does not reach a window that was already open — which makes the same")
+        print("     command work or fail depending on which one you type it in.")
+        print("     It is also looked for in the usual install folders, so a PATH that was")
+        print("     never updated is not fatal. If it is somewhere else, put it in")
+        print(f"     {_where_settings_live()} as")
+        print(r"       SDI_TESSERACT_PATH=C:\Program Files\Tesseract-OCR\tesseract.exe")
+        return 2
+
+    try:
+        report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
+                     recurse=a.recurse)
+    except NoOCR as exc:
+        # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
+        # times, and not with an exit code that says the day went fine.
+        print(f"  !! {exc}")
+        return 2
     notes = unsorted = 0
     for result in report["results"]:
         if result.get("error"):
