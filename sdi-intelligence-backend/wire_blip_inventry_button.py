@@ -2,16 +2,16 @@
 wire_blip_inventry_button.py — enable the "Load to InVentry" button in the portal.
 
 Replaces the disabled "Load to InVentry (soon)" placeholder left by
-fix_portal_blip.py with a live button that calls POST /api/hr/blip/load, and
-injects the hrBlipLoad() handler.
+fix_portal_blip.py with a live button that calls POST /api/hr/blip/push (the
+InVentry Partner API route), and injects the hrBlipLoad() handler.
 
 Idempotent: running it twice is a no-op. Matches the EXACT bytes on disk.
 
     python wire_blip_inventry_button.py                      # server default path
     python wire_blip_inventry_button.py <path-to-portal.html> # e.g. the repo copy
 
-The button runs in DRY RUN until InVentry confirm the presence import — see
-HR_LOAD_DRY_RUN in the injected script.
+The button runs in DRY RUN until the endpoint paths are confirmed and a check
+passes — see HR_PUSH_APPLY in the injected script.
 """
 import shutil
 import sys
@@ -42,7 +42,7 @@ old_button = (
 
 new_button = (
     "+\'<button class=\"run\" id=\"hr-load-btn\" onclick=\"hrBlipLoad()\" "
-    "title=\"Write the current on-site list to the InVentry watched folder\" "
+    "title=\"Push the current on-site list into InVentry via the Partner API\" "
     "style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\">"
     "Load to InVentry</button>\'"
 )
@@ -57,36 +57,37 @@ else:
 
 # ── 2. Inject hrBlipLoad() before </script> ──
 load_fn = """
-  // ---- Blip -> InVentry presence load (stage 3) ----
-  // DRY RUN until InVentry confirm they accept a presence import: the CSV is
-  // written beside the snapshot instead of into their watched folder.
-  // Set to false once confirmed.
-  var HR_LOAD_DRY_RUN = true;
+  // ---- Blip -> InVentry presence push (stage 3, Partner API) ----
+  // The supported route, per InVentry's Partner API documentation.
+  // APPLY=false is a dry run: the plan is returned and logged, nothing is
+  // written. Set it true once /api/hr/inventry/check passes and a few dry runs
+  // look right.
+  var HR_PUSH_APPLY = false;
 
   async function hrBlipLoad(){
     var btn=document.getElementById('hr-load-btn');
     var out=document.getElementById('hr-blip-result');
     if(!btn||!out) return;
-    if(!HR_LOAD_DRY_RUN && !confirm('Write the current on-site list to InVentry?\\n\\nThis replaces the front-desk on-site register.')) return;
+    if(HR_PUSH_APPLY && !confirm('Push the current on-site list into InVentry?\n\nThis signs staff in on the reception system and affects the fire roll call.')) return;
     var orig=btn.textContent;
-    btn.disabled=true; btn.textContent='Loading\\u2026';
+    btn.disabled=true; btn.textContent='Pushing…';
     out.style.color='var(--ink-dim)';
-    out.textContent=(HR_LOAD_DRY_RUN?'[DRY RUN] ':'')+'Writing on-site list to InVentry\\u2026';
+    out.textContent=(HR_PUSH_APPLY?'':'[DRY RUN] ')+'Pushing on-site list to InVentry…';
     try{
-      var r=await fetch(API_BASE+'/api/hr/blip/load?dry_run='+HR_LOAD_DRY_RUN,{method:'POST',headers:_hdr()});
+      var r=await fetch(API_BASE+'/api/hr/blip/push?apply='+HR_PUSH_APPLY,{method:'POST',headers:_hdr()});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,200));
       var d=await r.json();
-      var warn=(d.warnings||[]).join('\\n');
+      var warn=(d.warnings||[]).join('\n');
       out.style.color = d.status==='ok' ? 'var(--ok)' : 'var(--warn)';
       out.textContent=(d.dry_run?'[DRY RUN] ':'')
-        +'Wrote '+d.written+' of '+d.on_site+' on site'
-        +'\\nStatus: '+(d.status||'').toUpperCase()
-        +'\\nTarget: '+(d.target||'')
-        +(d.snapshot_age_minutes!=null ? '\\nSnapshot age: '+d.snapshot_age_minutes+' min' : '')
-        +(warn ? '\\n'+warn : '');
+        +'Signed in '+((d.signed_in||[]).length)+', signed out '+((d.signed_out||[]).length)
+        +'\nBrightHR on site: '+d.brighthr_on_site+'  |  InVentry on site: '+d.inventry_on_site_before
+        +'\nAlready on site: '+d.already_on_site+'  |  Unmatched: '+((d.unmatched||[]).length)
+        +'\nStatus: '+(d.status||'').toUpperCase()
+        +(warn ? '\n'+warn : '');
     }catch(e){
       out.style.color='var(--fail)';
-      out.textContent='Load failed: '+e.message;
+      out.textContent='Push failed: '+e.message;
     }finally{
       btn.disabled=false; btn.textContent=orig;
     }

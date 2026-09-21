@@ -41,7 +41,9 @@ good pull before it ever overwrites InVentry.
 | `hr_pull.py` | **Stage 1** — pull → store snapshot |
 | `hr_load_inventry.py` | **Stage 2** — snapshot → InVentry roster CSV |
 | `hr_blip.py` | **Blip** — who is clocked in right now → snapshot |
-| `hr_blip_inventry.py` | **Stage 3** — Blip snapshot → InVentry on-site CSV |
+| `hr_blip_inventry.py` | **Stage 3 (file)** — Blip snapshot → on-site CSV; also the source loader |
+| `hr_inventry_api.py` | **InVentry Partner API client** — auth, rate limits, self-signed TLS |
+| `hr_onsite_push.py` | **Stage 3 (API)** — reconcile InVentry's on-site register via the API |
 | `hr_routes.py` | Backend endpoints (`/api/hr/...`) |
 | `tests/` | `python -m pytest tests -q` — no network or credentials needed |
 
@@ -91,32 +93,59 @@ failure.
 
 The portal button uses `latest` because it keeps emails without a name lookup.
 
-### ⚠ The delivery route to InVentry is still unknown
+### Delivery route: the InVentry Partner API ✅
 
-Everything up to the file is built and produces real output — see the dated
-`blip_onsite_*.json` and `brighthr_staff_*.json` files in
-`\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput`. What has never been
-established is how InVentry *receives* it.
+**Resolved 16 Sep 2026.** InVentry supplied their Partner API documentation, and
+it supports writes. There is no watched folder — that idea, in earlier versions
+of this document, was wrong. The facts the code relies on are recorded in
+**`docs/INVENTRY_API_NOTES.md`**; the short version:
 
-The "watched folder" in earlier versions of this document was an assumption, not
-a vendor answer. Treat the CSV as the shape of the payload, not as a working
-delivery mechanism.
+- Auth is `apikey` (from the InVentry console) + `partnersecret` (issued by
+  InVentry Ltd), both as request **headers**.
+- The API is **on-premises only** and unreachable externally. SDI-APP01 is on
+  the network, so it can call it directly. Certificates are self-signed.
+- **20 GET calls/minute; POST is exempt** — which is what makes a frequent
+  presence push viable.
+- POST bodies are **`x-www-form-urlencoded`, not JSON**.
+- `PersonID` (varchar 40) is settable and documented as the place to store *our*
+  system's ID, so the **BrightHR employee UUID goes there and no mapping table
+  is needed**.
+- Presence is written through the events table (`EventType`, `EventDateTime`),
+  and InVentry's own ANPR partners already use the API to sign staff in and out.
 
-The request that unblocks this is drafted in
-**`docs/INVENTRY_INTEGRATION_REQUEST.md`**. In short, InVentry need to tell us:
+```
+ COO clicks "Load to InVentry"  ─▶  /api/hr/blip/push   hr_onsite_push.py
+      blip_latest.json ──▶ match on PersonID ──▶ POST sign-in ──▶ InVentry
+                                                          on-site register / fire roll
+```
 
-1. **How** they ingest external data — a folder their server watches (and where
-   must it live, given `C:\` on our app server is not reachable by them), a
-   database we write to, or an API.
-2. Whether that same route carries **live on-site presence**, or only the staff
-   roster.
-3. If presence is supported: the **format and columns**, and whether the payload
-   is **full current state** (absent = signed out) or a delta.
-4. Which **identifier** they match on — email, staff ID, or name.
+`hr_inventry_api.py` is the client; `hr_onsite_push.py` reconciles the two
+sides. `hr_blip_inventry.py` (the CSV writer) is kept as the source-loading
+layer and in case a file-based import is ever wanted.
 
-Until then the button and the endpoints default to **dry run**
-(`HR_LOAD_DRY_RUN = true` in the portal; `?dry_run=true` on the API), which
-writes the CSV beside the snapshot rather than to any InVentry path.
+**Still outstanding: the endpoint paths.** They are in InVentry's Postman
+collection, which has not arrived. Every path is a setting (`INVENTRY_PATH_*`)
+with a placeholder default, and the client turns a 404 into a message saying so.
+Applying the collection is a `.env` change, not a code change.
+
+Check connectivity without writing anything:
+
+```
+GET  /api/hr/inventry/check        # or: python hr_onsite_push.py --check
+POST /api/hr/blip/push             # dry run: plans and logs, writes nothing
+POST /api/hr/blip/push?apply=true  # live
+```
+
+### Sign-out starts disabled
+
+InVentry has no settable field recording which system signed a person in, so we
+cannot tell our sign-ins from someone signing in at the reception touchscreen.
+A sign-out driven by "BrightHR has no clocking for them" could therefore
+override a real human sign-in and drop someone off the evacuation list.
+
+Sign-ins carry no such risk, so they go live first. `INVENTRY_ENABLE_SIGN_OUT`
+turns sign-outs on deliberately once matching is proven, and
+`INVENTRY_MAX_SIGN_OUTS_PER_RUN` caps them.
 
 ### Presence guards (different from the roster guards)
 
@@ -167,7 +196,12 @@ POST /api/hr/blip/load    # presence: on-site list -> InVentry
                           #   ?dry_run=true   write beside the snapshot, not the InVentry path
                           #   ?source=output  load the JSON the portal Files view exposes
                           #   ?force=true     override the presence guards
-POST /api/hr/blip/sync    # presence: blip + load in one call (same query params)
+POST /api/hr/blip/sync    # presence: blip + build the CSV in one call
+GET  /api/hr/inventry/check  # InVentry Partner API connectivity, read-only
+POST /api/hr/blip/push    # presence -> InVentry over the Partner API
+                          #   ?apply=true      actually write (default: dry run)
+                          #   ?source=output   use the portal's on-site JSON
+                          #   ?force=true      override the presence guards
 ```
 
 Or scheduled, via Windows Task Scheduler (same code, no button):

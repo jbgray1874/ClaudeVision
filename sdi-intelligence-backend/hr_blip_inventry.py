@@ -1,4 +1,4 @@
-"""
+r"""
 Stage 3 — BUILD the InVentry on-site presence file from Blip data.
 
 Stage 1/2 (hr_pull.py -> hr_load_inventry.py) sync the staff *roster*: who
@@ -120,7 +120,7 @@ def _resolve_source(source: str) -> Path:
 def _normalise(payload: dict) -> tuple:
     """Return (records, meta) for either on-site JSON shape.
 
-    records: [{first_name, surname, email, signed_in}]
+    records: [{brighthr_id, first_name, surname, email, signed_in}]
     meta:    {timestamp, status, query_failures, on_site}
     """
     # Snapshot shape: {"summary": {...}, "on_site": [{... "clocking": {...}}]}
@@ -130,6 +130,7 @@ def _normalise(payload: dict) -> tuple:
         for entry in payload["on_site"]:
             clocking = entry.get("clocking") or {}
             records.append({
+                "brighthr_id": str(entry.get("id") or "").strip(),
                 "first_name": (entry.get("first_name") or "").strip(),
                 "surname": (entry.get("surname") or "").strip(),
                 "email": (entry.get("email") or "").strip(),
@@ -148,6 +149,7 @@ def _normalise(payload: dict) -> tuple:
     if isinstance(payload.get("staff_on_site"), list):
         records = [
             {
+                "brighthr_id": str(e.get("id") or "").strip(),
                 "first_name": (e.get("first_name") or "").strip(),
                 "surname": (e.get("surname") or "").strip(),
                 "email": (e.get("email") or "").strip(),
