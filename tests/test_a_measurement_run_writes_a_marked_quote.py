@@ -27,7 +27,7 @@ handed them is not a safeguard; it is declining to produce the artefact while pr
 
 SO THE MARK IS IN THE FILENAME AND NOWHERE ELSE.
 
-  ..._quote_LLM-ONLY.html   how a file is identified from a folder listing, an attachment box
+  ..._quote_PORTAL.html     how a file is identified from a folder listing, an attachment box
                             or a share — the places where the wrong document actually gets
                             picked up. Two files called 10575-02_quote.html in one directory is
                             the failure this prevents, and it is a real one.
@@ -89,11 +89,23 @@ def test_a_measurement_run_still_produces_a_quote(summary_json, tmp_path, monkey
     assert Path(out).exists()
 
 
-def test_the_filename_says_which_kind_of_run_it_was(summary_json, tmp_path, monkeypatch):
-    """The one place the mark survives, because it is the one place a file is identified
-    without being opened."""
+def test_the_filename_says_only_whether_it_may_go_out(summary_json, tmp_path, monkeypatch):
+    """── THIS TEST'S RULE WAS REVERSED ON 22 SEP 2026, ON INSTRUCTION ─────────────────
+
+    It used to require `_quote_LLM-ONLY.html`. James Gray: "WHY IS THE filename also LLM
+    ONLY.. we need to stop making decisions like this. we know quotes won't go out without
+    being checked."
+
+    That suffix was the same instinct as the six warning blocks removed from the page,
+    moved into the filename: labelling a document with what is imperfect about it, on the
+    assumption somebody will attach it unread. Which run produced it is in the page's own
+    Basis row and in section 4.1 of the report; a third place is friction, not safety.
+
+    WHAT THE NAME STILL CARRIES is the one thing it is for — whether this file may reach a
+    customer — because that is an export gate, not a caveat."""
     out = _write(summary_json, tmp_path, monkeypatch, llm_only=True)
-    assert Path(out).name == "10575-02_quote_LLM-ONLY.html", Path(out).name
+    assert "LLM-ONLY" not in Path(out).name, Path(out).name
+    assert Path(out).name.endswith(("_quote.html", "_quote_PORTAL.html")), Path(out).name
 
 
 def test_an_unreleased_estimate_is_named_as_the_portal_copy(summary_json, tmp_path,
@@ -221,7 +233,7 @@ def test_the_run_is_still_announced_on_the_console(summary_json, tmp_path, monke
     _write(summary_json, tmp_path, monkeypatch, llm_only=True)
     out = capsys.readouterr().out
     assert "vision model alone" in out
-    assert "_quote_LLM-ONLY.html" in out
+    assert "section 4.1" in out, "the operator is not told where to read which readers ran"
 
 
 # ── the run in flight and the reader afterwards ──────────────────────────────
@@ -231,7 +243,7 @@ def test_the_environment_alone_is_enough(summary_json, tmp_path, monkeypatch):
     the JSON of an older run may carry no llm_only key at all."""
     monkeypatch.setenv("SDI_LLM_ONLY", "1")
     out = q.generate_quote_files(str(summary_json()), out_dir=str(tmp_path), job_stem="10575-02")
-    assert Path(out).name.endswith("_quote_LLM-ONLY.html")
+    assert "LLM-ONLY" not in Path(out).name
 
 
 def test_the_json_alone_is_enough(summary_json, tmp_path, monkeypatch):
@@ -240,4 +252,4 @@ def test_the_json_alone_is_enough(summary_json, tmp_path, monkeypatch):
     monkeypatch.delenv("SDI_LLM_ONLY", raising=False)
     jp = summary_json(llm_only=True)
     out = q.generate_quote_files(str(jp), out_dir=str(tmp_path), job_stem="10575-02")
-    assert Path(out).name.endswith("_quote_LLM-ONLY.html")
+    assert "LLM-ONLY" not in Path(out).name

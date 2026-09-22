@@ -1895,30 +1895,30 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
                                 manual_workbook=manual_workbook,
                                 customer=customer)
     if _llm_only:
-        print("   [deliverables] client quote written — this run read the pack with the vision "
-              "model alone, so the file is named _quote_LLM-ONLY.html. The page itself is "
-              "identical to a full-run quote so the two can be laid side by side; which "
-              "readers ran is in section 4.1 of the job report.",
-              flush=True)
+        print("   [deliverables] client quote written. This run read the pack with the vision "
+              "model alone — the page says so in its Basis row, and section 4.1 of the job "
+              "report names which readers ran.", flush=True)
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
-    # IN THE NAME, because a file is identified from a folder listing far more often than it
-    # is opened. A quote off a measurement run and a quote off a real estimate sitting in one
-    # directory as "10575-02_quote.html" twice is how the wrong one gets attached.
+    # ── THE NAME SAYS WHETHER IT MAY GO OUT, AND NOTHING ELSE ───────────────────────
     #
-    # AND A PORTAL VIEW IS NOT CALLED `_quote.html`. "export, email attachment, print/share:
-    # disabled while `customer_releasable` is false" — the export half is this. A file named
-    # `401912-02_quote.html` sitting on the Estimating share is a quotation as far as anyone
-    # reading the folder is concerned, and the way an unreleased one goes out is that somebody
-    # attaches it without opening it. `_quote_PORTAL.html` cannot be mistaken for the
-    # document, in a listing or in an attachment box, which is the same reasoning that named
-    # the LLM-only file.
-    if _llm_only:
-        out_path = out_dir_p / f"{safe}_quote_LLM-ONLY.html"
-    elif _releasable:
-        out_path = out_dir_p / f"{safe}_quote.html"
-    else:
-        out_path = out_dir_p / f"{safe}_quote_PORTAL.html"
+    # James Gray, 22 Sep 2026: "WHY IS THE filename also LLM ONLY.. we need to stop making
+    # decisions like this. we know quotes won't go out without being checked."
+    #
+    # `_quote_LLM-ONLY.html` was the same instinct as the six warning blocks that came off
+    # this page, moved into the filename: labelling a document with what is imperfect about
+    # it, on the assumption somebody will attach it unread. They will not — a quote is
+    # checked before it is sent, and the run that produced it is named in the page's own
+    # Basis row and in section 4.1 of the report. A third place to say it is friction, not
+    # safety.
+    #
+    # WHAT THE NAME STILL CARRIES IS THE ONE THING IT IS FOR: whether this file may reach a
+    # customer. `_quote_PORTAL.html` is not a defensive label, it is the export gate —
+    # "email attachment, print/share disabled while customer_releasable is false" — and the
+    # way an unreleased quote goes out is that somebody attaches it from a folder listing. So
+    # a released quote is `_quote.html` and an unreleased one is not, whichever readers ran.
+    out_path = out_dir_p / (f"{safe}_quote.html" if _releasable
+                            else f"{safe}_quote_PORTAL.html")
     out_path.write_text(html_str, encoding="utf-8")
     return str(out_path)
 
