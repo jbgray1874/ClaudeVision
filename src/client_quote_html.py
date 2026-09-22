@@ -1895,9 +1895,16 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
                                 manual_workbook=manual_workbook,
                                 customer=customer)
     if _llm_only:
-        print("   [deliverables] client quote written. This run read the pack with the vision "
-              "model alone — the page says so in its Basis row, and section 4.1 of the job "
-              "report names which readers ran.", flush=True)
+        # THE CONSOLE CALLS IT WHAT THE FILE IS. James Gray, 22 Sep 2026: "The console message
+        # also says 'client quote written' even when the result is `_quote_PORTAL.html`; it
+        # should say 'portal estimate written' unless it is actually releasable." It is the
+        # same fault as the filename one directly below, in the other place a document is
+        # identified without opening it: a run that writes `_quote_PORTAL.html` and reports a
+        # client quote has told the operator the release gate passed when it did not.
+        print(f"   [deliverables] {'client quote' if _releasable else 'portal estimate'} "
+              "written. This run read the pack with the vision model alone — the page says so "
+              "in its Basis row, and section 4.1 of the job report names which readers ran.",
+              flush=True)
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
     # ── THE NAME SAYS WHETHER IT MAY GO OUT, AND NOTHING ELSE ───────────────────────

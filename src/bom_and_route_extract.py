@@ -623,7 +623,10 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         code = _text(part.get("part_number"))
         seen_codes[code.upper()] = seen_codes.get(code.upper(), 0) + 1
         _ops = [str(o) for o in (part.get("inferred_operations") or [])]
-        _kind = _text(part.get("concept_kind") or "fabricated")
+        # No fall-through here either: a line whose kind the mapper refused reads `unknown`
+        # on this table, not `fabricated`, because that is what the record says (D-176).
+        _kind = _text(part.get("concept_kind") or "unknown")
+        _unclassified = bool(part.get("concept_unclassified"))
         _blank = ""
         if part.get("blank_length_mm") and part.get("blank_width_mm"):
             _blank = (f"{part.get('blank_length_mm')} x {part.get('blank_width_mm')}"
@@ -631,6 +634,8 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
                          if part.get("normalized_thickness_mm") else "") + " mm (assumed)")
         elif part.get("concept_sighted_size_mm"):
             _blank = "bought by the each — sighted size is a note, not a blank"
+        elif _unclassified:
+            _blank = "none — this line is not classified"
         rows.append({
             "part_number": code,
             "description": _text(part.get("description")),
@@ -657,7 +662,8 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "kind": _kind,
             "assumed_blank": _blank,
             "work_sighted": ", ".join(_ops) if _ops else (
-                "" if _kind != "fabricated" else "none sighted — enter the work"),
+                "classify this line before it can carry work" if _unclassified
+                else "" if _kind != "fabricated" else "none sighted — enter the work"),
             "seen": _text(part.get("concept_seen") or ""),
         })
 

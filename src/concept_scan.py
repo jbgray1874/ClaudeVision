@@ -303,6 +303,33 @@ def why_not_sightable(summary: Mapping[str, Any],
     return None
 
 
+# ── THE ONLY KINDS THE MAPPER KNOWS ─────────────────────────────────────────────────
+#
+# James Gray, 22 Sep 2026, on the first safe-to-rerun review: "Any unexpected LLM `kind`
+# falls through as fabricated and can still receive a blank, material, dimensions and route.
+# The prompt constrains the model, but the mapper does not validate its output."
+#
+# That is exactly the two-names fault again, one level up: the prompt writes the word, the
+# mapper reads it, and `kind or "fabricated"` made every word the prompt did not write —
+# "assembly", "subassembly", "hardware", "electrical", a translation, a typo, a future prompt
+# edit — into a made panel. A made panel gets a blank, and a blank is an instruction to nest.
+# So a word this mapper does not know is not a default: it is a refusal with a name on it,
+# and the line stays on the sheet carrying its count and one estimator action.
+CONCEPT_KINDS = ("fabricated", "bought_in", "graphic")
+UNKNOWN_KIND = "unknown"
+
+
+def _concept_kind(raw: Any) -> str:
+    """The model's kind word as one of CONCEPT_KINDS, or UNKNOWN_KIND.
+
+    Punctuation and case are normalised — "Bought-In" is the prompt's own word spelled
+    differently, not a different classification. Nothing else is mapped: a synonym the
+    mapper guesses at ("purchased", "component") is a guess wearing a schema's clothes.
+    """
+    word = re.sub(r"[^a-z0-9]+", "_", str(raw or "").strip().lower()).strip("_")
+    return word if word in CONCEPT_KINDS else UNKNOWN_KIND
+
+
 def _positive(value: Any) -> bool:
     try:
         return float(value) > 0
@@ -330,7 +357,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if not isinstance(sighted, dict):
             continue
         name = str(sighted.get("name") or f"part {n}").strip()
-        kind = str(sighted.get("kind") or "").strip().lower()
+        kind = _concept_kind(sighted.get("kind"))
+        unclassified = kind == UNKNOWN_KIND
         record = _empty_part_record(
             f"{_slug(stem, 'CONCEPT')}-C{n:02d} {_slug(name, str(n))}",
             item_number=n, description=name, quantity=None)
@@ -339,9 +367,25 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         # A fabricated panel must carry work or it is a part nobody can price; a bought-in
         # castor and an applied graphic correctly carry none, and the difference has to be
         # readable without guessing from a material string.
-        record["concept_kind"] = kind or "fabricated"
+        record["concept_kind"] = kind
         record["page_roles"] = ["render"]
         record["concept_seen"] = str(sighted.get("seen") or "")
+        if unclassified:
+            # Everything the model said about this line, kept as words for the estimator and
+            # kept OUT of every field that prices. The line is not dropped — a thing the
+            # model could see is a thing the unit contains — it is unpriced until classified.
+            record["concept_unclassified"] = {
+                "kind_returned": str(sighted.get("kind") or ""),
+                "sighted_material": str(sighted.get("sighted_material") or ""),
+                "material_guess": str(sighted.get("material_guess") or ""),
+                "assumed_blank_mm": sighted.get("assumed_blank_mm") or {},
+                "operations": [str(o) for o in (sighted.get("operations") or [])],
+            }
+            record["review_flags"].append(
+                "CONCEPT: this line came back as "
+                f"'{str(sighted.get('kind') or '(none)')}', which is not a kind this "
+                "estimate knows — classify it as fabricated, bought-in or graphic; until "
+                "then it carries no material, no size and no route")
 
         qty = sighted.get("quantity")
         basis = str(sighted.get("quantity_basis") or "sighted on the render")
@@ -357,6 +401,9 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if kind == "bought_in" and not guess:
             # A sourcing fact, not a zero — the bought-in price chain starts here (D-153).
             guess = "BOUGHT_IN"
+        if unclassified:
+            # A material on a line nobody has classified prices a guess at a guess.
+            guess, sighted_mat = "", ""
         if guess:
             apply_field(record, "normalized_material", guess, SOURCE,
                         note=f"sighted as '{sighted_mat}' on the render" if sighted_mat
@@ -377,7 +424,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         # right. What it must never do is become a blank, because a blank is an instruction
         # to nest, and nesting a bought item is how a sheet of wheels gets priced.
         blank = sighted.get("assumed_blank_mm") or {}
-        if kind in ("bought_in", "graphic"):
+        if unclassified:
+            # Same refusal, one step earlier: a size on an unclassified line would nest too.
+            blank = {}
+        elif kind in ("bought_in", "graphic"):
             _given = [k for k in ("length", "width", "thickness")
                       if _positive(blank.get(k))]
             if _given:
@@ -421,7 +471,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         # department, mints nothing and charges nothing — silently. So an unknown operation
         # is dropped and SAID, rather than carried as a row that looks like work and is not.
         seen_ops, unknown = [], []
-        for raw in (sighted.get("operations") or []):
+        for raw in ([] if unclassified else (sighted.get("operations") or [])):
             name = str(raw or "").strip().lower().replace(" ", "_")
             if name in SIGHTABLE_OPERATIONS:
                 if name not in seen_ops:
@@ -448,7 +498,9 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 f"CONCEPT: size assumed from the render ({why}) — confirm "
                 f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
                 f"{blank.get('thickness', '?')}mm before release")
-        else:
+        elif not unclassified:
+            # An unclassified line already carries its one action; "enter the dimensions"
+            # on top of it asks for a size before anybody has said what the thing is.
             record["review_flags"].append(
                 "CONCEPT: no size could be sighted — enter this part's dimensions")
         parts.append(record)

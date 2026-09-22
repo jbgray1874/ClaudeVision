@@ -326,6 +326,111 @@ def test_a_fabricated_panel_still_gets_its_blank():
     assert part["blank_length_mm"] == 900.0 and part["blank_width_mm"] == 400.0
 
 
+def test_a_kind_the_mapper_does_not_know_is_refused_not_defaulted():
+    """James Gray, 22 Sep 2026: "Any unexpected LLM `kind` falls through as fabricated and
+    can still receive a blank, material, dimensions and route. The prompt constrains the
+    model, but the mapper does not validate its output."
+
+    `kind or "fabricated"` turned every word the prompt did not write — a translation, a
+    typo, "subassembly", "electrical", tomorrow's prompt edit — into a made panel. A made
+    panel gets a blank, and a blank is an instruction to nest. So an unknown word is a
+    refusal with a name on it, not a default: the line keeps its count and its description,
+    and carries no material, no size and no work until somebody classifies it.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["kind"] = "subassembly"
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert part["concept_kind"] == "unknown", "an unknown kind was mapped to a real one"
+    assert part.get("blank_length_mm") in (None, 0), "an unclassified line got a blank"
+    assert part.get("blank_width_mm") in (None, 0)
+    assert part.get("normalized_thickness_mm") in (None, 0)
+    assert not part.get("normalized_material"), "an unclassified line got a material"
+    assert not part.get("inferred_operations"), "an unclassified line got a route"
+    # The line is still THERE — "we dont drop something if it's obviously something that is
+    # part of the unit" — with its count and one action on it.
+    assert part["quantity"] == answer["parts"][0]["quantity"]
+    flags = [f for f in part["review_flags"] if "not a kind this estimate knows" in f]
+    assert len(flags) == 1, part["review_flags"]
+    assert "subassembly" in flags[0], "the flag does not say what the model returned"
+    # And nothing the model said is thrown away: it is kept as words, off the priced fields.
+    assert part["concept_unclassified"]["kind_returned"] == "subassembly"
+    assert part["concept_unclassified"]["assumed_blank_mm"]["length"] == 900
+
+
+def test_a_line_with_no_kind_at_all_is_not_a_made_panel():
+    """The empty string took the same fall-through, and an absent field is the commonest
+    way a model omits one. One action, not two: an unclassified line is not asked for its
+    dimensions before anybody has said what the thing is."""
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0].pop("kind", None)
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert part["concept_kind"] == "unknown"
+    assert part.get("blank_length_mm") in (None, 0)
+    assert not any("enter this part's dimensions" in f for f in part["review_flags"]), (
+        "an unclassified line was asked for a size as well as a classification")
+    assert sum("CONCEPT:" in f for f in part["review_flags"]) == 1, part["review_flags"]
+
+
+def test_the_same_word_spelled_differently_is_the_same_kind():
+    """The mapper normalises the PROMPT'S OWN WORDS — case and punctuation — and nothing
+    else. "Bought-In" is bought_in spelled differently; "purchased" is a synonym the mapper
+    would be guessing at, and a guess wearing a schema's clothes is the fault above."""
+    assert concept_scan._concept_kind("Bought-In") == "bought_in"
+    assert concept_scan._concept_kind("  FABRICATED ") == "fabricated"
+    assert concept_scan._concept_kind("purchased") == concept_scan.UNKNOWN_KIND
+    assert concept_scan._concept_kind(None) == concept_scan.UNKNOWN_KIND
+    assert concept_scan._concept_kind(7) == concept_scan.UNKNOWN_KIND
+
+
+def test_the_bom_page_says_a_line_is_unclassified_rather_than_leaving_it_blank():
+    """The BOM row defaulted the kind to `fabricated` too, so a refused line would have read
+    as a made part with empty columns — the refusal invisible on the one page an estimator
+    reads to answer "what parts"."""
+    from bom_and_route_extract import bom_sheet
+
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["kind"] = "widget"
+    parts = concept_scan.parts_from_concept(answer, "PlanA")
+    rows = bom_sheet({"manufacturing_writeup": {"parts": parts},
+                      "document_analysis": {"bom_rows": []}})
+    row = next(r for r in rows if r["description"] == answer["parts"][0]["name"])
+    assert row["kind"] == "unknown"
+    assert "not classified" in row["assumed_blank"]
+    assert "classify" in row["work_sighted"]
+
+
+def test_the_cad_guard_reads_the_staged_pack_not_the_folder():
+    """James Gray, 22 Sep 2026: "the CAD refusal scans every file in the job folder, not only
+    the selected/staged pack."
+
+    A folder is a place, not a selection. One stale STEP left in a customer's drop — an old
+    revision, a neighbouring job, a file somebody parked there — refused the concept read on
+    a pack of renders that had nothing to do with it. What counts is what this run staged or
+    actually attached, including a DXF the job discovered and MEASURED, because that geometry
+    is in the estimate whatever found it.
+    """
+    import re
+
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    guard = re.search(r"_concept_refused = None(.*?)_concept_refused = _cs_probe", src, re.S)
+    assert guard, "the measured-CAD guard has moved"
+    body = guard.group(1)
+    assert "iterdir" not in body, "the guard still lists the whole job folder"
+    assert "glob" not in body, "the guard still lists the whole job folder"
+    assert "staged_inputs" in body and "dxf_paths" in body
+
+    # And the staged selection is recorded where the guard can read it — as handed in,
+    # before scan_folder_job drops what no reader opens (a STEP nobody parses is still a
+    # file the estimator chose for this job).
+    import inspect
+
+    import file_scan
+    staged = inspect.getsource(file_scan.scan_folder_job)
+    assert 'merged["staged_inputs"] = [str(p) for p in pdf_paths]' in staged
+
+
 def test_the_prompt_cannot_change_without_its_cache_version():
     """THE SILENT UNDO. The prompt is part of the cache key, so editing it WITHOUT bumping
     the version means the new instructions are never sent: every pack replays the answer the

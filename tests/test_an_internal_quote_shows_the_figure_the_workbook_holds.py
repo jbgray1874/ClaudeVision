@@ -120,6 +120,31 @@ def test_a_job_with_no_figure_still_asks_for_one():
     assert "indicative, from the workbook" not in html
 
 
+def test_the_console_calls_the_file_what_it_is(tmp_path, capsys):
+    """James Gray, 22 Sep 2026: "The console message also says 'client quote written' even
+    when the result is `_quote_PORTAL.html`; it should say 'portal estimate written' unless
+    it is actually releasable."
+
+    It is the filename fault in the other place a document is identified without opening it.
+    An operator watching the run was told the release gate had passed when it had not.
+    """
+    import json
+
+    jp = tmp_path / "bdab4adf.json"
+    jp.write_text(json.dumps(_summary()), encoding="utf-8")
+    out = client_quote_html.generate_quote_files(str(jp), out_dir=str(tmp_path))
+
+    assert Path(out).name.endswith("_quote_PORTAL.html"), out
+    printed = capsys.readouterr().out
+    assert "portal estimate written" in printed, printed
+    assert "client quote written" not in printed, printed
+
+    # The noun and the filename must be decided by the SAME fact, or they drift apart again.
+    src = (ROOT / "src" / "client_quote_html.py").read_text(encoding="utf-8")
+    assert "'client quote' if _releasable else 'portal estimate'" in src
+    assert "if _releasable\n" in src, "the filename no longer branches on the same fact"
+
+
 def test_the_page_still_carries_no_warning_block():
     """Six removals and counting. The indicative line is ONE sentence naming the next
     action — not a banner, not a catalogue of what is outstanding."""

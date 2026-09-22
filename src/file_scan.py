@@ -852,6 +852,13 @@ def scan_folder_job(
     # renders ITS pages from these, and a wrapped render lives in the output tree, not in
     # the job folder, so a glob of the folder would silently miss the whole point.
     merged["scanned_documents"] = [str(p) for p in pdfs]
+    # THE PACK THE ESTIMATOR STAGED, exactly as handed in, before this function dropped what
+    # no reader opens. The measured-CAD guard reads THIS, not a listing of the folder: a STEP
+    # file selected for the job is part of the job even though nothing read it, and a STEP
+    # file merely sitting in the same folder — an old revision, a neighbouring job, a file
+    # somebody parked there — is not, and must not silently refuse the concept read (D-176).
+    merged["staged_inputs"] = [str(p) for p in pdf_paths] + [
+        str(p) for p in (attach_dxf_paths or [])]
     if renders:
         merged["render_images"] = [r.name for r in renders]
         if len(renders) == len(pdfs):
@@ -3909,14 +3916,19 @@ def _finalize_scan_summary(
     if _llm_only_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan as _cs_probe
+            # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
+            # James Gray, 22 Sep 2026: "the CAD refusal scans every file in the job folder,
+            # not only the selected/staged pack." A folder is a place, not a selection: one
+            # stale STEP left in a customer's drop would refuse the concept read on a pack
+            # of renders that had nothing to do with it. What counts as measured CAD here is
+            # what this run staged or actually attached — including a DXF the job discovered
+            # and MEASURED, because that geometry is in the estimate whatever found it.
             _pack_files = list(summary.get("scanned_documents") or [])
+            _pack_files += [str(p) for p in (summary.get("staged_inputs") or [])]
             if pdf_path is not None:
                 _pack_files.append(str(pdf_path))
-            if job_folder is not None:
-                try:
-                    _pack_files += [str(p) for p in Path(job_folder).iterdir()]
-                except OSError:
-                    pass
+            _pack_files += [str(p) for p in (dxf_paths or [])]
+            _pack_files += [str(p) for p in (attach_dxf_paths or [])]
             _concept_refused = _cs_probe.why_not_sightable(summary, _pack_files)
         except Exception as _wexc:                                   # noqa: BLE001
             # FAIL CLOSED. If the guard itself cannot run, the concept read does not run:
