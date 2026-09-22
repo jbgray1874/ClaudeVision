@@ -212,12 +212,28 @@ if ($task) {
 # "It restarted" and "it is running the code you meant" are different claims and only the
 # second one matters. This is the line that would have ended 401912-02's afternoon on the
 # first run instead of the fourth.
-Start-Sleep -Seconds 3
-$now = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-         Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+#
+# WAIT FOR IT, DO NOT GUESS AT IT. This slept 3 seconds and then declared the runner dead.
+# On 22 September 2026 it said "NO RUNNER IS RUNNING. It was stopped and did not come back"
+# twice, and both times the runner the task had started appeared a few seconds later - the
+# task was working and the check was impatient. The person was told to start one by hand,
+# did, and was refused by the one-runner lock because the "missing" runner was already up.
+# A false alarm here costs more than a slow start: it sends someone to fix a thing that is
+# not broken. So it now watches for up to 45 seconds and reports as soon as one appears.
+$now = @()
+$waited = 0
+while ($waited -lt 45) {
+    Start-Sleep -Seconds 3
+    $waited += 3
+    $now = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" `
+                 -ErrorAction SilentlyContinue |
+             Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+    if ($now.Count -gt 0) { break }
+    Write-Host "  waiting for the runner to start ($waited s)..." -ForegroundColor DarkGray
+}
 if ($now.Count -eq 0) {
     Write-Host ""
-    Write-Host "  NO RUNNER IS RUNNING. It was stopped and did not come back." -ForegroundColor Red
+    Write-Host "  NO RUNNER IS RUNNING after $waited seconds. It was stopped and did not come back." -ForegroundColor Red
     Write-Host "  Start one by hand and read the window:" -ForegroundColor Yellow
     Write-Host "      .\tools\start\start-runner.ps1" -ForegroundColor Yellow
     exit 6
