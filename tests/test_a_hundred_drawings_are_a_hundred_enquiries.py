@@ -481,19 +481,24 @@ def test_both_methods_land_on_the_same_row(api, monkeypatch):
         "the LLM answer must not be mistaken for the engine having finished")
 
 
-def test_an_llm_only_enquiry_never_waits_for_a_runner(api, monkeypatch):
-    """It needs no SOLIDWORKS seat and no Excel. Queued as ordinary work it would sit in
-    front of real jobs for ever, waiting for a machine that has nothing to do with it."""
+def test_an_llm_only_enquiry_owes_a_workbook_and_the_runner_gets_it(api, monkeypatch):
+    """THE RULE THIS TEST USED TO PIN IS REVERSED, ON INSTRUCTION.
+
+    It asserted an llm-only drawing was never handed to a runner, from the days when "llm"
+    ended at the fast comparison figure. James Gray, 22 Sep 2026: "we need to build in the
+    pipeline to populate the pricing s/sheet from the LLM only model" — a pricing sheet is
+    a workbook and workbooks are runner work. So the runner claims it, and the claim says
+    llm_only so the engine runs with one reader instead of four.
+    """
     er, tmp_path, enquiry = api
     _stub_model(monkeypatch)
     out = er.batch(er.BatchRequest(client="M & S", units=100, method="llm",
                                    files=_pdfs(enquiry, 3),
                                    output_root=str(tmp_path / "share")))
     assert len(out["queued"]) == 3
-    # THE FIRST CLAIM, not the second. Asking twice and checking the second is None passes
-    # even when the first was wrongly handed a scan-only drawing, because one run being in
-    # progress is itself enough to make the second answer None.
-    assert _check_in(er)["run"] is None, "a scan-only drawing was handed to a runner"
+    claim = _check_in(er)
+    assert claim["run"] is not None, "an llm-only enquiry now produces workbooks: runner work"
+    assert claim["run"]["llm_only"] is True, "the engine must be told to run --llm-only"
 
 
 def test_an_llm_only_enquiry_is_accepted_with_no_runner_connected(api, monkeypatch):
@@ -520,10 +525,11 @@ def test_a_full_enquiry_is_still_refused_with_no_runner(api, monkeypatch):
         assert exc.value.status_code == 503, method
 
 
-def test_a_scan_only_enquiry_can_actually_finish(api, monkeypatch):
-    """Left queued after its scan, an LLM-only drawing counts against the enquiry total for
-    ever and the page never says it is done. A progress bar that cannot reach the end is
-    worse than no progress bar."""
+def test_an_llm_only_drawing_is_finished_by_its_workbook_not_its_scan(api, monkeypatch):
+    """THE OTHER HALF OF THE REVERSAL. This test used to prove the scan alone finished an
+    llm-only drawing; a drawing marked done with no workbook filed is now exactly the
+    silent under-delivery the change exists to end. The fast figure lands on the row, the
+    run stays queued, and the runner's completion is what finishes it."""
     er, tmp_path, enquiry = api
     _stub_model(monkeypatch)
     out = er.batch(er.BatchRequest(client="M & S", units=100, method="llm",
@@ -531,7 +537,13 @@ def test_a_scan_only_enquiry_can_actually_finish(api, monkeypatch):
                                    output_root=str(tmp_path / "share")))
     _scan_now(er, out)
     view = er.batch_status(out["batch_id"])
-    assert view["finished"] == view["total"] == 4
+    assert view["finished"] == 0, "a scan is not a workbook"
+    assert view["runs"][0]["llm_price_gbp"] == 41.5, "the fast figure still lands at once"
+
+    first = _check_in(er)["run"]
+    er.complete(first["run_id"], er.CompleteRequest(runner_id="rnr-1", status="done"))
+    view = er.batch_status(out["batch_id"])
+    assert view["finished"] == 1 and view["total"] == 4
 
 
 def test_a_drawing_the_model_would_not_price_says_so_and_is_not_zero(api, monkeypatch):

@@ -848,11 +848,17 @@
         value="engine"> Full estimate only</label><br>
       <span style="color:var(--warn)">The LLM figure is a read of the drawing by Grok. It is
       NOT a quote, not from our rate tables, and not reproducible — it is there to compare
-      against the engine, and a hundred full estimates take days.</span>
+      against the engine, and a hundred full estimates take days.</span><br>
+      <span>A customer render (PNG/JPG, or a PDF of visuals) is estimated on LLM scan only:
+      the vision model sights the parts — sizes assumed and named for confirmation — and the
+      ordinary pricing waterfall fills the estimate workbook. The model never prices.</span>
     </p>
 
     <div style="display:flex;gap:9px;flex-wrap:wrap">
-      <button id="bAdd">Add PDFs…</button>
+      <!-- "Add PDFs" undersold it once renders became readable: a customer pack is PDFs,
+           DXFs and — since the Plan A bin enquiry — image renders, and a button that names
+           one format teaches people the others don't work. -->
+      <button id="bAdd">Add drawings &amp; renders…</button>
       <button id="bClear">Clear</button>
     </div>
 

@@ -271,6 +271,16 @@ SOURCE_RANK: Dict[str, int] = {
     "llm_full_extract": 40,
     "inference": 20,
     "geometry_inference": 20,
+    # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
+    # looks at a customer's visual — a photoreal render with no dimensions, no title block,
+    # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
+    # material each part appears to be, an envelope guessed off human-scale cues. That is
+    # weaker than the vision read of a drawing ("vision", 40), which transcribes printed
+    # figures; here there are no figures to transcribe, so every number is an assumption
+    # wearing its own name. Rank 20, with the inferences: anything anybody ever reads off a
+    # real drawing displaces it field by field, which is exactly the lifecycle a concept
+    # estimate is for — budget first, tightened when the pack arrives.
+    "vision_concept": 20,
 }
 
 # ── WHICH OF TWO EQUALLY-RANKED SOURCES WINS ────────────────────────────────────────
@@ -456,6 +466,7 @@ def tiebreak_priority(source: Any, field: Any = None) -> int:
 # falls back to the raw key rather than to silence — an unfamiliar source is still a source,
 # and printing nothing is the failure this exists to prevent.
 SOURCE_DISPLAY_NAME: Dict[str, str] = {
+    "vision_concept":         "sighted from the customer's render (assumed, unconfirmed)",
     "production_substitution": "a confirmed production rule (the gauge the shop buys)",
     "estimator_confirmed":    "an estimator, overruling the files",
     "estimator_read_drawing": "an estimator reading the drawing",

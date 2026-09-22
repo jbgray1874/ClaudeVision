@@ -44,15 +44,23 @@ from typing import Any, Dict, List, Optional
 try:
     import config
     _CONFIG_EXT = set(getattr(config, "SUPPORTED_EXTENSIONS", None) or {".pdf", ".dxf"})
+    _IMAGE_EXT = set(getattr(config, "IMAGE_RENDER_EXTENSIONS", None) or set())
 except Exception:                                                    # noqa: BLE001
     _CONFIG_EXT = {".pdf", ".dxf"}
+    _IMAGE_EXT = set()
 
 SCHEMA = "enquiry.v1"
 
 # The drawings a job can be built from. The readers accept PDF and DXF; DWG is converted to DXF
 # offline before reading, so a job that arrives as DWG flats is NOT empty. Drawn from config so
 # that adding a reader adds a recognised pack type in one place, not two.
-DRAWING_EXTENSIONS = set(_CONFIG_EXT) | {".dwg"}
+#
+# IMAGES ARE EXCLUDED HERE ON PURPOSE, though the engine can read them. A render is a
+# drawing only when somebody SELECTS it by name (staging applies the same rule): this module
+# walks folders nobody curated, and a job folder's site photos and logo files counting as
+# "readable drawings" would turn a folder of notes and photographs into a pack the engine
+# claims it can price.
+DRAWING_EXTENSIONS = (set(_CONFIG_EXT) - _IMAGE_EXT) | {".dwg"}
 
 # Below this order quantity the setup a job carries — programming, first-off, fixturing — is
 # amortised over so few units that the per-unit figure is mostly setup, and a demand quantity

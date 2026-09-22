@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -805,10 +806,21 @@ def scan_folder_job(
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     started = time.time()
     pdfs = [Path(p) for p in pdf_paths if Path(p).suffix.lower() == ".pdf"]
+    # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
+    # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
+    # (text, title block, BOM) is absent because a render carries none, not because a reader
+    # failed. The wrap lands in the output tree, never in the job folder — see image_as_pdf.
+    renders = sorted((Path(p) for p in pdf_paths if is_image_path(Path(p))),
+                     key=lambda p: p.name.lower())
+    for image in renders:
+        wrapped = image_as_pdf(image)
+        print(f"      • {image.name} is an image render — scanned as a one-page PDF")
+        pdfs.append(wrapped)
     if not pdfs:
-        raise ValueError(f"No PDF files to scan in job folder {job_folder}")
+        raise ValueError(f"No drawing files to scan in job folder {job_folder}")
 
-    print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} PDF(s))")
+    print(f"   -> Folder-as-job: {job_folder.name} ({len(pdfs)} document(s)"
+          + (f", {len(renders)} of them image render(s)" if renders else "") + ")")
     partials: List[Tuple[Path, Dict[str, Any]]] = []
     # THE SIX MINUTES NOBODY COULD SEE. extract_pdf_summary is bracketed on the single-PDF
     # path, and folder-as-job — which is how every real job now runs — calls it here instead,
@@ -825,6 +837,16 @@ def scan_folder_job(
     run_timing.mark("start merge_job_pdf_summaries")
     merged, anchor_pdf = merge_job_pdf_summaries(partials, job_folder)
     run_timing.mark("done merge_job_pdf_summaries")
+    # The documents this job actually read, wrapped renders included — the concept read
+    # renders ITS pages from these, and a wrapped render lives in the output tree, not in
+    # the job folder, so a glob of the folder would silently miss the whole point.
+    merged["scanned_documents"] = [str(p) for p in pdfs]
+    if renders:
+        merged["render_images"] = [r.name for r in renders]
+        if len(renders) == len(pdfs):
+            # Nothing in this pack is a drawing. Everything downstream that would say "the
+            # readers found nothing" must be able to say "there was nothing to read" instead.
+            merged["source_format"] = "image_render"
     bom_count = len((merged.get("document_analysis") or {}).get("bom_rows") or [])
     print(f"   -> Pooled BOM: {bom_count} line(s); anchor PDF: {anchor_pdf.name}")
 
@@ -1804,6 +1826,35 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     summary["alternative_processes"] = []
 
 
+def is_image_path(path: Path) -> bool:
+    return path.suffix.lower() in getattr(config, "IMAGE_RENDER_EXTENSIONS", set())
+
+
+def image_as_pdf(image_path: Path) -> Path:
+    """The one-page PDF this image is scanned as. Lossless — the image is embedded, not
+    re-rendered — so the vision readers see exactly the pixels the customer sent.
+
+    WRITTEN INTO THE OUTPUT TREE, NOT BESIDE THE SOURCE. The staged job folder is "a durable
+    record of exactly which drawings produced a number"; a derived file appearing in it makes
+    the record lie, and a folder rescan would find the PNG and its own conversion and cost
+    the job twice. Keyed on content, so an unchanged render converts once ever and a
+    re-scanned one gets a fresh page rather than a stale one.
+    """
+    import pymupdf                                                  # noqa: WPS433
+
+    raw = image_path.read_bytes()
+    key = hashlib.sha256(raw).hexdigest()[:16]
+    out_dir = Path(config.OUTPUT_DIR) / "render_pdfs"
+    out = out_dir / f"{key}-{image_path.stem}.pdf"
+    if out.is_file() and out.stat().st_size > 0:
+        return out
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with pymupdf.open(str(image_path)) as img:
+        pdf_bytes = img.convert_to_pdf()
+    out.write_bytes(pdf_bytes)
+    return out
+
+
 def scan_file(
     drawing_path: Path,
     *,
@@ -1816,6 +1867,22 @@ def scan_file(
             attach_dxf_paths=attach_dxf_paths,
             auto_discover_dxf=auto_discover_dxf,
         )
+    if is_image_path(drawing_path):
+        # A RENDER, NOT A DRAWING — and the summary says so, because everything this scan
+        # cannot know (dimensions, materials, a BOM) is absent for that reason and not
+        # because the readers failed. No DXF ever belongs to a render.
+        print(f"   -> Image source: {drawing_path.name} wrapped as a one-page PDF; "
+              f"no text layer, no title block — a render, not a drawing")
+        wrapped = image_as_pdf(drawing_path)
+        summary, paths = scan_pdf_file(
+            wrapped,
+            attach_dxf_paths=None,
+            auto_discover_dxf=False,
+        )
+        summary["source_format"] = "image_render"
+        summary["source_image_path"] = str(drawing_path.resolve())
+        summary["source_image_name"] = drawing_path.name
+        return summary, paths
     return scan_pdf_file(
         drawing_path,
         attach_dxf_paths=attach_dxf_paths,
@@ -3785,6 +3852,68 @@ def _finalize_scan_summary(
     except Exception as _strip_err:
         print(f"   [route] late leaf-operation strip skipped: "
               f"{type(_strip_err).__name__}: {_strip_err}", flush=True)
+
+    # ── THE CONCEPT READ, AT THE LAST BOUNDARY BEFORE COSTING ───────────────────────
+    #
+    # A render pack reaches this point with an empty parts list, because every reader above
+    # is a reader of drawings and a render is not one. On an --llm-only run that is not the
+    # end of the answer: the concept read (concept_scan.py) sights the parts off the images
+    # themselves — assumed sizes, sighted materials, rank vision_concept — and THEY go into
+    # estimate_document like any other parts, so the pricing waterfall and the workbook
+    # populate exactly as they do on a drawing job. "we need to build in the pipeline to
+    # populate the pricing s/sheet from the LLM only model" (James Gray, 22 Sep 2026).
+    #
+    # Placed here, beside the late merges, for their reason: nothing can add or remove a
+    # part after this point, so "the pack produced no parts" is finally a fact rather than
+    # a stage nobody has run yet. Gated on --llm-only AND on the ordinary readers having
+    # found nothing (or the pack being renders outright) — a drawing pack that names its
+    # parts never pays for this, and a full engine run never sights what it can measure.
+    _llm_only_run = os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
+    _is_render_pack = summary.get("source_format") == "image_render"
+    _no_parts = not summary["manufacturing_writeup"]["parts"]
+    if _llm_only_run and (_no_parts or _is_render_pack):
+        try:
+            import concept_scan
+            _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
+            if not _pack and pdf_path is not None:
+                _pack = [str(pdf_path)]
+            if not _pack and job_folder is not None:
+                _pack = [str(p) for p in sorted(Path(job_folder).glob("*.pdf"))]
+            _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
+                                                                             "yes", "on"}
+            _read = concept_scan.read_concept(_pack, refresh=_fresh)
+            _answer = _read.get("parsed") or {}
+            _sighted = concept_scan.parts_from_concept(
+                _answer, Path(_pack[0]).stem if _pack else "CONCEPT")
+            summary["concept_read"] = dict(concept_scan.concept_note(_answer),
+                                           parts=len(_sighted),
+                                           cache_hit=bool(_read.get("cache_hit")))
+            summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            print("")
+            print("   " + "=" * 68)
+            print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
+            print(f"   parts below are SIGHTED by the vision model: {len(_sighted)} part(s),")
+            print("   every dimension an assumption that names the cue it was scaled from.")
+            print("   They are priced by the ordinary waterfall — the model never prices.")
+            for _uv in (summary["concept_read"].get("not_visible") or [])[:6]:
+                print(f"   Not visible on the render, for the estimator: {_uv}")
+            print("   " + "=" * 68)
+            print("")
+        except concept_scan.ConceptUnavailable as _cu:
+            # NOTHING WAS READ, AND THE BOOK MUST SAY SO. An empty estimate whose cause is
+            # a missing key reads identically to a pack with nothing in it — the exact
+            # illusion D-157 buried for the delivery notes.
+            summary["concept_read"] = {"error": str(_cu)}
+            summary.setdefault("review_flags", []).append(
+                f"CONCEPT READ COULD NOT RUN: {_cu} — this book is empty because nothing "
+                f"was read, not because the pack has no parts")
+            print(f"   !! concept read could not run: {_cu}", flush=True)
+        except Exception as _ce:                                     # noqa: BLE001
+            summary["concept_read"] = {"error": f"{type(_ce).__name__}: {_ce}"}
+            summary.setdefault("review_flags", []).append(
+                f"CONCEPT READ FAILED ({type(_ce).__name__}: {_ce}) — this book is empty "
+                f"because the read failed, not because the pack has no parts")
+            print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
 
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")

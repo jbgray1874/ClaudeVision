@@ -43,6 +43,16 @@ import config
 # without.
 DRAWING_SUFFIXES = (".pdf", ".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp")
 
+# A RENDER IS A DRAWING ONLY WHEN SOMEBODY SAYS IT IS. Customer packs arrive as images as
+# well as PDFs — two renders of an M&S collection bin started this — and the engine reads
+# them (file_scan wraps one image as a one-page PDF). But a job folder on the share also
+# holds site photos, logo files and screenshots, and sweeping those into a pack because a
+# FOLDER was chosen would cost a vision read per holiday snap and file them as parts of the
+# job. So an image is staged when it was SELECTED BY NAME, and skipped with a note when it
+# merely lived in a chosen folder — "selection means selection", the rule this module
+# already applies to everything else.
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+
 # NOT A DRAWING, AND IT MUST TRAVEL WITH THE JOB ANYWAY.
 #
 # The SolidWorks connector is self-gating on `_sw_native_extract.json` being in the job folder.
@@ -164,7 +174,7 @@ def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
     skipped: List[Tuple[str, str]] = []
     seen: set = set()
 
-    def consider(p: Path) -> None:
+    def consider(p: Path, *, explicit: bool = False) -> None:
         # A LOCK FILE IS NOT A MODEL. SolidWorks and Office write "~$<name>" beside a document
         # that is open, and it carries the document's own extension — so "~$12349-02-69-GA
         # .SLDASM" passed the suffix test and was staged as a drawing. Six of them reached one
@@ -176,7 +186,16 @@ def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
             skipped.append((str(p), "a SolidWorks/Office lock file, not a drawing — it means "
                                     "someone had that document open"))
             return
-        if p.suffix.lower() not in DRAWING_SUFFIXES:
+        suffix = p.suffix.lower()
+        if suffix in IMAGE_SUFFIXES:
+            # Selected by name: a render the engine reads. Found in a chosen folder: a photo
+            # until somebody says otherwise — see IMAGE_SUFFIXES above.
+            if not explicit:
+                skipped.append((str(p), "an image in a chosen folder — a render is staged "
+                                        "only when selected by name, so a job folder's "
+                                        "photos do not become parts of the job"))
+                return
+        elif suffix not in DRAWING_SUFFIXES:
             skipped.append((str(p), f"not a drawing file ({p.suffix or 'no extension'})"))
             return
         key = p.name.lower()
@@ -194,7 +213,7 @@ def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
                 if child.is_file():
                     consider(child)
         elif p.is_file():
-            consider(p)
+            consider(p, explicit=True)
         else:
             skipped.append((str(p), "not found on this machine"))
 
