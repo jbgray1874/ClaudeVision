@@ -254,6 +254,13 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
 
 # ── sighted answer → engine parts ───────────────────────────────────────────────────
 
+def _positive(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _slug(text: Any, fallback: str) -> str:
     out = re.sub(r"[^A-Za-z0-9]+", "-", str(text or "")).strip("-").upper()
     return out[:24] or fallback
@@ -308,7 +315,30 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if sighted_mat:
             record["materials"].append(sighted_mat)
 
+        # ── A BOUGHT-IN LINE IS NEVER NESTED, WHATEVER SIZE THE MODEL GIVES IT ──────
+        #
+        # James Gray, 22 Sep 2026: "Never nest a caster." The first run did exactly that —
+        # CASTORS came back with a 75×75 envelope, the assembler wrote it as a blank, and
+        # the nest block worked out 338 castors per 2500×1250 sheet. A castor is not cut
+        # from anything: it is bought, each, and it prices off a catalogue or an evidenced
+        # research figure. The same is true of a hinge, a fixing and an applied graphic.
+        #
+        # THIS IS THE MAPPER REFUSING AN ILLEGAL KIND, not the prompt asking nicely. The
+        # model may return a size for a castor — it can see one — and the size may even be
+        # right. What it must never do is become a blank, because a blank is an instruction
+        # to nest, and nesting a bought item is how a sheet of wheels gets priced.
         blank = sighted.get("assumed_blank_mm") or {}
+        if kind in ("bought_in", "graphic"):
+            _given = [k for k in ("length", "width", "thickness")
+                      if _positive(blank.get(k))]
+            if _given:
+                record["review_flags"].append(
+                    f"CONCEPT: {kind.replace('_', '-')} line — the sighted size "
+                    f"({', '.join(_given)}) is recorded as a note, not as a blank; it is "
+                    f"bought by the each and is never nested")
+                record["concept_sighted_size_mm"] = {
+                    k: blank.get(k) for k in ("length", "width", "thickness")}
+            blank = {}
         why = str(sighted.get("why_size") or "scaled from the render")
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):

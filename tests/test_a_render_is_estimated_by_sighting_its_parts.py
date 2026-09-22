@@ -171,6 +171,49 @@ def test_an_operation_the_rate_card_cannot_price_is_dropped_and_said():
                for f in part["review_flags"]), part["review_flags"]
 
 
+def test_a_castor_is_never_nested_however_the_model_sizes_it():
+    """James Gray, 22 Sep 2026: "Never nest a caster."
+
+    The first run did. CASTORS came back with a 75×75 envelope, the assembler wrote it as a
+    blank, and the nest block worked out 338 castors per 2500×1250 sheet. A castor is bought
+    by the each; a blank is an instruction to nest, so a bought-in line must never get one.
+
+    THE MAPPER REFUSES THE KIND — it does not rely on the prompt asking nicely. The model
+    can see a castor and may well return its size, so the size is kept as a note and refused
+    as a blank.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    castor = next(p for p in answer["parts"] if p["name"] == "CASTOR")
+    castor["assumed_blank_mm"] = {"length": 75, "width": 75, "thickness": 75}
+
+    part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
+                if "CASTOR" in p["part_number"])
+    assert part.get("blank_length_mm") in (None, 0), "a castor was written as a blank"
+    assert part.get("blank_width_mm") in (None, 0)
+    assert part.get("normalized_thickness_mm") in (None, 0)
+    # Kept as evidence, not thrown away — it is a real observation, just not a blank.
+    assert part["concept_sighted_size_mm"]["length"] == 75
+    assert any("never nested" in f for f in part["review_flags"]), part["review_flags"]
+
+
+def test_an_applied_graphic_is_not_nested_either():
+    """A print laid onto a panel is bought by area or by the each; it is not cut from a
+    sheet of graphics. Same rule, same reason."""
+    answer = json.loads(json.dumps(FIXTURE))
+    part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
+                if "GRAPHIC" in p["part_number"])
+    assert part["concept_kind"] == "graphic"
+    assert part.get("blank_length_mm") in (None, 0), "the graphic was written as a blank"
+
+
+def test_a_fabricated_panel_still_gets_its_blank():
+    """The control. A guard that refuses everything is not a guard — a made panel must
+    still nest, or there is no material cost at all."""
+    part = concept_scan.parts_from_concept(FIXTURE, "PlanA")[0]
+    assert part["concept_kind"] == "fabricated"
+    assert part["blank_length_mm"] == 900.0 and part["blank_width_mm"] == 400.0
+
+
 def test_the_prompt_cannot_change_without_its_cache_version():
     """THE SILENT UNDO. The prompt is part of the cache key, so editing it WITHOUT bumping
     the version means the new instructions are never sent: every pack replays the answer the
