@@ -1632,7 +1632,19 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # reader that cannot size a folded part — a measurement, not an offer, which is why
     # James asked for the window to go and the word indicative to stay. No amount of
     # estimator work on the sheet turns that run into a full one.
-    _validity_row = ("<tr><td>Basis</td><td>Indicative — for internal comparison</td></tr>"
+    # A CONCEPT BUDGET SAYS SO IN THE ROW THAT SAYS WHAT THE DOCUMENT IS. James Gray,
+    # 22 Sep 2026: a price reconstructed from a PNG "is acceptable only as a clearly editable
+    # concept budget". Every size, material and count behind this total was sighted off a
+    # picture — that is not a caveat about quality, it is WHAT THE DOCUMENT IS, and it
+    # belongs in the Basis row exactly like "indicative" does. One row, no banner.
+    _concept = (summary.get("concept_read") or {}) if isinstance(summary, dict) else {}
+    _n_assumed = len(_concept.get("assumptions") or [])
+    if _concept.get("parts"):
+        _basis = ("Concept budget — every size, material and count sighted from the render"
+                  + (f", {_n_assumed} assumptions" if _n_assumed else ""))
+    else:
+        _basis = "Indicative — for internal comparison"
+    _validity_row = (f"<tr><td>Basis</td><td>{_esc(_basis)}</td></tr>"
                      if _llm else
                      f"<tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>")
     _validity_foot = ("Prices ex VAT, GBP. Indicative."

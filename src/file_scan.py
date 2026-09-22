@@ -3576,6 +3576,11 @@ def _finalize_scan_summary(
         print(f"   [detail-geometry] not applied: "
               f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
 
+    # Declared before the try so the concept hook can ask what the answers file said even
+    # when this block did not run: the sighted parts are minted AFTER this pass, so their
+    # confirmations have to be applied a second time, down there, to a list that holds them.
+    _ec_data: Dict[str, Any] = {}
+    _ec_src = ""
     try:
         # WHAT A PERSON READ OFF THE DRAWING, LAST AND HIGHEST. It runs after every reader
         # so that what it displaces is recorded against a fully-populated record rather than
@@ -3953,12 +3958,49 @@ def _finalize_scan_summary(
                                                                              "yes", "on"}
             _read = concept_scan.read_concept(_pack, refresh=_fresh)
             _answer = _read.get("parsed") or {}
-            _sighted = concept_scan.parts_from_concept(
-                _answer, Path(_pack[0]).stem if _pack else "CONCEPT")
+            # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
+            # in the output tree, so the anchor's stem is a hash — and every sighted part
+            # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type
+            # into a confirmations file and nobody can match to a job by eye.
+            _job_name = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name)
             _unit_ops = concept_scan.unit_operations(_answer)
+            # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
+            #
+            # The confirmations pass runs before this hook, against a parts list that does
+            # not yet hold a single sighted part — so every entry an estimator wrote about
+            # this render would have reported "NO part of this job carries that number" and
+            # done nothing. The pass is not moved: it runs where it does so that what it
+            # displaces is recorded against fully-populated records. It is run AGAIN here,
+            # over the sighted parts only, which is the list its entries name.
+            if _ec_data.get("parts"):
+                try:
+                    import estimator_confirmed as _ec2                 # noqa: WPS433
+                    _rep2 = _ec2.apply_estimator_confirmed(_sighted, _ec_data)
+                    if _rep2.get("stamped") or _rep2.get("agreed"):
+                        print(f"   [confirmed] {_rep2.get('stamped', 0)} sighted part(s), "
+                              f"{_rep2.get('fields', 0)} field(s) confirmed from "
+                              f"{_ec_src or 'the answers file'} — the render's assumption is "
+                              f"displaced by the estimator's figure", flush=True)
+                    _offs2 = ((summary.get("estimator_decisions") or {})
+                              .get("operations_off") or {})
+                    for _sp in _sighted:
+                        _spc = str(_sp.get("part_number") or "").strip().upper()
+                        if _spc in _offs2:
+                            _sp["_estimator_operations_off"] = list(_offs2[_spc])
+                except Exception as _ec2_err:                          # noqa: BLE001
+                    print(f"   [confirmed] the answers file could not be applied to the "
+                          f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+            _assumed = concept_scan.assumption_register(_sighted)
+            _answers_path = concept_scan.write_assumptions_file(
+                _sighted, folder=job_folder, job=_job_name)
             summary["concept_read"] = dict(concept_scan.concept_note(_answer),
                                            parts=len(_sighted),
                                            unit_operations=_unit_ops,
+                                           assumptions=_assumed,
+                                           assumptions_file=(str(_answers_path)
+                                                             if _answers_path else ""),
                                            cache_hit=bool(_read.get("cache_hit")))
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
             # THE UNIT'S OWN WORK, ON THE UNIT'S OWN RECORD. Assembling the carcass, fitting
@@ -3978,6 +4020,16 @@ def _finalize_scan_summary(
             print(f"   parts below are SIGHTED by the vision model: {len(_sighted)} part(s),")
             print("   every dimension an assumption that names the cue it was scaled from.")
             print("   They are priced by the ordinary waterfall — the model never prices.")
+            # WHAT IT ASSUMED, AND WHERE TO ANSWER IT. A concept budget is only honest if
+            # the assumptions are a list somebody can work through, not stamps on twelve
+            # records that have to be opened one at a time.
+            if _assumed:
+                print(f"   {len(_assumed)} assumption(s) went into the price — every size, "
+                      f"material and count is sighted, not measured.")
+            if _answers_path:
+                print(f"   Confirm or correct them in {_answers_path}")
+                print("   (state your reasoning against each one; an entry with none is "
+                      "refused and the render's own assumption stands)")
             for _uv in (summary["concept_read"].get("not_visible") or [])[:6]:
                 print(f"   Not visible on the render, for the estimator: {_uv}")
             print("   " + "=" * 68)

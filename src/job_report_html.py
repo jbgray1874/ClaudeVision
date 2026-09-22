@@ -1787,6 +1787,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
     return f"""<h2>7 &nbsp;Verdict</h2>
 <p class="lead">{_lead}{parity_note} {draw_note}</p>
 {_provenance_strip(summary)}
+{_concept_assumptions_section(summary)}
 {_bom_provenance_section(summary)}
 {_purchased_key_section(summary)}
 {_unpriced_section(summary)}
@@ -1872,6 +1873,51 @@ def _provenance_strip(summary: Dict[str, Any]) -> str:
             f'<tr><td><b>Decisions needing resolution</b></td><td>{con_txt}</td></tr>'
             f'<tr><td><b>Powder decided by</b></td><td>{pow_txt}</td></tr>'
             '</tbody></table>')
+
+
+def _concept_assumptions_section(summary: Dict[str, Any]) -> str:
+    """8.5 — WHAT A CONCEPT BUDGET ASSUMED, AS A LIST SOMEBODY CAN WORK THROUGH.
+
+    James Gray, 22 Sep 2026: a price reconstructed from a render "is acceptable only as a
+    clearly editable concept budget, with each assumption available to confirm — not as a
+    technical estimate reconstructed from a PNG."
+
+    Every figure on a concept run is already stamped `vision_concept` and carries the cue it
+    was scaled from, which section 9 reports part by part. That is provenance, and provenance
+    answers "where did this come from" for a datum you already have in your hand. This answers
+    the estimator's actual question — WHAT DID IT ASSUME, all of it, in one place, with the
+    file that turns each assumption into a confirmed figure named at the top.
+
+    Empty on every other run, because a drawing pack assumes none of this.
+    """
+    concept = summary.get("concept_read") or {}
+    rows = concept.get("assumptions") or []
+    if not isinstance(rows, list) or not rows:
+        return ""
+    path = str(concept.get("assumptions_file") or "")
+    body = []
+    for row in rows[:400]:
+        if not isinstance(row, dict):
+            continue
+        value = row.get("value")
+        if isinstance(value, list):
+            value = ", ".join(str(v) for v in value)
+        body.append(
+            f'<tr><td>{_esc(row.get("part_number"))}</td>'
+            f'<td>{_esc(row.get("description"))}</td>'
+            f'<td>{_esc(row.get("field"))}</td>'
+            f'<td>{_esc(value)}</td>'
+            f'<td>{_esc(row.get("cue"))}</td></tr>')
+    where = (f'<p>Confirm or correct them in <code>{_esc(path)}</code>. State your reasoning '
+             f'against each one — an entry with none is refused, and the render\'s own '
+             f'assumption stands.</p>' if path else "")
+    return (f'<h2>8.5 &nbsp;What this concept budget assumed</h2>'
+            f'<p class="lead">This pack is a visual, so <b>every size, material and count '
+            f'below was sighted from the image</b> and none of it was measured. '
+            f'{len(rows)} assumption(s) went into the price.</p>{where}'
+            f'<table><thead><tr><th>Part</th><th>Description</th><th>Assumed</th>'
+            f'<th>Value</th><th>Sighted because</th></tr></thead>'
+            f'<tbody>{"".join(body)}</tbody></table>')
 
 
 def _bom_provenance_section(summary: Dict[str, Any]) -> str:

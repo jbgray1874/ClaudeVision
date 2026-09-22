@@ -431,6 +431,174 @@ def test_the_cad_guard_reads_the_staged_pack_not_the_folder():
     assert 'merged["staged_inputs"] = [str(p) for p in pdf_paths]' in staged
 
 
+def test_every_figure_a_render_supplied_is_on_one_list():
+    """James Gray, 22 Sep 2026: "The concept path still turns a render's guessed MDF, 5 mm
+    thickness, dimensions and operations into normal pricing inputs... It is acceptable only
+    as a clearly editable concept budget, with each assumption available to confirm."
+
+    The provenance was already right — every field is stamped `vision_concept` with its cue.
+    But provenance answers "where did this come from" about a datum already in your hand;
+    an estimator needs the opposite, which is one list of everything that was assumed."""
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = concept_scan.assumption_register(parts)
+    assert len(rows) > 30, "the assumptions list is not the whole of what was assumed"
+
+    fields = {r["field"] for r in rows}
+    for expected in ("quantity", "material", "blank_length_mm", "thickness_mm", "operations"):
+        assert expected in fields, f"{expected} was assumed and is not on the list"
+    for row in rows:
+        assert row["cue"], f"{row['part_number']} {row['field']} names no cue"
+        assert row["part_number"] and row["description"]
+
+    # A drawing pack assumes none of this, and must produce no list at all.
+    assert concept_scan.assumption_register(
+        [{"part_number": "12349-02-69-04M", "description": "LID"}]) == []
+
+
+def test_the_answer_sheet_is_written_out_pre_filled(tmp_path):
+    """Confirming an assumption should be editing a line, not hand-authoring JSON for a part
+    number nobody wants to retype. The file written is the one `estimator_confirmed` already
+    reads and finds — no new convention, no copying anything anywhere."""
+    import estimator_confirmed as ec
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    path = concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1")
+    assert path is not None and path.exists()
+    assert ec.find_corrections_file(tmp_path, None, "JOB1") == path, (
+        "the engine's own finder does not find the file the engine just wrote")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entry = payload["parts"][parts[0]["part_number"]]
+    assert entry["blank_length_mm"] == 900.0 and entry["material"] == "MDF"
+    assert entry["_sighted_because"], "the cue is not beside the figure"
+
+
+def test_the_template_cannot_apply_itself(tmp_path):
+    """THE WHOLE DESIGN. Writing the answers file must never promote a picture-guess into a
+    person's reading. Every entry is `inferred` with its reasoning left EMPTY, and
+    `estimator_confirmed` refuses an inferred figure that states no reasoning — "a claim
+    without its working is a guess wearing a person's authority".
+
+    Omitting `basis` would default it to `read` — PRINTED ON THE SHEET — which is exactly
+    the laundering this refuses, so the absence of that key is the test."""
+    import estimator_confirmed as ec
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    payload = concept_scan.assumptions_payload(parts, job="JOB1")
+    for code, entry in payload["parts"].items():
+        assert entry["basis"] == "inferred", f"{code} would enter above the render"
+        assert entry["read_from"] == "", f"{code} arrives with its reasoning pre-written"
+    assert not payload["confirmed_by"], "the file claims a person confirmed it"
+
+    # And the door itself refuses it, which is the fact that matters.
+    p = tmp_path / "JOB1_estimator_dimensions.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    data, problems = ec.load_corrections(p)
+    assert data["parts"] == {}, "an untouched template applied figures to the estimate"
+    assert len(problems) == len(payload["parts"])
+    assert all("no reasoning is given" in p for p in problems), problems
+
+
+def test_an_answered_assumption_displaces_the_render_and_leaves_the_list(tmp_path):
+    """The other half: a person who states their reasoning has confirmed that assumption on
+    purpose, it enters at THEIR rank, above the render — and it stops being asked about."""
+    import estimator_confirmed as ec
+    from source_precedence import source_of
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    path = concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    code = parts[0]["part_number"]
+    raw["confirmed_by"] = "James Gray"
+    raw["parts"][code]["blank_length_mm"] = 1000
+    raw["parts"][code]["read_from"] = "measured off the sample on the bench"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    fresh = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    before = len(concept_scan.assumption_register(fresh))
+    data, _ = ec.load_corrections(path)
+    report = ec.apply_estimator_confirmed(fresh, data)
+    assert report["stamped"] == 1 and not report["unmatched"], report
+    assert fresh[0]["blank_length_mm"] == 1000.0
+    assert source_of(fresh[0], "blank_length_mm") == "estimator_inferred", (
+        "an answered assumption did not outrank the render")
+    assert len(concept_scan.assumption_register(fresh)) < before, (
+        "a figure a person has answered is still being asked about")
+
+
+def test_an_estimators_own_file_is_never_overwritten(tmp_path):
+    """A machine that rewrote a person's confirmations with its own guesses would undo the
+    exact work this exists to collect — silently, on the run after they did it."""
+    theirs = tmp_path / "JOB1_confirmed.json"
+    theirs.write_text(json.dumps({"drawing_number": "JOB1", "confirmed_by": "James Gray",
+                                  "parts": {"X": {"material": "ACRYLIC", "basis": "read"}}}),
+                      encoding="utf-8")
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    assert concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1") is None
+    assert "ACRYLIC" in theirs.read_text(encoding="utf-8")
+    assert not (tmp_path / "JOB1_estimator_dimensions.json").exists()
+
+
+def test_a_note_beside_a_figure_is_not_reported_as_an_error(tmp_path):
+    """The answers file teaches writing a note beside a ruling, and `estimator_decisions` has
+    read a leading underscore as a comment since. A PART entry could not, so the cue written
+    beside each sighted figure would have been reported as a line that did nothing — and an
+    estimator told three times that their own notes are errors stops writing notes."""
+    import estimator_confirmed as ec
+
+    p = tmp_path / "JOB1_estimator_dimensions.json"
+    p.write_text(json.dumps({"drawing_number": "JOB1", "parts": {
+        "ABC": {"material": "MDF", "basis": "read", "_why": "scaled from the castors"}}}),
+        encoding="utf-8")
+    data, problems = ec.load_corrections(p)
+    assert data["parts"]["ABC"]["material"] == "MDF"
+    assert not problems, problems
+
+
+def test_the_report_and_the_quote_say_it_is_a_concept_budget():
+    """Not a banner and not a warning — the Basis row is where a document says what it is,
+    and section 8.5 is the list. Both are silent on every other run."""
+    import client_quote_html
+    import job_report_html
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = concept_scan.assumption_register(parts)
+    summary = {"concept_read": {"parts": len(parts), "assumptions": rows,
+                                "assumptions_file": "K:/jobs/JOB1_estimator_dimensions.json"}}
+    section = job_report_html._concept_assumptions_section(summary)
+    assert "concept budget" in section.lower()
+    assert "sighted from the image" in section
+    assert "JOB1_estimator_dimensions.json" in section
+    assert job_report_html._concept_assumptions_section({}) == "", (
+        "a drawing pack grew a concept section")
+
+    # The quote's Basis row, on the internal page a render run produces.
+    from quote_state import PORTAL
+    quote = dict(summary, llm_only=True, job_number="JOB1",
+                 estimate_summary={"estimate_workbook_inputs": {"assumed_job_quantity": 1},
+                                   "workbook_equivalent_pricing":
+                                       {"m105_total_unit_cost_gbp": 102.70},
+                                   "part_estimates": []},
+                 final_estimate={"totals": {}})
+    html = client_quote_html.build_quote_html(quote, job_stem="JOB1", audience=PORTAL)
+    assert "Concept budget" in html
+    assert "sighted from the render" in html
+
+
+def test_a_sighted_part_is_numbered_after_the_job_not_the_wrapper():
+    """A render is scanned as a content-keyed PDF in the output tree, so the anchor's stem is
+    a hash: every sighted part came out as `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no
+    estimator would type into a confirmations file and nobody can match to a job by eye."""
+    import re
+
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    hook = re.search(r"_job_name = (.{0,200})", src, re.S)
+    assert hook and "job_folder" in hook.group(1), (
+        "the sighted parts are still numbered after the wrapped render")
+    parts = concept_scan.parts_from_concept(FIXTURE, "bdab4adf-3340-40M&S")
+    assert parts[0]["part_number"].startswith("BDAB4ADF-3340-40M-S-C01")
+
+
 def test_the_prompt_cannot_change_without_its_cache_version():
     """THE SILENT UNDO. The prompt is part of the cache key, so editing it WITHOUT bumping
     the version means the new instructions are never sent: every pack replays the answer the

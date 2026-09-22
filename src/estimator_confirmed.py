@@ -494,6 +494,13 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
         entry: Dict[str, Any] = {}
         for key, value in spec.items():
             key_l = str(key).strip().lower()
+            # A LEADING UNDERSCORE IS A COMMENT HERE TOO. `estimator_decisions` has read one
+            # that way since the example file taught the habit, and a part entry could not —
+            # so a note written beside a figure ("_sighted_because: scaled from the castors")
+            # was reported as a line that did nothing. An estimator told three times that
+            # their own notes are errors stops writing notes, or stops reading the list.
+            if key_l.startswith("_"):
+                continue
             if key_l in _REFUSED_KEYS:
                 problems.append(
                     f"{code_s}: '{key}' REFUSED — this file states what the drawing says "

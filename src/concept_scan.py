@@ -359,6 +359,24 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         name = str(sighted.get("name") or f"part {n}").strip()
         kind = _concept_kind(sighted.get("kind"))
         unclassified = kind == UNKNOWN_KIND
+        # ── EVERY GUESS, LISTED WHERE SOMEBODY CAN CONFIRM IT ───────────────────────
+        #
+        # James Gray, 22 Sep 2026: "The concept path still turns a render's guessed MDF,
+        # 5 mm thickness, dimensions and operations into normal pricing inputs... It is
+        # acceptable only as a clearly editable concept budget, with each assumption
+        # available to confirm — not as a technical estimate reconstructed from a PNG."
+        #
+        # The provenance was already right — every field is stamped `vision_concept` and
+        # says which cue it was scaled from — but provenance is a thing you find by opening
+        # a record and asking. An estimator needs the opposite: ONE list of what was
+        # assumed, with the answer sheet already written. So each figure this mapper puts
+        # into pricing is also recorded here, in the file keys the confirmations door reads,
+        # and `write_assumptions_file` turns the list into a file a person edits.
+        assumed: List[Dict[str, Any]] = []
+
+        def _assume(file_key: str, value: Any, cue: str) -> None:
+            assumed.append({"file_key": file_key, "value": value, "cue": cue})
+
         record = _empty_part_record(
             f"{_slug(stem, 'CONCEPT')}-C{n:02d} {_slug(name, str(n))}",
             item_number=n, description=name, quantity=None)
@@ -395,6 +413,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             qty = 1
             basis = "assumed — the render does not show a count"
         apply_field(record, "quantity", qty, SOURCE, note=basis)
+        _assume("quantity", qty, basis)
 
         sighted_mat = str(sighted.get("sighted_material") or "").strip()
         guess = str(sighted.get("material_guess") or "").strip().upper()
@@ -405,9 +424,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             # A material on a line nobody has classified prices a guess at a guess.
             guess, sighted_mat = "", ""
         if guess:
-            apply_field(record, "normalized_material", guess, SOURCE,
-                        note=f"sighted as '{sighted_mat}' on the render" if sighted_mat
+            _why_mat = (f"sighted as '{sighted_mat}' on the render" if sighted_mat
                         else "sighted on the render")
+            apply_field(record, "normalized_material", guess, SOURCE, note=_why_mat)
+            _assume("material", guess, _why_mat)
         if sighted_mat:
             record["materials"].append(sighted_mat)
 
@@ -447,6 +467,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 continue
             if value > 0:
                 apply_field(record, field, value, SOURCE, note=why)
+                _assume(field, value, why)
                 wrote_size = True
         try:
             thickness = float(blank.get("thickness"))
@@ -454,6 +475,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             thickness = 0.0
         if thickness > 0:
             apply_field(record, "normalized_thickness_mm", thickness, SOURCE, note=why)
+            _assume("thickness_mm", thickness, why)
 
         # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
         #
@@ -480,6 +502,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 unknown.append(str(raw))
         if seen_ops:
             record["inferred_operations"] = seen_ops
+            # No file key: the answers file states what a drawing says, and it takes no
+            # operations. A route sighted from a picture is turned off through
+            # `estimator_decisions.operations_off`, which is a DECISION, not a reading.
+            _assume("", list(seen_ops), "the work sighted on the render")
         elif kind == "fabricated":
             # A made part with no work on it is not a part anybody can price. Say so on the
             # record rather than letting it reach the sheet as a free component.
@@ -503,8 +529,136 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             # on top of it asks for a size before anybody has said what the thing is.
             record["review_flags"].append(
                 "CONCEPT: no size could be sighted — enter this part's dimensions")
+        record["concept_assumptions"] = assumed
         parts.append(record)
     return parts
+
+
+# ── THE CONCEPT BUDGET'S OWN PAPERWORK ──────────────────────────────────────────────
+#
+# James Gray, 22 Sep 2026: "The concept path still turns a render's guessed MDF, 5 mm
+# thickness, dimensions and operations into normal pricing inputs... It is acceptable only
+# as a clearly editable concept budget, with each assumption available to confirm — not as
+# a technical estimate reconstructed from a PNG."
+#
+# Two things make that true, and neither is a warning block:
+#
+#   THE LIST      every figure the render path put into pricing, gathered off the records
+#                 in one place, so "what did this assume?" is answered by reading rather
+#                 than by opening twelve records and inspecting their stamps;
+#   THE DOOR      the answers file `estimator_confirmed` already reads, WRITTEN OUT
+#                 PRE-FILLED, so confirming an assumption is editing a line rather than
+#                 hand-authoring JSON for a part number nobody wants to retype.
+#
+# THE TEMPLATE CANNOT APPLY ITSELF, AND THAT IS THE WHOLE DESIGN. Every entry carries
+# `"basis": "inferred"` with its reasoning left EMPTY, and `estimator_confirmed` refuses an
+# inferred figure that states no reasoning — "a claim without its working is a guess wearing
+# a person's authority". So an untouched template changes nothing and says, part by part,
+# that it is waiting. A person who types their reasoning has confirmed that assumption on
+# purpose, and it then enters at their rank, above the render. The one thing this must never
+# do is promote a picture-guess into a person's reading by writing a file, and it cannot:
+# omitting `basis` would default it to "read" — PRINTED ON THE SHEET — which is exactly the
+# laundering this refuses.
+
+ASSUMPTION_BASIS = "inferred"
+
+
+def assumption_register(parts: Optional[List[Mapping[str, Any]]]) -> List[Dict[str, Any]]:
+    """Every figure the concept read put into pricing, one row each, with its cue."""
+    rows: List[Dict[str, Any]] = []
+    for part in (parts or []):
+        if not isinstance(part, Mapping) or not part.get("concept"):
+            continue
+        # A CONFIRMED FIGURE IS NOT AN ASSUMPTION ANY MORE. An estimator who answered one in
+        # the answers file should not be asked about it again on every run afterwards — that
+        # is how a list of actions becomes a list nobody reads.
+        _settled = set((part.get("estimator_confirmed") or {}).get("fields") or {})
+        for item in (part.get("concept_assumptions") or []):
+            if not isinstance(item, Mapping):
+                continue
+            if item.get("file_key") and item["file_key"] in _settled:
+                continue
+            rows.append({"part_number": str(part.get("part_number") or ""),
+                         "description": str(part.get("description") or ""),
+                         "kind": str(part.get("concept_kind") or ""),
+                         "field": str(item.get("file_key") or "operations"),
+                         "value": item.get("value"),
+                         "cue": str(item.get("cue") or ""),
+                         "confirmable_in_the_answers_file": bool(item.get("file_key"))})
+    return rows
+
+
+def assumptions_payload(parts: Optional[List[Mapping[str, Any]]],
+                        *, job: str = "") -> Dict[str, Any]:
+    """The answers file, pre-filled with what was assumed and nothing else.
+
+    `confirmed_by` and the per-part reasoning are the estimator's to write. Until they do,
+    every entry is refused by `estimator_confirmed` and the concept figures stand as the
+    render's own — which is what they are.
+    """
+    out: Dict[str, Any] = {}
+    for part in (parts or []):
+        if not isinstance(part, Mapping) or not part.get("concept"):
+            continue
+        entry: Dict[str, Any] = {}
+        cues: List[str] = []
+        for item in (part.get("concept_assumptions") or []):
+            key = str((item or {}).get("file_key") or "")
+            if not key:
+                continue
+            entry[key] = item.get("value")
+            if item.get("cue"):
+                cues.append(f"{key}: {item['cue']}")
+        if not entry:
+            continue
+        entry["basis"] = ASSUMPTION_BASIS
+        # EMPTY ON PURPOSE — see above. What the render saw is recorded beside it under a
+        # leading underscore, which this file's own convention reads as a comment, so the
+        # estimator can see what they are agreeing with or overturning.
+        entry["read_from"] = ""
+        entry["_sighted_because"] = "; ".join(cues)
+        out[str(part.get("part_number") or "")] = entry
+    return {
+        "drawing_number": job,
+        "job": job,
+        "confirmed_by": "",
+        "confirmed_on": "",
+        "note": ("Every figure below was SIGHTED from a render, not read off a drawing. "
+                 "Edit the value where it is wrong, then state your reasoning in "
+                 "'read_from' — an entry with no reasoning is refused and the render's own "
+                 "assumption stands. Prices are never entered here."),
+        "parts": out,
+    }
+
+
+def write_assumptions_file(parts: Optional[List[Mapping[str, Any]]], *,
+                           folder: Any, job: str) -> Optional[Path]:
+    """Write the pre-filled answers file beside the job, or None if it must not be written.
+
+    NEVER OVERWRITES. A file already there is a person's, and a machine that rewrote an
+    estimator's confirmations with its own guesses would undo the exact work this exists to
+    collect — silently, on the run after they did it.
+    """
+    if not parts or folder is None:
+        return None
+    payload = assumptions_payload(parts, job=job)
+    if not payload["parts"]:
+        return None
+    try:
+        import estimator_confirmed as _ec                              # noqa: WPS433
+        if _ec.find_corrections_file(folder, None, job):
+            return None                        # a person's file is already there
+    except Exception:                                                  # noqa: BLE001
+        return None                            # cannot prove it is safe → do not write
+    safe = re.sub(r"[^\w\-. ]", "", str(job or "concept")).strip() or "concept"
+    path = Path(folder) / f"{safe}_estimator_dimensions.json"
+    if path.exists():
+        return None
+    try:
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError:
+        return None                            # a share we cannot write to is not an error
+    return path
 
 
 def unit_operations(answer: Dict[str, Any]) -> List[str]:
