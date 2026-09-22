@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estimating Validation Status</title>
+<!--
+  HOW TO UPDATE THIS REPORT (weekly):
+  1. Change the "week ending" date in the header below.
+  2. Add a row to the STATUS TABLE (search for "STATUS TABLE") — copy an existing <tr>.
+  3. Add or update a JOB CARD (search for "JOB CARDS") — copy an existing <article>.
+     Keep the card to a THEME, not a list of items, and end it with the
+     "fed back into the model" sentence.
+  4. When a pack moves (response arrives, re-sent, signed off), edit its row's
+     Status pill: class "s-sent", "s-review", "s-integrated" or "s-signed".
+  Nothing else needs touching — there is no script and no build step.
+-->
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1a2330; --dim:#5b6a7e;
+    --line:#dde3ea; --accent:#0f7a5c; --accent-soft:#e4f3ee;
+    --warn:#8a6d00; --warn-soft:#fdf4d7; --sent:#3d5a80; --sent-soft:#e6edf5;
+    --gold:#7a5b0f; --gold-soft:#f6ecd4;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#12161c; --panel:#1a2029; --ink:#e8edf3; --dim:#9aa7b6;
+      --line:#2c3542; --accent:#4cc39a; --accent-soft:#173327;
+      --warn:#e3c96a; --warn-soft:#332d14; --sent:#8fb3d9; --sent-soft:#1d2836;
+      --gold:#dbb95c; --gold-soft:#322a13;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#12161c; --panel:#1a2029; --ink:#e8edf3; --dim:#9aa7b6;
+    --line:#2c3542; --accent:#4cc39a; --accent-soft:#173327;
+    --warn:#e3c96a; --warn-soft:#332d14; --sent:#8fb3d9; --sent-soft:#1d2836;
+    --gold:#dbb95c; --gold-soft:#322a13;
+  }
+  *{box-sizing:border-box}
+  body{margin:0; background:var(--bg); color:var(--ink);
+       font:15px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif}
+  .wrap{max-width:1060px; margin:0 auto; padding:28px 16px 60px}
+  header h1{font-size:26px; margin:0 0 2px}
+  header .sub{color:var(--dim); margin:0 0 4px}
+  .stamp{display:inline-block; background:var(--accent-soft); color:var(--accent);
+         border-radius:20px; padding:3px 14px; font-weight:600; font-size:13px; margin-top:8px}
+  section{margin-top:30px}
+  h2{font-size:18px; border-bottom:2px solid var(--accent); padding-bottom:6px}
+  /* headline tiles */
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-top:14px}
+  .tile{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+  .tile .n{font-size:28px; font-weight:700; color:var(--accent)}
+  .tile .l{color:var(--dim); font-size:13px}
+  /* quotes */
+  .quotes{display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-top:14px}
+  blockquote{background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--accent);
+             border-radius:8px; margin:0; padding:12px 16px; font-size:14px}
+  blockquote footer{color:var(--dim); font-size:12.5px; margin-top:6px}
+  /* table */
+  .scroll{overflow-x:auto; border:1px solid var(--line); border-radius:10px; background:var(--panel)}
+  table{border-collapse:collapse; width:100%; min-width:900px; font-size:13.5px}
+  th{background:var(--sent-soft); color:var(--ink); text-align:left; padding:9px 10px;
+     border-bottom:2px solid var(--line); white-space:nowrap}
+  td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td:first-child{white-space:nowrap}
+  .pill{display:inline-block; border-radius:12px; padding:1px 10px; font-size:12px;
+        font-weight:600; white-space:nowrap}
+  .s-sent{background:var(--sent-soft); color:var(--sent)}
+  .s-review{background:var(--warn-soft); color:var(--warn)}
+  .s-integrated{background:var(--accent-soft); color:var(--accent)}
+  .s-signed{background:var(--gold-soft); color:var(--gold)}
+  /* cards */
+  .cards{display:grid; gap:14px; margin-top:14px}
+  article{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
+  article h3{margin:0 0 4px; font-size:15.5px}
+  article .meta{color:var(--dim); font-size:12.5px; margin-bottom:8px}
+  article p{margin:6px 0}
+  .fed{color:var(--accent); font-weight:600}
+  details{margin-top:14px}
+  summary{cursor:pointer; font-weight:600; color:var(--dim); padding:6px 0}
+  .note{color:var(--dim); font-size:13px; margin-top:16px}
+  @media print{
+    body{background:#fff}
+    .tile,.scroll,article,blockquote{border-color:#bbb}
+    details{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>SDI Intelligence — Estimating Validation Status</h1>
+  <p class="sub">Estimate workbooks issued to the estimating team for review, the responses received, and how each review has strengthened the model.</p>
+  <p class="sub">Estimates and packs filed at <b>K:\Estimating\Completed\Live Enquiries\completed AI briefs</b>, one folder per client and job.</p>
+  <span class="stamp">Week ending 22 September 2026 · updated 22/09/2026</span>
+</header>
+
+<section>
+  <h2>This cycle at a glance</h2>
+  <div class="tiles">
+    <div class="tile"><div class="n">9</div><div class="l">additional estimate packs issued (September wave)</div></div>
+    <div class="tile"><div class="n">6</div><div class="l">detailed reviews received back</div></div>
+    <div class="tile"><div class="n">6/6</div><div class="l">reviews fed back into the model as reusable rules</div></div>
+    <div class="tile"><div class="n">4</div><div class="l">estimators actively reviewing (Howard, Tim, Dave, Tony)</div></div>
+  </div>
+  <p>Every review received this cycle produced changes that were made <b>in the estimating engine itself</b>, not patched into a single workbook — so each estimator's knowledge now carries automatically to every comparable job. The direction of travel is exactly what this programme is for: reviewed estimates are converging on the manual figures, and the engine is accumulating the team's production knowledge as it goes.</p>
+  <div class="quotes">
+    <blockquote>"That's pretty good now — only a simple unit but price would be usable."
+      <footer>Dave Wright, 18/09, on 401912-02 Tesco Metal Divider — reviewed and answered within 19 minutes</footer></blockquote>
+    <blockquote>"Just a few points on the above. Costs come out really close."
+      <footer>Tim Wilkes, 09/09, on 11350-02 Boots Comms Bar</footer></blockquote>
+    <blockquote>Material aligned to within a penny of the manual sheet — £2.38 vs £2.37 at 10-off.
+      <footer>10975-02 M&amp;S Table Top Graphic Holder, after Howard's review cycle</footer></blockquote>
+    <blockquote>Within ~6% of the manual estimate at 50-off (£60.56 vs £57.09) — shown honestly rather than tuned to match.
+      <footer>11908-21 Sunglasses Tray, after Tony's review</footer></blockquote>
+  </div>
+</section>
+
+<section>
+  <h2>Status — additional workbooks issued</h2>
+  <!-- ═══════════════ STATUS TABLE — one row per pack ═══════════════ -->
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>Sent</th><th>Job</th><th>Sent to</th><th>Re-sent</th>
+      <th>Response received</th><th>Feedback theme (summarised)</th><th>Status</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td>02/09</td><td>12552 — Storage Unit (qty-break set)</td><td>Tim Wilkes</td>
+        <td>02/09 (quantity workbooks 10/25/50/100) · 09/09 (review invited)</td>
+        <td>02/09 — quantity brief clarified</td>
+        <td>Quantity handling: full set-up/run split published so the discount curve is checkable; one-workbook-per-job format adopted from this feedback.</td>
+        <td><span class="pill s-review">awaiting detailed review</span></td>
+      </tr>
+      <tr>
+        <td>03/09</td><td>12349-02 — Gravity Feeder Modules (fanatics)</td><td>Tim Wilkes, Dave Wright, James Ryan</td>
+        <td>15/09 (revised workbook)</td>
+        <td>04/09 — Tim, full 14-point review</td>
+        <td>Quantities per unit, routing to the correct departments, fixings from the database, header traceability. Nine of fourteen points confirmed fixed on the revised book.</td>
+        <td><span class="pill s-integrated">integrated · re-issued</span></td>
+      </tr>
+      <tr>
+        <td>04/09</td><td>1176-02 — TTI</td><td>Dave Wright</td>
+        <td>21/09 (to Howard for review)</td>
+        <td>—</td>
+        <td>Brought into the active review cycle 21/09; earlier issues may already be addressed by the September engine improvements.</td>
+        <td><span class="pill s-sent">with reviewer</span></td>
+      </tr>
+      <tr>
+        <td>05/09</td><td>11732-17 — TTI Milwaukee</td><td>Dave Wright</td>
+        <td>21/09 (to Howard for review)</td>
+        <td>—</td>
+        <td>Brought into the active review cycle 21/09, alongside 1176-02.</td>
+        <td><span class="pill s-sent">with reviewer</span></td>
+      </tr>
+      <tr>
+        <td>08/09</td><td>11350-02 — Boots Comms Bar (and 11350-01 by extension)</td><td>Tim Wilkes</td>
+        <td>—</td>
+        <td>09/09 — Tim: "costs come out really close" + four sourcing queries</td>
+        <td>Sourcing traceability: fixings and ticket strip from the system, powder reference on the drawing, visibility of the pemming rate. Tim confirmed the same findings read across to 11350-01.</td>
+        <td><span class="pill s-integrated">integrated</span></td>
+      </tr>
+      <tr>
+        <td>08/09</td><td>10975-02 — A4 Table Top Graphic Holder (M&amp;S, 0355255)</td><td>Dave Wright; reviewed by Howard Thurley</td>
+        <td>15/09 · 16/09 (revised + quantity breaks) · 21/09 (to Howard)</td>
+        <td>10/09 — Howard, full line-level review with manual comparison</td>
+        <td>Roll goods priced by length, the packing method built into the engine, sheet nesting turned for best yield, department rates confirmed. Material now agrees with the manual sheet to a penny at 10-off.</td>
+        <td><span class="pill s-integrated">integrated · final confirmations open</span></td>
+      </tr>
+      <tr>
+        <td>w/c 08/09</td><td>7332-01 — A3 Signage Stand (Harrods)</td><td>Howard Thurley</td>
+        <td>15/09 (revised workbook) · 17/09 (adoption summary)</td>
+        <td>09/09 — Howard, 12-point review; 16/09 — detailed follow-up answers</td>
+        <td>Department times and rates adopted throughout (laser, weld, dress, brushing, packing split); Harrods plating recorded as a standing decision; per-job commercial prices kept current rather than carried forward. Called out by both sides as the most productive review of the programme so far.</td>
+        <td><span class="pill s-integrated">integrated · job rulings closing</span></td>
+      </tr>
+      <tr>
+        <td>17/09</td><td>11908-21 — Sunglasses Tray (0359967)</td><td>Tony Ford</td>
+        <td>—</td>
+        <td>Reviewed by Tony; response and adoption summary issued 17/09</td>
+        <td>Pre-faced board recognised and priced as bought (no double-charged laminating), ABS edging as its own measured line, joinery machine and bench rows made visible, deliberate exclusions recorded by name. Lands ~6% from Tony's manual at 50-off.</td>
+        <td><span class="pill s-integrated">integrated · 3 confirmations open</span></td>
+      </tr>
+      <tr>
+        <td>18/09</td><td>401912-02 — Tesco Metal Divider Tall Rev B</td><td>Dave Wright</td>
+        <td>—</td>
+        <td>18/09 — Dave, same morning: "price would be usable"</td>
+        <td>One principle: never a near-match presumption on a bought-in item — a line with no confirmed source stays at £0 and is flagged for a person. Adopted as a standing rule of the pricing model.</td>
+        <td><span class="pill s-integrated">integrated</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>What each review taught the model</h2>
+  <!-- ═══════════════ JOB CARDS — theme, not item lists ═══════════════ -->
+  <div class="cards">
+
+    <article>
+      <h3>7332-01 — Harrods A3 Signage Stand · Howard Thurley</h3>
+      <p class="meta">Reviewed 09/09 · revised book 15/09 · follow-up answers 16/09 · adoption summary 17/09</p>
+      <p>The richest exchange of the programme to date, and one both sides flagged as the most useful review so far. The theme was <b>production reality over engine averages</b>: the real department times and rates for laser, welding, dressing, brushing and packing now drive the sheet, and the movement in the unit price is almost entirely the shop's own figures replacing generic ones. Harrods plating is now a standing decision rather than a guess, and commercial prices are kept current per job instead of being carried forward from history.</p>
+      <p class="fed">Every point has been fed back into the model — these rules now apply automatically to comparable metal and plated work, without carrying this job's prices into other jobs.</p>
+    </article>
+
+    <article>
+      <h3>10975-02 — M&amp;S A4 Table Top Graphic Holder · Howard Thurley</h3>
+      <p class="meta">Sent 08/09 · reviewed 10/09 · revised 15/09 and 16/09 · re-issued to Howard 21/09</p>
+      <p>A model example of the review loop closing: after Howard's line-level comparison, <b>material now agrees with the manual sheet to within a penny</b> at 10-off, and the quantity breaks sit together on one tab of one workbook, exactly as requested. The theme was pricing method — roll goods by the length actually used, packing by the shop's own bag-and-box method, and sheet nesting turned for best yield.</p>
+      <p class="fed">All of it has been fed back into the model as general rules — every future job with roll goods, packed products or sheet nesting benefits, with prices always drawn live from SDI systems.</p>
+    </article>
+
+    <article>
+      <h3>12349-02 — Gravity Feeder Modules (fanatics) · Tim Wilkes</h3>
+      <p class="meta">Sent 03/09 · reviewed 04/09 (14 points) · revised book 15/09</p>
+      <p>Tim's review sharpened <b>quantity and routing discipline</b>: quantities per unit now read true against the drawing, acrylic routes to the right department at the right rate, and the header carries full traceability for future re-quotes. Nine of his fourteen points were confirmed fixed on the revised book, with the remainder tracked openly. Notably, one of Tim's findings matched one of Howard's from a different job — independent confirmation that the fix is a rule, not a patch.</p>
+      <p class="fed">The corrections have been fed back into the model, so quantity reading and department routing improve on every job, not just this one.</p>
+    </article>
+
+    <article>
+      <h3>11350-02 — Boots Comms Bar · Tim Wilkes</h3>
+      <p class="meta">Sent 08/09 · reviewed 09/09 · findings read across to 11350-01</p>
+      <p>"Costs come out really close" — and the queries were all about <b>traceability of sources</b> rather than the numbers themselves: where fixings, the ticket strip, the powder reference and the pemming rate come from. Exactly the right questions, and the report format now answers them on the sheet. One review covered two jobs, since Tim confirmed the same points apply to the near-identical 11350-01.</p>
+      <p class="fed">The sourcing visibility Tim asked for has been fed back into the model — every line on every estimate now says which system answered it.</p>
+    </article>
+
+    <article>
+      <h3>11908-21 — Sunglasses Tray · Tony Ford</h3>
+      <p class="meta">Adoption summary issued 17/09 · lands ~6% from the manual estimate at 50-off</p>
+      <p>Tony's review taught the engine <b>how joinery really buys and builds</b>: pre-faced board is priced as the sheet that is actually purchased (with no laminating charged twice), edging is a measured line of its own with the measurement credited by name, and the joinery machine and bench operations are visible rows at the shop's own rates. A deliberate exclusion is now recorded as a decision with a name against it — categorically different from a gap.</p>
+      <p class="fed">All of it fed back into the model as board, edging and joinery rules that carry to every faced-board job — with the small remaining gap shown honestly rather than tuned away.</p>
+    </article>
+
+    <article>
+      <h3>401912-02 — Tesco Metal Divider · Dave Wright</h3>
+      <p class="meta">Sent 18/09 11:53 · reviewed 18/09 12:12 — the fastest turnaround of the programme</p>
+      <p>"Pretty good now — price would be usable." Dave's one substantive point was the most valuable kind: a matter of principle. A near-match presumption on a bought-in item is the real danger with automated estimating, and the rule he asked for — <b>leave it at £0 and flag it for a person rather than pick the closest alternative</b> — is precisely the discipline the pricing model is built around.</p>
+      <p class="fed">Dave's rule has been fed back into the model as a standing principle: no line is ever priced on a guessed match, and every unpriced line names itself for review.</p>
+    </article>
+
+    <article>
+      <h3>12552 · Tim Wilkes — and 1176-02 / 11732-17 (TTI) · with Howard</h3>
+      <p class="meta">12552 sent 02/09 with the full quantity set · TTI pair re-issued to Howard 21/09</p>
+      <p>The 12552 exchange established the <b>quantity-break format</b> now used everywhere: one workbook, the set-up/run split published so the discount curve can be checked line by line, and briefs filed centrally so quantities are never in doubt. The two TTI jobs have been brought into Howard's review queue — and usefully, they were produced by an earlier build, so his review will double as a measure of how far the model has moved since.</p>
+      <p class="fed">The format improvements are already in the model; the TTI reviews will feed in the same way when they land.</p>
+    </article>
+
+  </div>
+</section>
+
+<section>
+  <h2>Running themes across the programme</h2>
+  <p>Four threads run through every review this cycle, and all four are now standing behaviour of the model:</p>
+  <p><b>1 · The shop's own figures win.</b> Department times and rates supplied by the estimators and departments replace engine averages, permanently and for every comparable job.</p>
+  <p><b>2 · No silent guesses.</b> An item without a confirmed source stays visibly unpriced and asks for a person — never a closest-match presumption, never a carried-forward historic figure.</p>
+  <p><b>3 · Everything says where it came from.</b> Every line names the system, person or drawing that decided it, so a review is a check rather than an investigation.</p>
+  <p><b>4 · Rules, not patches.</b> Each correction lands in the engine, is recorded in the change register with the estimator's name against it, and is pinned by an automated test — so the same question is never asked twice.</p>
+</section>
+
+<details>
+  <summary>Phase 1 register — original workbooks issued May–August 2026</summary>
+  <div class="scroll" style="margin-top:10px">
+  <table>
+    <thead><tr><th>Sent</th><th>Job</th><th>Sent to</th><th>Response</th><th>Outcome</th></tr></thead>
+    <tbody>
+      <tr><td>05/05</td><td>Gillette Mobile Cage</td><td>Andy Baxter</td><td>Immediate response</td><td><span class="pill s-signed">signed off 05/05</span></td></tr>
+      <tr><td>04/06</td><td>1282-Milwaukee-Wall-Bay</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>04/06</td><td>10897-01</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>06/07</td><td>1282 Milwaukee — SDI estimating s/sheet format</td><td>James Ryan / Dave Wright</td><td>Verbal feedback; multiple copies exchanged</td><td><span class="pill s-integrated">changes integrated, resent multiple times</span></td></tr>
+      <tr><td>07/07</td><td>1298-DrillHolder</td><td>James Ryan / Dave Wright</td><td>James Ryan asked Dave Wright to check 08/07</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>10/07</td><td>12532-03-RecipeCard</td><td>James Ryan / Dave Wright</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>10/07</td><td>1304-01 GrinderHolder</td><td>James Ryan / Dave Wright</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>12/07</td><td>1303-a LargeCircularShelf</td><td>James Ryan / Dave Wright</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>14/07</td><td>1310-DrillStud-Holder</td><td>Dave Wright</td><td>Minor points — powder coating, welding, one measurement</td><td><span class="pill s-integrated">changes integrated where relevant</span></td></tr>
+      <tr><td>22/07</td><td>12120-01-GA Digital Ticketing Bracket</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>28/07</td><td>0348837-Horti-Crate</td><td>James Ryan</td><td>Various improvements suggested</td><td><span class="pill s-review">on hold pending phase 2</span></td></tr>
+      <tr><td>28/07</td><td>357299_2-WideArch</td><td>James Ryan</td><td>Various improvements suggested</td><td><span class="pill s-review">on hold pending phase 2</span></td></tr>
+      <tr><td>28/07</td><td>0357831-MadridStyle</td><td>James Ryan</td><td>Various improvements suggested</td><td><span class="pill s-review">on hold pending phase 2</span></td></tr>
+      <tr><td>28/07</td><td>0359131-Cocktail</td><td>James Ryan</td><td>Various improvements suggested</td><td><span class="pill s-review">on hold pending phase 2</span></td></tr>
+      <tr><td>03/08</td><td>11350 Boots Ladder Rack Comms Bar</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>04/08</td><td>12422</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>06/08</td><td>12392-02</td><td>Tim Wilkes / James Ryan</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>13/08</td><td>11650 Fragrance Coffret</td><td>Tim Wilkes</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+      <tr><td>13/08</td><td>11650-04</td><td>Tim Wilkes / James Ryan</td><td>—</td><td><span class="pill s-sent">no response</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="note">The contrast between the two phases is itself the story: phase 1 sends mostly went unanswered; the September wave has a 6-of-9 review rate with turnarounds as fast as 19 minutes — the estimating team is engaged, and the review loop is working.</p>
+</details>
+
+<p class="note">Produced by SDI Intelligence. Customer quotations remain unissued on every job above until the estimator settles the open commercial inputs — reviews are of internal working estimates only.</p>
+
+</div>
+</body>
+</html>
