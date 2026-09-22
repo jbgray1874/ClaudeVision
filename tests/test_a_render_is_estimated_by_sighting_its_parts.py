@@ -171,6 +171,57 @@ def test_an_operation_the_rate_card_cannot_price_is_dropped_and_said():
                for f in part["review_flags"]), part["review_flags"]
 
 
+def test_a_pack_with_measured_cad_is_never_sighted_over():
+    """James Gray, 22 Sep 2026, on the split between the two paths: "If you point the render
+    assembler at a real pack, you will flatten a weldment into one 5 mm panel again."
+
+    The first gate was `--llm-only AND (a render pack OR no parts came out)`, and the second
+    half is the hole: a REAL drawing pack whose BOM read came back empty — an unreadable
+    table, a scan the reader could not see — would be handed to the concept read and guessed
+    at, with flats and models sitting measured and ignored in the same folder.
+
+    A drawing pack that produced no parts is a READER FAILURE. The honest output is that
+    failure, not a picture-guess wearing its name.
+    """
+    # A flat in the pack: refused by file.
+    assert concept_scan.why_not_sightable(
+        {}, ["C:/job/11350-02-01_1mm MS_RevB.DXF"]) is not None
+    assert "DXF" in concept_scan.why_not_sightable({}, ["x/a.DXF"])
+    for cad in ("b.dwg", "c.SLDPRT", "d.sldasm", "e.step"):
+        assert concept_scan.why_not_sightable({}, [cad]), cad
+
+    # A DXF-sourced scan: refused by the summary.
+    assert concept_scan.why_not_sightable({"source_format": "dxf"}, [])
+
+    # A measured flat on a part: refused even when the file list is empty, because a pack
+    # can reach this point with its geometry already merged onto the records.
+    measured = {"manufacturing_writeup": {"parts": [
+        {"part_number": "12349-02-69-04M", "flat_pattern_detected": True}]}}
+    assert "measured flat" in concept_scan.why_not_sightable(measured, [])
+    sw = {"manufacturing_writeup": {"parts": [
+        {"part_number": "7332-01-003", "geometry_source": "solidworks_flat_pattern"}]}}
+    assert concept_scan.why_not_sightable(sw, [])
+
+    # THE CONTROL. A render pack has nothing to measure and is sightable.
+    assert concept_scan.why_not_sightable(
+        {"source_format": "image_render",
+         "manufacturing_writeup": {"parts": []}},
+        ["C:/job/PlanA-bin-render.png", "C:/job/visuals.pdf"]) is None
+
+
+def test_the_refusal_is_wired_in_before_the_read_and_fails_closed():
+    """A refusal is not a failure, so it is decided BEFORE the try — otherwise a deliberate
+    refusal is reported as a concept read that crashed. And if the guard itself cannot run,
+    the read does not run: the one thing worse than refusing a pack we could have sighted is
+    sighting over a pack we could have measured."""
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "_concept_refused" in src
+    assert "MEASURED CAD IS NEVER SIGHTED OVER" in src
+    assert "the measured-CAD guard could not run" in src, "the guard does not fail closed"
+    # The refusal must be decided before the concept read is attempted.
+    assert src.index("_concept_refused = None") < src.index("_sighted = concept_scan.parts_from_concept")
+
+
 def test_a_castor_is_never_nested_however_the_model_sizes_it():
     """James Gray, 22 Sep 2026: "Never nest a caster."
 

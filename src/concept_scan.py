@@ -44,7 +44,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 # ── BUMP THIS WHENEVER THE PROMPT CHANGES ───────────────────────────────────────────
 #
@@ -253,6 +253,55 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
 
 
 # ── sighted answer → engine parts ───────────────────────────────────────────────────
+
+# ── WHEN THE CONCEPT READ MAY NOT RUN ───────────────────────────────────────────────
+#
+# James Gray, 22 Sep 2026, setting the split between the two paths: "If you point the render
+# assembler at a real pack, you will flatten a weldment into one 5 mm panel again. That is
+# the defect we just saw." And: "Assembler / nest / routes — NO. Do not run concept-kind
+# mapping over a measured DXF."
+#
+# The first gate was `--llm-only AND (a render pack OR no parts came out)`. The second half
+# is the hole: a REAL drawing pack whose BOM read happened to come back empty — a scan the
+# reader could not see, a pack with an unreadable table — would be handed to the concept
+# read and sighted over. Flats, models and title blocks would sit in the folder, measured
+# and ignored, while a vision model guessed at panels from a picture of the same thing.
+#
+# So measured CAD in the pack is an absolute refusal, whatever else is true. The concept
+# read exists for a pack that has nothing to measure; a drawing pack that produced no parts
+# is a READER FAILURE, and the honest output for that is the failure, not a sighted guess.
+_MEASURABLE_CAD = {".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
+
+
+def why_not_sightable(summary: Mapping[str, Any],
+                      files: Optional[List[Any]] = None) -> Optional[str]:
+    """The reason this pack must not be concept-read, or None if it may be.
+
+    Returns a sentence, because a refusal nobody can read is a refusal nobody can act on.
+    """
+    if str(summary.get("source_format") or "").lower() == "dxf":
+        return "this pack was read as DXF geometry — it is measured, not sighted"
+
+    for raw in (files or []):
+        suffix = Path(str(raw)).suffix.lower()
+        if suffix in _MEASURABLE_CAD:
+            return (f"the pack contains {Path(str(raw)).name} — measured CAD is never "
+                    f"sighted over")
+
+    writeup = summary.get("manufacturing_writeup")
+    parts = (writeup or {}).get("parts") if isinstance(writeup, dict) else None
+    for part in (parts or []):
+        if not isinstance(part, dict):
+            continue
+        if part.get("flat_pattern_detected") or part.get("source_dxf_path"):
+            return (f"{part.get('part_number') or 'a part'} carries a measured flat — "
+                    f"measured CAD is never sighted over")
+        source = str(part.get("geometry_source") or "").lower()
+        if source.startswith(("dxf", "solidworks")):
+            return (f"{part.get('part_number') or 'a part'} carries {source} geometry — "
+                    f"measured CAD is never sighted over")
+    return None
+
 
 def _positive(value: Any) -> bool:
     try:
