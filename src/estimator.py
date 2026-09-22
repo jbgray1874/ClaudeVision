@@ -2646,11 +2646,17 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                     "price": _ind_price,
                     "review_required": True,
                     "review_reason": _ind.get("status"),
+                    # THE STAMP THE WITHHOLDING RULE READS. price_provenance.
+                    # stamp_is_reproducible looks for this key on the block or one level
+                    # inside it; without it every researched figure read as a guess that
+                    # moves, and was kept off the price column however stable it was.
+                    "price_is_reproducible": bool(_ind.get("price_is_reproducible")),
                     "metadata": {
                         "pricing_mode": "llm_indicative",
                         "evidence": _ind.get("evidence"),
                         "calculation": _ind.get("calculation"),
                         "label": _ind.get("label"),
+                        "price_first_taken": _ind.get("price_first_taken"),
                     },
                 }},
                 "applied_unit_cost": _ind_price,
@@ -3248,6 +3254,26 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         "quantity_basis": (_found.get("price_basis")
                            or _found.get("quantity_basis") or ""),
         "origin": _found.get("source_type"),
+        # ── AND WHETHER IT WILL SAY THE SAME THING TOMORROW ──────────────────────
+        #
+        # James Gray, 22 Sep 2026, on the second concept book: "The hinge and four castors
+        # are still £0. That is against your standing rule: visible bought-ins must enter
+        # the pricing pipeline."
+        #
+        # THE FIGURE WAS FOUND AND THEN THROWN AWAY BY A MISSING KEY — the same shape as
+        # the date three lines above, one layer down. `lookup_web_ai_price` asks once per
+        # specification and stores the answer, and returns `price_is_reproducible` to say
+        # so. This adapter did not carry it. `indicative_price_to_withhold` then found an
+        # AI figure with nothing saying it holds still, and did the one thing it is for:
+        # kept it off the price column. So the castors showed £48.16 in one table and
+        # "no price" in another, and the money column read £0.
+        #
+        # Reproducibility is the WHOLE test that rule turns on — "a guess that changes
+        # every run is not a price" — and this figure passes it. Carrying the flag is not
+        # a relaxation of the policy; it is the policy finally being asked about the right
+        # thing.
+        "price_is_reproducible": bool(_found.get("price_is_reproducible")),
+        "price_first_taken": _found.get("price_first_taken") or "",
     }
 
 

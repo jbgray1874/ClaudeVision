@@ -260,8 +260,8 @@ _MINTED_CODE = re.compile(r"^BI-[A-Z]+$", re.IGNORECASE)
 
 # ── AND THE OTHER MINT IN THIS ENGINE ───────────────────────────────────────────────
 #
-# concept_scan numbers a sighted part `<JOB>-C01 SIDE-PANEL` — job slug, sequence, name
-# slug — because a render has no parts list to take a number from. That is a placeholder
+# concept_scan numbers a sighted part `<JOB>-CPT01` — job slug, then CPT and a sequence —
+# because a render has no parts list to take a number from. That is a placeholder
 # every bit as much as BI-SCREW is, and this recogniser did not know it: the first full
 # concept book told an estimator that
 # `5E09BE03B9741E5F-BDAB4AD-C11 CASTOR` "is a real code, so it was put to the purchasing
@@ -269,9 +269,10 @@ _MINTED_CODE = re.compile(r"^BI-[A-Z]+$", re.IGNORECASE)
 # have existed. A wrong diagnosis costs more than no diagnosis, because it is acted on.
 #
 # NARROW, for the reason above it: the whole string must be the shape concept_scan writes —
-# upper-case slug, a -C then exactly two digits, one space, another upper-case slug. A
-# drawing's own code carries no space, so nothing somebody printed can match this.
-_CONCEPT_CODE = re.compile(r"^[A-Z0-9][A-Z0-9-]*-C\d{2} [A-Z0-9][A-Z0-9-]*$")
+# an upper-case slug, then -CPT and exactly two digits, and nothing else. The CPT token is
+# there for this test alone: `1234-C01` is a code a drawing could genuinely print, and
+# calling somebody's part an invention is the one error this must never make.
+_CONCEPT_CODE = re.compile(r"^[A-Z0-9][A-Z0-9-]*-CPT\d{2}$")
 
 
 def is_sighted_code(identity: Any) -> bool:

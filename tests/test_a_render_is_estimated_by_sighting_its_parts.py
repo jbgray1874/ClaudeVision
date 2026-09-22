@@ -299,7 +299,7 @@ def test_a_castor_is_never_nested_however_the_model_sizes_it():
     castor["assumed_blank_mm"] = {"length": 75, "width": 75, "thickness": 75}
 
     part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
-                if "CASTOR" in p["part_number"])
+                if "CASTOR" in p["description"].upper())
     assert part.get("blank_length_mm") in (None, 0), "a castor was written as a blank"
     assert part.get("blank_width_mm") in (None, 0)
     assert part.get("normalized_thickness_mm") in (None, 0)
@@ -313,7 +313,7 @@ def test_an_applied_graphic_is_not_nested_either():
     sheet of graphics. Same rule, same reason."""
     answer = json.loads(json.dumps(FIXTURE))
     part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
-                if "GRAPHIC" in p["part_number"])
+                if "GRAPHIC" in p["description"].upper())
     assert part["concept_kind"] == "graphic"
     assert part.get("blank_length_mm") in (None, 0), "the graphic was written as a blank"
 
@@ -596,7 +596,9 @@ def test_a_sighted_part_is_numbered_after_the_job_not_the_wrapper():
     assert hook and "job_folder" in hook.group(1), (
         "the sighted parts are still numbered after the wrapped render")
     parts = concept_scan.parts_from_concept(FIXTURE, "bdab4adf-3340-40M&S")
-    assert parts[0]["part_number"].startswith("BDAB4ADF-3340-40M-S-C01")
+    assert parts[0]["part_number"] == "BDAB4ADF-3340-40M-S-CPT01"
+    assert " " not in parts[0]["part_number"], (
+        "a part number with a space in it breaks the nested-block join — see D-187")
 
 
 def test_somebody_assembles_the_unit():
@@ -727,7 +729,7 @@ def test_a_castor_carries_enough_specification_to_be_researched():
     researched rung was handed the single word CASTOR — no diameter, no fixing, no load —
     and it has to name a real current listing. A render answers more than one word."""
     parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
-    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    castor = next(p for p in parts if "CASTOR" in p["description"].upper())
     spec = castor.get("research_description") or ""
     assert spec, "the bought-in line carries nothing to research"
     assert "sighted on a customer render" in spec and "approximate" in spec, (
@@ -749,8 +751,8 @@ def test_a_sighted_code_is_not_a_code_anybody_can_look_up():
     catalogue for it is doing work that cannot succeed."""
     from part_identity import is_engine_minted_code, is_sighted_code
 
-    assert is_sighted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
-    assert is_engine_minted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
+    assert is_sighted_code("5E09BE03B9741E5F-BDAB4AD-CPT11")
+    assert is_engine_minted_code("5E09BE03B9741E5F-BDAB4AD-CPT11")
     # NARROW. A code somebody printed on a drawing must never be called an invention.
     for real in ("12349-02-69-04M", "10975-02-GA", "1234-C01", "FIXING1081", "DBR60"):
         assert not is_sighted_code(real), real
@@ -808,7 +810,7 @@ def test_a_made_part_with_no_sighted_work_says_so():
 def test_a_bought_in_line_needs_no_work_and_no_blank():
     """A castor is bought. It has no blank and no operations, and neither is a defect."""
     parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
-    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    castor = next(p for p in parts if "CASTOR" in p["description"].upper())
     assert not castor.get("inferred_operations")
     assert not any("no manufacturing operation" in f for f in castor["review_flags"])
 
@@ -817,7 +819,7 @@ def test_a_sighted_castor_is_a_sourcing_fact_not_a_zero():
     """kind=bought_in with no material guess becomes BOUGHT_IN — the start of the bought-in
     price chain (D-153), never a £0 short-circuit."""
     parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
-    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    castor = next(p for p in parts if "CASTOR" in p["description"].upper())
     assert castor["normalized_material"] == "BOUGHT_IN"
     assert castor["quantity"] == 4
     assert "symmetry" in (castor.get("quantity_source_note") or "") or True  # note optional
@@ -964,3 +966,133 @@ def test_the_answer_survives_a_markdown_fence():
     parsed = concept_scan.parse_concept_response(fenced)
     assert parsed is not None and len(parsed["parts"]) == 11
     assert concept_scan.parse_concept_response("the model apologises") is None
+
+
+def test_a_researched_price_that_holds_still_is_written_to_the_column():
+    """James Gray, 22 Sep 2026, on the second concept book: "The hinge and four castors are
+    still £0. That is against your standing rule: visible bought-ins must enter the pricing
+    pipeline."
+
+    THE FIGURE WAS FOUND AND THEN DROPPED BY A MISSING KEY. `lookup_web_ai_price` asks once
+    per specification, stores the answer and returns `price_is_reproducible` to say so —
+    and three adapters in a row did not carry it. `indicative_price_to_withhold` then saw an
+    AI figure with nothing saying it holds still and did the one thing it exists for: kept
+    it off the price column. The castors showed £48.16 in one table and "no price" in
+    another, and the money column read £0.
+
+    Reproducibility is the whole test that rule turns on — "a guess that changes every run
+    is not a price" — and a cached figure passes it. This is not a relaxation of the
+    policy; it is the policy finally being asked about the right thing.
+    """
+    import estimator
+    import indicative_price
+    from estimator_inputs import indicative_price_to_withhold
+
+    # The producer carries the flag out of the researcher...
+    out = indicative_price.resolve_indicative(
+        {"code": "", "description": "CASTOR, black swivel, approx 75mm",
+         "quantity": 4, "unit_of_measure": "each"},
+        order_qty=1, as_of="2026-09-22",
+        ask=lambda brief: {"price_gbp": 12.04, "unit": "each",
+                           "as_of": "2026-09-22", "source": "a named UK trade listing",
+                           "quantity_basis": "pack of 4",
+                           "price_is_reproducible": True})
+    assert out["price_gbp"], out.get("missing")
+    assert out["price_is_reproducible"] is True, "the producer drops the flag"
+
+    # ...and the withholding rule then lets it through, where before it did not.
+    priced = {"_price_is_reproducible": True}
+    assert indicative_price_to_withhold(priced, True, 48.16) is None, (
+        "a reproducible researched figure is still being kept off the price column")
+    assert indicative_price_to_withhold({}, True, 48.16) == 48.16, (
+        "an UNreproducible figure must still be withheld — that rule does not change")
+
+    # And the adapters in between carry it, or the flag never reaches the stamp.
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"price_is_reproducible": bool(_found.get("price_is_reproducible"))' in src
+    assert '"price_is_reproducible": bool(_ind.get("price_is_reproducible"))' in src
+
+
+def test_a_render_pack_is_not_manufactured_to_a_drawing():
+    """James Gray, 22 Sep 2026: "The portal quote is also too customer-like for a
+    render-only pack: it says 'manufactured to drawing' and 'As drawing', despite having one
+    concept PDF, no DXF and 34 assumptions... Keep the concise 'Concept budget' basis, but
+    remove those two false claims. No giant warning is needed."
+
+    They are not caveats — they are untrue sentences. There is no drawing, so nothing was
+    manufactured to one and no material or finish is "as" one."""
+    import client_quote_html
+    from quote_state import PORTAL
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    summary = {
+        "concept_read": {"parts": len(parts),
+                         "assumptions": concept_scan.assumption_register(parts)},
+        "llm_only": True, "job_number": "JOB1", "product": "IN-STORE RECYCLING BIN",
+        "manufacturing_writeup": {"parts": parts},
+        "estimate_summary": {"estimate_workbook_inputs": {"assumed_job_quantity": 1},
+                             "workbook_equivalent_pricing":
+                                 {"m105_total_unit_cost_gbp": 269.34},
+                             "part_estimates": []},
+        "final_estimate": {"totals": {}}}
+    html = client_quote_html.build_quote_html(summary, job_stem="JOB1", audience=PORTAL)
+
+    assert "manufactured to drawing" not in html.lower()
+    assert "as drawing" not in html.lower()
+    assert "Concept budget" in html, "the Basis row lost the one true statement"
+    # One placeholder in the LEAD, not two: material and finish default to the same words,
+    # and the lead joined them into "sighted from the visual, sighted from the visual".
+    # The spec table may legitimately show it against both rows.
+    import re
+    lead = re.search(r'<p class="lead">(.*?)</p>', html, re.S)
+    assert lead, "the lead sentence has gone"
+    assert lead.group(1).lower().count("sighted from the visual") == 1, lead.group(1)
+
+    # THE CONTROL. A drawing job still says what it always said.
+    drawn = dict(summary, product="TESCO METAL DIVIDER")
+    drawn.pop("concept_read")
+    assert "manufactured to drawing" in client_quote_html.build_quote_html(
+        drawn, job_stem="JOB1", audience=PORTAL).lower()
+
+
+def test_a_nested_board_line_joins_its_money_on_the_sheet():
+    """James Gray, 22 Sep 2026: "The four board panels are charged correctly on the
+    workbook's nested-sheet rows (£31.91 total), but the report and Provenance tab show each
+    as £0 and call the £31.91 an unexplained residual. That is a generic line-to-workbook
+    mapping failure, not an estimating gap."
+
+    THE CAUSE WAS A SPACE IN A PART NUMBER. `costed_facts._material_row_key` joins a nested
+    block row on THE FIRST WORD of its description, because that is where wb_populate writes
+    the part number. The concept mint was `<CODE> <NAME-SLUG>` — two words — so the Other
+    Sheet Material row keyed on the code alone while the part looked itself up by the whole
+    string. Two keys for one part: the money under one, the line reading the other as £0,
+    and the difference falling out as a residual on every surface that adds the lines up.
+
+    The name was never needed in the code; it is the description, which sits in the next
+    column and was already carrying it.
+    """
+    from costed_facts import _material_row_key
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "bdab4adf-3340-40M&S")
+    unit = concept_scan.unit_assembly_part(parts, FIXTURE, "bdab4adf-3340-40M&S")
+    for record in [unit] + parts:
+        pn = record["part_number"]
+        assert " " not in pn, f"{pn} would key a nested row on its first word alone"
+        assert record["description"], "the name has to survive somewhere"
+        # The join the workbook actually makes, on the row wb_populate writes.
+        row = {"description": f"{pn}  {record['description']}"}
+        assert _material_row_key(row) == pn, (
+            f"the nested-block row keys on {_material_row_key(row)!r}, not {pn!r}")
+
+
+def test_a_concept_code_cannot_be_mistaken_for_a_drawings_own():
+    """The CPT token earns its keep here. `1234-C01` is a code a drawing could genuinely
+    print, and telling an estimator their own part number is an invention is the one error
+    this recogniser must never make."""
+    from part_identity import is_sighted_code
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    assert all(is_sighted_code(p["part_number"]) for p in parts)
+    for real in ("1234-C01", "11650-04-01A", "12349-02-69-04M", "10975-02-GA",
+                 "1453-GA-C", "FIXING1081"):
+        assert not is_sighted_code(real), real

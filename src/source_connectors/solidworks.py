@@ -1740,6 +1740,15 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
 
     bom_by_pn = {_pn_key(r.part_number): r for r in job.bom}
 
+    # THE MODEL'S OWN PER-PARENT COUNTS, from every SLDASM's edge list: child -> [(parent,
+    # qty)]. See QUANTITY below for why the full-depth BOM figure may not be written as the
+    # part's quantity, and why these edges are what may.
+    per_parent_edges: Dict[str, List[Tuple[str, float]]] = {}
+    for _parent, _kids in (getattr(job, "hierarchy", None) or {}).items():
+        for _child, _q in (_kids or []):
+            per_parent_edges.setdefault(_pn_key(_child), []).append(
+                (_clean_pn(str(_parent)), float(_q or 1.0)))
+
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -1884,9 +1893,57 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 flags.append("SolidWorks: welded sub-assembly (from name) — confirm weld/dress route")
                 out["weld_flagged"] += 1
 
-        # ── QUANTITY: full-depth BOM roll-up ─────────────────────────────────────
+        # ── QUANTITY: PER PARENT, NOT PER PRODUCT ────────────────────────────────
+        #
+        # James Gray, 22 Sep 2026, on the 11650-06 Coffret hospital kit: sliders 24 against
+        # a kit of 12, locking tabs 12 against 6, RSB plates 18 against 3, extenders 9
+        # against 3 — "don't buy 6 + 12", arrived at by a different road.
+        #
+        # TWO FACTS UNDER ONE NAME. The native BOM is FULL-DEPTH: its figure for a part is
+        # how many the WHOLE PRODUCT contains, already multiplied through every assembly
+        # above it. It was written into `quantity`. But `quantity` on a record means how
+        # many ONE PARENT takes — route_compiler's _per_parent says so in terms ("both are
+        # per-parent statements about the same thing") and multiplies it down the tree. The
+        # model outranks the drawing's BOM edge, so the rolled-up total was kept as a
+        # per-parent count and then rolled up AGAIN: an extender the model counts 3 of,
+        # under a set the kit takes 3 of, came out at 9.
+        #
+        # So each fact goes under its own name. The model's edge list says how many of this
+        # part each parent takes, which IS what `quantity` means, and it is written only
+        # where it is unambiguous — one parent. The full-depth figure is kept beside it as
+        # `quantity_total_per_unit`, a second road to the same answer that the compiler can
+        # check its roll-up against. Where the model has no edges at all, nothing about a
+        # parent is known and the full-depth figure is still the best per-parent reading
+        # there is, so that case is unchanged.
         if row is not None and row.quantity and row.quantity > 0:
-            _q = int(round(row.quantity))
+            _total = int(round(row.quantity))
+            part["quantity_total_per_unit"] = _total
+            part["quantity_total_per_unit_source"] = SOURCE_NAME
+            _edges = per_parent_edges.get(_pn_key(pn)) or []
+            _parents = {e[0] for e in _edges}
+            if len(_parents) == 1:
+                _q = int(round(sum(q for _p, q in _edges)))
+                _basis = (f"per {next(iter(_parents))}, from the SolidWorks assembly's own "
+                          f"tree ({_total} in the whole product, all levels)")
+            elif len(_parents) > 1:
+                # One part under several parents: no single per-parent count exists, and the
+                # full-depth figure would be multiplied again under each of them. The
+                # drawing's BOM edges already carry a count per parent, so they decide.
+                flags.append(
+                    f"SolidWorks: this part sits under {len(_parents)} assemblies "
+                    f"({', '.join(sorted(_parents))}), {_total} in the whole product — the "
+                    f"per-assembly counts on the BOM decide, not the product total")
+                _q = 0
+                _basis = ""
+            elif getattr(job, "hierarchy", None):
+                # The model has a tree and this part is not on it under any parent: the
+                # total is not known to be per-parent, and writing it risks the same double
+                # roll-up. Kept as the cross-check only.
+                _q = 0
+                _basis = ""
+            else:
+                _q = _total
+                _basis = "from the SolidWorks assembly BOM (component count, all levels)"
             _cur = _num(part.get("quantity"))
             # ALWAYS SUBMIT, even when the numbers already match. Skipping the resolver on
             # agreement left the datum carrying the WEAKER source's name, so a later
@@ -1898,8 +1955,8 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                 # resolver refused — because an estimator had already corrected it — was
                 # still counted as applied, so the run reported work it did not do.
                 if _apply_field(part, "quantity", _q, SOURCE_NAME):
-                    flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} from the "
-                                 f"SolidWorks assembly BOM (component count, all levels)")
+                    flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} "
+                                 f"{_basis}")
                     out["qty"] += 1
 
         # ── NOT IN THE ASSEMBLY BOM ──────────────────────────────────────────────

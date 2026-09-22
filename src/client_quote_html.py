@@ -758,7 +758,13 @@ def _collect_operations(parts: List[Dict[str, Any]],
     return out
 
 
-def _materials_line(parts: List[Dict[str, Any]]) -> str:
+# THE PLACEHOLDERS THAT ARE NOT A FINISH. Named once, because the lead line skips the
+# finish when nothing was actually charged, and a second spelling of "nothing" reaching
+# that test is how a quote came to read "sighted from the visual, sighted from the visual".
+_NO_FINISH_STATED = ("As drawing", "Sighted from the visual")
+
+
+def _materials_line(parts: List[Dict[str, Any]], *, concept: bool = False) -> str:
     """What the customer is told the product is made of.
 
     IT COLLECTED `normalized_material` OFF EVERY LINE, including the bought-ins — and a
@@ -776,7 +782,11 @@ def _materials_line(parts: List[Dict[str, Any]]) -> str:
         m = describes_the_product(p)
         if m and m not in mats:
             mats.append(m)
-    return ", ".join(_title_material(m) for m in mats) if mats else "As drawing"
+    if mats:
+        return ", ".join(_title_material(m) for m in mats)
+    # "As drawing" is a true sentence on a drawing pack and a false one on a render: there
+    # is no drawing to be as. Said as what it is instead — see the lead line (D-186).
+    return "Sighted from the visual" if concept else "As drawing"
 
 
 def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
@@ -789,7 +799,13 @@ def _finish_line(summary: Dict[str, Any], parts: List[Dict[str, Any]]) -> str:
     # been gated off a part, and that combination promised "Powder coated" to the customer
     # on a lacquered timber crate whose priced sheet contains no powder at all.
     from costed_facts import costed_finish_label
-    return costed_finish_label(summary if isinstance(summary, dict) else parts)
+    # Same rule as the material line: there is no drawing on a render pack, so the finish
+    # cannot be "as" one. The default is the only part of this that changes (D-186).
+    _concept = bool((summary.get("concept_read") or {}).get("parts")) \
+        if isinstance(summary, dict) else False
+    return costed_finish_label(summary if isinstance(summary, dict) else parts,
+                               default="Sighted from the visual" if _concept
+                               else "As drawing")
 
 
 # ── main render ─────────────────────────────────────────────────────────────
@@ -1444,7 +1460,9 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # job the sheet does not contain.
     from costed_facts import job_parts as _job_parts
     parts = _job_parts(summary) or (es.get("part_estimates") or [])
-    material = _materials_line(parts)
+    material = _materials_line(
+        parts, concept=bool((summary.get("concept_read") or {}).get("parts"))
+        if isinstance(summary, dict) else False)
     finish = _finish_line(summary, parts)
 
     # THE ONE RECORD decides scope and release. What is excluded, and whether this page is
@@ -1661,11 +1679,28 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         _run_foot = (f"<br>Ref {_esc(str(summary.get('run_id')))} · qty "
                      f"{_esc(str(summary.get('assumed_job_quantity') or summary.get('quantity') or 1))}")
 
-    _lead_open = (
-        f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
-        if str(product).strip() == str(job_number).strip() else
-        f"{_esc(product)} — manufactured to drawing {_esc(job_number)}"
-        f"{(' ' + _esc(rev)) if rev else ''}. ")
+    # ── A RENDER PACK WAS NEVER MANUFACTURED TO A DRAWING ───────────────────────────
+    #
+    # James Gray, 22 Sep 2026: "The portal quote is also too customer-like for a render-only
+    # pack: it says 'manufactured to drawing' and 'As drawing', despite having one concept
+    # PDF, no DXF and 34 assumptions... Keep the concise 'Concept budget' basis, but remove
+    # those two false claims. No giant warning is needed."
+    #
+    # They are not caveats, they are untrue sentences: there is no drawing, so nothing was
+    # manufactured to one and no material is "as" one. Replaced with what the document
+    # actually rests on, in the same number of words. Every drawing job reads as it did.
+    _concept_pack = bool((summary.get("concept_read") or {}).get("parts")) \
+        if isinstance(summary, dict) else False
+    if _concept_pack:
+        _lead_open = (f"{_esc(product)} — concept budget from the customer's visual. "
+                      if str(product).strip() != str(job_number).strip() else
+                      "Concept budget from the customer's visual. ")
+    else:
+        _lead_open = (
+            f"Manufactured to drawing {_esc(job_number)}{(' ' + _esc(rev)) if rev else ''}. "
+            if str(product).strip() == str(job_number).strip() else
+            f"{_esc(product)} — manufactured to drawing {_esc(job_number)}"
+            f"{(' ' + _esc(rev)) if rev else ''}. ")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1769,7 +1804,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
       <div class="meta">{meta_bits}</div>
     </div>
     <div class="body">
-      <p class="lead">{_lead_open}{_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish!='As drawing' else ''}.</p>
+      <p class="lead">{_lead_open}{_esc(material)}{(', ' + _esc(finish.lower())) if finish and finish not in _NO_FINISH_STATED else ''}.</p>
       <div class="grid">
         <div class="spec">
           <h3>Specification</h3>

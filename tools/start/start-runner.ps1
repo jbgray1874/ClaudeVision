@@ -25,8 +25,9 @@
     runner reported itself as running perfectly, polled a port with nothing on it,
     and nothing anywhere said what was wrong.
 
-    So it now ASKS. With no -Server it probes SDI_PORT, then 8072, then 8071, and
-    serves whichever answers /api/health. With an explicit -Server it probes that
+    So it now ASKS. With no -Server it probes SDI_PORT, 8071 and 8072, and serves
+    the one that answers /api/health. When more than one answers it SAYS SO and takes
+    SDI_PORT if set, otherwise 8071 - see the probe below for why. With an explicit -Server it probes that
     one and REFUSES TO START if nothing answers, rather than polling into
     silence. A runner that cannot reach its service is not a runner, and it should
     say so in the window you are looking at rather than on a page you are not.
@@ -148,14 +149,32 @@ if ($Server) {
         exit 1
     }
 } else {
+    # BOTH CAN ANSWER, AND THAT IS THE CASE THIS USED TO GET WRONG IN SILENCE.
+    #
+    # 22 September 2026: the page on 8071 said "No runner connected" while a healthy runner
+    # sat on 8072, because this probed 8072 first and stopped at the first answer. Nothing
+    # was broken - the runner and the page were on different services, and nothing said so.
+    # Every candidate is now asked. One answer is used as before. More than one is SAID,
+    # loudly, and the choice is made by rule rather than by probe order: SDI_PORT if it is
+    # set and answering, otherwise 8071 - the installed service the portal is opened on.
     $candidates = @()
     if ($env:SDI_PORT) { $candidates += "http://localhost:$($env:SDI_PORT)" }
-    $candidates += @("http://localhost:8072", "http://localhost:8071")
+    $candidates += @("http://localhost:8071", "http://localhost:8072")
     $candidates = $candidates | Select-Object -Unique
 
+    $answering = @()
     foreach ($c in $candidates) {
         Write-Host "  probing $c ..." -ForegroundColor DarkGray
-        if (Test-SdiService $c) { $Server = $c; break }
+        if (Test-SdiService $c) { $answering += $c }
+    }
+    if ($answering.Count -ge 1) { $Server = $answering[0] }
+    if ($answering.Count -gt 1) {
+        Write-Host ""
+        Write-Host "  MORE THAN ONE SERVICE IS RUNNING: $($answering -join ' and ')" -ForegroundColor Yellow
+        Write-Host "  This runner will serve $Server. A page opened on any other port will say" -ForegroundColor Yellow
+        Write-Host "  'No runner connected' while this one works normally." -ForegroundColor Yellow
+        Write-Host "  Stop the one you are not using, or pin this with -Server <url>." -ForegroundColor Yellow
+        Write-Host ""
     }
     if (-not $Server) {
         Write-Host "No SDI Intelligence service is answering." -ForegroundColor Red
