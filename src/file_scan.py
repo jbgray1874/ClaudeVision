@@ -342,10 +342,21 @@ def list_input_files(search_root: Path = config.DRAWINGS_DIR, drawing_pattern: s
 
 
 def group_input_files_by_folder(files: Sequence[Path]) -> Dict[Path, List[Path]]:
-    """Group PDF paths by parent directory for folder-as-job scanning."""
+    """Group drawing paths by parent directory for folder-as-job scanning.
+
+    PDFs AND IMAGE RENDERS. This filtered to `.pdf` alone, which was right until a render
+    became an input and then silently undid the whole feature: the first live run on the
+    Plan A bin printed "Found 1 drawing file(s)" and then "Folder-as-job: 0 job folder(s)
+    from 1 file(s)" — the PNG was discovered by `list_input_files`, dropped here, and the
+    run filed a summary with no workbook. Nothing failed; the pack simply became empty
+    between one function and the next.
+
+    `scan_folder_job` wraps each render as a one-page PDF, so everything downstream of this
+    grouping already handles them — this was the one gate that had not been told.
+    """
     groups: Dict[Path, List[Path]] = {}
     for path in files:
-        if path.suffix.lower() != ".pdf":
+        if path.suffix.lower() != ".pdf" and not is_image_path(path):
             continue
         if _is_excluded_doc(path):  # A7: skip setup/route/MO sheets
             continue
