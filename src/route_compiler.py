@@ -282,6 +282,10 @@ class PartNode:
     qty_own: Optional[float] = None
     qty_own_source: str = ""
     qty_note: str = ""
+    # HOW THE EFFECTIVE FIGURE WAS REACHED, one line per path from a root: every edge with
+    # the count one parent takes and the reader that said so, then the product. A part under
+    # two parents has two lines, and they add up to qty_per_unit. See add_descendants.
+    qty_trail: List[str] = field(default_factory=list)
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -1832,21 +1836,57 @@ def build_part_graph(
               f"(BOM edge said {edge_qty:g})", flush=True)
         return _own
 
-    def add_descendants(identity: str, factor: float, path: Set[str]) -> None:
+    # ── THE MULTIPLICATION, WRITTEN DOWN ─────────────────────────────────────────
+    #
+    # Review of 11650-06, 22 Sep 2026: "The workbook proves that many own quantities and
+    # effective quantities differ, but it does not prove all effective quantities are wrong.
+    # For example, the extender is recorded as three per end-panel set and three sets in the
+    # job, which can legitimately produce nine... The system needs to show the exact
+    # parent-to-child multiplication trail, then an estimator can approve or correct it."
+    #
+    # Right, and it is the difference between an argument and a check. The product was the
+    # only thing that left this loop, so nobody — reviewer, estimator or this engine — could
+    # say WHICH edge made nine. Every path from a root is now recorded as it is walked, each
+    # step with the count one parent takes and who said so, ending in the product:
+    #
+    #     11650-06-GA x1 -> 11650-06-SA01 x3 (BOM) -> 11650-04-03A x1 (SolidWorks) = 3
+    #
+    # A part reached by two paths gets two lines, and they sum to the costed figure.
+    qty_trails: Dict[str, List[str]] = {}
+
+    def _step_source(child_id: str, used: float, edge_qty: float) -> str:
+        _src = qty_own_source.get(child_id) or ""
+        _own = qty_own.get(child_id)
+        if abs(used - edge_qty) < 1e-9:
+            # Agreement is evidence too — two readers saying the same count is a stronger
+            # step than one, and the trail should let an estimator see it.
+            if _src and _own is not None and abs(_own - edge_qty) < 1e-9 \
+                    and rank(_src) > _edge_substitution_rank:
+                return f"BOM, {_display_source(_src)} agrees"
+            return "BOM"
+        return _display_source(_src) if _src else "the part's own record"
+
+    def add_descendants(identity: str, factor: float, path: Set[str],
+                        chain: Tuple[str, ...] = ()) -> None:
         if identity in path:
             return
         quantities[identity] = quantities.get(identity, 0.0) + factor
+        if len(chain) > 1:
+            qty_trails.setdefault(identity, []).append(
+                f"{' -> '.join(chain)} = {factor:g}")
         next_path = set(path)
         next_path.add(identity)
         for child_id, child_qty in (children.get(identity) or {}).items():
-            add_descendants(child_id,
-                            factor * _per_parent(child_id, child_qty, identity),
-                            next_path)
+            _each = _per_parent(child_id, child_qty, identity)
+            add_descendants(
+                child_id, factor * _each, next_path,
+                chain + (f"{child_id} x{_each:g} "
+                         f"({_step_source(child_id, _each, child_qty)})",))
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
     for _root in top_ids:
-        add_descendants(_root, 1.0, set())
+        add_descendants(_root, 1.0, set(), (f"{_root} x1",))
     for identity in identities:
         if identity not in quantities:
             quantities[identity] = number(
@@ -1909,6 +1949,7 @@ def build_part_graph(
             qty_own=qty_own.get(identity),
             qty_own_source=qty_own_source.get(identity, ""),
             qty_note=qty_notes.get(identity, ""),
+            qty_trail=list(qty_trails.get(identity) or []),
             parents=sorted(parents.get(identity) or []),
             children=[
                 ChildEdge(part_number=child_id, qty=qty)

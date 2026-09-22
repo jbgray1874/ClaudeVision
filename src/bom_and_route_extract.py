@@ -428,6 +428,10 @@ def graph_quantity_by_code(summary: Mapping[str, Any]) -> Dict[str, Dict[str, An
                 "qty_own": node.get("qty_own"),
                 "qty_own_source": _text(node.get("qty_own_source") or ""),
                 "qty_note": _text(node.get("qty_note") or ""),
+                # The walk that produced qty_effective, edge by edge — see route_compiler's
+                # add_descendants. Carried so the BOM page can show the multiplication rather
+                # than only its answer.
+                "qty_trail": [_text(t) for t in (node.get("qty_trail") or []) if t],
             }
     return out
 
@@ -555,6 +559,10 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "qty_effective": _effective,
             "qty_own_and_effective_differ": _differs,
             "why_the_quantity_is_what_it_is": " / ".join(n for n in _qty_notes if n),
+            # THE TRAIL AN ESTIMATOR CAN APPROVE OR CORRECT. Review of 11650-06: "The system
+            # needs to show the exact parent-to-child multiplication trail." One path per
+            # line, each edge with its count and who said so, ending in the product.
+            "how_the_quantity_multiplies": " | ".join(_g.get("qty_trail") or []),
             "quantity_as_printed_on_the_drawing": row.get("quantity_as_printed"),
             "material_as_printed": material,
             "material_read_from": material_from,
@@ -644,6 +652,7 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
             "qty_effective": part.get("quantity"),
             "qty_own_and_effective_differ": False,
             "why_the_quantity_is_what_it_is": _text(part.get("quantity_source_note") or ""),
+            "how_the_quantity_multiplies": "",
             "quantity_as_printed_on_the_drawing": None,
             "material_as_printed": _text(part.get("normalized_material") or ""),
             "material_read_from": "sighted on the render",
@@ -889,6 +898,15 @@ def derivation_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
          "what_it_does_not_mean": "NOT the job quantity, and not rolled through the assembly. A "
                                   "sub-assembly's 2-off inside a 6-off stand is 12 parts, and "
                                   "that multiplication is the route compiler's, not this sheet's"},
+        {"sheet": "BOMs", "column": "how_the_quantity_multiplies",
+         "derived_from": "canonical route nodes[].qty_trail",
+         "how": "every path from the top assembly down to this part, one per line: each step "
+                "is the count ONE parent takes and the reader that said so (the BOM, the "
+                "SolidWorks model, or both agreeing), ending in the product. Several paths add "
+                "up to qty_effective",
+         "what_it_does_not_mean": "not a ruling that the count is right — it is the working, "
+                                  "laid out so an estimator can approve an edge or correct the "
+                                  "one that is wrong"},
         {"sheet": "BOMs", "column": "material_as_printed",
          "derived_from": "document_analysis.bom_rows[].material_text",
          "how": "the material cell exactly as the drawing office typed it, never normalised",

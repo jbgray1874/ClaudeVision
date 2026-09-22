@@ -117,3 +117,52 @@ def test_a_model_with_no_tree_behaves_exactly_as_before():
     apply_native_to_pre_estimate(parts, job)
     assert parts[0]["quantity"] == 2
     assert any("component count, all levels" in f for f in parts[0]["review_flags"])
+
+
+def test_the_multiplication_trail_is_written_down():
+    """Review of 11650-06: "The workbook proves that many own quantities and effective
+    quantities differ, but it does not prove all effective quantities are wrong... The system
+    needs to show the exact parent-to-child multiplication trail, then an estimator can
+    approve or correct it."
+
+    The product was the only thing the roll-up kept, so nobody could say WHICH edge made a
+    count. Every path is now recorded, each step with the count one parent takes and who said
+    so, and the paths add up to what is costed."""
+    parts = _kit_parts()
+    apply_native_to_pre_estimate(parts, _model())
+    graph = rc.build_part_graph(parts)
+    node = next(n for n in graph["nodes"] if n.part_number == "11650-04-03A")
+
+    assert node.qty_trail, "the roll-up left no working behind it"
+    trail = node.qty_trail[0]
+    assert trail.startswith("11650-06-GA x1"), trail
+    assert "11650-06-SA01 x3" in trail and "11650-04-03A x1" in trail, trail
+    assert trail.endswith("= 3"), trail
+    # Who said so, per step — the thing an estimator needs to overrule the right edge.
+    assert "(BOM" in trail, trail
+
+    # And it reaches the BOM page, where an estimator reads it.
+    from bom_and_route_extract import graph_quantity_by_code
+    summary = {"estimate_summary": {"canonical_route_shadow": {
+        "nodes": [{"part_number": n.part_number, "qty_per_unit": n.qty_per_unit,
+                   "qty_trail": n.qty_trail} for n in graph["nodes"]]}}}
+    assert graph_quantity_by_code(summary)["11650-04-03A"]["qty_trail"] == node.qty_trail
+
+
+def test_two_paths_are_two_lines_that_add_up():
+    """A part reached twice is costed as the sum, and the trail shows both — which is exactly
+    the case the reviewer raised about the slider sitting under more than one parent."""
+    parts = [
+        {"part_number": "TOP", "quantity": 1, "is_assembly_parent": True,
+         "assembly_children": ["A", "B"], "page_roles": ["assembly"]},
+        {"part_number": "A", "quantity": 2, "is_assembly_parent": True,
+         "assembly_children": ["SLIDER"], "page_roles": ["assembly"]},
+        {"part_number": "B", "quantity": 3, "is_assembly_parent": True,
+         "assembly_children": ["SLIDER"], "page_roles": ["assembly"]},
+        {"part_number": "SLIDER", "quantity": 1, "page_roles": ["detail"]},
+    ]
+    graph = rc.build_part_graph(parts)
+    node = next(n for n in graph["nodes"] if n.part_number == "SLIDER")
+    assert len(node.qty_trail) == 2, node.qty_trail
+    totals = sorted(float(t.rsplit("= ", 1)[1]) for t in node.qty_trail)
+    assert sum(totals) == node.qty_per_unit, (totals, node.qty_per_unit)
