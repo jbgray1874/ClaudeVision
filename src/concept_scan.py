@@ -394,8 +394,25 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             assumed.append({"file_key": file_key, "value": value, "cue": cue,
                             "field": field or file_key or "operations"})
 
+        # ── A PART NUMBER IS A CODE, AND A CODE HAS NO SPACE IN IT ─────────────────
+        #
+        # James Gray, 22 Sep 2026: "The four board panels are charged correctly on the
+        # workbook's nested-sheet rows (£31.91 total), but the report and Provenance tab
+        # show each as £0 and call the £31.91 an unexplained residual. That is a generic
+        # line-to-workbook mapping failure, not an estimating gap."
+        #
+        # It was this line. The number was minted as `<CODE> <NAME-SLUG>` — two words — and
+        # `costed_facts._material_row_key` joins a nested block row on THE FIRST WORD of its
+        # description, because that is where wb_populate writes the part number. So the
+        # Other Sheet Material row keyed on `…-C01` while the part looked itself up as
+        # `…-C01 HEADER-PANEL`: two keys for one part, the money under one and the line
+        # reading the other as £0, with the difference falling out as an unexplained
+        # residual on every surface that adds the lines back up.
+        #
+        # The name was never needed in the code — it is the DESCRIPTION, which sits in the
+        # next column and was already carrying it. Every concept job would have hit this.
         record = _empty_part_record(
-            f"{_slug(stem, 'CONCEPT')}-C{n:02d} {_slug(name, str(n))}",
+            f"{_slug(stem, 'CONCEPT')}-CPT{n:02d}",
             item_number=n, description=name, quantity=None)
         record["concept"] = True
         # WHICH KIND OF LINE THIS IS, on the record rather than inferred from its material.
@@ -803,7 +820,7 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
     material = max(tally, key=lambda k: (tally[k], k)) if tally else ""
 
     product = str((answer.get("product") or {}).get("name") or "").strip() or "UNIT"
-    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-C00 {_slug(product, 'UNIT')}",
+    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-CPT00",
                                 item_number=0, description=f"{product} — unit assembly",
                                 quantity=None)
     # THROUGH THE RESOLVER, like every other arbitrated fact this module writes. One of

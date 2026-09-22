@@ -370,4 +370,11 @@ def resolve_indicative(line: Any, *, order_qty: int = 1, as_of: str = "",
         # words, and so a reader can tell at a glance that this is rung 4 and not rung 1.
         "label": LLM_INDICATIVE_STATUS,
         "review_required": True,
+        # WHETHER IT HOLDS STILL, CARRIED THROUGH. The workbook's withholding rule turns
+        # on exactly one question — "is this the same number next run?" — and a figure the
+        # researcher asked once and stored answers it yes. Dropped here, the rule saw an
+        # AI figure with nothing said about it and kept it off the price column, which is
+        # how a castor with a researched price reached the sheet at zero.
+        "price_is_reproducible": bool(found.get("price_is_reproducible")),
+        "price_first_taken": _clean(found.get("price_first_taken")),
     }
