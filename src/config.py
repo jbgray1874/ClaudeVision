@@ -97,6 +97,20 @@ ARCHIVE_SQL_DIR = ARCHIVE_DIR / "sql"
 
 SUPPORTED_EXTENSIONS = {".pdf", ".dxf"}
 
+# ── A RENDER IS A DOCUMENT THE ENGINE CAN BE ASKED ABOUT ────────────────────────────
+#
+# James Gray, 22 Sep 2026, with two renders of an M&S Plan A collection bin: "we need to
+# build in the pipeline to populate the pricing s/sheet from the LLM only model... WE HAVE
+# THE add PDFs button. we should make this recognise this file format type also."
+#
+# An image file is accepted as a drawing INPUT: file_scan wraps it losslessly in a one-page
+# PDF and scans that, so every downstream stage — page rendering, the vision readers, the
+# report — works unchanged. What an image cannot supply is what it does not carry: no text
+# layer, no title block, no BOM table, no dimensions. On an --llm-only run the concept read
+# (concept_scan.py) sights the parts instead, every figure stamped as assumed.
+IMAGE_RENDER_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
+SUPPORTED_EXTENSIONS |= IMAGE_RENDER_EXTENSIONS
+
 # The ODA File Converter turns DWG into DXF offline and free, so a DWG flat pattern feeds the
 # reader we already have instead of being ignored. Leave unset to auto-detect: PATH first,
 # then the usual install roots.

@@ -202,9 +202,12 @@ class Run:
     llm_price_gbp: Optional[float] = None
     llm: Dict[str, Any] = field(default_factory=dict)
     engine_price_gbp: Optional[float] = None
-    # WHETHER A RUNNER SHOULD EVER PICK THIS UP. An LLM-only enquiry needs no SOLIDWORKS
-    # seat and no Excel; queued as an ordinary run it would sit in front of real work for
-    # ever, waiting for a machine that has nothing to do with it.
+    # WHETHER A RUNNER SHOULD EVER PICK THIS UP. Nothing sets this False any more: an
+    # LLM-only enquiry used to end at the fast text read — no runner, no workbook — and
+    # since 22 Sep 2026 it queues a runner job like every other method, because "populate
+    # the pricing s/sheet from the LLM only model" is a workbook and workbooks are runner
+    # work. The field stays because the claim filter reads it and because the next method
+    # that genuinely needs no runner will want it back.
     wants_engine: bool = True
     # THE VISION MODEL ALONE, AS A MEASUREMENT. Distinct from wants_engine, which decides
     # whether a runner picks the run up at all: this run DOES need a runner -- it produces a
@@ -1838,14 +1841,19 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
 
     with _LOCK:
         _expire_dead_claims()
-        # ONLY THE METHOD THAT NEEDS A RUNNER IS REFUSED WITHOUT ONE. An LLM scan runs on
-        # this service and needs no seat, so refusing it because a laptop is closed would
-        # withhold the one method that can answer a hundred drawings today.
+        # ONLY THE METHODS THAT CANNOT START WITHOUT A RUNNER ARE REFUSED WITHOUT ONE. An
+        # LLM-only enquiry now produces workbooks too, so it does queue runner work — but
+        # its fast figures arrive from this service in minutes either way, which is the one
+        # method that can answer a hundred drawings today. So it is accepted runner-less:
+        # the scans run now, the workbook runs sit queued, and each run's own log says so
+        # rather than leaving somebody watching a progress bar that cannot move.
         if method != "llm" and not _online_runners():
             raise HTTPException(
                 503, "No estimating runner is connected, so there is nothing to run these "
                      "jobs. Start the runner on a machine with SOLIDWORKS and Excel, then "
-                     "try again — or run this enquiry as an LLM scan, which needs neither.")
+                     "try again — or run this enquiry as an LLM scan, whose fast figures "
+                     "need no runner (its workbooks queue until one connects).")
+        _runnerless_llm = (method == "llm" and not _online_runners())
         # ORDER IS THE ORDER THEY WERE GIVEN IN. An estimator working down a customer's
         # list wants the answers to arrive in that list's order, not in whatever order a
         # file dialog happened to hand them over.
@@ -1859,11 +1867,25 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
                 refused.append({"file": raw, "why": "its name leaves nothing to call a folder"})
                 continue
             out = root / client / drawing / run_folder_name(queued_at, req.units)
+            # ── "LLM scan only" NOW POPULATES THE PRICING SHEET ─────────────────────
+            #
+            # James Gray, 22 Sep 2026: "we need to build in the pipeline to populate the
+            # pricing s/sheet from the LLM only model."
+            #
+            # This route used to set wants_engine=False for method="llm": the fast text
+            # read ran on this service and the run was marked done — no runner, no
+            # workbook, nothing an estimator could open in Excel. That was built when
+            # "llm" meant a comparison figure. It now means AN ESTIMATE READ BY ONE
+            # READER: the run queues for the runner with llm_only=True, main.py --llm-only
+            # reads the pack with the vision model alone (a render pack gets the concept
+            # read), and the ordinary waterfall fills the workbook. Lighter than a full
+            # run — no SolidWorks seat, no DXF pass — but a real run, filed like one, and
+            # wearing its LLM-ONLY label on every deliverable.
             run = Run(run_id=uuid.uuid4().hex[:12], client=client, drawing_number=drawing,
                       units=int(req.units), job_folder=str(Path(raw).parent),
                       output_path=str(out), queued_at=queued_at,
                       pdf_path=str(path), batch_id=batch_id,
-                      wants_engine=(method != "llm"))
+                      llm_only=(method == "llm"))
             _RUNS[run.run_id] = run
             accepted.append(run)
             queued_at += 0.001          # keeps the queue order stable and the sort total
@@ -1873,6 +1895,12 @@ def batch(req: BatchRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.line(f"Reading   {run.pdf_path}")
         run.line(f"Filing to {run.output_path}")
         run.line(f"Queued — drawing {i} of {len(accepted)} in this enquiry.")
+        if run.llm_only:
+            run.line("LLM-ONLY: the fast figure arrives from the scan below; the estimate "
+                     "workbook is a runner job that reads the pack with the vision model "
+                     "alone and prices it through the ordinary waterfall."
+                     + (" No runner is connected — the workbook run starts when one is."
+                        if _runnerless_llm else ""))
 
     # THE SCAN RUNS IN THE BACKGROUND AND THE REQUEST RETURNS NOW. A hundred drawings at a
     # few seconds each is minutes; holding the HTTP request open for that would time out in
@@ -1917,9 +1945,11 @@ def _scan_one(run: "Run") -> None:
     with _LOCK:
         run.llm = out
         run.llm_price_gbp = out.get("price_gbp") if out.get("found") else None
-        # AN LLM-ONLY DRAWING IS FINISHED WHEN THE SCAN IS. Left "queued" it would count
-        # for ever against the enquiry's total and the page would never say it was done --
-        # a progress bar that cannot reach the end is worse than none.
+        # A DRAWING IS NO LONGER FINISHED WHEN THE SCAN IS. This branch closed llm-only
+        # runs here, back when "llm" ended at the fast figure; an llm-only run now owes a
+        # workbook, so it stays queued for the runner like everything else and is finished
+        # by the run that fills the book. The guard stays for the day a method that truly
+        # ends at the scan returns.
         if not run.wants_engine and run.status == "queued":
             run.status = "done"
             run.finished_at = time.time()

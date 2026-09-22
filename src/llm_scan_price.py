@@ -219,8 +219,11 @@ def scan_price(pdf_path: Any, units: int, model: Optional[str] = None,
                       model, units)
     if not str(context or "").strip():
         return _stamp({"found": False,
-                       "why": "no text could be read from this drawing — it may be a scan, "
-                              "in which case this method cannot price it"}, model, units)
+                       "why": "no text could be read from this drawing — a scan or an image "
+                              "render carries none, and this fast read is a read of the "
+                              "TEXT. The full estimate still runs: on an LLM-only run a "
+                              "render's parts are sighted by the concept read and priced "
+                              "by the ordinary waterfall"}, model, units)
 
     prompt = (f"ORDER QUANTITY: {units} off\n\n"
               f"DRAWING:\n{context}")

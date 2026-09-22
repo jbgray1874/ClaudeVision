@@ -457,6 +457,22 @@ def test_the_scheduled_task_reads_a_week_not_a_day_and_not_everything():
     assert _re.search(r"--since \{0\}' -f \$SinceDays", ps1), "the window must reach the task"
 
 
+def test_the_task_says_whether_it_needs_somebody_logged_on():
+    """A task registered for a named user with no password is INTERACTIVE-ONLY: it runs
+    while that user is logged on and otherwise waits for the next logon. On a desktop used
+    every morning that is workable; on one that is not it silently does nothing at 06:30.
+    Either way it is a choice, and the installer must say which one was made."""
+    import re as _re
+    ps1 = (ROOT / "tools" / "logistics" / "Install-SplitScanTask.ps1").read_text(
+        encoding="utf-8")
+    block = _re.search(r"^param\((.*?)^\)", ps1, _re.S | _re.M).group(1)
+    assert _re.search(r"\[switch\]\$RunWhenLoggedOff", block), block
+    # The password is prompted for, never a parameter: a command line is in shell history.
+    assert not _re.search(r"\$Password", block), "a password parameter is in the history"
+    assert "Read-Host -AsSecureString" in ps1
+    assert "runs only while" in ps1, "the default's consequence must be stated"
+
+
 # ── the endpoint ────────────────────────────────────────────────────────────────────
 
 @pytest.fixture()

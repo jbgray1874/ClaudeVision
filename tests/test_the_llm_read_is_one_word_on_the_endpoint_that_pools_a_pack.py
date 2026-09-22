@@ -91,14 +91,19 @@ def test_the_runner_passes_the_engine_flag():
 
 
 def test_it_is_not_confused_with_wants_engine():
-    """wants_engine decides whether a runner picks the run up AT ALL — the batch path's
-    LLM scan needs no runner. This one does: it produces a workbook and deliverables like
-    any other run, it just reads with one source instead of four."""
+    """wants_engine decides whether a runner picks the run up AT ALL; llm_only decides how
+    many readers the engine runs with. They were briefly entangled: the batch path set
+    wants_engine=False for method="llm", so "LLM scan only" ended at the fast figure and no
+    workbook was ever filed. James Gray, 22 Sep 2026: "we need to build in the pipeline to
+    populate the pricing s/sheet from the LLM only model" — so the batch path now sets
+    llm_only like the single-pack path does, and NOTHING sets wants_engine from the method."""
     at = _ROUTES.index("llm_only: bool = False")
     assert "wants_engine" in _ROUTES[at - 900:at], "the two flags are no longer adjacent"
-    assert re.search(r"wants_engine=\(method != \"llm\"\)", _ROUTES), (
-        "the batch path's wants_engine rule has changed; check it still means what the "
-        "single-pack llm_only does not")
+    assert re.search(r"llm_only=\(method == \"llm\"\)", _ROUTES), (
+        "the batch path no longer queues an llm-only workbook run")
+    assert not re.search(r"wants_engine=\(method", _ROUTES), (
+        "a method is deciding whether a runner is involved again — that is how 'LLM scan "
+        "only' quietly stopped producing workbooks the first time")
 
 
 # ── it cannot be mistaken for an estimate ────────────────────────────────────

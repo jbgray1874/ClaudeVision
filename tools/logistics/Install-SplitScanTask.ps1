@@ -53,6 +53,20 @@
     schedule. Defaults to the current user, who demonstrably can reach K: or you would not be
     reading this there.
 
+.PARAMETER RunWhenLoggedOff
+    Store the account's password with the task so it runs at 06:30 whether or not anybody is
+    logged on. You are prompted for it; it is handed to Task Scheduler and kept nowhere else.
+
+    WITHOUT THIS THE TASK RUNS ONLY WHILE THAT USER IS LOGGED ON. That is how Windows
+    registers a task for a named user with no password: an interactive-only task. If nobody
+    is logged in at 06:30, StartWhenAvailable fires it at the next logon instead -- which
+    is workable for a desktop that is used every morning, and silently does nothing on one
+    that is not. The other unattended option, S4U, runs without a password but cannot reach
+    a network share, so it is no use here.
+
+    Trade-off: a stored password must be updated here when it changes, or the task stops
+    with "the user name or password is incorrect" in the task history and nothing else.
+
 .EXAMPLE
     .\Install-SplitScanTask.ps1
 
@@ -67,6 +81,7 @@ param(
     [int]$SinceDays = 7,
     [string]$At = '06:30',
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
+    [switch]$RunWhenLoggedOff,
     [string]$TaskName = 'SDI Split Delivery Note Scans'
 )
 
@@ -155,6 +170,12 @@ Write-Host "source    : $(if ($Source) { $Source } else { 'from SDI_SCAN_SOURCE_
 Write-Host "out       : $(if ($Out) { $Out } else { 'from SDI_SCAN_SPLIT_DIR in .env' })"
 Write-Host "window    : scans modified in the last $SinceDays day(s); older ones are left alone"
 Write-Host "runs at   : $At daily, as $RunAsUser"
+if ($RunWhenLoggedOff) {
+    Write-Host "logon     : NOT required -- the password is stored with the task"
+} else {
+    Write-Host "logon     : REQUIRED -- runs only while $RunAsUser is logged on; if $At is"
+    Write-Host "            missed it fires at the next logon. -RunWhenLoggedOff to change that."
+}
 
 $arguments = '"{0}"' -f $script
 if ($Source) { $arguments += ' --source "{0}"' -f $Source }
@@ -169,10 +190,25 @@ $settings  = New-ScheduledTaskSettingsSet -StartWhenAvailable `
                                           -ExecutionTimeLimit (New-TimeSpan -Hours 2)
 
 if ($PSCmdlet.ShouldProcess($TaskName, 'Register scheduled task')) {
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
-                           -Settings $settings -User $RunAsUser -RunLevel Limited `
-                           -Description 'Splits the day''s scanned delivery notes into one PDF per note.' `
-                           -Force | Out-Null
+    $register = @{
+        TaskName    = $TaskName
+        Action      = $action
+        Trigger     = $trigger
+        Settings    = $settings
+        User        = $RunAsUser
+        RunLevel    = 'Limited'
+        Description = 'Splits the day''s scanned delivery notes into one PDF per note.'
+        Force       = $true
+    }
+    if ($RunWhenLoggedOff) {
+        # Prompted, never a parameter: a password on a command line is in the shell history.
+        # Handed to Task Scheduler, which stores it in its own credential vault, and to
+        # nothing else; the plain-text copy lives only for the duration of this call.
+        $secure = Read-Host -AsSecureString "Password for $RunAsUser (stored by Task Scheduler so the task can run and reach the share when nobody is logged on)"
+        $register.Password = (New-Object System.Management.Automation.PSCredential(
+            $RunAsUser, $secure)).GetNetworkCredential().Password
+    }
+    Register-ScheduledTask @register | Out-Null
     Write-Host ''
     Write-Host "Registered '$TaskName'."
     Write-Host 'Try it now without writing anything (the same arguments the task will use):'
