@@ -1762,7 +1762,14 @@ def build_part_graph(
         The edge is the BOM table's answer. The child's own arbitrated quantity is whatever
         reader won `quantity` on its record, which for a model-counted part is SolidWorks. Both
         are per-parent statements about the same thing, so where they disagree rank decides and
-        the loser is recorded. Ranks are NOT changed here and the tree is not promoted: the
+        the loser is recorded.
+
+        THAT SENTENCE WAS NOT TRUE OF THE MODEL UNTIL 22 SEP 2026. The connector wrote the
+        full-depth BOM figure — how many the whole PRODUCT contains — into `quantity`, and it
+        was kept here as a per-parent count and multiplied down the tree a second time
+        (11650-06: extenders 9 against 3, sliders 24 against 12). It now writes the model's
+        own per-parent edge count and keeps the product total as `quantity_total_per_unit`,
+        which the node loop below checks this roll-up against. Ranks are NOT changed here and the tree is not promoted: the
         tree keeps the field where nothing stronger has spoken, which is what it is for.
         """
         record = records.get(child_id) or {}
@@ -1855,6 +1862,26 @@ def build_part_graph(
             _src = str(source_of(records.get(identity) or {}, "quantity") or "")
             if _src:
                 qty_own_source[identity] = _src
+
+    # ── TWO ROADS TO ONE NUMBER ───────────────────────────────────────────────────
+    #
+    # The model counts every instance in the whole product; the roll-up above multiplies
+    # per-parent counts down the tree. Where both exist they are independent answers to the
+    # same question, and a disagreement is exactly the double-count that priced 11650-06's
+    # sliders twice. Said on the line, never silently resolved: the model's top assembly is
+    # not always the job's, so a difference can be legitimate — and a person can tell which.
+    for identity in sorted(identities):
+        _rec = records.get(identity) or {}
+        _total = number(_rec.get("quantity_total_per_unit"), None)
+        _rolled = quantities.get(identity)
+        if _total and _rolled and abs(_total - _rolled) > 1e-6 and not _rec.get(
+                "is_assembly_parent"):
+            qty_notes.setdefault(identity, (
+                f"this roll-up costs {_rolled:g} per unit; the SolidWorks model counts "
+                f"{_total:g} in the whole product. One of them double-counts or misses a "
+                f"level — confirm before quoting"))
+            print(f"   [graph] {identity}: rolled up to {_rolled:g} per unit, the model "
+                  f"counts {_total:g} — CHECK", flush=True)
 
     nodes: List[PartNode] = []
     for identity in sorted(identities):
