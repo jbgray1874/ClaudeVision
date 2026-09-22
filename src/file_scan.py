@@ -3894,7 +3894,42 @@ def _finalize_scan_summary(
             "ordinary waterfall prices them.")
         print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
               "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
+    # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
+    #
+    # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
+    # second half is a hole: a REAL drawing pack whose BOM read came back empty would be
+    # handed to the concept read and guessed at, with flats and models sitting unread in the
+    # same folder. James Gray, 22 Sep 2026: "If you point the render assembler at a real
+    # pack, you will flatten a weldment into one 5 mm panel again."
+    #
+    # A drawing pack that produced no parts is a READER FAILURE, and the honest output for
+    # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
+    # a deliberate refusal is never reported as a concept read that crashed.
+    _concept_refused = None
     if _llm_only_run and (_no_parts or _is_render_pack):
+        try:
+            import concept_scan as _cs_probe
+            _pack_files = list(summary.get("scanned_documents") or [])
+            if pdf_path is not None:
+                _pack_files.append(str(pdf_path))
+            if job_folder is not None:
+                try:
+                    _pack_files += [str(p) for p in Path(job_folder).iterdir()]
+                except OSError:
+                    pass
+            _concept_refused = _cs_probe.why_not_sightable(summary, _pack_files)
+        except Exception as _wexc:                                   # noqa: BLE001
+            # FAIL CLOSED. If the guard itself cannot run, the concept read does not run:
+            # the one thing worse than refusing a pack we could have sighted is sighting
+            # over a pack we could have measured.
+            _concept_refused = f"the measured-CAD guard could not run ({_wexc})"
+    if _concept_refused:
+        summary["concept_read"] = {"refused": _concept_refused}
+        summary.setdefault("review_flags", []).append(
+            f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable geometry, "
+            f"so an empty parts list is a reading problem to fix, not a picture to guess at.")
+        print(f"   [concept] not sighted — {_concept_refused}", flush=True)
+    elif _llm_only_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan
             _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
@@ -3908,10 +3943,23 @@ def _finalize_scan_summary(
             _answer = _read.get("parsed") or {}
             _sighted = concept_scan.parts_from_concept(
                 _answer, Path(_pack[0]).stem if _pack else "CONCEPT")
+            _unit_ops = concept_scan.unit_operations(_answer)
             summary["concept_read"] = dict(concept_scan.concept_note(_answer),
                                            parts=len(_sighted),
+                                           unit_operations=_unit_ops,
                                            cache_hit=bool(_read.get("cache_hit")))
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            # THE UNIT'S OWN WORK, ON THE UNIT'S OWN RECORD. Assembling the carcass, fitting
+            # the lid and the castors and packing it are not operations on any one panel —
+            # they are what turns the panels into the product. Carried on the top assembly
+            # so the compiler charges them once, not once per part.
+            if _unit_ops:
+                _top = summary.setdefault("assembly_events", [])
+                if isinstance(_top, list):
+                    _top.append({"assembly": "CONCEPT-UNIT", "operations": _unit_ops,
+                                 "source": concept_scan.SOURCE,
+                                 "why": "sighted on the render: the unit is made of several "
+                                        "parts and has to be put together and packed"})
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")

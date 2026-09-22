@@ -44,46 +44,100 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
-# Bump when the prompt changes — it is part of the cache key.
-CONCEPT_PROMPT_VERSION = "c1"
+# ── BUMP THIS WHENEVER THE PROMPT CHANGES ───────────────────────────────────────────
+#
+# It is part of the cache key, so a prompt change WITHOUT a bump is the worst of both: the
+# new instructions are never sent, every pack replays the answer the old prompt produced,
+# and the run looks entirely normal. The whole "a noun list, not a BOM" rewrite would have
+# reached nothing on the machine it was written for.
+#
+# `_PROMPT_FINGERPRINT` below makes forgetting impossible: it pins the prompt's own hash, and
+# a test compares the two. Edit the prompt, the hash moves, the test fails, and the message
+# tells you to bump the version and record the new hash.
+#   c1  first cut — "name the parts you can see"
+#   c2  the make list: an enclosure is its panels, and every made line names its work
+CONCEPT_PROMPT_VERSION = "c2"
 
 SOURCE = "vision_concept"
 
-_PROMPT = """You are looking at {n} image(s): customer-supplied product renders or photos of ONE
-retail display product (SDI Displays estimating). They may be different views or print/graphic
-variants of the SAME product — never treat each image as a separate product.
+# ── THE OPERATIONS THE ENGINE CAN ACTUALLY MINT ─────────────────────────────────────
+#
+# The model may only name work from this list, because every name here resolves to a real
+# department on the rate card (department_codes._alias). A word outside it — "print", "wrap",
+# "fit" — resolves to nothing, mints nothing, and silently costs nothing, which is exactly
+# how the first run produced three route rows and charged for none of them.
+#
+# Board and joinery vocabulary first: this is what a display bin is made on.
+SIGHTABLE_OPERATIONS = {
+    "saw":              "cut board or tube to size (panel saw)",
+    "cnc_routing":      "router pass — profiles, apertures, cut-outs",
+    "edge_banding":     "edge tape or lipping on a visible board edge",
+    "laminating":       "laminate, veneer, vinyl wrap or applied graphic laid onto a panel",
+    "glue":             "bonded or glued joint",
+    "wet_spray":        "sprayed paint or lacquer finish",
+    "bench_work":       "bench assembly of a joinery carcass",
+    "hole_machining":   "drilled or bored holes — hinge bores, fixing holes",
+    "assembly":         "putting the unit together — fitting lid, castors, fittings",
+    "laser_cutting":    "laser cut sheet metal",
+    "folding":          "press-brake fold in sheet metal",
+    "welding":          "welded joint",
+    "powder_coating":   "powder coated finish",
+    "deburring":        "deburr or fettle an edge",
+}
 
-Name ONLY the parts you can actually SEE, so a manufacturer could price a budget build.
-For every part: what it appears to be made of, and an ESTIMATED envelope in mm derived from
-visible human-scale cues (castors ~75mm, standard aperture heights, brick/floor tile scale,
-door heights). Every estimate must name the cue it was scaled from.
+_PROMPT = """You are looking at {n} image(s): customer-supplied renders or photos of ONE retail
+display product (SDI Displays estimating). They may be different views or print/graphic variants
+of the SAME product — never treat each image as a separate product.
+
+Produce a MAKE LIST: every line is something that is CUT or BOUGHT, with how many per unit.
+This is a bill of materials a manufacturer would price, not a list of the things you can see.
+
+THE DIFFERENCE MATTERS AND IT IS THE WHOLE TASK:
+- An enclosure is NOT one part. A cabinet is its PANELS — front, two sides, back, base, top —
+  each its own line with its own blank size. Never return a carcass as a single blank.
+- A printed face is TWO lines where it is a print applied to a board: the board, and the
+  applied graphic.
+- Fittings you can see the effect of are lines too: a lid that lifts has a hinge; a unit on
+  wheels has castors; panels that meet are screwed or glued.
+- Give the quantity PER UNIT (4 castors = one line, quantity 4 — never 4 lines, never "a set").
+
+For every line give the work it needs, from THIS LIST ONLY — any other word is discarded:
+{ops}
+
+Sizes: estimate in mm from visible human-scale cues (castors ~75mm, hand-height apertures,
+floor tiles, door heights). Every size must name the cue it came from. Integers only.
 
 Rules:
-- NEVER state a price, cost, weight or supplier. Geometry, materials and counts only.
-- NEVER invent parts you cannot see. What a real unit must contain but the images cannot
-  show (fixings, internal framing, base weights) goes in "not_visible" as words.
-- Every dimension is an ASSUMPTION: give integers in mm and always say why in "why_size".
+- NEVER state a price, cost or supplier. Geometry, materials, counts and operations only.
+- A bought-in line (castor, hinge, fitting) needs no blank size — leave the sizes 0.
+- NEVER invent a part whose existence you cannot infer from the image. What a real unit must
+  contain but the images cannot show goes in "not_visible" as words, for the estimator.
 - If the images are variants (different graphics, same build), say so in "variants" and list
-  each graphic set once in "print_sets" — do not duplicate the build per variant.
-- quantity is what is visible (4 castors seen or implied by symmetry = 4, and say which).
+  each graphic set once in "print_sets" — ONE build, not one per variant.
 
 Return ONLY valid JSON, no markdown, exactly this shape:
 {{
   "product": {{"name": "<what this is>", "assumed_overall_mm": {{"height": 0, "width": 0, "depth": 0}},
               "scale_cue": "<what the overall size was scaled from>", "variants": 1}},
   "parts": [
-    {{"name": "<part>", "kind": "fabricated|bought_in|graphic",
+    {{"name": "<part, e.g. SIDE PANEL>", "kind": "fabricated|bought_in|graphic",
       "sighted_material": "<what it looks like, verbatim impression>",
-      "material_guess": "<closest stock material name, e.g. MFMDF, MDF, ACRYLIC, MILD STEEL, PRINTED_PAPER>",
+      "material_guess": "<closest stock material, e.g. MFMDF, MDF, ACRYLIC, MILD STEEL, PRINTED_PAPER>",
       "assumed_blank_mm": {{"length": 0, "width": 0, "thickness": 0}},
       "quantity": 1, "quantity_basis": "<seen / implied by symmetry / per print set>",
+      "operations": ["saw", "cnc_routing"],
       "seen": "<which image, where>", "why_size": "<the cue this was scaled from>"}}
   ],
+  "unit_operations": ["assembly"],
   "print_sets": ["<one line per graphic variant>"],
   "not_visible": ["<what a real unit needs that these images cannot show>"]
 }}"""
+
+# The prompt's own hash, so a change without a version bump cannot pass silently. If a test
+# tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
+_PROMPT_FINGERPRINT = "d7f83e6e40fe"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -110,8 +164,9 @@ def _call_vision_llm(png_pages: List[bytes], model: str) -> str:
     from openai import OpenAI                                       # noqa: WPS433
 
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+    _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
     content: List[Dict[str, Any]] = [
-        {"type": "text", "text": _PROMPT.format(n=len(png_pages))}]
+        {"type": "text", "text": _PROMPT.format(n=len(png_pages), ops=_ops)}]
     for png in png_pages:
         b64 = base64.b64encode(png).decode("ascii")
         content.append({"type": "image_url",
@@ -199,6 +254,62 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
 
 # ── sighted answer → engine parts ───────────────────────────────────────────────────
 
+# ── WHEN THE CONCEPT READ MAY NOT RUN ───────────────────────────────────────────────
+#
+# James Gray, 22 Sep 2026, setting the split between the two paths: "If you point the render
+# assembler at a real pack, you will flatten a weldment into one 5 mm panel again. That is
+# the defect we just saw." And: "Assembler / nest / routes — NO. Do not run concept-kind
+# mapping over a measured DXF."
+#
+# The first gate was `--llm-only AND (a render pack OR no parts came out)`. The second half
+# is the hole: a REAL drawing pack whose BOM read happened to come back empty — a scan the
+# reader could not see, a pack with an unreadable table — would be handed to the concept
+# read and sighted over. Flats, models and title blocks would sit in the folder, measured
+# and ignored, while a vision model guessed at panels from a picture of the same thing.
+#
+# So measured CAD in the pack is an absolute refusal, whatever else is true. The concept
+# read exists for a pack that has nothing to measure; a drawing pack that produced no parts
+# is a READER FAILURE, and the honest output for that is the failure, not a sighted guess.
+_MEASURABLE_CAD = {".dxf", ".dwg", ".sldprt", ".sldasm", ".slddrw", ".step", ".stp"}
+
+
+def why_not_sightable(summary: Mapping[str, Any],
+                      files: Optional[List[Any]] = None) -> Optional[str]:
+    """The reason this pack must not be concept-read, or None if it may be.
+
+    Returns a sentence, because a refusal nobody can read is a refusal nobody can act on.
+    """
+    if str(summary.get("source_format") or "").lower() == "dxf":
+        return "this pack was read as DXF geometry — it is measured, not sighted"
+
+    for raw in (files or []):
+        suffix = Path(str(raw)).suffix.lower()
+        if suffix in _MEASURABLE_CAD:
+            return (f"the pack contains {Path(str(raw)).name} — measured CAD is never "
+                    f"sighted over")
+
+    writeup = summary.get("manufacturing_writeup")
+    parts = (writeup or {}).get("parts") if isinstance(writeup, dict) else None
+    for part in (parts or []):
+        if not isinstance(part, dict):
+            continue
+        if part.get("flat_pattern_detected") or part.get("source_dxf_path"):
+            return (f"{part.get('part_number') or 'a part'} carries a measured flat — "
+                    f"measured CAD is never sighted over")
+        source = str(part.get("geometry_source") or "").lower()
+        if source.startswith(("dxf", "solidworks")):
+            return (f"{part.get('part_number') or 'a part'} carries {source} geometry — "
+                    f"measured CAD is never sighted over")
+    return None
+
+
+def _positive(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _slug(text: Any, fallback: str) -> str:
     out = re.sub(r"[^A-Za-z0-9]+", "-", str(text or "")).strip("-").upper()
     return out[:24] or fallback
@@ -219,10 +330,16 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if not isinstance(sighted, dict):
             continue
         name = str(sighted.get("name") or f"part {n}").strip()
+        kind = str(sighted.get("kind") or "").strip().lower()
         record = _empty_part_record(
             f"{_slug(stem, 'CONCEPT')}-C{n:02d} {_slug(name, str(n))}",
             item_number=n, description=name, quantity=None)
         record["concept"] = True
+        # WHICH KIND OF LINE THIS IS, on the record rather than inferred from its material.
+        # A fabricated panel must carry work or it is a part nobody can price; a bought-in
+        # castor and an applied graphic correctly carry none, and the difference has to be
+        # readable without guessing from a material string.
+        record["concept_kind"] = kind or "fabricated"
         record["page_roles"] = ["render"]
         record["concept_seen"] = str(sighted.get("seen") or "")
 
@@ -235,7 +352,6 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             basis = "assumed — the render does not show a count"
         apply_field(record, "quantity", qty, SOURCE, note=basis)
 
-        kind = str(sighted.get("kind") or "").strip().lower()
         sighted_mat = str(sighted.get("sighted_material") or "").strip()
         guess = str(sighted.get("material_guess") or "").strip().upper()
         if kind == "bought_in" and not guess:
@@ -248,7 +364,30 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if sighted_mat:
             record["materials"].append(sighted_mat)
 
+        # ── A BOUGHT-IN LINE IS NEVER NESTED, WHATEVER SIZE THE MODEL GIVES IT ──────
+        #
+        # James Gray, 22 Sep 2026: "Never nest a caster." The first run did exactly that —
+        # CASTORS came back with a 75×75 envelope, the assembler wrote it as a blank, and
+        # the nest block worked out 338 castors per 2500×1250 sheet. A castor is not cut
+        # from anything: it is bought, each, and it prices off a catalogue or an evidenced
+        # research figure. The same is true of a hinge, a fixing and an applied graphic.
+        #
+        # THIS IS THE MAPPER REFUSING AN ILLEGAL KIND, not the prompt asking nicely. The
+        # model may return a size for a castor — it can see one — and the size may even be
+        # right. What it must never do is become a blank, because a blank is an instruction
+        # to nest, and nesting a bought item is how a sheet of wheels gets priced.
         blank = sighted.get("assumed_blank_mm") or {}
+        if kind in ("bought_in", "graphic"):
+            _given = [k for k in ("length", "width", "thickness")
+                      if _positive(blank.get(k))]
+            if _given:
+                record["review_flags"].append(
+                    f"CONCEPT: {kind.replace('_', '-')} line — the sighted size "
+                    f"({', '.join(_given)}) is recorded as a note, not as a blank; it is "
+                    f"bought by the each and is never nested")
+                record["concept_sighted_size_mm"] = {
+                    k: blank.get(k) for k in ("length", "width", "thickness")}
+            blank = {}
         why = str(sighted.get("why_size") or "scaled from the render")
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):
@@ -266,6 +405,42 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if thickness > 0:
             apply_field(record, "normalized_thickness_mm", thickness, SOURCE, note=why)
 
+        # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
+        #
+        # James Gray, 22 Sep 2026, on the first render run: "Three assembly rows, all ruled
+        # out. No cut, print, wrap, CNC, assemble, pack. A route that charges nothing is not
+        # a route." He was right: the sighted parts carried no operations at all, so the
+        # compiler had nothing to mint but a generic assembly on a leaf part — which it
+        # correctly ruled out — and the whole labour column came to £0.00.
+        #
+        # `inferred_operations` is the honest field for this: these ARE inferred, from a
+        # picture. The compiler reads it exactly as it reads an inference off a drawing, and
+        # the route report says `inference` against every one.
+        #
+        # FILTERED TO THE VOCABULARY. A word the rate card cannot resolve resolves to no
+        # department, mints nothing and charges nothing — silently. So an unknown operation
+        # is dropped and SAID, rather than carried as a row that looks like work and is not.
+        seen_ops, unknown = [], []
+        for raw in (sighted.get("operations") or []):
+            name = str(raw or "").strip().lower().replace(" ", "_")
+            if name in SIGHTABLE_OPERATIONS:
+                if name not in seen_ops:
+                    seen_ops.append(name)
+            elif name:
+                unknown.append(str(raw))
+        if seen_ops:
+            record["inferred_operations"] = seen_ops
+        elif kind == "fabricated":
+            # A made part with no work on it is not a part anybody can price. Say so on the
+            # record rather than letting it reach the sheet as a free component.
+            record["review_flags"].append(
+                "CONCEPT: no manufacturing operation could be sighted for this part — "
+                "it will carry material and no labour until one is entered")
+        if unknown:
+            record["review_flags"].append(
+                "CONCEPT: operation(s) not on the rate card were sighted and dropped: "
+                + ", ".join(sorted(set(unknown))))
+
         # THE ACTION RIDES ON THE PART. One line, in the estimator's imperative, because a
         # concept figure that nobody is told to confirm becomes a firm one by seniority.
         if wrote_size or thickness > 0:
@@ -278,6 +453,25 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 "CONCEPT: no size could be sighted — enter this part's dimensions")
         parts.append(record)
     return parts
+
+
+def unit_operations(answer: Dict[str, Any]) -> List[str]:
+    """The work that belongs to the UNIT, not to any one panel.
+
+    "Route: cut board → print/wrap → assemble carcass → fit lid & wheels → pack." The first
+    three happen to panels and ride on the parts; the last two happen to the product and
+    have nowhere else to live. Filtered to the vocabulary for the same reason the per-part
+    list is, and defaulted to `assembly` — a unit made of several sighted parts is assembled,
+    whatever else the model did or did not say about it.
+    """
+    out: List[str] = []
+    for raw in (answer.get("unit_operations") or []):
+        name = str(raw or "").strip().lower().replace(" ", "_")
+        if name in SIGHTABLE_OPERATIONS and name not in out:
+            out.append(name)
+    if not out and len(answer.get("parts") or []) > 1:
+        out = ["assembly"]
+    return out
 
 
 def concept_note(answer: Dict[str, Any]) -> Dict[str, Any]:

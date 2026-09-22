@@ -110,13 +110,13 @@ def test_the_concept_source_ranks_with_the_inferences():
 
 def test_sighted_parts_carry_their_stamps_and_their_doubts():
     parts = concept_scan.parts_from_concept(FIXTURE, "PlanA renders")
-    assert len(parts) == 5
+    assert len(parts) == 11, "the make list, not the noun list"
 
     carcass = parts[0]
     assert carcass["concept"] is True
     assert source_of(carcass, "quantity") == "vision_concept"
     assert source_of(carcass, "normalized_material") == "vision_concept"
-    assert carcass["normalized_material"] == "MFMDF"
+    assert carcass["normalized_material"] == "MDF"
     assert carcass["blank_length_mm"] == 900.0
     # THE PAIR RULE (D-152): length and width share one recorded source, so flat_blank_mm
     # treats them as one reading rather than refusing an assembled pair.
@@ -126,6 +126,196 @@ def test_sighted_parts_carry_their_stamps_and_their_doubts():
     assert flat_blank_mm(carcass) != (None, None)
     # And the doubt rides on the part, in the estimator's imperative.
     assert any("confirm" in f.lower() for f in carcass["review_flags"]), carcass["review_flags"]
+
+
+def test_an_enclosure_is_its_panels_not_one_blank():
+    """James Gray, 22 Sep 2026, on the first render run: "You have a noun list, not a
+    credible BOM or route... cabinet as faces or a carcass, not one 900×450 blank."
+
+    The first answer returned four nouns — header, cabinet, lid, castors — and the cabinet
+    was ONE blank. A carcass is not a part; it is five or six panels, each with its own
+    blank and its own work, and nothing downstream can recover that from a single line.
+    """
+    names = [p["description"].upper() for p in
+             concept_scan.parts_from_concept(FIXTURE, "PlanA")]
+    for face in ("FRONT", "SIDE", "BACK", "BASE"):
+        assert any(face in n for n in names), f"no {face} panel — the carcass is one blank again"
+    assert not any("CABINET" in n and "PANEL" not in n for n in names), names
+
+
+def test_every_made_part_carries_work_the_rate_card_can_price():
+    """"A route that charges nothing is not a route." Sighted parts used to reach the
+    compiler with no operations at all, so it minted a generic assembly on each leaf,
+    correctly ruled every one out, and the labour column came to £0.00."""
+    from department_codes import code_for                                # noqa: WPS433
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    made = [p for p in parts if p.get("concept_kind") == "fabricated"]
+    assert len(made) >= 6, "the fixture has no make list to speak of"
+    for part in made:
+        ops = part.get("inferred_operations") or []
+        assert ops, f"{part['description']} carries no operation — it would cost nothing"
+        for op in ops:
+            assert code_for(op), f"{op!r} resolves to no department, so it charges nothing"
+
+
+def test_an_operation_the_rate_card_cannot_price_is_dropped_and_said():
+    """A word outside the vocabulary resolves to no department, mints nothing and charges
+    nothing — silently. Dropping it is right; dropping it quietly is how a route looks
+    complete and is not."""
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["operations"] = ["saw", "print", "wrap"]
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert part["inferred_operations"] == ["saw"]
+    assert any("not on the rate card" in f and "print" in f and "wrap" in f
+               for f in part["review_flags"]), part["review_flags"]
+
+
+def test_a_pack_with_measured_cad_is_never_sighted_over():
+    """James Gray, 22 Sep 2026, on the split between the two paths: "If you point the render
+    assembler at a real pack, you will flatten a weldment into one 5 mm panel again."
+
+    The first gate was `--llm-only AND (a render pack OR no parts came out)`, and the second
+    half is the hole: a REAL drawing pack whose BOM read came back empty — an unreadable
+    table, a scan the reader could not see — would be handed to the concept read and guessed
+    at, with flats and models sitting measured and ignored in the same folder.
+
+    A drawing pack that produced no parts is a READER FAILURE. The honest output is that
+    failure, not a picture-guess wearing its name.
+    """
+    # A flat in the pack: refused by file.
+    assert concept_scan.why_not_sightable(
+        {}, ["C:/job/11350-02-01_1mm MS_RevB.DXF"]) is not None
+    assert "DXF" in concept_scan.why_not_sightable({}, ["x/a.DXF"])
+    for cad in ("b.dwg", "c.SLDPRT", "d.sldasm", "e.step"):
+        assert concept_scan.why_not_sightable({}, [cad]), cad
+
+    # A DXF-sourced scan: refused by the summary.
+    assert concept_scan.why_not_sightable({"source_format": "dxf"}, [])
+
+    # A measured flat on a part: refused even when the file list is empty, because a pack
+    # can reach this point with its geometry already merged onto the records.
+    measured = {"manufacturing_writeup": {"parts": [
+        {"part_number": "12349-02-69-04M", "flat_pattern_detected": True}]}}
+    assert "measured flat" in concept_scan.why_not_sightable(measured, [])
+    sw = {"manufacturing_writeup": {"parts": [
+        {"part_number": "7332-01-003", "geometry_source": "solidworks_flat_pattern"}]}}
+    assert concept_scan.why_not_sightable(sw, [])
+
+    # THE CONTROL. A render pack has nothing to measure and is sightable.
+    assert concept_scan.why_not_sightable(
+        {"source_format": "image_render",
+         "manufacturing_writeup": {"parts": []}},
+        ["C:/job/PlanA-bin-render.png", "C:/job/visuals.pdf"]) is None
+
+
+def test_the_refusal_is_wired_in_before_the_read_and_fails_closed():
+    """A refusal is not a failure, so it is decided BEFORE the try — otherwise a deliberate
+    refusal is reported as a concept read that crashed. And if the guard itself cannot run,
+    the read does not run: the one thing worse than refusing a pack we could have sighted is
+    sighting over a pack we could have measured."""
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "_concept_refused" in src
+    assert "MEASURED CAD IS NEVER SIGHTED OVER" in src
+    assert "the measured-CAD guard could not run" in src, "the guard does not fail closed"
+    # The refusal must be decided before the concept read is attempted.
+    assert src.index("_concept_refused = None") < src.index("_sighted = concept_scan.parts_from_concept")
+
+
+def test_a_castor_is_never_nested_however_the_model_sizes_it():
+    """James Gray, 22 Sep 2026: "Never nest a caster."
+
+    The first run did. CASTORS came back with a 75×75 envelope, the assembler wrote it as a
+    blank, and the nest block worked out 338 castors per 2500×1250 sheet. A castor is bought
+    by the each; a blank is an instruction to nest, so a bought-in line must never get one.
+
+    THE MAPPER REFUSES THE KIND — it does not rely on the prompt asking nicely. The model
+    can see a castor and may well return its size, so the size is kept as a note and refused
+    as a blank.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    castor = next(p for p in answer["parts"] if p["name"] == "CASTOR")
+    castor["assumed_blank_mm"] = {"length": 75, "width": 75, "thickness": 75}
+
+    part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
+                if "CASTOR" in p["part_number"])
+    assert part.get("blank_length_mm") in (None, 0), "a castor was written as a blank"
+    assert part.get("blank_width_mm") in (None, 0)
+    assert part.get("normalized_thickness_mm") in (None, 0)
+    # Kept as evidence, not thrown away — it is a real observation, just not a blank.
+    assert part["concept_sighted_size_mm"]["length"] == 75
+    assert any("never nested" in f for f in part["review_flags"]), part["review_flags"]
+
+
+def test_an_applied_graphic_is_not_nested_either():
+    """A print laid onto a panel is bought by area or by the each; it is not cut from a
+    sheet of graphics. Same rule, same reason."""
+    answer = json.loads(json.dumps(FIXTURE))
+    part = next(p for p in concept_scan.parts_from_concept(answer, "PlanA")
+                if "GRAPHIC" in p["part_number"])
+    assert part["concept_kind"] == "graphic"
+    assert part.get("blank_length_mm") in (None, 0), "the graphic was written as a blank"
+
+
+def test_a_fabricated_panel_still_gets_its_blank():
+    """The control. A guard that refuses everything is not a guard — a made panel must
+    still nest, or there is no material cost at all."""
+    part = concept_scan.parts_from_concept(FIXTURE, "PlanA")[0]
+    assert part["concept_kind"] == "fabricated"
+    assert part["blank_length_mm"] == 900.0 and part["blank_width_mm"] == 400.0
+
+
+def test_the_prompt_cannot_change_without_its_cache_version():
+    """THE SILENT UNDO. The prompt is part of the cache key, so editing it WITHOUT bumping
+    the version means the new instructions are never sent: every pack replays the answer the
+    old prompt produced, and the run looks entirely normal. This whole rewrite — "an
+    enclosure is its panels" — would have reached nothing on the machine it was written for.
+
+    So the prompt's own hash is pinned beside the version. Change the prompt, this fails, and
+    the fix is two lines: bump the version, record the new hash."""
+    import hashlib
+
+    got = hashlib.sha256(concept_scan._PROMPT.encode()).hexdigest()[:12]
+    assert got == concept_scan._PROMPT_FINGERPRINT, (
+        f"the concept prompt changed. Bump CONCEPT_PROMPT_VERSION (now "
+        f"{concept_scan.CONCEPT_PROMPT_VERSION!r}) and set _PROMPT_FINGERPRINT = {got!r}")
+
+
+def test_every_operation_offered_to_the_model_resolves_to_a_department():
+    """The vocabulary is the contract. A word in this list that the rate card cannot resolve
+    is an operation the model will happily return and nothing will ever charge for."""
+    from department_codes import code_for
+
+    for op in concept_scan.SIGHTABLE_OPERATIONS:
+        assert code_for(op), f"{op!r} is offered to the model and resolves to no department"
+
+
+def test_the_unit_has_work_of_its_own():
+    """"assemble carcass → fit lid & wheels → pack" happens to the PRODUCT, not to any one
+    panel, and has nowhere else to live. A unit of several parts is assembled whatever else
+    the model said."""
+    assert concept_scan.unit_operations(FIXTURE) == ["bench_work", "assembly"]
+    assert concept_scan.unit_operations({"parts": [{}, {}]}) == ["assembly"]
+    assert concept_scan.unit_operations({"parts": [{}]}) == [], "one part is not an assembly"
+    assert concept_scan.unit_operations(
+        {"parts": [{}, {}], "unit_operations": ["teleportation"]}) == ["assembly"]
+
+
+def test_a_made_part_with_no_sighted_work_says_so():
+    """Material and no labour is a part somebody must look at, not a cheap one."""
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["operations"] = []
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert not part.get("inferred_operations")
+    assert any("no manufacturing operation" in f for f in part["review_flags"])
+
+
+def test_a_bought_in_line_needs_no_work_and_no_blank():
+    """A castor is bought. It has no blank and no operations, and neither is a defect."""
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    assert not castor.get("inferred_operations")
+    assert not any("no manufacturing operation" in f for f in castor["review_flags"])
 
 
 def test_a_sighted_castor_is_a_sourcing_fact_not_a_zero():
@@ -277,5 +467,5 @@ def test_an_engine_run_on_a_render_pack_names_the_right_mode(monkeypatch):
 def test_the_answer_survives_a_markdown_fence():
     fenced = "```json\n" + json.dumps(FIXTURE) + "\n```"
     parsed = concept_scan.parse_concept_response(fenced)
-    assert parsed is not None and len(parsed["parts"]) == 5
+    assert parsed is not None and len(parsed["parts"]) == 11
     assert concept_scan.parse_concept_response("the model apologises") is None

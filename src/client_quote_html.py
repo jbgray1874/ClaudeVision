@@ -1388,7 +1388,37 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # customer file, is not served as a download and is not attached to a mail — none of which
     # needs a sentence on the page to work. So what is left here is the one thing the page can
     # usefully say: which value to enter, and where.
-    if unit_price is None:
+    # ── AN INTERNAL PAGE SHOWS THE FIGURE THE WORKBOOK HOLDS ────────────────────────
+    #
+    # James Gray, 22 Sep 2026: "Quote needs to have a price — even if a bad one since we
+    # know it's only indicative... it keeps being over ridden."
+    #
+    # The customer document is unchanged and still fails closed: `unit_price` comes from the
+    # traceable figure, and without one a customer sees no number. But this file is also
+    # generated as _quote_PORTAL.html and _quote_LLM-ONLY.html — pages whose entire purpose
+    # is to show the estimator what the run produced, and which already say "Indicative —
+    # for internal comparison" in their own Basis row. Printing a dash there, on a job whose
+    # workbook says £102.70 and whose report prints £102.70, is not caution: it sends
+    # somebody to a second document to read the number this one is about.
+    #
+    # So the internal pages fall back to the workbook's own figure, captioned as what it is.
+    # The release gates are untouched: what may reach a customer is decided by audience and
+    # by `customer_releasable`, never by whether a number was rendered here.
+    _internal = bool(summary.get("llm_only")) or (audience or PORTAL) != CUSTOMER
+    _workbook_only = _state["price"].get("workbook_amount")
+    if unit_price is None and _internal and isinstance(_workbook_only, (int, float)):
+        _indicative = _workbook_only * MARKUP_FACTOR
+        _price_class, _order_class = "unit", "ov"
+        _unit_figure = _money(_indicative)
+        _order_figure = _money(_indicative * qty) if qty else "&mdash;"
+        _unit_caption = ("per unit, ex VAT · indicative, from the workbook"
+                         + ((' · ' + _num(qty) + ' of') if qty else ''))
+        _order_caption = "ex VAT · indicative"
+        _pending_note = (
+            '\n      <div class="estimator-action">Indicative: this figure is the workbook\'s '
+            'own total and has not been traced to a signed-off cell. Settle the open lines on '
+            'the Estimate sheet and regenerate before it is quoted.</div>')
+    elif unit_price is None:
         _price_class = _order_class = "unit"
         _unit_figure = _order_figure = "&mdash;"
         _unit_caption = "per unit, ex VAT"
@@ -1865,30 +1895,30 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
                                 manual_workbook=manual_workbook,
                                 customer=customer)
     if _llm_only:
-        print("   [deliverables] client quote written — this run read the pack with the vision "
-              "model alone, so the file is named _quote_LLM-ONLY.html. The page itself is "
-              "identical to a full-run quote so the two can be laid side by side; which "
-              "readers ran is in section 4.1 of the job report.",
-              flush=True)
+        print("   [deliverables] client quote written. This run read the pack with the vision "
+              "model alone — the page says so in its Basis row, and section 4.1 of the job "
+              "report names which readers ran.", flush=True)
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
-    # IN THE NAME, because a file is identified from a folder listing far more often than it
-    # is opened. A quote off a measurement run and a quote off a real estimate sitting in one
-    # directory as "10575-02_quote.html" twice is how the wrong one gets attached.
+    # ── THE NAME SAYS WHETHER IT MAY GO OUT, AND NOTHING ELSE ───────────────────────
     #
-    # AND A PORTAL VIEW IS NOT CALLED `_quote.html`. "export, email attachment, print/share:
-    # disabled while `customer_releasable` is false" — the export half is this. A file named
-    # `401912-02_quote.html` sitting on the Estimating share is a quotation as far as anyone
-    # reading the folder is concerned, and the way an unreleased one goes out is that somebody
-    # attaches it without opening it. `_quote_PORTAL.html` cannot be mistaken for the
-    # document, in a listing or in an attachment box, which is the same reasoning that named
-    # the LLM-only file.
-    if _llm_only:
-        out_path = out_dir_p / f"{safe}_quote_LLM-ONLY.html"
-    elif _releasable:
-        out_path = out_dir_p / f"{safe}_quote.html"
-    else:
-        out_path = out_dir_p / f"{safe}_quote_PORTAL.html"
+    # James Gray, 22 Sep 2026: "WHY IS THE filename also LLM ONLY.. we need to stop making
+    # decisions like this. we know quotes won't go out without being checked."
+    #
+    # `_quote_LLM-ONLY.html` was the same instinct as the six warning blocks that came off
+    # this page, moved into the filename: labelling a document with what is imperfect about
+    # it, on the assumption somebody will attach it unread. They will not — a quote is
+    # checked before it is sent, and the run that produced it is named in the page's own
+    # Basis row and in section 4.1 of the report. A third place to say it is friction, not
+    # safety.
+    #
+    # WHAT THE NAME STILL CARRIES IS THE ONE THING IT IS FOR: whether this file may reach a
+    # customer. `_quote_PORTAL.html` is not a defensive label, it is the export gate —
+    # "email attachment, print/share disabled while customer_releasable is false" — and the
+    # way an unreleased quote goes out is that somebody attaches it from a folder listing. So
+    # a released quote is `_quote.html` and an unreleased one is not, whichever readers ran.
+    out_path = out_dir_p / (f"{safe}_quote.html" if _releasable
+                            else f"{safe}_quote_PORTAL.html")
     out_path.write_text(html_str, encoding="utf-8")
     return str(out_path)
 
