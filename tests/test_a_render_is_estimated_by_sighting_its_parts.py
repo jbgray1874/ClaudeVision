@@ -171,6 +171,67 @@ def test_an_operation_the_rate_card_cannot_price_is_dropped_and_said():
                for f in part["review_flags"]), part["review_flags"]
 
 
+def test_the_bom_page_shows_the_sighted_make_list():
+    """THE ONE DELIVERABLE WHOSE JOB IS "WHAT PARTS" ANSWERED WITH SILENCE.
+
+    `bom_sheet` read `document_analysis.bom_rows` and nothing else — the drawing's OWN parts
+    list, which a render does not have. So a concept run sighted eleven parts, priced them,
+    put them on the Estimate sheet, and the BOMs page still said "Nothing in this record" on
+    the pack that needs the question asked most.
+
+    The sighted lines are a bill of materials too. Same table, same detail, with the reader
+    named as what it is so nobody has to infer "guessed" from an absent page number.
+    """
+    from bom_and_route_extract import bom_sheet
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = bom_sheet({"manufacturing_writeup": {"parts": parts},
+                      "document_analysis": {"bom_rows": []}})
+    assert len(rows) == 11, "the sighted make list is missing from the BOM page"
+
+    by_desc = {r["description"]: r for r in rows}
+    side = by_desc["SIDE PANEL"]
+    assert side["read_by"] == "vision_concept", "a sighted line must name its reader"
+    assert side["quantity"] == 2
+    assert "800.0 x 450.0 x 18.0" in side["assumed_blank"] and "assumed" in side["assumed_blank"]
+    assert "saw" in side["work_sighted"], "the work is not on the BOM line"
+    assert side["kind"] == "fabricated"
+
+    castor = by_desc["CASTOR"]
+    assert castor["kind"] == "bought_in"
+    assert not castor["assumed_blank"], "a bought-in line must not show a blank"
+    assert castor["work_sighted"] == "", "a bought-in line needs no work"
+
+
+def test_a_sighted_line_is_not_written_into_the_drawings_bom_rows():
+    """`document_analysis.bom_rows` means "read off the drawing's parts list". A sighted line
+    is not one, and writing it there would make every downstream reader believe a render had
+    a parts list. Two facts, two names."""
+    from bom_and_route_extract import bom_sheet
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    summary = {"manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}}
+    bom_sheet(summary)
+    assert summary["document_analysis"]["bom_rows"] == [], (
+        "the sighted list was written into the drawing's own BOM rows")
+
+
+def test_a_drawing_pack_keeps_exactly_the_bom_it_had():
+    """The control. Concept rows are ADDED for concept parts only — a real pack's table must
+    come out unchanged, or this has quietly altered every job in the building."""
+    from bom_and_route_extract import bom_sheet
+
+    drawn = {"manufacturing_writeup": {"parts": [
+                 {"part_number": "12349-02-69-04M", "description": "LID"}]},
+             "document_analysis": {"bom_rows": [
+                 {"part_number": "12349-02-69-04M", "description": "LID", "quantity": 1,
+                  "source": "bom_table"}]}}
+    rows = bom_sheet(drawn)
+    assert len(rows) == 1 and rows[0]["read_by"] == "bom_table"
+    assert "kind" not in rows[0], "a drawn row grew a concept column"
+
+
 def test_a_pack_with_measured_cad_is_never_sighted_over():
     """James Gray, 22 Sep 2026, on the split between the two paths: "If you point the render
     assembler at a real pack, you will flatten a weldment into one 5 mm panel again."

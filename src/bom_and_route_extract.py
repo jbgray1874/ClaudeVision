@@ -601,6 +601,66 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     # APPEARING TWICE IS NOT THE SAME AS BEING WANTED TWICE. A part number on three sheets of one
     # pack is usually one part drawn three times, and the quantity that matters is the assembly's.
     # Flagged rather than merged: merging here would hide the very duplication an estimator needs
+    # ── A SIGHTED MAKE LIST IS A BILL OF MATERIALS TOO ──────────────────────────────
+    #
+    # This page read `document_analysis.bom_rows` and nothing else — which is the drawing's
+    # OWN parts list, and a render does not have one. So a concept run produced eleven
+    # sighted parts, priced them, put them on the Estimate sheet, and this page still said
+    # "Nothing in this record": the one deliverable whose whole job is to answer "what parts"
+    # answered it with silence, on the pack that needs the question asked most.
+    #
+    # It is the same rows as any other BOM, at the same level of detail, with the reader named
+    # as what it is — `vision_concept`, sighted from a picture, rank 20. Nobody reading this
+    # table should have to work out from the absence of a page number that a line was guessed,
+    # so the reader column says so and the quantity carries its own basis.
+    #
+    # THEY ARE NOT WRITTEN INTO `document_analysis.bom_rows`. That field means "read off the
+    # drawing's parts list", and a sighted line is not one. Two facts, two names.
+    _writeup = summary.get("manufacturing_writeup")
+    for part in ((_writeup or {}).get("parts") or []) if isinstance(_writeup, Mapping) else []:
+        if not isinstance(part, Mapping) or not part.get("concept"):
+            continue
+        code = _text(part.get("part_number"))
+        seen_codes[code.upper()] = seen_codes.get(code.upper(), 0) + 1
+        _ops = [str(o) for o in (part.get("inferred_operations") or [])]
+        _kind = _text(part.get("concept_kind") or "fabricated")
+        _blank = ""
+        if part.get("blank_length_mm") and part.get("blank_width_mm"):
+            _blank = (f"{part.get('blank_length_mm')} x {part.get('blank_width_mm')}"
+                      + (f" x {part.get('normalized_thickness_mm')}"
+                         if part.get("normalized_thickness_mm") else "") + " mm (assumed)")
+        elif part.get("concept_sighted_size_mm"):
+            _blank = "bought by the each — sighted size is a note, not a blank"
+        rows.append({
+            "part_number": code,
+            "description": _text(part.get("description")),
+            "quantity": part.get("quantity"),
+            "qty_own": part.get("quantity"),
+            "qty_effective": part.get("quantity"),
+            "qty_own_and_effective_differ": False,
+            "why_the_quantity_is_what_it_is": _text(part.get("quantity_source_note") or ""),
+            "quantity_as_printed_on_the_drawing": None,
+            "material_as_printed": _text(part.get("normalized_material") or ""),
+            "material_read_from": "sighted on the render",
+            "thickness_mm": part.get("normalized_thickness_mm"),
+            "item_no": _text(part.get("item_number") or ""),
+            "read_from_page": "",
+            "read_from_sheet": "",
+            "drawing_file": "",
+            "grouped_under": "",
+            "belongs_to": "",
+            "read_by": "vision_concept",
+            "also_read_by": "",
+            "also_on_sheets": "",
+            # The columns that only a sighted line has, so the table says what kind of line
+            # this is without anybody inferring it from what is blank.
+            "kind": _kind,
+            "assumed_blank": _blank,
+            "work_sighted": ", ".join(_ops) if _ops else (
+                "" if _kind != "fabricated" else "none sighted — enter the work"),
+            "seen": _text(part.get("concept_seen") or ""),
+        })
+
     # to rule on.
     for row in rows:
         count = seen_codes.get(str(row["part_number"]).upper(), 0)
