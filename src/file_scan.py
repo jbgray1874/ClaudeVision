@@ -3871,6 +3871,18 @@ def _finalize_scan_summary(
     _llm_only_run = os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
     _is_render_pack = summary.get("source_format") == "image_render"
     _no_parts = not summary["manufacturing_writeup"]["parts"]
+    if _is_render_pack and not _llm_only_run:
+        # A RENDER PACK ON AN ENGINE RUN IS AN EMPTY BOOK WAITING TO BE MISREAD. The four
+        # readers read drawings; a render has no text layer, no dimensions and no flats, so
+        # they correctly find nothing — and "£0.00, no parts" filed without a reason reads
+        # as a free job, not as the wrong mode. Say which mode answers this pack.
+        summary.setdefault("review_flags", []).append(
+            "THIS PACK IS IMAGE RENDERS AND THIS WAS AN ENGINE RUN — the drawing readers "
+            "have nothing to measure, so this book is empty by mode, not by content. Run "
+            "the same pack as LLM SCAN ONLY: the vision model sights the parts and the "
+            "ordinary waterfall prices them.")
+        print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
+              "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
     if _llm_only_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan

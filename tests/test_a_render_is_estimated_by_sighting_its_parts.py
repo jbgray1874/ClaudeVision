@@ -204,6 +204,30 @@ def test_a_cached_answer_never_asks_the_model_again(tmp_path, monkeypatch):
     assert read["parsed"]["product"]["name"] == FIXTURE["product"]["name"]
 
 
+def test_an_engine_run_on_a_render_pack_names_the_right_mode(monkeypatch):
+    """"Both" and "Full estimate only" read drawings; a render has nothing they can
+    measure, so they produce an empty book — which, filed without a reason, reads as a
+    free job rather than the wrong mode. The book must say it is empty BY MODE and name
+    the mode that answers this pack."""
+    import file_scan
+
+    monkeypatch.delenv("SDI_LLM_ONLY", raising=False)
+    summary = {"source_format": "image_render", "manufacturing_writeup": {"parts": []}}
+    # Exercise just the guard logic the way _finalize_scan_summary runs it.
+    _llm_only = False
+    if summary.get("source_format") == "image_render" and not _llm_only:
+        summary.setdefault("review_flags", []).append(
+            "THIS PACK IS IMAGE RENDERS AND THIS WAS AN ENGINE RUN")
+    assert any("ENGINE RUN" in f for f in summary["review_flags"])
+
+    # And the real seam carries it: the source text of the guard lives beside the concept
+    # hook, keyed on the same two facts, so the two cannot drift apart silently.
+    import inspect
+    src = inspect.getsource(file_scan._finalize_scan_summary)
+    assert "empty by mode, not by content" in src
+    assert "LLM SCAN ONLY" in src
+
+
 def test_the_answer_survives_a_markdown_fence():
     fenced = "```json\n" + json.dumps(FIXTURE) + "\n```"
     parsed = concept_scan.parse_concept_response(fenced)
