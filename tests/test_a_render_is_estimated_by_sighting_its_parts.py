@@ -204,6 +204,52 @@ def test_a_cached_answer_never_asks_the_model_again(tmp_path, monkeypatch):
     assert read["parsed"]["product"]["name"] == FIXTURE["product"]["name"]
 
 
+def test_a_staged_render_survives_the_walk_from_discovery_to_the_job(tmp_path):
+    """THE FIRST LIVE RUN FILED A SUMMARY AND NO WORKBOOK.
+
+        Found 1 drawing file(s).
+        Folder-as-job: 0 job folder(s) from 1 file(s).
+
+    `list_input_files` discovered the render (config.SUPPORTED_EXTENSIONS knew about it);
+    `group_input_files_by_folder` filtered to `.pdf` and dropped it. Nothing failed — the
+    pack simply became empty between one function and the next, and the run reported
+    success over an empty book.
+
+    Both halves are asserted here, because the defect lived in the JOIN between them: a
+    render must be discovered AND still be there when the job is grouped.
+    """
+    from file_scan import group_input_files_by_folder, list_input_files
+
+    job = tmp_path / "M&S" / "bdab4adf"
+    job.mkdir(parents=True)
+    _png(job, "PlanA-bin-render.png")
+    (job / "notes.txt").write_bytes(b"not a drawing")
+
+    found = list_input_files(job, "*")
+    assert [p.name for p in found] == ["PlanA-bin-render.png"], found
+
+    groups = group_input_files_by_folder(found)
+    assert len(groups) == 1, "the render was discovered and then dropped before the job"
+    assert [p.name for p in next(iter(groups.values()))] == ["PlanA-bin-render.png"]
+
+
+def test_files_found_but_not_grouped_stops_the_run(tmp_path):
+    """"0 job folder(s) from 1 file(s)" was a line of information and the run carried on,
+    filing a summary with no workbook and exiting 0. Discovery and grouping disagreeing is
+    always a defect in the engine — never a fact about the pack — so it refuses, names the
+    files it could not place, and exits NON-ZERO. A returned code would not do: main() is
+    called for its side effects and its value is discarded."""
+    import re
+
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    guard = re.search(r"if files and not scan_jobs:(.{0,1400})", src, re.S)
+    assert guard, "the discovery/grouping disagreement guard is gone"
+    body = guard.group(1)
+    assert "NOTHING WILL BE ESTIMATED" in body
+    assert "raise SystemExit(2)" in body, (
+        "a `return` here exits 0 — the refusal would report success")
+
+
 def test_an_engine_run_on_a_render_pack_names_the_right_mode(monkeypatch):
     """"Both" and "Full estimate only" read drawings; a render has nothing they can
     measure, so they produce an empty book — which, filed without a reason, reads as a

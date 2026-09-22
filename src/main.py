@@ -716,6 +716,32 @@ def main() -> None:
         groups = group_input_files_by_folder(files)
         scan_jobs = [(folder, pdfs) for folder, pdfs in sorted(groups.items()) if pdfs]
         print(f"Folder-as-job: {len(scan_jobs)} job folder(s) from {len(files)} file(s).\n")
+        # ── FILES FOUND AND NONE OF THEM GROUPED IS A REFUSAL, NOT A STATISTIC ──────
+        #
+        # The first live render run printed "Found 1 drawing file(s)" and then
+        # "Folder-as-job: 0 job folder(s) from 1 file(s)", carried on, and filed a summary
+        # with no workbook. The pack became empty BETWEEN two functions — discovery knew
+        # the file, grouping did not — and the only thing that noticed was the collector,
+        # at the very end, by which time the run had reported success.
+        #
+        # Discovery and grouping disagreeing is always a bug in this engine, never a fact
+        # about the pack: `list_input_files` has already applied the extension rule. So it
+        # stops here, names the files it could not place, and exits — the same rule the
+        # delivery-note splitter learned when it reported a missing share as a quiet day.
+        if files and not scan_jobs:
+            print("   !! NOTHING WILL BE ESTIMATED. These file(s) were found and then could")
+            print("      not be placed in a job folder, so the pack is empty from here on:")
+            for _f in files[:10]:
+                print(f"        {_f}")
+            if len(files) > 10:
+                print(f"        ... and {len(files) - 10} more")
+            print("      Discovery and grouping disagree, which is a defect in this engine")
+            print("      rather than a fact about the pack. Refusing rather than filing an")
+            print("      estimate of nothing.", flush=True)
+            # SystemExit, NOT `return`. main() is annotated -> None and `main()` is called
+            # for its side effects, so a returned code is discarded and the process exits 0
+            # — a refusal that reports success, which is the very thing being fixed here.
+            raise SystemExit(2)
     else:
         scan_jobs = [(None, [path]) for path in files]
         # SAID, BECAUSE THE SHAPE OF THE ANSWER DEPENDS ON IT. --job exists because
