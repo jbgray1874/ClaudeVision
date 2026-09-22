@@ -258,6 +258,26 @@ def synthesise_bought_in_code(description: Any, fallback: Any = "") -> str:
 # somebody's.
 _MINTED_CODE = re.compile(r"^BI-[A-Z]+$", re.IGNORECASE)
 
+# ── AND THE OTHER MINT IN THIS ENGINE ───────────────────────────────────────────────
+#
+# concept_scan numbers a sighted part `<JOB>-C01 SIDE-PANEL` — job slug, sequence, name
+# slug — because a render has no parts list to take a number from. That is a placeholder
+# every bit as much as BI-SCREW is, and this recogniser did not know it: the first full
+# concept book told an estimator that
+# `5E09BE03B9741E5F-BDAB4AD-C11 CASTOR` "is a real code, so it was put to the purchasing
+# catalogue... that is a gap on our side", and sent them to look for a row that could never
+# have existed. A wrong diagnosis costs more than no diagnosis, because it is acted on.
+#
+# NARROW, for the reason above it: the whole string must be the shape concept_scan writes —
+# upper-case slug, a -C then exactly two digits, one space, another upper-case slug. A
+# drawing's own code carries no space, so nothing somebody printed can match this.
+_CONCEPT_CODE = re.compile(r"^[A-Z0-9][A-Z0-9-]*-C\d{2} [A-Z0-9][A-Z0-9-]*$")
+
+
+def is_sighted_code(identity: Any) -> bool:
+    """True when this code was minted for a part SIGHTED on a render (concept_scan)."""
+    return bool(_CONCEPT_CODE.match(str(identity or "").strip().upper()))
+
 
 def is_engine_minted_code(identity: Any) -> bool:
     """True when this module wrote the code, rather than a drawing printing it.
@@ -268,7 +288,8 @@ def is_engine_minted_code(identity: Any) -> bool:
     difference -- one is answered by putting a code on the pack, the other by loading the
     catalogue or pricing the line by hand.
     """
-    return bool(_MINTED_CODE.match(str(identity or "").strip()))
+    return bool(_MINTED_CODE.match(str(identity or "").strip())) \
+        or is_sighted_code(identity)
 
 
 def dxf_alias_target(part_number: str) -> Optional[str]:

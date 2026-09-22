@@ -1147,6 +1147,24 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
             from part_identity import is_engine_minted_code as _is_minted
         except Exception:                                        # noqa: BLE001
             _is_minted = None                                    # type: ignore[assignment]
+        # A SIGHTED LINE HAS A THIRD ANSWER, AND IT IS NOT ABOUT CODES AT ALL.
+        #
+        # The castor on the first concept book was not short of a catalogue row; it was
+        # short of a SPECIFICATION. "CASTOR" names a drawer, not a purchase — no diameter,
+        # no fixing, no load — so nothing could be looked up and nothing could be researched
+        # either. Telling an estimator to load a supplier price list would be the third
+        # wrong sentence in a row on the same line.
+        try:
+            from part_identity import is_sighted_code as _is_sighted
+        except Exception:                                        # noqa: BLE001
+            _is_sighted = None                                   # type: ignore[assignment]
+        if _is_sighted is not None and code and _is_sighted(code):
+            return ("**NOT PRICED — this part was SIGHTED on a render, and nothing names "
+                    "which item it is.** A picture shows that there is a castor; it does "
+                    "not show the diameter, the fixing or the load, so no catalogue row "
+                    "can be matched to it and no supplier can be asked for a real price. "
+                    "Name the item — a code, a manufacturer reference, or the specification "
+                    "you would order by — and the ordinary price chain answers it")
         if _is_minted is not None and code and _is_minted(code):
             return ("**NOT PRICED — this line has no part code, and the one shown is ours.** "
                     f"'{bom_row['code']}' was minted by the engine from the description so "

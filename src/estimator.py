@@ -2598,8 +2598,27 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             from indicative_price import resolve_indicative as _rung4
 
             _researcher = _rung4_researcher
+            # ── ONE WORD IS NOT A PURCHASE ──────────────────────────────────────
+            #
+            # James Gray, 22 Sep 2026: "we need to be able to price castors and hinges."
+            # On the first concept book both sat at £0, and the reason was in the brief:
+            # this rung asks the market to name a REAL CURRENT LISTING, and it was being
+            # handed the single word CASTOR — no diameter, no fixing, no load. Nothing
+            # usable can come back from that, and nothing did.
+            #
+            # A render answers more than one word: a wheel about 75mm, black, on a plated
+            # bracket. `research_description` carries exactly that, written by the reader
+            # that saw it and marked as approximate and sighted in its own text, so the
+            # answer is a price for a standard item of that description rather than a
+            # confident figure for a code nobody has. The description on the sheet does
+            # not change; only the question asked of the market does.
+            _sighted_desc = str(part.get("research_description") or "").strip()
             _ind = _rung4(
-                {"code": part.get("part_number"), "description": part.get("description"),
+                # NO CODE ON A SIGHTED LINE. The code is one this engine minted from a
+                # render; putting it in the brief invites an answer about a part number
+                # no supplier has ever listed.
+                {"code": "" if _sighted_desc else part.get("part_number"),
+                 "description": _sighted_desc or part.get("description"),
                  "quantity": part.get("quantity"),
                  # A LINE'S OWN UNIT, WHICH THE BRIEF NEVER USED TO SEE. The edging stub
                  # carries `unit_of_measure = "m"` and this dict did not pass it on, so the
@@ -2607,7 +2626,12 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  # a fact recorded under one name and read under another, again.
                  "unit_of_measure": part.get("unit_of_measure"),
                  "mass_kg": part.get("normalized_weight_kg"),
-                 "input_origins": part.get("input_origins") or {}},
+                 # THE ORIGIN IS THE TRUE ONE, so the guard judges the brief on what it
+                 # actually is. A sighted description is not a drawing's reading and must
+                 # not travel as one.
+                 "input_origins": dict(part.get("input_origins") or {},
+                                       **({"description": "vision_concept_sighted"}
+                                          if _sighted_desc else {}))},
                 order_qty=int(_safe_float(part.get("job_quantity")) or 1),
                 as_of=str(part.get("run_date") or ""),
                 ask=_researcher,
@@ -3228,7 +3252,7 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float],
-                              part: Dict[str, Any]):
+                              part: Dict[str, Any], noun: str = "board"):
     """An evidenced researched £/m² for a board nothing else can price, or None.
 
     James Gray, 17 September 2026: "it's lame not to price the MDF and Tony is sarcastic
@@ -3258,8 +3282,11 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     if _area_m2 <= 0:
         return None
     _thk = _safe_float(thickness)
-    _desc = (f"{_thk:g}mm {str(material).replace('_', ' ')} board"
-             if _thk else f"{str(material).replace('_', ' ')} board")
+    # THE NOUN IS THE CALLER'S. Asking the market for "2mm PETG board" gets an answer
+    # about the wrong product; a plastic is bought as sheet. The rung is the same rung —
+    # only the word for what is being bought changes.
+    _desc = (f"{_thk:g}mm {str(material).replace('_', ' ')} {noun}"
+             if _thk else f"{str(material).replace('_', ' ')} {noun}")
     # ONE BOARD, ONE RATE, ONE LOOKUP.
     #
     # 11908-21 has three parts cut from the same 9mm sheet. Researched per part, that is
@@ -5660,6 +5687,44 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     applied_price_per_kg = external_price.get("applied_price_per_kg")
     price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
 
+    # ── RUNG 4 FOR A RECOGNISED SHEET MATERIAL THAT HAS NO RATE ─────────────────────
+    #
+    # config.MATERIAL_PRICE_GBP_PER_KG holds a comment naming this exact case: "PETG, HIPS,
+    # ABS, PVC, FOAMEX, PP and PS have a sheet size and a density above but DELIBERATELY NO
+    # RATE HERE." The refusal is right — a price is a commercial fact SDI owns, and inventing
+    # one is worse than the gap. But `_researched_board_rate_m2` says the other half out
+    # loud: "Rung 4 is not a property of being a bought-in; it is the last rung, and every
+    # line is entitled to it" — and it was wired for FACED BOARD only. So a board reached the
+    # bottom rung and a plastic fell off the ladder, on packs where the plastic IS the job.
+    #
+    # 11650's PETG side panels are the standing example, named in that config comment and in
+    # estimator_inputs' NO_VOCABULARY branch: a part with a measured blank, a known density
+    # and a known sheet size, reported as UNDER-CHARGED and costing £0.
+    #
+    # THE RATE COMES BACK PER SQUARE METRE AND IS CONVERTED HERE, with the arithmetic shown,
+    # because this path costs by mass: £/kg = (£/m² ÷ gauge in metres) ÷ density. Nothing is
+    # invented — where the research cannot produce a source, a date and a quantity basis it
+    # returns nothing and the line stays unpriced and visible, exactly as it is today.
+    if price_per_kg is None and material and density and _safe_float(thickness):
+        _res_sheet = _researched_board_rate_m2(material, thickness, part, noun="sheet")
+        _res_m2 = _safe_float((_res_sheet or {}).get("unit_price_gbp"))
+        if _res_m2 and _res_m2 > 0:
+            _thk_m = float(_safe_float(thickness)) / 1000.0
+            _kg_per_m2 = _thk_m * float(density)
+            if _kg_per_m2 > 0:
+                price_per_kg = round(_res_m2 / _kg_per_m2, 4)
+                _ev = (_res_sheet.get("evidence") or {})
+                part.setdefault("review_flags", []).append(
+                    f"{material} at {_safe_float(thickness):g}mm: no SDI Live, catalogue or "
+                    f"config rate, so this is a RESEARCHED indicative price — "
+                    f"GBP {_res_m2:,.2f}/m2 over {_kg_per_m2:.3f} kg/m2 = "
+                    f"GBP {price_per_kg:,.2f}/kg, from {_ev.get('source')} as at "
+                    f"{_ev.get('as_of')} ({_ev.get('quantity_basis')}). "
+                    f"{_res_sheet.get('status')}: confirm against a current supplier price "
+                    f"before it goes out firm. A rate in "
+                    f"config.MATERIAL_PRICE_GBP_PER_KG ends the question for every job.")
+                part["_researched_sheet_rate"] = _res_sheet
+
     sheet_estimate = select_sheet_size(material, blank_length, blank_width)
 
     # Sheet steel cost — workbook rows 37-48 formula:
@@ -5798,16 +5863,24 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "part_geometry_reliability": _part_geometry_reliability(part),
         "price_source": _build_price_source_metadata(
             external_result,
+            # A RESEARCHED RATE SAYS SO HERE OR IT LOOKS LIKE A CONFIG RATE. The name
+            # begins "llm_" so `is_non_reproducible_source` recognises it with no new rule
+            # and check_prices_are_firm reports the job as not firm by itself — the same
+            # treatment the acrylic market rate already gets on the area path.
             fallback_source=(
                 "workbook_sheet_steel_formula" if cost_method == "workbook_sheet_steel_formula"
+                else "llm_indicative_researched" if part.get("_researched_sheet_rate")
                 else "config_default_material_rates"
             ),
             applied=(
                 True if cost_method == "workbook_sheet_steel_formula"
+                else True if part.get("_researched_sheet_rate")
                 else applied_price_per_kg is not None
             ),
             applied_basis=(
                 "workbook_sheet_steel_formula" if cost_method == "workbook_sheet_steel_formula"
+                else "GBP_per_m2_researched_converted_to_GBP_per_kg"
+                if part.get("_researched_sheet_rate")
                 else (external_price.get("applied_basis") if applied_price_per_kg is not None
                       else "config_fallback_GBP_per_kg")
             ),

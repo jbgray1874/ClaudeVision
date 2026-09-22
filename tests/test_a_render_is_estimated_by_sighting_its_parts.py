@@ -171,6 +171,67 @@ def test_an_operation_the_rate_card_cannot_price_is_dropped_and_said():
                for f in part["review_flags"]), part["review_flags"]
 
 
+def test_the_bom_page_shows_the_sighted_make_list():
+    """THE ONE DELIVERABLE WHOSE JOB IS "WHAT PARTS" ANSWERED WITH SILENCE.
+
+    `bom_sheet` read `document_analysis.bom_rows` and nothing else — the drawing's OWN parts
+    list, which a render does not have. So a concept run sighted eleven parts, priced them,
+    put them on the Estimate sheet, and the BOMs page still said "Nothing in this record" on
+    the pack that needs the question asked most.
+
+    The sighted lines are a bill of materials too. Same table, same detail, with the reader
+    named as what it is so nobody has to infer "guessed" from an absent page number.
+    """
+    from bom_and_route_extract import bom_sheet
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = bom_sheet({"manufacturing_writeup": {"parts": parts},
+                      "document_analysis": {"bom_rows": []}})
+    assert len(rows) == 11, "the sighted make list is missing from the BOM page"
+
+    by_desc = {r["description"]: r for r in rows}
+    side = by_desc["SIDE PANEL"]
+    assert side["read_by"] == "vision_concept", "a sighted line must name its reader"
+    assert side["quantity"] == 2
+    assert "800.0 x 450.0 x 18.0" in side["assumed_blank"] and "assumed" in side["assumed_blank"]
+    assert "saw" in side["work_sighted"], "the work is not on the BOM line"
+    assert side["kind"] == "fabricated"
+
+    castor = by_desc["CASTOR"]
+    assert castor["kind"] == "bought_in"
+    assert not castor["assumed_blank"], "a bought-in line must not show a blank"
+    assert castor["work_sighted"] == "", "a bought-in line needs no work"
+
+
+def test_a_sighted_line_is_not_written_into_the_drawings_bom_rows():
+    """`document_analysis.bom_rows` means "read off the drawing's parts list". A sighted line
+    is not one, and writing it there would make every downstream reader believe a render had
+    a parts list. Two facts, two names."""
+    from bom_and_route_extract import bom_sheet
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    summary = {"manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}}
+    bom_sheet(summary)
+    assert summary["document_analysis"]["bom_rows"] == [], (
+        "the sighted list was written into the drawing's own BOM rows")
+
+
+def test_a_drawing_pack_keeps_exactly_the_bom_it_had():
+    """The control. Concept rows are ADDED for concept parts only — a real pack's table must
+    come out unchanged, or this has quietly altered every job in the building."""
+    from bom_and_route_extract import bom_sheet
+
+    drawn = {"manufacturing_writeup": {"parts": [
+                 {"part_number": "12349-02-69-04M", "description": "LID"}]},
+             "document_analysis": {"bom_rows": [
+                 {"part_number": "12349-02-69-04M", "description": "LID", "quantity": 1,
+                  "source": "bom_table"}]}}
+    rows = bom_sheet(drawn)
+    assert len(rows) == 1 and rows[0]["read_by"] == "bom_table"
+    assert "kind" not in rows[0], "a drawn row grew a concept column"
+
+
 def test_a_pack_with_measured_cad_is_never_sighted_over():
     """James Gray, 22 Sep 2026, on the split between the two paths: "If you point the render
     assembler at a real pack, you will flatten a weldment into one 5 mm panel again."
@@ -263,6 +324,440 @@ def test_a_fabricated_panel_still_gets_its_blank():
     part = concept_scan.parts_from_concept(FIXTURE, "PlanA")[0]
     assert part["concept_kind"] == "fabricated"
     assert part["blank_length_mm"] == 900.0 and part["blank_width_mm"] == 400.0
+
+
+def test_a_kind_the_mapper_does_not_know_is_refused_not_defaulted():
+    """James Gray, 22 Sep 2026: "Any unexpected LLM `kind` falls through as fabricated and
+    can still receive a blank, material, dimensions and route. The prompt constrains the
+    model, but the mapper does not validate its output."
+
+    `kind or "fabricated"` turned every word the prompt did not write — a translation, a
+    typo, "subassembly", "electrical", tomorrow's prompt edit — into a made panel. A made
+    panel gets a blank, and a blank is an instruction to nest. So an unknown word is a
+    refusal with a name on it, not a default: the line keeps its count and its description,
+    and carries no material, no size and no work until somebody classifies it.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["kind"] = "subassembly"
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert part["concept_kind"] == "unknown", "an unknown kind was mapped to a real one"
+    assert part.get("blank_length_mm") in (None, 0), "an unclassified line got a blank"
+    assert part.get("blank_width_mm") in (None, 0)
+    assert part.get("normalized_thickness_mm") in (None, 0)
+    assert not part.get("normalized_material"), "an unclassified line got a material"
+    assert not part.get("inferred_operations"), "an unclassified line got a route"
+    # The line is still THERE — "we dont drop something if it's obviously something that is
+    # part of the unit" — with its count and one action on it.
+    assert part["quantity"] == answer["parts"][0]["quantity"]
+    flags = [f for f in part["review_flags"] if "not a kind this estimate knows" in f]
+    assert len(flags) == 1, part["review_flags"]
+    assert "subassembly" in flags[0], "the flag does not say what the model returned"
+    # And nothing the model said is thrown away: it is kept as words, off the priced fields.
+    assert part["concept_unclassified"]["kind_returned"] == "subassembly"
+    assert part["concept_unclassified"]["assumed_blank_mm"]["length"] == 900
+
+
+def test_a_line_with_no_kind_at_all_is_not_a_made_panel():
+    """The empty string took the same fall-through, and an absent field is the commonest
+    way a model omits one. One action, not two: an unclassified line is not asked for its
+    dimensions before anybody has said what the thing is."""
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0].pop("kind", None)
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert part["concept_kind"] == "unknown"
+    assert part.get("blank_length_mm") in (None, 0)
+    assert not any("enter this part's dimensions" in f for f in part["review_flags"]), (
+        "an unclassified line was asked for a size as well as a classification")
+    assert sum("CONCEPT:" in f for f in part["review_flags"]) == 1, part["review_flags"]
+
+
+def test_the_same_word_spelled_differently_is_the_same_kind():
+    """The mapper normalises the PROMPT'S OWN WORDS — case and punctuation — and nothing
+    else. "Bought-In" is bought_in spelled differently; "purchased" is a synonym the mapper
+    would be guessing at, and a guess wearing a schema's clothes is the fault above."""
+    assert concept_scan._concept_kind("Bought-In") == "bought_in"
+    assert concept_scan._concept_kind("  FABRICATED ") == "fabricated"
+    assert concept_scan._concept_kind("purchased") == concept_scan.UNKNOWN_KIND
+    assert concept_scan._concept_kind(None) == concept_scan.UNKNOWN_KIND
+    assert concept_scan._concept_kind(7) == concept_scan.UNKNOWN_KIND
+
+
+def test_the_bom_page_says_a_line_is_unclassified_rather_than_leaving_it_blank():
+    """The BOM row defaulted the kind to `fabricated` too, so a refused line would have read
+    as a made part with empty columns — the refusal invisible on the one page an estimator
+    reads to answer "what parts"."""
+    from bom_and_route_extract import bom_sheet
+
+    answer = json.loads(json.dumps(FIXTURE))
+    answer["parts"][0]["kind"] = "widget"
+    parts = concept_scan.parts_from_concept(answer, "PlanA")
+    rows = bom_sheet({"manufacturing_writeup": {"parts": parts},
+                      "document_analysis": {"bom_rows": []}})
+    row = next(r for r in rows if r["description"] == answer["parts"][0]["name"])
+    assert row["kind"] == "unknown"
+    assert "not classified" in row["assumed_blank"]
+    assert "classify" in row["work_sighted"]
+
+
+def test_the_cad_guard_reads_the_staged_pack_not_the_folder():
+    """James Gray, 22 Sep 2026: "the CAD refusal scans every file in the job folder, not only
+    the selected/staged pack."
+
+    A folder is a place, not a selection. One stale STEP left in a customer's drop — an old
+    revision, a neighbouring job, a file somebody parked there — refused the concept read on
+    a pack of renders that had nothing to do with it. What counts is what this run staged or
+    actually attached, including a DXF the job discovered and MEASURED, because that geometry
+    is in the estimate whatever found it.
+    """
+    import re
+
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    guard = re.search(r"_concept_refused = None(.*?)_concept_refused = _cs_probe", src, re.S)
+    assert guard, "the measured-CAD guard has moved"
+    body = guard.group(1)
+    assert "iterdir" not in body, "the guard still lists the whole job folder"
+    assert "glob" not in body, "the guard still lists the whole job folder"
+    assert "staged_inputs" in body and "dxf_paths" in body
+
+    # And the staged selection is recorded where the guard can read it — as handed in,
+    # before scan_folder_job drops what no reader opens (a STEP nobody parses is still a
+    # file the estimator chose for this job).
+    import inspect
+
+    import file_scan
+    staged = inspect.getsource(file_scan.scan_folder_job)
+    assert 'merged["staged_inputs"] = [str(p) for p in pdf_paths]' in staged
+
+
+def test_every_figure_a_render_supplied_is_on_one_list():
+    """James Gray, 22 Sep 2026: "The concept path still turns a render's guessed MDF, 5 mm
+    thickness, dimensions and operations into normal pricing inputs... It is acceptable only
+    as a clearly editable concept budget, with each assumption available to confirm."
+
+    The provenance was already right — every field is stamped `vision_concept` with its cue.
+    But provenance answers "where did this come from" about a datum already in your hand;
+    an estimator needs the opposite, which is one list of everything that was assumed."""
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = concept_scan.assumption_register(parts)
+    assert len(rows) > 30, "the assumptions list is not the whole of what was assumed"
+
+    fields = {r["field"] for r in rows}
+    for expected in ("quantity", "material", "blank_length_mm", "thickness_mm", "operations"):
+        assert expected in fields, f"{expected} was assumed and is not on the list"
+    for row in rows:
+        assert row["cue"], f"{row['part_number']} {row['field']} names no cue"
+        assert row["part_number"] and row["description"]
+
+    # A drawing pack assumes none of this, and must produce no list at all.
+    assert concept_scan.assumption_register(
+        [{"part_number": "12349-02-69-04M", "description": "LID"}]) == []
+
+
+def test_the_answer_sheet_is_written_out_pre_filled(tmp_path):
+    """Confirming an assumption should be editing a line, not hand-authoring JSON for a part
+    number nobody wants to retype. The file written is the one `estimator_confirmed` already
+    reads and finds — no new convention, no copying anything anywhere."""
+    import estimator_confirmed as ec
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    path = concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1")
+    assert path is not None and path.exists()
+    assert ec.find_corrections_file(tmp_path, None, "JOB1") == path, (
+        "the engine's own finder does not find the file the engine just wrote")
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entry = payload["parts"][parts[0]["part_number"]]
+    assert entry["blank_length_mm"] == 900.0 and entry["material"] == "MDF"
+    assert entry["_sighted_because"], "the cue is not beside the figure"
+
+
+def test_the_template_cannot_apply_itself(tmp_path):
+    """THE WHOLE DESIGN. Writing the answers file must never promote a picture-guess into a
+    person's reading. Every entry is `inferred` with its reasoning left EMPTY, and
+    `estimator_confirmed` refuses an inferred figure that states no reasoning — "a claim
+    without its working is a guess wearing a person's authority".
+
+    Omitting `basis` would default it to `read` — PRINTED ON THE SHEET — which is exactly
+    the laundering this refuses, so the absence of that key is the test."""
+    import estimator_confirmed as ec
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    payload = concept_scan.assumptions_payload(parts, job="JOB1")
+    for code, entry in payload["parts"].items():
+        assert entry["basis"] == "inferred", f"{code} would enter above the render"
+        assert entry["read_from"] == "", f"{code} arrives with its reasoning pre-written"
+    assert not payload["confirmed_by"], "the file claims a person confirmed it"
+
+    # And the door itself refuses it, which is the fact that matters.
+    p = tmp_path / "JOB1_estimator_dimensions.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    data, problems = ec.load_corrections(p)
+    assert data["parts"] == {}, "an untouched template applied figures to the estimate"
+    assert len(problems) == len(payload["parts"])
+    assert all("no reasoning is given" in p for p in problems), problems
+
+
+def test_an_answered_assumption_displaces_the_render_and_leaves_the_list(tmp_path):
+    """The other half: a person who states their reasoning has confirmed that assumption on
+    purpose, it enters at THEIR rank, above the render — and it stops being asked about."""
+    import estimator_confirmed as ec
+    from source_precedence import source_of
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    path = concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    code = parts[0]["part_number"]
+    raw["confirmed_by"] = "James Gray"
+    raw["parts"][code]["blank_length_mm"] = 1000
+    raw["parts"][code]["read_from"] = "measured off the sample on the bench"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+
+    fresh = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    before = len(concept_scan.assumption_register(fresh))
+    data, _ = ec.load_corrections(path)
+    report = ec.apply_estimator_confirmed(fresh, data)
+    assert report["stamped"] == 1 and not report["unmatched"], report
+    assert fresh[0]["blank_length_mm"] == 1000.0
+    assert source_of(fresh[0], "blank_length_mm") == "estimator_inferred", (
+        "an answered assumption did not outrank the render")
+    assert len(concept_scan.assumption_register(fresh)) < before, (
+        "a figure a person has answered is still being asked about")
+
+
+def test_an_estimators_own_file_is_never_overwritten(tmp_path):
+    """A machine that rewrote a person's confirmations with its own guesses would undo the
+    exact work this exists to collect — silently, on the run after they did it."""
+    theirs = tmp_path / "JOB1_confirmed.json"
+    theirs.write_text(json.dumps({"drawing_number": "JOB1", "confirmed_by": "James Gray",
+                                  "parts": {"X": {"material": "ACRYLIC", "basis": "read"}}}),
+                      encoding="utf-8")
+    parts = concept_scan.parts_from_concept(FIXTURE, "JOB1")
+    assert concept_scan.write_assumptions_file(parts, folder=tmp_path, job="JOB1") is None
+    assert "ACRYLIC" in theirs.read_text(encoding="utf-8")
+    assert not (tmp_path / "JOB1_estimator_dimensions.json").exists()
+
+
+def test_a_note_beside_a_figure_is_not_reported_as_an_error(tmp_path):
+    """The answers file teaches writing a note beside a ruling, and `estimator_decisions` has
+    read a leading underscore as a comment since. A PART entry could not, so the cue written
+    beside each sighted figure would have been reported as a line that did nothing — and an
+    estimator told three times that their own notes are errors stops writing notes."""
+    import estimator_confirmed as ec
+
+    p = tmp_path / "JOB1_estimator_dimensions.json"
+    p.write_text(json.dumps({"drawing_number": "JOB1", "parts": {
+        "ABC": {"material": "MDF", "basis": "read", "_why": "scaled from the castors"}}}),
+        encoding="utf-8")
+    data, problems = ec.load_corrections(p)
+    assert data["parts"]["ABC"]["material"] == "MDF"
+    assert not problems, problems
+
+
+def test_the_report_and_the_quote_say_it_is_a_concept_budget():
+    """Not a banner and not a warning — the Basis row is where a document says what it is,
+    and section 8.5 is the list. Both are silent on every other run."""
+    import client_quote_html
+    import job_report_html
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    rows = concept_scan.assumption_register(parts)
+    summary = {"concept_read": {"parts": len(parts), "assumptions": rows,
+                                "assumptions_file": "K:/jobs/JOB1_estimator_dimensions.json"}}
+    section = job_report_html._concept_assumptions_section(summary)
+    assert "concept budget" in section.lower()
+    assert "sighted from the image" in section
+    assert "JOB1_estimator_dimensions.json" in section
+    assert job_report_html._concept_assumptions_section({}) == "", (
+        "a drawing pack grew a concept section")
+
+    # The quote's Basis row, on the internal page a render run produces.
+    from quote_state import PORTAL
+    quote = dict(summary, llm_only=True, job_number="JOB1",
+                 estimate_summary={"estimate_workbook_inputs": {"assumed_job_quantity": 1},
+                                   "workbook_equivalent_pricing":
+                                       {"m105_total_unit_cost_gbp": 102.70},
+                                   "part_estimates": []},
+                 final_estimate={"totals": {}})
+    html = client_quote_html.build_quote_html(quote, job_stem="JOB1", audience=PORTAL)
+    assert "Concept budget" in html
+    assert "sighted from the render" in html
+
+
+def test_a_sighted_part_is_numbered_after_the_job_not_the_wrapper():
+    """A render is scanned as a content-keyed PDF in the output tree, so the anchor's stem is
+    a hash: every sighted part came out as `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no
+    estimator would type into a confirmations file and nobody can match to a job by eye."""
+    import re
+
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    hook = re.search(r"_job_name = (.{0,200})", src, re.S)
+    assert hook and "job_folder" in hook.group(1), (
+        "the sighted parts are still numbered after the wrapped render")
+    parts = concept_scan.parts_from_concept(FIXTURE, "bdab4adf-3340-40M&S")
+    assert parts[0]["part_number"].startswith("BDAB4ADF-3340-40M-S-C01")
+
+
+def test_somebody_assembles_the_unit():
+    """James Gray, 22 Sep 2026, on the first full concept book: "Assembly still ruled out on
+    every panel, so glue-up of the box is missing."
+
+    Twenty route lines — saw, cnc_routing, edge_banding, laminating — and nothing that put
+    the carcass together. The cause was a field nobody reads: the unit's work was written to
+    `summary["assembly_events"]`, and the route compiler builds its assembly events from its
+    own payload while the workbook costs from the part records. Neither has ever read it.
+
+    The engine's own rule was already right and had nothing to fire on — it mints bench
+    fitting on a BOARD ASSEMBLY, and a render pack presented no assembly. This mints one.
+    """
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    unit = concept_scan.unit_assembly_part(parts, FIXTURE, "PlanA")
+    assert unit is not None, "the product itself is not on the parts list"
+    # The three names the assembly rules ask by, together.
+    assert unit["is_assembly_parent"] is True
+    assert unit["canonical_kind"] == "assembly"
+    assert len(unit["assembly_children"]) >= 6
+    assert unit.get("normalized_material"), "the build has no board to be timed as"
+    # It is the product, not a part: it carries work and no size of its own.
+    assert unit.get("blank_length_mm") in (None, 0)
+    assert unit["concept_kind"] == "assembly"
+
+    # And the dead field is gone, or this fix is a second copy of the same fault.
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert 'setdefault("assembly_events"' not in src, (
+        "the unit's work is still written to a key nothing reads")
+
+
+def test_the_bench_rule_fires_and_times_the_build_off_the_shops_own_rate():
+    """The measure that matters: the rule charges, and the minutes are the shop's, not
+    ours. Nothing here invents an assembly time — it proves the existing rule reaches a
+    concept job and says which rate it used."""
+    from estimator import estimate_document
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    unit = concept_scan.unit_assembly_part(parts, FIXTURE, "PlanA")
+    before = estimate_document(list(parts),
+                               summary={"manufacturing_writeup": {"parts": list(parts)}})
+    after = estimate_document([unit] + parts,
+                              summary={"manufacturing_writeup": {"parts": [unit] + parts}})
+    _l = lambda e: float((e.get("workbook_equivalent_pricing") or {}).get(   # noqa: E731
+        "m103_labour_subtotal_gbp") or 0.0)
+    assert _l(after) > _l(before), "the unit assembly charges nothing"
+    assert any("bench fitting" in str(f) for f in (unit.get("review_flags") or [])), (
+        "the build was timed with no line saying how")
+
+
+def test_a_one_part_render_is_not_an_assembly():
+    """The control. An assembly event minted over nothing charges for nothing, and a pack
+    of bought-ins is not a carcass."""
+    answer = {"product": {"name": "SIGN"}, "parts": [
+        {"name": "FACE", "kind": "fabricated", "material_guess": "MDF",
+         "assumed_blank_mm": {"length": 300, "width": 200, "thickness": 18},
+         "quantity": 1, "operations": ["saw"]},
+        {"name": "CASTOR", "kind": "bought_in", "quantity": 4}]}
+    parts = concept_scan.parts_from_concept(answer, "ONE")
+    assert concept_scan.unit_assembly_part(parts, answer, "ONE") is None
+
+
+def test_edging_is_charged_only_where_the_edges_are_named():
+    """James Gray, 22 Sep 2026: "I would not merely add it to the confirm list while still
+    charging £65.04. Make it an explicit editable concept assumption with a stated
+    visible-edge basis; otherwise it should not mint a deterministic edge-banding route."
+
+    All eight panels were banded off one word from a vision model — two department set-ups
+    and over half the labour on the job. The engine's rule for a drawing (D-104) is that
+    edging is measured where the drawing MARKS it, never round a perimeter; a render is held
+    to the same standard.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    panel = answer["parts"][0]
+    panel["operations"] = ["saw", "edge_banding"]
+    panel.pop(concept_scan.EDGE_BASIS_FIELD, None)
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert "edge_banding" not in (part.get("inferred_operations") or []), (
+        "edging was charged with no edge named")
+    assert "saw" in part["inferred_operations"], "the rest of the route was thrown away too"
+    flag = [f for f in part["review_flags"] if "no edges could be named" in f]
+    assert len(flag) == 1 and "banded_metres" in flag[0], part["review_flags"]
+    assert any(r["field"] == "banded edges"
+               for r in concept_scan.assumption_register([part])), (
+        "the edging assumption is not on the list anybody confirms")
+
+    # NAMED, and it is work like any other.
+    panel[concept_scan.EDGE_BASIS_FIELD] = "front and top edges show a banded lip"
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert "edge_banding" in part["inferred_operations"]
+    assert part["concept_banded_edges"].startswith("front and top")
+    assert not any("no edges could be named" in f for f in part["review_flags"])
+
+
+def test_a_sighted_description_cannot_match_a_catalogue_row():
+    """James Gray, 22 Sep 2026: "Prevent a render-invented material/description from matching
+    a catalogue item without matching specification and unit basis."
+
+    `HEADER GRAPHIC SET` / `PRINTED_VINYL` — a material this engine uses nowhere — matched a
+    UDEF row on its words and took £115.56 each, a quarter of a £459.56 unit, for a graphic
+    with no size at all. A wrong citation is worse than no figure.
+    """
+    import inspect
+
+    import pricing_service
+
+    assert pricing_service.PricingService._is_sighted_line(
+        {"concept": True, "description": "HEADER GRAPHIC SET"})
+    assert not pricing_service.PricingService._is_sighted_line(
+        {"part_number": "12349-02-69-04M", "description": "LID"})
+
+    # The guard sits in front of EVERY word-matched arm, not only UDEF's — guarding one
+    # would have moved the match one arm down the chain.
+    chain = inspect.getsource(pricing_service.PricingService._select_anchor_price_source)
+    assert "_is_sighted_line" in chain
+    assert chain.index("_is_sighted_line") < chain.index("_get_historical_rag"), (
+        "the historical-quote RAG still matches a sighted description")
+    assert chain.index("_is_sighted_line") < chain.index("_get_supplier_catalog")
+    udef = inspect.getsource(pricing_service.PricingService._get_udef_anchor)
+    assert "if _sighted:\n            return None" in udef, (
+        "UDEF's own description arms are still open to a sighted line")
+
+
+def test_a_castor_carries_enough_specification_to_be_researched():
+    """"We need to be able to price castors and hinges." They sat at £0 because the
+    researched rung was handed the single word CASTOR — no diameter, no fixing, no load —
+    and it has to name a real current listing. A render answers more than one word."""
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    spec = castor.get("research_description") or ""
+    assert spec, "the bought-in line carries nothing to research"
+    assert "sighted on a customer render" in spec and "approximate" in spec, (
+        "the brief does not say the specification was sighted")
+    # A made panel is priced by nest and has no business being researched as a purchase.
+    made = next(p for p in parts if p.get("concept_kind") == "fabricated")
+    assert not made.get("research_description")
+
+    # And the rung asks with it, without the code we minted ourselves.
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"description": _sighted_desc or part.get("description")' in src
+    assert '"code": "" if _sighted_desc else part.get("part_number")' in src
+
+
+def test_a_sighted_code_is_not_a_code_anybody_can_look_up():
+    """The castor's refusal blamed the wrong thing: "'5E09BE03B9741E5F-BDAB4AD-C11 CASTOR'
+    is a real code, so it was put to the purchasing catalogue... that is a gap on our side."
+    It is not a real code — we minted it from a render — and an estimator sent to check the
+    catalogue for it is doing work that cannot succeed."""
+    from part_identity import is_engine_minted_code, is_sighted_code
+
+    assert is_sighted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
+    assert is_engine_minted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
+    # NARROW. A code somebody printed on a drawing must never be called an invention.
+    for real in ("12349-02-69-04M", "10975-02-GA", "1234-C01", "FIXING1081", "DBR60"):
+        assert not is_sighted_code(real), real
+
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    assert "this part was SIGHTED on a render" in src
+    assert "Name the item" in src, "the refusal does not say what would settle it"
 
 
 def test_the_prompt_cannot_change_without_its_cache_version():

@@ -1632,7 +1632,19 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # reader that cannot size a folded part — a measurement, not an offer, which is why
     # James asked for the window to go and the word indicative to stay. No amount of
     # estimator work on the sheet turns that run into a full one.
-    _validity_row = ("<tr><td>Basis</td><td>Indicative — for internal comparison</td></tr>"
+    # A CONCEPT BUDGET SAYS SO IN THE ROW THAT SAYS WHAT THE DOCUMENT IS. James Gray,
+    # 22 Sep 2026: a price reconstructed from a PNG "is acceptable only as a clearly editable
+    # concept budget". Every size, material and count behind this total was sighted off a
+    # picture — that is not a caveat about quality, it is WHAT THE DOCUMENT IS, and it
+    # belongs in the Basis row exactly like "indicative" does. One row, no banner.
+    _concept = (summary.get("concept_read") or {}) if isinstance(summary, dict) else {}
+    _n_assumed = len(_concept.get("assumptions") or [])
+    if _concept.get("parts"):
+        _basis = ("Concept budget — every size, material and count sighted from the render"
+                  + (f", {_n_assumed} assumptions" if _n_assumed else ""))
+    else:
+        _basis = "Indicative — for internal comparison"
+    _validity_row = (f"<tr><td>Basis</td><td>{_esc(_basis)}</td></tr>"
                      if _llm else
                      f"<tr><td>Valid for</td><td>{VALID_DAYS} days</td></tr>")
     _validity_foot = ("Prices ex VAT, GBP. Indicative."
@@ -1895,9 +1907,16 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
                                 manual_workbook=manual_workbook,
                                 customer=customer)
     if _llm_only:
-        print("   [deliverables] client quote written. This run read the pack with the vision "
-              "model alone — the page says so in its Basis row, and section 4.1 of the job "
-              "report names which readers ran.", flush=True)
+        # THE CONSOLE CALLS IT WHAT THE FILE IS. James Gray, 22 Sep 2026: "The console message
+        # also says 'client quote written' even when the result is `_quote_PORTAL.html`; it
+        # should say 'portal estimate written' unless it is actually releasable." It is the
+        # same fault as the filename one directly below, in the other place a document is
+        # identified without opening it: a run that writes `_quote_PORTAL.html` and reports a
+        # client quote has told the operator the release gate passed when it did not.
+        print(f"   [deliverables] {'client quote' if _releasable else 'portal estimate'} "
+              "written. This run read the pack with the vision model alone — the page says so "
+              "in its Basis row, and section 4.1 of the job report names which readers ran.",
+              flush=True)
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"
     # ── THE NAME SAYS WHETHER IT MAY GO OUT, AND NOTHING ELSE ───────────────────────
