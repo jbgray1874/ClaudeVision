@@ -58,9 +58,15 @@ from typing import Any, Dict, List, Mapping, Optional
 # tells you to bump the version and record the new hash.
 #   c1  first cut — "name the parts you can see"
 #   c2  the make list: an enclosure is its panels, and every made line names its work
-CONCEPT_PROMPT_VERSION = "c2"
+#   c3  banded edges must be NAMED before edging is charged — see EDGE_BASIS_FIELD
+CONCEPT_PROMPT_VERSION = "c3"
 
 SOURCE = "vision_concept"
+
+# The field the model names visibly-finished edges in. Named once: the prompt asks for it
+# and the assembler gates edge_banding on it, and those two drifting apart is how a rule
+# becomes decorative.
+EDGE_BASIS_FIELD = "banded_edges"
 
 # ── THE OPERATIONS THE ENGINE CAN ACTUALLY MINT ─────────────────────────────────────
 #
@@ -109,6 +115,12 @@ For every line give the work it needs, from THIS LIST ONLY — any other word is
 Sizes: estimate in mm from visible human-scale cues (castors ~75mm, hand-height apertures,
 floor tiles, door heights). Every size must name the cue it came from. Integers only.
 
+EDGE BANDING IS CHARGED ONLY WHERE YOU CAN NAME THE EDGES. If you list edge_banding on a
+part, say in "banded_edges" WHICH edges are visibly finished — "front and top edges show a
+banded lip", "all four edges of the door". If you cannot see which edges are finished,
+leave "banded_edges" empty and the operation is recorded as an assumption for the estimator
+rather than charged. Do not band every panel because the product looks tidy.
+
 Rules:
 - NEVER state a price, cost or supplier. Geometry, materials, counts and operations only.
 - A bought-in line (castor, hinge, fitting) needs no blank size — leave the sizes 0.
@@ -128,6 +140,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
       "assumed_blank_mm": {{"length": 0, "width": 0, "thickness": 0}},
       "quantity": 1, "quantity_basis": "<seen / implied by symmetry / per print set>",
       "operations": ["saw", "cnc_routing"],
+      "banded_edges": "<which edges are visibly finished, or empty if you cannot tell>",
       "seen": "<which image, where>", "why_size": "<the cue this was scaled from>"}}
   ],
   "unit_operations": ["assembly"],
@@ -137,7 +150,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "d7f83e6e40fe"
+_PROMPT_FINGERPRINT = "151638566ab8"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -374,8 +387,12 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         # and `write_assumptions_file` turns the list into a file a person edits.
         assumed: List[Dict[str, Any]] = []
 
-        def _assume(file_key: str, value: Any, cue: str) -> None:
-            assumed.append({"file_key": file_key, "value": value, "cue": cue})
+        def _assume(file_key: str, value: Any, cue: str, field: str = "") -> None:
+            # `file_key` is the answers-file key that confirms this, and is empty for the
+            # things that file does not take — a route, an edging basis. `field` is what
+            # the assumption is CALLED on the report, which is not always the same word.
+            assumed.append({"file_key": file_key, "value": value, "cue": cue,
+                            "field": field or file_key or "operations"})
 
         record = _empty_part_record(
             f"{_slug(stem, 'CONCEPT')}-C{n:02d} {_slug(name, str(n))}",
@@ -458,6 +475,30 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 record["concept_sighted_size_mm"] = {
                     k: blank.get(k) for k in ("length", "width", "thickness")}
             blank = {}
+            # ── ENOUGH OF A SPECIFICATION TO GO AND BUY ONE ─────────────────────────
+            #
+            # "We need to be able to price castors and hinges." The researched rung asks
+            # the market for a real current listing, and it was being handed the single
+            # word CASTOR — which names a drawer, not a purchase: no diameter, no fixing,
+            # no load. Nothing usable came back and the line sat at £0.
+            #
+            # A render answers more than one word. It shows a wheel about 75mm, black,
+            # plated bracket — which is a briefable item, as long as every word of it says
+            # it was SIGHTED and approximate. The description on the sheet stays what it
+            # was; this is a second field, read only by the rung that goes looking.
+            _spec = [name]
+            if sighted_mat:
+                _spec.append(str(sighted_mat))
+            _dims = [f"{k} ~{blank_given}mm" for k, blank_given in
+                     ((k, (record.get("concept_sighted_size_mm") or {}).get(k))
+                      for k in ("length", "width", "thickness")) if _positive(blank_given)]
+            if _dims:
+                _spec.append("approximately " + " x ".join(
+                    str(d).split(" ~")[1] for d in _dims))
+            record["research_description"] = (
+                ", ".join(_spec)
+                + " — sighted on a customer render, so the size is approximate; price a "
+                  "standard trade item of this description")
         why = str(sighted.get("why_size") or "scaled from the render")
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):
@@ -492,20 +533,56 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         # FILTERED TO THE VOCABULARY. A word the rate card cannot resolve resolves to no
         # department, mints nothing and charges nothing — silently. So an unknown operation
         # is dropped and SAID, rather than carried as a row that looks like work and is not.
-        seen_ops, unknown = [], []
+        #
+        # ── EDGING IS CHARGED ONLY WHERE THE EDGES ARE NAMED ────────────────────────
+        #
+        # James Gray, 22 Sep 2026: "On edging, I would not merely add it to the confirm
+        # list while still charging £65.04. Make it an explicit editable concept assumption
+        # with a stated visible-edge basis; otherwise it should not mint a deterministic
+        # edge-banding route."
+        #
+        # The first full concept book banded all eight panels — two department set-ups and
+        # £65.04, over half the labour on the job — off one word from a vision model. A
+        # render cannot show which edges are finished unless the finish is actually visible,
+        # and the engine's own rule for a drawing (D-104) is that edging is measured where
+        # the drawing MARKS it, never round the perimeter because a part has one.
+        #
+        # So the same standard: an edge that can be named is work, and an edge that cannot
+        # is an assumption. Unnamed, it does not reach `inferred_operations` at all — it
+        # goes on the assumptions list with the action that turns it into a charge, which
+        # is `estimator_decisions.banded_metres`, the field the engine already reads.
+        _edges = str(sighted.get(EDGE_BASIS_FIELD) or "").strip()
+        seen_ops, unknown, unbanded = [], [], False
         for raw in ([] if unclassified else (sighted.get("operations") or [])):
             name = str(raw or "").strip().lower().replace(" ", "_")
+            if name == "edge_banding" and not _edges:
+                unbanded = True
+                continue
             if name in SIGHTABLE_OPERATIONS:
                 if name not in seen_ops:
                     seen_ops.append(name)
             elif name:
                 unknown.append(str(raw))
+        if _edges and "edge_banding" in seen_ops:
+            record["concept_banded_edges"] = _edges
+            _assume("", f"edge_banding: {_edges}", "the edges visible on the render",
+                    field="banded edges")
+        if unbanded:
+            record["review_flags"].append(
+                "CONCEPT: edging was sighted on this part but no edges could be named, so "
+                "it is NOT charged — a render cannot show which edges are finished. State "
+                "the metres in `estimator_decisions.banded_metres` and the line prices "
+                "itself")
+            _assume("", "edge_banding — sighted, NOT charged",
+                    "edging was sighted but no visible edge could be named",
+                    field="banded edges")
         if seen_ops:
             record["inferred_operations"] = seen_ops
             # No file key: the answers file states what a drawing says, and it takes no
             # operations. A route sighted from a picture is turned off through
             # `estimator_decisions.operations_off`, which is a DECISION, not a reading.
-            _assume("", list(seen_ops), "the work sighted on the render")
+            _assume("", list(seen_ops), "the work sighted on the render",
+                    field="operations")
         elif kind == "fabricated":
             # A made part with no work on it is not a part anybody can price. Say so on the
             # record rather than letting it reach the sheet as a free component.
@@ -581,7 +658,8 @@ def assumption_register(parts: Optional[List[Mapping[str, Any]]]) -> List[Dict[s
             rows.append({"part_number": str(part.get("part_number") or ""),
                          "description": str(part.get("description") or ""),
                          "kind": str(part.get("concept_kind") or ""),
-                         "field": str(item.get("file_key") or "operations"),
+                         "field": str(item.get("field") or item.get("file_key")
+                                      or "operations"),
                          "value": item.get("value"),
                          "cue": str(item.get("cue") or ""),
                          "confirmable_in_the_answers_file": bool(item.get("file_key"))})
@@ -678,6 +756,90 @@ def unit_operations(answer: Dict[str, Any]) -> List[str]:
     if not out and len(answer.get("parts") or []) > 1:
         out = ["assembly"]
     return out
+
+
+def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
+                       stem: str) -> Optional[Dict[str, Any]]:
+    """The product itself, as an assembly parent — or None where there is nothing to assemble.
+
+    ── NOBODY ASSEMBLED THE BIN ────────────────────────────────────────────────────────
+    #
+    James Gray, 22 Sep 2026, on the first full concept book: twenty route lines, all of them
+    saw, cnc_routing, edge_banding and laminating. The carcass was cut, banded and routed,
+    and no operation anywhere put it together.
+
+    THE CAUSE WAS A FIELD NOBODY READS. The unit's own work was written to
+    `summary["assembly_events"]`, and nothing in this engine reads that key — the route
+    compiler builds `explicit_assembly_events` from its own payload. A fact recorded under
+    one name and read under another, which is the fault this register keeps finding.
+
+    THE RULE WAS ALREADY THERE AND HAD NOTHING TO FIRE ON. `estimate_process_times` mints
+    bench fitting on a BOARD ASSEMBLY — "a multi-part board assembly has to be fitted before
+    it is packed, whatever the board is" — gated on the part being an assembly parent. A
+    render pack presented no parent, so the rule was true and idle. This mints the one thing
+    it needs: a parent, with the sighted parts as its children, carrying the unit operations
+    the model sighted. The MINUTES are not invented here — the existing rule takes Tony's
+    measured joinery bench rate inside its scope and the house allowance outside it, and
+    says which on the line.
+
+    THE MATERIAL IS THE CHILDREN'S, because it decides which of those two the rule applies:
+    a scoped pilot measured on faced board must not silently govern a plain MDF carcass.
+    """
+    from document_builder import _empty_part_record                    # noqa: WPS433
+    from source_precedence import apply_field                          # noqa: WPS433
+
+    made = [p for p in (parts or [])
+            if isinstance(p, dict) and p.get("concept_kind") == "fabricated"]
+    if len(made) < 2:
+        # One panel is not an assembly, and neither is a pack of bought-ins. Saying so is
+        # the honest answer: an assembly event minted over nothing charges for nothing.
+        return None
+
+    tally: Dict[str, int] = {}
+    for part in made:
+        mat = str(part.get("normalized_material") or "").strip().upper()
+        if mat:
+            tally[mat] = tally.get(mat, 0) + 1
+    material = max(tally, key=lambda k: (tally[k], k)) if tally else ""
+
+    product = str((answer.get("product") or {}).get("name") or "").strip() or "UNIT"
+    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-C00 {_slug(product, 'UNIT')}",
+                                item_number=0, description=f"{product} — unit assembly",
+                                quantity=None)
+    # THROUGH THE RESOLVER, like every other arbitrated fact this module writes. One of
+    # these decides how the build is timed, and a figure that cannot be displaced by a
+    # drawing is not a concept figure at all.
+    apply_field(record, "quantity", 1, SOURCE,
+                note="one product per unit — this line IS the unit")
+    record["concept"] = True
+    record["concept_kind"] = "assembly"
+    record["page_roles"] = ["render"]
+    record["concept_seen"] = str((answer.get("product") or {}).get("scale_cue") or "")
+    # The three names the assembly rules ask by. Written together, because a parent known
+    # to one of them and not the others is the two-names fault again, one level down.
+    record["is_assembly_parent"] = True
+    record["canonical_kind"] = "assembly"
+    record["assembly_children"] = [str(p.get("part_number") or "") for p in made]
+    if material:
+        apply_field(record, "normalized_material", material, SOURCE,
+                    note=f"the board most of the sighted panels are made of ({material})")
+    ops = unit_operations(answer)
+    if ops:
+        record["inferred_operations"] = ops
+    record["concept_assumptions"] = []
+    # WHICH BOARD THE BUILD IS TIMED AS, SAID OUT LOUD. The bench rule takes the shop's
+    # measured faced-board rate inside its scope and the house allowance outside it, and the
+    # difference is fifteen times. On a mixed carcass that call is a judgement, so the line
+    # names the mix it was made from and the lever that overturns it.
+    _mix = ", ".join(f"{n}x {m}" for m, n in sorted(tally.items(), key=lambda kv: -kv[1]))
+    record["review_flags"].append(
+        f"CONCEPT: this is the product itself, sighted as {len(made)} made part(s) that "
+        f"have to be put together. It carries the unit's own work and no material of its "
+        f"own — the panels carry that. The build is timed as {material or 'board'} because "
+        f"that is most of what it is made of ({_mix or 'no material sighted'}); set "
+        f"`estimator_decisions.throughput_per_hour` for the bench department to time it "
+        f"yourself")
+    return record
 
 
 def concept_note(answer: Dict[str, Any]) -> Dict[str, Any]:

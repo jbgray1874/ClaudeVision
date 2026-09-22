@@ -414,6 +414,44 @@ class PricingService:
         "CASTOR", "WHEEL", "BEARING", "SPRING",
     )
 
+    # ── A SIGHTED WORD IS NOT A SPECIFICATION ───────────────────────────────────────────
+    #
+    # James Gray, 22 Sep 2026, on the first full concept book: "Prevent a render-invented
+    # material/description from matching a catalogue item without matching specification and
+    # unit basis."
+    #
+    # The line was `HEADER GRAPHIC SET`, material `PRINTED_VINYL` — a word this engine does
+    # not use anywhere and the vision model made up — with NO size, because a graphic is
+    # never nested. It matched a UDEF row by description tokens and took £115.56 EACH, a
+    # quarter of a £459.56 unit. The pack then stated the source two ways, "catalogue — Udef
+    # parts table for estimating" on one page and "the line records no source" on another.
+    #
+    # THE DESCRIPTION ARMS ARE SAFE FOR A DRAWING AND UNSAFE FOR A RENDER, and the reason is
+    # not the arms: it is what they are matching. A drawing's description was typed by a
+    # draughtsman describing a real part with a real size beside it, and the token-overlap
+    # and sole-match rules weigh it fairly. A sighted description is the model's impression
+    # of a picture: it carries no size to check the row against, no unit basis to compare,
+    # and words nobody in this building chose. Matching it to a priced row is not evidence,
+    # it is coincidence wearing a citation — and a wrong citation is worse than no figure.
+    #
+    # SO A SIGHTED LINE MAY MATCH ON A REFERENCE AND NOTHING ELSE: its own exact part code,
+    # or a manufacturer reference it actually carries. Both are things somebody WROTE DOWN.
+    # Where neither exists the line falls to the researched rung, which has to name a real
+    # listing, a date and a unit basis before it can produce a figure at all.
+    @staticmethod
+    def _is_sighted_line(part: Dict[str, Any]) -> bool:
+        """True when this record's words came from a render rather than from a drawing."""
+        if not isinstance(part, dict):
+            return False
+        if part.get("concept") or part.get("concept_kind"):
+            return True
+        try:
+            from source_precedence import source_of                    # noqa: WPS433
+        except Exception:                                              # noqa: BLE001
+            return False
+        return any(source_of(part, f) == "vision_concept"
+                   for f in ("normalized_material", "blank_length_mm", "quantity"))
+
     @staticmethod
     def _is_bought_in_heuristic(part: Dict[str, Any]) -> bool:
         pn = str(part.get("part_number") or "").strip().upper()
@@ -437,6 +475,8 @@ class PricingService:
         """
         part_code = str(part.get("part_number") or "").strip()
         desc = str(part.get("description") or "").strip()
+        # See _is_sighted_line above: a render's words reach the reference arms and no other.
+        _sighted = self._is_sighted_line(part)
 
         # A CATEGORY WORD IS NOT A CODE, AND THE GUARD IN lookup_keys DID NOT REACH HERE.
         # Refusing FIXING as a supplier-reference key stopped the two reference arms below
@@ -535,6 +575,13 @@ class PricingService:
                     f" | matched on manufacturer reference {key} found in the catalogue "
                     f"description (sole match)")
                 return anchor
+
+        # THE LOOSE ARMS STOP HERE FOR A SIGHTED LINE. Below this point every match is made
+        # on the DESCRIPTION — the part-code-or-description query, its token-overlap rescue,
+        # and the description recall. A drawing's description earns those; a render's
+        # impression of one does not. The reference arms above have already run.
+        if _sighted:
+            return None
 
         row = self._fetch_one_with_retry(
             """
@@ -1205,6 +1252,38 @@ class PricingService:
         udef = self._get_udef_anchor(part)
         if udef:
             return udef
+        # ── EVERY WORD-MATCHED ARM IS CLOSED TO A SIGHTED LINE ──────────────────────
+        #
+        # The four below all fall back to the DESCRIPTION when the code misses — PMA by
+        # description, the bought-in catalogue by description, the historical-quote RAG by
+        # token overlap, the supplier catalogue by material hint. Guarding only UDEF would
+        # have moved the £115.56 graphic one arm down the chain rather than stopping it.
+        #
+        # Nothing real is lost. A sighted line's code is one this engine minted from a
+        # render, so the code arms of all four can never match anyway; only the word arms
+        # could, and a render's words are the model's impression, not a specification. The
+        # researched rung below still runs, and it must name a real listing, a date and a
+        # unit basis before it can produce a figure — which is the whole difference.
+        #
+        # It returns the no-source answer rather than reaching for the web/AI arm here,
+        # because the caller's NEXT rung is the researched one that enforces the evidence
+        # contract in full. One researched figure, produced by the rung that has to show
+        # its working, beats two market arms disagreeing about the same castor.
+        if self._is_sighted_line(part):
+            return {
+                "source": "fallback",
+                "unit_price_gbp": 0.0,
+                "confidence": 0.0,
+                "provenance": ("sighted on a render — matched against no catalogue, because "
+                               "a sighted description carries no specification and no unit "
+                               "basis to match one on"),
+                "review_required": True,
+                "review_reason": (
+                    "This line was sighted on a render, so nothing here names WHICH item it "
+                    "is — no code, no manufacturer reference, no size a catalogue row could "
+                    "be checked against. Name the item (or give its code) and the ordinary "
+                    "price chain answers it."),
+            }
         pma = self._get_pma_purchased(part)
         if pma:
             return pma

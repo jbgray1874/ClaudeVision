@@ -599,6 +599,167 @@ def test_a_sighted_part_is_numbered_after_the_job_not_the_wrapper():
     assert parts[0]["part_number"].startswith("BDAB4ADF-3340-40M-S-C01")
 
 
+def test_somebody_assembles_the_unit():
+    """James Gray, 22 Sep 2026, on the first full concept book: "Assembly still ruled out on
+    every panel, so glue-up of the box is missing."
+
+    Twenty route lines — saw, cnc_routing, edge_banding, laminating — and nothing that put
+    the carcass together. The cause was a field nobody reads: the unit's work was written to
+    `summary["assembly_events"]`, and the route compiler builds its assembly events from its
+    own payload while the workbook costs from the part records. Neither has ever read it.
+
+    The engine's own rule was already right and had nothing to fire on — it mints bench
+    fitting on a BOARD ASSEMBLY, and a render pack presented no assembly. This mints one.
+    """
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    unit = concept_scan.unit_assembly_part(parts, FIXTURE, "PlanA")
+    assert unit is not None, "the product itself is not on the parts list"
+    # The three names the assembly rules ask by, together.
+    assert unit["is_assembly_parent"] is True
+    assert unit["canonical_kind"] == "assembly"
+    assert len(unit["assembly_children"]) >= 6
+    assert unit.get("normalized_material"), "the build has no board to be timed as"
+    # It is the product, not a part: it carries work and no size of its own.
+    assert unit.get("blank_length_mm") in (None, 0)
+    assert unit["concept_kind"] == "assembly"
+
+    # And the dead field is gone, or this fix is a second copy of the same fault.
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert 'setdefault("assembly_events"' not in src, (
+        "the unit's work is still written to a key nothing reads")
+
+
+def test_the_bench_rule_fires_and_times_the_build_off_the_shops_own_rate():
+    """The measure that matters: the rule charges, and the minutes are the shop's, not
+    ours. Nothing here invents an assembly time — it proves the existing rule reaches a
+    concept job and says which rate it used."""
+    from estimator import estimate_document
+
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    unit = concept_scan.unit_assembly_part(parts, FIXTURE, "PlanA")
+    before = estimate_document(list(parts),
+                               summary={"manufacturing_writeup": {"parts": list(parts)}})
+    after = estimate_document([unit] + parts,
+                              summary={"manufacturing_writeup": {"parts": [unit] + parts}})
+    _l = lambda e: float((e.get("workbook_equivalent_pricing") or {}).get(   # noqa: E731
+        "m103_labour_subtotal_gbp") or 0.0)
+    assert _l(after) > _l(before), "the unit assembly charges nothing"
+    assert any("bench fitting" in str(f) for f in (unit.get("review_flags") or [])), (
+        "the build was timed with no line saying how")
+
+
+def test_a_one_part_render_is_not_an_assembly():
+    """The control. An assembly event minted over nothing charges for nothing, and a pack
+    of bought-ins is not a carcass."""
+    answer = {"product": {"name": "SIGN"}, "parts": [
+        {"name": "FACE", "kind": "fabricated", "material_guess": "MDF",
+         "assumed_blank_mm": {"length": 300, "width": 200, "thickness": 18},
+         "quantity": 1, "operations": ["saw"]},
+        {"name": "CASTOR", "kind": "bought_in", "quantity": 4}]}
+    parts = concept_scan.parts_from_concept(answer, "ONE")
+    assert concept_scan.unit_assembly_part(parts, answer, "ONE") is None
+
+
+def test_edging_is_charged_only_where_the_edges_are_named():
+    """James Gray, 22 Sep 2026: "I would not merely add it to the confirm list while still
+    charging £65.04. Make it an explicit editable concept assumption with a stated
+    visible-edge basis; otherwise it should not mint a deterministic edge-banding route."
+
+    All eight panels were banded off one word from a vision model — two department set-ups
+    and over half the labour on the job. The engine's rule for a drawing (D-104) is that
+    edging is measured where the drawing MARKS it, never round a perimeter; a render is held
+    to the same standard.
+    """
+    answer = json.loads(json.dumps(FIXTURE))
+    panel = answer["parts"][0]
+    panel["operations"] = ["saw", "edge_banding"]
+    panel.pop(concept_scan.EDGE_BASIS_FIELD, None)
+
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert "edge_banding" not in (part.get("inferred_operations") or []), (
+        "edging was charged with no edge named")
+    assert "saw" in part["inferred_operations"], "the rest of the route was thrown away too"
+    flag = [f for f in part["review_flags"] if "no edges could be named" in f]
+    assert len(flag) == 1 and "banded_metres" in flag[0], part["review_flags"]
+    assert any(r["field"] == "banded edges"
+               for r in concept_scan.assumption_register([part])), (
+        "the edging assumption is not on the list anybody confirms")
+
+    # NAMED, and it is work like any other.
+    panel[concept_scan.EDGE_BASIS_FIELD] = "front and top edges show a banded lip"
+    part = concept_scan.parts_from_concept(answer, "PlanA")[0]
+    assert "edge_banding" in part["inferred_operations"]
+    assert part["concept_banded_edges"].startswith("front and top")
+    assert not any("no edges could be named" in f for f in part["review_flags"])
+
+
+def test_a_sighted_description_cannot_match_a_catalogue_row():
+    """James Gray, 22 Sep 2026: "Prevent a render-invented material/description from matching
+    a catalogue item without matching specification and unit basis."
+
+    `HEADER GRAPHIC SET` / `PRINTED_VINYL` — a material this engine uses nowhere — matched a
+    UDEF row on its words and took £115.56 each, a quarter of a £459.56 unit, for a graphic
+    with no size at all. A wrong citation is worse than no figure.
+    """
+    import inspect
+
+    import pricing_service
+
+    assert pricing_service.PricingService._is_sighted_line(
+        {"concept": True, "description": "HEADER GRAPHIC SET"})
+    assert not pricing_service.PricingService._is_sighted_line(
+        {"part_number": "12349-02-69-04M", "description": "LID"})
+
+    # The guard sits in front of EVERY word-matched arm, not only UDEF's — guarding one
+    # would have moved the match one arm down the chain.
+    chain = inspect.getsource(pricing_service.PricingService._select_anchor_price_source)
+    assert "_is_sighted_line" in chain
+    assert chain.index("_is_sighted_line") < chain.index("_get_historical_rag"), (
+        "the historical-quote RAG still matches a sighted description")
+    assert chain.index("_is_sighted_line") < chain.index("_get_supplier_catalog")
+    udef = inspect.getsource(pricing_service.PricingService._get_udef_anchor)
+    assert "if _sighted:\n            return None" in udef, (
+        "UDEF's own description arms are still open to a sighted line")
+
+
+def test_a_castor_carries_enough_specification_to_be_researched():
+    """"We need to be able to price castors and hinges." They sat at £0 because the
+    researched rung was handed the single word CASTOR — no diameter, no fixing, no load —
+    and it has to name a real current listing. A render answers more than one word."""
+    parts = concept_scan.parts_from_concept(FIXTURE, "PlanA")
+    castor = next(p for p in parts if "CASTOR" in p["part_number"])
+    spec = castor.get("research_description") or ""
+    assert spec, "the bought-in line carries nothing to research"
+    assert "sighted on a customer render" in spec and "approximate" in spec, (
+        "the brief does not say the specification was sighted")
+    # A made panel is priced by nest and has no business being researched as a purchase.
+    made = next(p for p in parts if p.get("concept_kind") == "fabricated")
+    assert not made.get("research_description")
+
+    # And the rung asks with it, without the code we minted ourselves.
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"description": _sighted_desc or part.get("description")' in src
+    assert '"code": "" if _sighted_desc else part.get("part_number")' in src
+
+
+def test_a_sighted_code_is_not_a_code_anybody_can_look_up():
+    """The castor's refusal blamed the wrong thing: "'5E09BE03B9741E5F-BDAB4AD-C11 CASTOR'
+    is a real code, so it was put to the purchasing catalogue... that is a gap on our side."
+    It is not a real code — we minted it from a render — and an estimator sent to check the
+    catalogue for it is doing work that cannot succeed."""
+    from part_identity import is_engine_minted_code, is_sighted_code
+
+    assert is_sighted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
+    assert is_engine_minted_code("5E09BE03B9741E5F-BDAB4AD-C11 CASTOR")
+    # NARROW. A code somebody printed on a drawing must never be called an invention.
+    for real in ("12349-02-69-04M", "10975-02-GA", "1234-C01", "FIXING1081", "DBR60"):
+        assert not is_sighted_code(real), real
+
+    src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
+    assert "this part was SIGHTED on a render" in src
+    assert "Name the item" in src, "the refusal does not say what would settle it"
+
+
 def test_the_prompt_cannot_change_without_its_cache_version():
     """THE SILENT UNDO. The prompt is part of the cache key, so editing it WITHOUT bumping
     the version means the new instructions are never sent: every pack replays the answer the

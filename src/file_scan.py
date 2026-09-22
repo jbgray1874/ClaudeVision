@@ -3992,34 +3992,40 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+            _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
             _assumed = concept_scan.assumption_register(_sighted)
             _answers_path = concept_scan.write_assumptions_file(
                 _sighted, folder=job_folder, job=_job_name)
             summary["concept_read"] = dict(concept_scan.concept_note(_answer),
                                            parts=len(_sighted),
+                                           unit_assembly=(_unit or {}).get("part_number", ""),
                                            unit_operations=_unit_ops,
                                            assumptions=_assumed,
                                            assumptions_file=(str(_answers_path)
                                                              if _answers_path else ""),
                                            cache_hit=bool(_read.get("cache_hit")))
+            # ── THE UNIT ITSELF, SO SOMEBODY ASSEMBLES IT ───────────────────────────
+            #
+            # This wrote the unit's work to `summary["assembly_events"]`, and NOTHING IN
+            # THIS ENGINE READS THAT KEY — the route compiler builds its assembly events
+            # from its own payload and the workbook costs from the part records. So the
+            # first full concept book cut, banded and routed a bin that nobody put
+            # together. The honest fix is a part: an assembly parent whose children are
+            # the sighted panels, which the existing board-assembly rule then fits and
+            # times off the shop's own measured rate. See unit_assembly_part.
+            if _unit:
+                summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
-            # THE UNIT'S OWN WORK, ON THE UNIT'S OWN RECORD. Assembling the carcass, fitting
-            # the lid and the castors and packing it are not operations on any one panel —
-            # they are what turns the panels into the product. Carried on the top assembly
-            # so the compiler charges them once, not once per part.
-            if _unit_ops:
-                _top = summary.setdefault("assembly_events", [])
-                if isinstance(_top, list):
-                    _top.append({"assembly": "CONCEPT-UNIT", "operations": _unit_ops,
-                                 "source": concept_scan.SOURCE,
-                                 "why": "sighted on the render: the unit is made of several "
-                                        "parts and has to be put together and packed"})
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
             print(f"   parts below are SIGHTED by the vision model: {len(_sighted)} part(s),")
             print("   every dimension an assumption that names the cue it was scaled from.")
             print("   They are priced by the ordinary waterfall — the model never prices.")
+            if _unit:
+                print(f"   The unit itself is {_unit['part_number']} — "
+                      f"{len(_unit.get('assembly_children') or [])} made part(s) to fit "
+                      f"together, so the shop's own bench rule times the build.")
             # WHAT IT ASSUMED, AND WHERE TO ANSWER IT. A concept budget is only honest if
             # the assumptions are a list somebody can work through, not stamps on twelve
             # records that have to be opened one at a time.

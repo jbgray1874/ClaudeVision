@@ -2598,8 +2598,27 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             from indicative_price import resolve_indicative as _rung4
 
             _researcher = _rung4_researcher
+            # ── ONE WORD IS NOT A PURCHASE ──────────────────────────────────────
+            #
+            # James Gray, 22 Sep 2026: "we need to be able to price castors and hinges."
+            # On the first concept book both sat at £0, and the reason was in the brief:
+            # this rung asks the market to name a REAL CURRENT LISTING, and it was being
+            # handed the single word CASTOR — no diameter, no fixing, no load. Nothing
+            # usable can come back from that, and nothing did.
+            #
+            # A render answers more than one word: a wheel about 75mm, black, on a plated
+            # bracket. `research_description` carries exactly that, written by the reader
+            # that saw it and marked as approximate and sighted in its own text, so the
+            # answer is a price for a standard item of that description rather than a
+            # confident figure for a code nobody has. The description on the sheet does
+            # not change; only the question asked of the market does.
+            _sighted_desc = str(part.get("research_description") or "").strip()
             _ind = _rung4(
-                {"code": part.get("part_number"), "description": part.get("description"),
+                # NO CODE ON A SIGHTED LINE. The code is one this engine minted from a
+                # render; putting it in the brief invites an answer about a part number
+                # no supplier has ever listed.
+                {"code": "" if _sighted_desc else part.get("part_number"),
+                 "description": _sighted_desc or part.get("description"),
                  "quantity": part.get("quantity"),
                  # A LINE'S OWN UNIT, WHICH THE BRIEF NEVER USED TO SEE. The edging stub
                  # carries `unit_of_measure = "m"` and this dict did not pass it on, so the
@@ -2607,7 +2626,12 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  # a fact recorded under one name and read under another, again.
                  "unit_of_measure": part.get("unit_of_measure"),
                  "mass_kg": part.get("normalized_weight_kg"),
-                 "input_origins": part.get("input_origins") or {}},
+                 # THE ORIGIN IS THE TRUE ONE, so the guard judges the brief on what it
+                 # actually is. A sighted description is not a drawing's reading and must
+                 # not travel as one.
+                 "input_origins": dict(part.get("input_origins") or {},
+                                       **({"description": "vision_concept_sighted"}
+                                          if _sighted_desc else {}))},
                 order_qty=int(_safe_float(part.get("job_quantity")) or 1),
                 as_of=str(part.get("run_date") or ""),
                 ask=_researcher,
