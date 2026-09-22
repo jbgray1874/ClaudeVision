@@ -3908,10 +3908,23 @@ def _finalize_scan_summary(
             _answer = _read.get("parsed") or {}
             _sighted = concept_scan.parts_from_concept(
                 _answer, Path(_pack[0]).stem if _pack else "CONCEPT")
+            _unit_ops = concept_scan.unit_operations(_answer)
             summary["concept_read"] = dict(concept_scan.concept_note(_answer),
                                            parts=len(_sighted),
+                                           unit_operations=_unit_ops,
                                            cache_hit=bool(_read.get("cache_hit")))
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            # THE UNIT'S OWN WORK, ON THE UNIT'S OWN RECORD. Assembling the carcass, fitting
+            # the lid and the castors and packing it are not operations on any one panel —
+            # they are what turns the panels into the product. Carried on the top assembly
+            # so the compiler charges them once, not once per part.
+            if _unit_ops:
+                _top = summary.setdefault("assembly_events", [])
+                if isinstance(_top, list):
+                    _top.append({"assembly": "CONCEPT-UNIT", "operations": _unit_ops,
+                                 "source": concept_scan.SOURCE,
+                                 "why": "sighted on the render: the unit is made of several "
+                                        "parts and has to be put together and packed"})
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
