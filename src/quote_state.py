@@ -111,9 +111,42 @@ def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
     es = _mapping(summary.get("estimate_summary"))
     totals = _mapping(_mapping(summary.get("final_estimate")).get("totals"))
     unit = _mapping(es.get("workbook_equivalent_pricing")).get("m105_total_unit_cost_gbp")
+    # ── THE FIGURE THE WORKBOOK HOLDS, KEPT EVEN WHEN IT IS REFUSED ──────────────────
+    #
+    # James Gray, 22 Sep 2026, on the Plan A render run: "Quote needs to have a price —
+    # even if a bad one since we know it's only indicative... it keeps being over ridden."
+    #
+    # He was right, and the report proved it against itself. Its headline read "Unit cost
+    # PENDING — NOT TRACEABLE TO A WORKBOOK CELL" while its own Q&A twenty lines lower read
+    # "What does a unit cost? £102.70 — material £92.78 + labour £0.00". ONE DOCUMENT, BOTH
+    # ANSWERS, because the refusal discarded the figure instead of labelling it.
+    #
+    # `amount` keeps its meaning exactly: the figure a CUSTOMER document may print, refused
+    # unless it traces to a workbook cell. `workbook_amount` is the number the sheet
+    # actually holds, carried through the refusal so an INTERNAL page can show it and say
+    # what it is. A quote that says nothing where the workbook says £102.70 does not protect
+    # anybody — it just moves the estimator to a second document to find out.
+    # UNTRACED IS NOT THE SAME AS CONTRADICTED, and only one of them may be shown.
+    #
+    # An UNTRACED figure is the Plan A case: the workbook holds £102.70, nothing anywhere
+    # disagrees with it, and all that is missing is a recorded cell to cite. An internal page
+    # may print that and say so.
+    #
+    # A CONTRADICTED figure is the 401912-02 case that built this guard in the first place:
+    # the engine proposes 149.87 and the cell it cites holds 321.88. There is no "the
+    # workbook's figure" there — there are two figures and no way to tell which is the
+    # estimate, so showing either one picks a winner on no evidence. That is the same rule
+    # as D-152's blank: a pair assembled from two readings is not a reading.
+    _cell_value = totals.get("unit_cell_value")
+    _raw = unit if isinstance(unit, (int, float)) else None
+    if _raw is None and isinstance(_cell_value, (int, float)):
+        _raw = _cell_value
+    elif (isinstance(_raw, (int, float)) and isinstance(_cell_value, (int, float))
+            and abs(_raw - _cell_value) > 0.005):
+        _raw = None
     try:
         from displayed_charge import publishable_total
-        return publishable_total({"run": {
+        fact = publishable_total({"run": {
             "unit_cost_gbp": unit,
             "unit_cell": totals.get("unit_cell") or "",
             "unit_cell_value": totals.get("unit_cell_value"),
@@ -121,8 +154,17 @@ def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
     except Exception as exc:                                          # noqa: BLE001
         # FAIL CLOSED ON THE PRICE, NOT ON THE DOCUMENT. A check that cannot run refuses the
         # figure; it does not take the page down with it.
+        #
+        # AND IT REFUSES THE INDICATIVE FIGURE TOO. "Untraced" is a thing the check SAID —
+        # it ran, found no cell to cite, and nothing contradicted the number. A check that
+        # THREW said nothing: we do not know whether the workbook agrees, disagrees, or
+        # holds anything at all. Showing a figure on that basis would be inventing the one
+        # piece of evidence we just failed to obtain.
         return {"amount": None, "cell": None, "basis": "none",
+                "workbook_amount": None,
                 "why": f"the traceability check could not run ({exc})"}
+    fact.setdefault("workbook_amount", _raw)
+    return fact
 
 
 def _outstanding_on_the_record(summary: Mapping[str, Any]) -> List[str]:

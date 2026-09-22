@@ -333,10 +333,33 @@ def _quote_text(summary):
 
 
 def test_a_quote_with_no_traceable_total_carries_no_customer_price():
-    """The rendered case. A quote is the one deliverable a customer keeps."""
-    said = _quote_text(_quote_summary(cell=None, cell_value=None))
-    assert "149.87" not in said
-    assert "224.81" not in said, "a marked-up price was computed from an untraceable cost"
+    """The rendered case. A quote is the one deliverable a customer keeps.
+
+    ── THIS TEST'S RULE WAS NARROWED ON 22 SEP 2026, ON INSTRUCTION ─────────────────
+
+    It used to render the DEFAULT audience — which is the estimator's portal view — and
+    assert the figure was absent from that too. James Gray, on the Plan A render run whose
+    report said "PENDING — NOT TRACEABLE" in its headline and "£102.70" in its own Q&A
+    twenty lines lower: "Quote needs to have a price — even if a bad one since we know it's
+    only indicative... it keeps being over ridden."
+
+    So an UNTRACED figure now appears on internal pages, labelled as the workbook's own and
+    not traced. What this test protects is unchanged and is the part that matters: it never
+    reaches a CUSTOMER document, which is asked for by name and refused by name. The two
+    neighbouring cases are untouched, because they are not "untraced" at all — a cell that
+    DISAGREES publishes nothing anywhere, and a check that THREW publishes nothing anywhere.
+    """
+    from quote_state import CUSTOMER, NotReleasable
+    import client_quote_html as Q
+
+    summary = _quote_summary(cell=None, cell_value=None)
+    with pytest.raises(NotReleasable):
+        Q.build_quote_html(summary, audience=CUSTOMER)
+
+    # And the estimator's own copy shows it for what it is, rather than a dash.
+    said = _quote_text(summary)
+    assert "indicative, from the workbook" in said
+    assert "has not been traced" in said
 
 
 def test_a_quote_whose_cell_disagrees_carries_no_customer_price():

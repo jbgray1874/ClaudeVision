@@ -1388,7 +1388,37 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
     # customer file, is not served as a download and is not attached to a mail — none of which
     # needs a sentence on the page to work. So what is left here is the one thing the page can
     # usefully say: which value to enter, and where.
-    if unit_price is None:
+    # ── AN INTERNAL PAGE SHOWS THE FIGURE THE WORKBOOK HOLDS ────────────────────────
+    #
+    # James Gray, 22 Sep 2026: "Quote needs to have a price — even if a bad one since we
+    # know it's only indicative... it keeps being over ridden."
+    #
+    # The customer document is unchanged and still fails closed: `unit_price` comes from the
+    # traceable figure, and without one a customer sees no number. But this file is also
+    # generated as _quote_PORTAL.html and _quote_LLM-ONLY.html — pages whose entire purpose
+    # is to show the estimator what the run produced, and which already say "Indicative —
+    # for internal comparison" in their own Basis row. Printing a dash there, on a job whose
+    # workbook says £102.70 and whose report prints £102.70, is not caution: it sends
+    # somebody to a second document to read the number this one is about.
+    #
+    # So the internal pages fall back to the workbook's own figure, captioned as what it is.
+    # The release gates are untouched: what may reach a customer is decided by audience and
+    # by `customer_releasable`, never by whether a number was rendered here.
+    _internal = bool(summary.get("llm_only")) or (audience or PORTAL) != CUSTOMER
+    _workbook_only = _state["price"].get("workbook_amount")
+    if unit_price is None and _internal and isinstance(_workbook_only, (int, float)):
+        _indicative = _workbook_only * MARKUP_FACTOR
+        _price_class, _order_class = "unit", "ov"
+        _unit_figure = _money(_indicative)
+        _order_figure = _money(_indicative * qty) if qty else "&mdash;"
+        _unit_caption = ("per unit, ex VAT · indicative, from the workbook"
+                         + ((' · ' + _num(qty) + ' of') if qty else ''))
+        _order_caption = "ex VAT · indicative"
+        _pending_note = (
+            '\n      <div class="estimator-action">Indicative: this figure is the workbook\'s '
+            'own total and has not been traced to a signed-off cell. Settle the open lines on '
+            'the Estimate sheet and regenerate before it is quoted.</div>')
+    elif unit_price is None:
         _price_class = _order_class = "unit"
         _unit_figure = _order_figure = "&mdash;"
         _unit_caption = "per unit, ex VAT"
