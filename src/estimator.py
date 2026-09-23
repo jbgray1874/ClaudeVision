@@ -2507,6 +2507,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             )
             ps_price = _safe_float(anchor.get("unit_price_gbp")) if anchor else None
             if ps_price is not None and ps_price > 0:
+                if (anchor or {}).get("item_priced"):
+                    part.setdefault("review_flags", []).append(
+                        f"AI researched price £{ps_price:,.2f}: priced as "
+                        f"{anchor['item_priced']}")
                 return {
                     "result": {
                         "selected": {
@@ -2527,6 +2531,7 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                                 "supplier_name": anchor.get("supplier_name"),
                                 "price_date": anchor.get("price_date"),
                                 "review_reason": anchor.get("review_reason"),
+                                "item_priced": anchor.get("item_priced"),
                             },
                             "evidence": {
                                 "web_query": anchor.get("web_query"),

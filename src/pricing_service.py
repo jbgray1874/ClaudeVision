@@ -1437,6 +1437,34 @@ class PricingService:
             "weight_kg": geom.get("weight_kg"),
             "operations": ops[:6],
         }
+        # ── THE SAME QUESTION AS THE LATER RUNG, OR THIS ONE ANSWERS FIRST WITH A WORSE ONE ──
+        #
+        # 11650-06, 23 Sep 2026: D-204 told the researched rung what a bought-in line IS (its
+        # other names in the pack, its parent assembly), that it is BOUGHT, and gave it the
+        # brief's own request — and the Yiree binding screw still came back at £126.04,
+        # because THIS fallback answers first, with its own spec: a bare code, under a prompt
+        # written for made parts. Same inputs here, from the same places, so the two paths
+        # cannot ask different questions about one line. research_brief supplies the request
+        # wording, so it is written once.
+        _ctx = str(part.get("research_context") or "").strip()
+        if _ctx:
+            _spec["description"] = " — ".join(
+                x for x in (str(part.get("description") or "").strip(), _ctx) if x)
+        try:
+            from research_context import _is_bought_in as _bi
+            from indicative_price import research_brief as _rb, BOUGHT_IN_COMPONENT as _BIC
+            if _bi(part) or _ctx:
+                _brief = _rb({"description": _spec["description"],
+                              "part_number": part.get("part_number"),
+                              "unit_of_measure": part.get("unit_of_measure"),
+                              "quantity": part.get("quantity"),
+                              "is_bought_in": True})
+                _spec["supply"] = "bought_in"
+                if _brief.get("kind") == _BIC and _brief.get("ask"):
+                    _spec["ask"] = _brief["ask"]
+                    _spec["wanted_unit"] = _brief.get("wanted_unit")
+        except Exception:                                        # noqa: BLE001
+            pass
         # HARD wall-clock timeout: run the (multi-call, network+LLM) lookup on a worker thread and
         # abandon it if it exceeds the budget. Even if an inner call has no timeout of its own, the
         # run never blocks — a slow part just falls through to 'no price, estimator to confirm'.
@@ -1518,6 +1546,9 @@ class PricingService:
             "low_estimate_gbp": result.get("low_estimate_gbp"),
             "high_estimate_gbp": result.get("high_estimate_gbp"),
             "verify_against": result.get("verify_against", []),
+            # What the model says it priced, and per what — onto the line, so a wrong match
+            # (£126.04 for "a screw") is visible before anyone reaches the total.
+            "item_priced": result.get("item_priced") or "",
         }
 
     def _get_labour_rate_from_db(self, operation_code: str) -> Dict[str, Any] | None:
