@@ -1877,11 +1877,15 @@ def canonicalise_part_estimates_for_workbook(
     try:
         from route_compiler import (fold_bom_row_fragments,
                                     quarantine_interleave_artefacts,
+                                    set_aside_late_lines,
                                     set_aside_outside_product)
-        _issues = (canonical_route_payload(summary) or {}).get("issues")
+        _payload = canonical_route_payload(summary) or {}
+        _issues = _payload.get("issues")
         quarantine_interleave_artefacts(part_estimates, _issues, summary=summary)
-        # And what is not in the declared product — the other GA's own BOM — is not costed.
+        # And what is not in the declared product — the other GA's own BOM, and anything
+        # nothing links to it — is not costed; nor is a line minted after the graph.
         set_aside_outside_product(part_estimates, _issues, summary=summary)
+        set_aside_late_lines(part_estimates, _payload, summary=summary)
         _da_rows = ((summary.get("document_analysis") or {}))
         fold_bom_row_fragments(part_estimates,
                                list(_da_rows.get("bom_rows") or [])

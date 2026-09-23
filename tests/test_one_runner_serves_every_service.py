@@ -118,3 +118,21 @@ def test_a_heartbeat_shows_the_runner_online_and_hands_out_nothing(api):
     # A real claim afterwards clears the flag and takes the job.
     assert er.claim(er.ClaimRequest(runner_id="rid"))["run"]["run_id"] == "q1"
     assert er.runners()["runners"][0]["busy_elsewhere"] is False
+
+
+def test_a_runner_stopped_seconds_ago_is_not_a_second_runner(api, monkeypatch):
+    """23 Sep 2026: straight after a restart the page said 'Two runners are running on this
+    machine... Stop one' — the second was the process just ended, still inside the 90 s
+    online window. Two real runners both check in every 5 s; a stopped one does not."""
+    import time as _t
+    er = api
+    r = er._RUNNERS.setdefault("rid", er.Runner(runner_id="rid"))
+    now = _t.time()
+    r.processes = {"pid 1 old": now - 40, "pid 2 new": now - 2}
+    r.last_seen = now - 2
+    entry = er.runners()["runners"][0]
+    assert entry["conflict"] is False and entry["process_count"] == 1, entry
+    # Two that are both still talking are still a conflict.
+    r.processes = {"pid 1": now - 3, "pid 2": now - 1}
+    entry = er.runners()["runners"][0]
+    assert entry["conflict"] is True and entry["process_count"] == 2
