@@ -162,3 +162,19 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
                   f"its number instead.")
     return {"status": status, "declared": declared_s, "match": m, "matches": matches,
             "others": others, "message": msg}
+
+
+def title_from_files(product: Any, file_names: Sequence[Any]) -> str:
+    """The product's title as its own drawing file names it ("11650-06-GA COFFRET HOSPITAL
+    KIT_REVB.PDF" -> "COFFRET HOSPITAL KIT"), or "" when no file names it.
+
+    11650-06's header read "END PANEL GF CONVERSION PANEL SET" — the extender set's title
+    block, read by the model off another page of the same pack — and the report's scope line
+    read "assembly (from the SolidWorks model's own tree)", an engine note. The file name is
+    the drawing office's own label for the product's sheet, and it does not move."""
+    best = ""
+    for name in file_names or []:
+        d = drawing_of_file(name)
+        if d and names_the_product(product, d["number"]) and len(d.get("title") or "") > len(best):
+            best = d["title"]
+    return best

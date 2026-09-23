@@ -1576,6 +1576,91 @@ def build_part_graph(
             records[_owner]["hierarchy_source"] = "assembly_page"
             break
 
+    # ── A PRINTED EXPLODED LIST IS THE PRODUCT'S COUNT, NOT A SECOND PATH ─────────────────
+    #
+    # 11650-06, 23 Sep 2026: the kit GA's sheet 2 prints the whole kit exploded — slider 12,
+    # M4 PEM 18, M4 knob 32, arm 3 + handed 3 — every part counted once for the product,
+    # however many sub-assemblies it sits in. The roll-up re-multiplied the tree beside it:
+    # sliders 24 (03-GA x3 x 6 plus the loose 6), PEM 30 (the tree's 12 PLUS the sheet's 18
+    # made into a direct edge), knobs 20 (the loose 20; the 12 on the arms lost), and the plain
+    # arm 0, because no sub-assembly edge reached it. Review: "Prefer the printed kit sheet over
+    # re-multiplying 03-GA x sliders."
+    #
+    # WHICH TABLE IS ONE. A table on one parent (one sheet), listing only PARTS — no row is an
+    # assembly — of which at least three, and at least half, already reach that parent THROUGH
+    # a sub-assembly. The kit's sheet 1 lists 03-GA, 02-SA02, 06-SA01 and fails; sheet 2 passes.
+    # An ordinary GA table that happens to list a loose fastener also used inside a
+    # sub-assembly fails on the half.
+    #
+    # WHAT IT DOES. Its rows never become a second path to a part the tree already reaches
+    # (that is where the PEM's extra 18 came from). A part it prints that nothing reaches is
+    # linked to the parent at the printed count (the plain arm). And for a LEAF, the printed
+    # total is recorded to replace the roll-up after the cascade, with the disagreement on the
+    # line — the working stays visible, the count is the drawing's.
+    _exploded_totals: Dict[str, Tuple[float, str, str]] = {}
+    _groups: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+    _known_now = set(raw) | set(extracted) | set(children) | _drawings
+    for _row in bom_rows or []:
+        if not isinstance(_row, Mapping) or not str(_row.get("bom_sheet") or "").strip():
+            continue
+        for _c, _p, _q in _bom_stated_edges([_row], aliases, _known_now):
+            _groups.setdefault((_p, str(_row.get("bom_sheet"))), []).append((_c, _q))
+
+    def _deep_paths(_top: str, _target: str) -> bool:
+        """True when _top reaches _target through at least one intermediate assembly."""
+        _stack = [c for c in (children.get(_top) or {}) if c != _target]
+        _seen: Set[str] = set()
+        while _stack:
+            _n = _stack.pop()
+            if _n in _seen:
+                continue
+            _seen.add(_n)
+            _kids = children.get(_n) or {}
+            if _target in _kids:
+                return True
+            _stack.extend(_kids)
+        return False
+
+    def _reaches(_top: str, _target: str) -> bool:
+        _stack, _seen = [_top], set()
+        while _stack:
+            _n = _stack.pop()
+            if _n == _target and _n != _top:
+                return True
+            if _n in _seen:
+                continue
+            _seen.add(_n)
+            _stack.extend(children.get(_n) or {})
+        return False
+
+    for (_p, _sheet), _rows in sorted(_groups.items()):
+        _codes = {c for c, _ in _rows}
+        if len(_codes) < 3 or any(children.get(c) for c in _codes):
+            continue
+        _deep = {c for c in _codes if _deep_paths(_p, c)}
+        if len(_deep) < 3 or len(_deep) * 2 < len(_codes):
+            continue
+        _linked: List[str] = []
+        for _c, _q in _rows:
+            if _c in _deep and number((children.get(_p) or {}).get(_c), None) == _q:
+                # The exploded row made a direct edge beside the tree's path: take it away.
+                children[_p].pop(_c, None)
+                (parents.get(_c) or set()).discard(_p)
+            elif _c not in _deep and not _reaches(_p, _c):
+                # Nothing from this parent reaches it — whether it has no owner at all or an
+                # owner the parent never reaches (a handed assembly with no drawing of its
+                # own). The printed list is the parent's own statement that it is in there.
+                children.setdefault(_p, {})[_c] = _q
+                parents.setdefault(_c, set()).add(_p)
+                records.setdefault(_c, {})["hierarchy_source"] = "exploded_list"
+                _linked.append(_c)
+            _exploded_totals[_c] = (_q, _p, _sheet)
+        print(f"   [bom] {_sheet} is {_p}'s printed exploded list ({len(_codes)} parts, "
+              f"{len(_deep)} also reached through its sub-assemblies) — its totals are the "
+              f"counts; it adds no second path"
+              + (f"; linked {', '.join(_linked)}, which nothing else reached" if _linked
+                 else ""), flush=True)
+
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
     top_id = aliases.get(top_id, top_id)
@@ -2138,6 +2223,26 @@ def build_part_graph(
             if _src:
                 qty_own_source[identity] = _src
 
+    # THE PRINTED EXPLODED TOTAL, applied — see the block above the root. A leaf only (an
+    # assembly's children were cascaded from its own count), and only where the table's
+    # parent is a root, so the printed figure is per unit of what ships.
+    for _c, (_t, _p, _sheet) in sorted(_exploded_totals.items()):
+        if _c not in quantities or children.get(_c) or _p not in top_ids:
+            continue
+        _rolled = quantities[_c]
+        if abs(_rolled - _t) < 1e-9:
+            continue
+        quantities[_c] = _t
+        qty_trails.setdefault(_c, []).append(
+            f"printed total on {_sheet}: {_t:g} per {_p} — used instead of the roll-up "
+            f"({_rolled:g})")
+        _note = (f"{_p}'s printed exploded list says {_t:g}; the roll-up through its "
+                 f"sub-assemblies said {_rolled:g}. The printed total is costed — check the "
+                 f"edges above if the two should agree")
+        qty_notes[_c] = f"{qty_notes[_c]} / {_note}" if qty_notes.get(_c) else _note
+        print(f"   [graph] {_c}: {_t:g} from {_p}'s printed exploded list (roll-up said "
+              f"{_rolled:g})", flush=True)
+
     # ── TWO ROADS TO ONE NUMBER ───────────────────────────────────────────────────
     #
     # The model counts every instance in the whole product; the roll-up above multiplies
@@ -2617,9 +2722,24 @@ def product_scope(summary: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
             title = str((node.get("description") if isinstance(node, Mapping)
                          else getattr(node, "description", "")) or "")
             break
-    hint = next((f"{r['root']} was set aside, but it uses {', '.join(r['uses'])} from "
-                 f"{product}. If {r['root']} is what ships, the Drawing Number should be "
-                 f"{r['root']}." for r in other_roots if r["uses"]), "")
+    try:
+        from product_identity import title_from_files
+        _ft = title_from_files(product, [(e.get("name") if isinstance(e, Mapping) else e)
+                                         for e in (summary.get("job_source_pdfs") or [])])
+    except Exception:                                                # noqa: BLE001
+        _ft = ""
+    # The file's own label beats a node description, which on a model-built parent is an
+    # engine note ("assembly (from the SolidWorks model's own tree)").
+    if _ft or "from the solidworks model" in title.lower():
+        title = _ft
+    # A SHARED SUB-ASSEMBLY IS NOT EVIDENCE OF A WRONG NUMBER. The kit and the cabinet top
+    # both use 11650-02-SA02, so "it uses your part" fits either one being the product — and on
+    # the correct 11650-06 run the old wording told the estimator to switch to 11650-02-GA.
+    # Said as the fact it is, for a person to weigh; never as an instruction.
+    hint = next((f"{r['root']} is also in the pack and shares {', '.join(r['uses'])} with "
+                 f"{product}; it is priced only where {product}'s BOM reaches it. Check the "
+                 f"Drawing Number names the one that ships." for r in other_roots
+                 if r["uses"]), "")
     return {"declared": declared, "product": product, "title": title,
             "other_roots": other_roots, "unlinked": unlinked + late,
             "unresolved": str((unresolved or {}).get("detail") or ""), "hint": hint}
