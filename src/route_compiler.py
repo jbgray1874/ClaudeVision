@@ -222,6 +222,12 @@ def clean_part_number(value: Any) -> str:
     route. Returning "" here drops it at every caller at once, because every caller already
     skips a blank identity."""
     text = re.sub(r"\s+", " ", str(value or "").strip()).upper()
+    # A SPACED HYPHEN IS THE SAME HYPHEN. "ROSS HANDLING - TS-15M5X10" off the GA's table and
+    # "ROSS HANDLING-TS-15M5X10" on the costed record were two identities on 23 Sep 2026: the
+    # first was linked under 11650-02-GA x2, the second was linked to nothing — so once only
+    # linked lines were charged, the handles fell off the cabinet top. The drawing office
+    # spaces hyphens as it likes; a code does not change for it.
+    text = re.sub(r"\s*-\s*", "-", text)
     try:
         from part_identity import is_placeholder_identity
 
@@ -1405,9 +1411,49 @@ def build_part_graph(
               f"recognise, so no edge was made for them: {', '.join(_unique[:6])}"
               + (f" (+{len(_unique) - 6} more)" if len(_unique) > 6 else "")
               + ". Their parts will be reported as disconnected.", flush=True)
+    def _in_one_tree(_a: str, _b: str) -> bool:
+        """True when one of these assemblies contains the other, at any depth."""
+        for _top, _bottom in ((_a, _b), (_b, _a)):
+            _seen: Set[str] = set()
+            _stack = [_top]
+            while _stack:
+                _n = _stack.pop()
+                if _n == _bottom:
+                    return True
+                if _n in _seen:
+                    continue
+                _seen.add(_n)
+                _stack.extend((children.get(_n) or {}).keys())
+        return False
+
+    # Which owners the TABLES themselves name for each part — the test of agreement below.
+    _bom_owners: Dict[str, Set[str]] = {}
+    for _c, _p, _q in _bom_edges:
+        _bom_owners.setdefault(_c, set()).add(_p)
+
     for _child_id, _parent_id, _qty in _bom_edges:
         if _child_id in _claimed_before_bom:
-            continue
+            # A SECOND GA'S OWN ROW IS A SECOND USE, NOT A RE-PARENTING. 11650-02-SA02 is on
+            # the cabinet top's BOM (x1) AND the Coffret kit's (x3); the extract placed it under
+            # the kit, so the top's own row was refused — and on 23 Sep 2026, with only linked
+            # lines charged, the top was priced WITHOUT its RSB sub-assembly. The protection
+            # stands where it matters: a row whose owner is an ancestor or a descendant of an
+            # existing parent is the same use seen again (an exploded table on the parent GA,
+            # a sub-assembly's rows restated) and would count twice, so it is still refused.
+            # Only an owner in a different tree — another general arrangement — is added.
+            _have = parents.get(_child_id) or set()
+            # AND ONLY WHERE THE TABLES AGREE WITH THE EXTRACT. A table that names a DIFFERENT
+            # owner and never the extract's is a disagreement, and the extract still wins
+            # (12392: a panel the BOM put under the bracket set). A table that lists the part
+            # under the extract's parent AND under another GA is two uses.
+            if (not (_bom_owners.get(_child_id, set()) & _have)
+                    or _parent_id in _have
+                    or any(_in_one_tree(_parent_id, _p) for _p in _have)
+                    or _in_one_tree(_parent_id, _child_id)):
+                continue
+            print(f"   [bom] {_child_id} is also on {_parent_id}'s own BOM (x{_qty:g}) — a "
+                  f"second general arrangement's use, linked beside "
+                  f"{', '.join(sorted(_have))}", flush=True)
         children.setdefault(_parent_id, {})[_child_id] = _qty
         parents.setdefault(_child_id, set()).add(_parent_id)
         records.setdefault(_parent_id, {})["is_sub_assembly"] = True
@@ -1751,8 +1797,16 @@ def build_part_graph(
                 outside_product[_n] = _via.get(_n, "")
             # Read BEFORE the set-aside nodes lose their edges: which of the product's parts
             # each set-aside GA takes — the tell that the wrong drawing was named.
-            _uses_by_root = {r: sorted(c for c in (children.get(r) or {}) if c in _reach)
-                             for r in {v for v in outside_product.values() if v}}
+            # An ASSEMBLY of the product's is the tell; a shared fastener is weak evidence
+            # (11650-02: the hint named FIXING632 when the kit takes 3 of 02-SA02). So the
+            # assemblies are named when there are any, the parts only when there are not.
+            def _uses(r: str) -> List[str]:
+                _all = sorted(c for c in (children.get(r) or {}) if c in _reach)
+                _asm = [c for c in _all if children.get(c)
+                        or (records.get(c) or {}).get("is_sub_assembly")
+                        or (records.get(c) or {}).get("is_assembly_parent")]
+                return _asm or _all
+            _uses_by_root = {r: _uses(r) for r in {v for v in outside_product.values() if v}}
             for _gone in outside_product:
                 children.pop(_gone, None)
                 parents.pop(_gone, None)
