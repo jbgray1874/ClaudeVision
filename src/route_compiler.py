@@ -257,24 +257,10 @@ def _is_generated_line(identity: Any, record: Any = None) -> bool:
 def _names_the_product(declared: Any, identity: Any) -> bool:
     """Does the Drawing Number the estimator typed name this assembly?
 
-    One sheet, several spellings: "11650-06", "11650-06-GA", "11650-06 GA Rev B" all name
-    the kit's general arrangement. A trailing revision and ONE sheet-role token are set
-    aside on both sides and the rest must match exactly, ignoring spaces and dashes. Nothing
-    looser: "11650-06" must never name 11650-06-SA01, which is a part OF the product."""
-    try:
-        from part_code_conventions import strip_assembly_role as _strip_role
-    except Exception:                                                # noqa: BLE001
-        def _strip_role(t: str) -> str:
-            return t
-
-    def _key(text: Any) -> str:
-        t = str(text or "").strip().upper()
-        t = re.sub(r"[\s_\-]*REV(?:ISION)?[\s._()\-]*[A-Z0-9]{1,3}\]?\)?$", "", t)
-        t = _strip_role(t.strip())
-        return re.sub(r"[\s\-_]+", "", t)
-
-    d, i = _key(declared), _key(identity)
-    return bool(d) and d == i
+    ONE RESOLVER, shared with the portal's pre-run check — see product_identity. Two copies
+    of this test is how the page could approve a number the engine then refuses."""
+    from product_identity import names_the_product
+    return names_the_product(declared, identity)
 
 
 def number(value: Any, default: Optional[float] = None) -> Optional[float]:

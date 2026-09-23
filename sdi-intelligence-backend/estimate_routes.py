@@ -1078,6 +1078,72 @@ def recipients_set(req: RecipientsRequest, x_sdi_key: Optional[str] = Header(def
     return out
 
 
+class ProductCheckRequest(BaseModel):
+    drawing_number: str = ""
+    files: List[str] = []
+
+
+def _product_identity():
+    """The ENGINE's resolver, loaded by path. The service has its own `config`, so the
+    engine's src folder is appended (never prepended) to the search path — nothing here can
+    shadow a module the service already imports."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_product_identity",
+                                                  src / "product_identity.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+def _names_in(paths: List[str], limit: int = 2000) -> List[str]:
+    """File names from what the page added: files as themselves, a folder as its contents
+    (top level and one below — where a pack's drawings actually sit). Only inside the shares
+    this service may read."""
+    out: List[str] = []
+    for raw in paths or []:
+        p = _within_a_root(str(raw or ""))
+        if p is None:
+            # Outside the shares: the NAME is still what the estimator added, and the name is
+            # all this check reads.
+            out.append(str(raw or ""))
+            continue
+        try:
+            if p.is_dir():
+                for child in sorted(p.iterdir()):
+                    if child.is_file():
+                        out.append(child.name)
+                    elif child.is_dir():
+                        out.extend(g.name for g in sorted(child.iterdir()) if g.is_file())
+                    if len(out) >= limit:
+                        break
+            else:
+                out.append(p.name)
+        except OSError:
+            out.append(p.name)
+    return out[:limit]
+
+
+@router.post("/product-check")
+def product_check(req: ProductCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """WHICH DRAWING WILL THIS RUN PRICE — answered before Run, with the engine's own resolver.
+
+    James Gray, 23 Sep 2026: "we need to centre the job estimate around the drawing number
+    entered into the estimating portal." The 11650-02 run priced the cabinet top because that
+    is what 11650-02 names, set Tim's kit aside, and nobody could see it for forty minutes.
+    None or several matches: the page asks the estimator to correct the number; it never
+    picks one. One match beside other assemblies: the page names them, and guesses nothing."""
+    _check_key(x_sdi_key)
+    try:
+        return _product_identity().resolve_product(req.drawing_number, _names_in(req.files))
+    except Exception as exc:                                         # noqa: BLE001
+        return {"status": "unchecked", "declared": req.drawing_number, "match": None,
+                "matches": [], "others": [],
+                "message": f"The Drawing Number could not be checked ({type(exc).__name__})."}
+
+
 @router.post("")
 def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
