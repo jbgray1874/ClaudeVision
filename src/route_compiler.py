@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 import hashlib
 import json
 import re
+import os
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import bought_in_policy
@@ -237,6 +238,29 @@ def clean_operation(value: Any) -> str:
         re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()),
     ).strip("_")
     return OPERATION_ALIASES.get(cleaned, cleaned)
+
+
+def _names_the_product(declared: Any, identity: Any) -> bool:
+    """Does the Drawing Number the estimator typed name this assembly?
+
+    One sheet, several spellings: "11650-06", "11650-06-GA", "11650-06 GA Rev B" all name
+    the kit's general arrangement. A trailing revision and ONE sheet-role token are set
+    aside on both sides and the rest must match exactly, ignoring spaces and dashes. Nothing
+    looser: "11650-06" must never name 11650-06-SA01, which is a part OF the product."""
+    try:
+        from part_code_conventions import strip_assembly_role as _strip_role
+    except Exception:                                                # noqa: BLE001
+        def _strip_role(t: str) -> str:
+            return t
+
+    def _key(text: Any) -> str:
+        t = str(text or "").strip().upper()
+        t = re.sub(r"[\s_\-]*REV(?:ISION)?[\s._()\-]*[A-Z0-9]{1,3}\]?\)?$", "", t)
+        t = _strip_role(t.strip())
+        return re.sub(r"[\s\-_]+", "", t)
+
+    d, i = _key(declared), _key(identity)
+    return bool(d) and d == i
 
 
 def number(value: Any, default: Optional[float] = None) -> Optional[float]:
@@ -1117,6 +1141,7 @@ def build_part_graph(
     known_assemblies: Optional[Iterable[str]] = None,
     page_owner: Optional[Mapping[int, str]] = None,
     pack_mode: Optional[str] = None,
+    declared_product: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build canonical nodes and hierarchy edges from the whole job.
 
@@ -1650,6 +1675,120 @@ def build_part_graph(
                   f"higher-revision structure; the other(s) recorded as colourway variants.",
                   flush=True)
 
+    # ── THE PRODUCT IS WHAT THE ESTIMATOR SAID IT IS ──────────────────────────────────
+    #
+    # James Gray, 23 Sep 2026, on 11650-06: "Drawing Number on the portal is the product.
+    # Every other GA in the folder is detail, counted only on a path from that product."
+    #
+    # The forest above treats every unowned assembly as a thing that ships — right for 12392
+    # when nobody has said otherwise, and wrong the moment somebody has. The 11650-06 folder
+    # held the kit GA and the cabinet-top GA (11650-02-GA); the kit takes three of the top's
+    # RSB sub-assembly, and the top's own BOM was costed as a SECOND product beside it — SA02,
+    # tabs, RSB plates and PEM studs doubled, and the top's panels and Ross hardware added to
+    # a kit that contains none of them.
+    #
+    # So where the run DECLARES its product (the portal's Drawing Number, passed down as
+    # --product), that one assembly is the only root. Another GA counts only where a path
+    # from the product reaches it, and whatever only another root reaches is not in the
+    # product: it leaves the graph, and the record says which root it hung from, so an
+    # estimator can see what was set aside and why.
+    #
+    # NO GUESS. A declared number that matches no assembly here, or matches two, is flagged
+    # and — if the pack has more than one root — nothing is rolled up at all: a doubled kit
+    # is worse than an un-multiplied one, because it looks finished. With a single root there
+    # is nothing to choose between, so that root still cascades and the mismatch is flagged.
+    # Undeclared (a hand-run CLI job) behaves exactly as before.
+    _product_issues: List[Dict[str, Any]] = []
+    _declared = str(declared_product or "").strip()
+    product_root = ""
+    outside_product: Dict[str, str] = {}
+    if _declared:
+        _assemblies_here = set(top_ids) | {i for i, k in children.items() if k} | {
+            i for i, r in records.items()
+            if isinstance(r, Mapping) and (r.get("is_assembly_parent")
+                                           or r.get("is_sub_assembly"))}
+        _candidates = sorted(a for a in _assemblies_here if a
+                             and _names_the_product(_declared, a))
+        # Two spellings of one sheet ("11650-06" and "11650-06-GA") are not a choice between
+        # products; the one that is a root is the product.
+        if len(_candidates) > 1:
+            _rooted = [c for c in _candidates if c in top_ids]
+            if len(_rooted) == 1:
+                _candidates = _rooted
+        if len(_candidates) == 1:
+            product_root = _candidates[0]
+            _reach: Set[str] = set()
+            _stack = [product_root]
+            while _stack:
+                _n = _stack.pop()
+                if _n in _reach:
+                    continue
+                _reach.add(_n)
+                _stack.extend((children.get(_n) or {}).keys())
+            for _other in [t for t in top_ids if t and t != product_root]:
+                _stack = [_other]
+                _seen: Set[str] = set()
+                while _stack:
+                    _n = _stack.pop()
+                    if _n in _seen or _n in _reach:
+                        continue
+                    _seen.add(_n)
+                    outside_product.setdefault(_n, _other)
+                    _stack.extend((children.get(_n) or {}).keys())
+            for _gone in outside_product:
+                children.pop(_gone, None)
+                parents.pop(_gone, None)
+                records.pop(_gone, None)
+                raw.pop(_gone, None)
+                extracted.pop(_gone, None)
+            # A part the product reaches that ALSO hung under a set-aside root keeps only the
+            # product's edges — the other root's count of it was never a count of the product.
+            for _cid in list(parents):
+                parents[_cid] = {p for p in parents[_cid] if p not in outside_product}
+            for _via in sorted(set(outside_product.values())):
+                _members = sorted(k for k, v in outside_product.items() if v == _via)
+                _product_issues.append({
+                    "code": "outside_the_product",
+                    "root": _via,
+                    "product": product_root,
+                    "identities": _members,
+                    "detail": (f"{_via} is in the pack but is not the product ({product_root}, "
+                               f"the Drawing Number this run was asked to estimate). "
+                               f"{len(_members)} line(s) reached only from it were set aside, "
+                               f"not costed: {', '.join(_members)}"),
+                })
+                print(f"   [graph] product is {product_root} (declared {_declared!r}); "
+                      f"{_via} is detail, not a second product — set aside "
+                      f"{len(_members)} line(s) it alone reaches: {', '.join(_members)}",
+                      flush=True)
+            top_ids = [product_root]
+            top_id = product_root
+        else:
+            _stop = len(top_ids) > 1
+            _product_issues.append({
+                "code": "declared_product_not_resolved",
+                "declared": _declared,
+                "candidates": _candidates,
+                "roots": list(top_ids),
+                "rolled_up": not _stop,
+                "detail": (f"The Drawing Number {_declared!r} "
+                           + (f"matches {len(_candidates)} assemblies ({', '.join(_candidates)})"
+                              if _candidates else "matches no assembly in this pack")
+                           + (f". The pack has {len(top_ids)} top-level assemblies "
+                              f"({', '.join(top_ids)}) and none can be chosen without guessing, "
+                              f"so NOTHING is rolled up — every line is at its own drawing "
+                              f"count. Correct the Drawing Number and re-run."
+                              if _stop else
+                              f". The pack has one top-level assembly ({', '.join(top_ids)}), "
+                              f"which is what is costed — confirm it is the product.")),
+            })
+            print(f"   [graph] DECLARED PRODUCT {_declared!r} NOT RESOLVED "
+                  f"(candidates {_candidates or 'none'}; roots {top_ids}) — "
+                  + ("roll-up STOPPED" if _stop else "the single root is costed"), flush=True)
+            if _stop:
+                top_ids = []
+                top_id = ""
+
     identities: Set[str] = set(raw) | set(extracted) | set(children) | set(parents)
     identities.update(t for t in top_ids if t)
 
@@ -1978,7 +2117,8 @@ def build_part_graph(
             },
         ))
 
-    graph_issues = list(_interleave_issues) + list(_minted_root_issues)
+    graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
+                    + list(_product_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -2082,6 +2222,9 @@ def build_part_graph(
         # real question ask that one instead: with two GAs, both of them ship.
         "top_assembly": top_id,
         "top_assemblies": list(top_ids),
+        # The product the run was asked to estimate, where it named one and it resolved.
+        "product_root": product_root,
+        "declared_product": _declared,
     }
 
 
@@ -2117,12 +2260,14 @@ def apply_canonical_evidence_to_parts(
     # told, refused the stated root, and priced three orphan assemblies with the x2
     # cascade lost. One classification per job, consulted by every compile.
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
-                             pack_mode=_detect_pack_mode(summary or {}))
+                             pack_mode=_detect_pack_mode(summary or {}),
+                             declared_product=declared_product_of(summary or {}))
     # THE EVIDENCE, FILED AT THE FIRST DROP. The refresh recompile may never re-mint the
     # chimera's identity (its record is already gone from the parts), so if this call
     # does not file the quarantine on the summary, the pack-completeness invariant still
     # sends someone to Design for the phantom's drawing off the raw BOM row.
     quarantine_interleave_artefacts(parts, graph.get("issues"), summary=summary)
+    set_aside_outside_product(parts, graph.get("issues"), summary=summary)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
     for part in parts or []:
@@ -2255,6 +2400,80 @@ def interleave_artefact_identities(issues: Any) -> Set[str]:
             if ident:
                 out.add(ident)
     return out
+
+
+def declared_product_of(summary: Optional[Mapping[str, Any]]) -> str:
+    """The product this run was asked to estimate — the portal's Drawing Number.
+
+    Stamped on the summary by the scan, from SDI_PRODUCT, which main.py sets from --product
+    (the runner passes the portal's field). Read from the summary first so a saved summary
+    replays the same answer; the environment is the fallback for a compile that runs before
+    the stamp lands. Blank when the run named nothing, and then nothing changes."""
+    if isinstance(summary, Mapping):
+        _v = str(summary.get("declared_product") or "").strip()
+        if _v:
+            return _v
+    return str(os.environ.get("SDI_PRODUCT") or "").strip()
+
+
+def outside_product_identities(issues: Any) -> Dict[str, str]:
+    """identity -> the root it hung from, for every line set aside as not in the product."""
+    out: Dict[str, str] = {}
+    for issue in issues or []:
+        if isinstance(issue, Mapping) and issue.get("code") == "outside_the_product":
+            for ident in issue.get("identities") or []:
+                out[clean_part_number(ident)] = str(issue.get("root") or "")
+    out.pop("", None)
+    return out
+
+
+def set_aside_outside_product(part_lists: Any, issues: Any,
+                              summary: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Take the records of lines outside the declared product out of the costed population.
+
+    The same reason as the interleave quarantine beside it: the graph forgetting an identity
+    does not stop the part RECORD being priced, and the workbook writes from the records.
+    Kept on the summary under set_aside_outside_product with the root each hung from, so the
+    report can say what was left out and why — never a silent delete."""
+    idents = outside_product_identities(issues)
+    if not idents:
+        return []
+    lists = part_lists if isinstance(part_lists, tuple) or (
+        isinstance(part_lists, list) and part_lists and isinstance(part_lists[0], list)
+    ) else [part_lists]
+    removed: List[Dict[str, Any]] = []
+    for one in lists:
+        if not isinstance(one, list):
+            continue
+        kept: List[Any] = []
+        for part in one:
+            pn = clean_part_number(
+                part.get("part_number") or part.get("item_number")
+            ) if isinstance(part, dict) else ""
+            if pn and pn in idents:
+                removed.append(part)
+            else:
+                kept.append(part)
+        if len(kept) != len(one):
+            one[:] = kept
+    if removed:
+        _names = sorted({str(p.get("part_number") or "?") for p in removed})
+        print(f"   [graph] set aside {len(removed)} record(s) outside the declared product: "
+              f"{', '.join(_names)}", flush=True)
+        if isinstance(summary, dict):
+            _store = summary.setdefault("set_aside_outside_product", [])
+            _stored = {str(e.get("part_number") or "") for e in _store if isinstance(e, dict)}
+            for p in removed:
+                _pn = str(p.get("part_number") or "")
+                if _pn not in _stored:
+                    _stored.add(_pn)
+                    _store.append({
+                        "part_number": _pn,
+                        "description": str(p.get("description") or ""),
+                        "root": idents.get(clean_part_number(_pn), ""),
+                        "reason": "outside_the_product",
+                    })
+    return removed
 
 
 def quarantine_interleave_artefacts(part_lists: Any, issues: Any,
@@ -2429,7 +2648,8 @@ def compile_route_without_pricing(summary: Dict[str, Any]) -> Dict[str, Any]:
         list(_da.get("bom_rows") or []) + list(_da.get("bay_bom_rows") or []),
         job_drawing_numbers(summary),
         _assembly_page_owners(summary),
-        pack_mode=_detect_pack_mode(summary))
+        pack_mode=_detect_pack_mode(summary),
+        declared_product=declared_product_of(summary))
     payload = {
         "schema": compiled.get("schema"),
         # NOT "shadow". A costed run publishes mode "shadow", meaning "compiled beside the
@@ -2501,7 +2721,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                  + list(_da.get("bay_bom_rows") or []),
                                  job_drawing_numbers(summary),
                                  _assembly_page_owners(summary),
-                                 pack_mode=_pack_mode)
+                                 pack_mode=_pack_mode,
+                                 declared_product=declared_product_of(summary))
     # THE DROP, AFTER THE LAST READER AS WELL AS BEFORE THE FIRST. The pre-cost pass
     # quarantines the zipped-BOM-row chimera, and the dual-path reconciler then re-adds
     # its row from the raw table read — which is how a part the log twice said was
@@ -2512,6 +2733,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
         final_estimates if isinstance(final_estimates, list) else None,
     ) if isinstance(list_, list)]
     _removed = list(quarantine_interleave_artefacts(
+        _final_lists, compiled.get("issues"), summary=summary))
+    _removed += list(set_aside_outside_product(
         _final_lists, compiled.get("issues"), summary=summary))
     # AND THE WRAP FRAGMENTS, AT THE SAME BOUNDARY. The BI- minting pass runs during
     # reconciliation, so only a purge HERE can see what it invented.
@@ -2536,7 +2759,8 @@ def refresh_canonical_route_after_reconciliation(summary: Dict[str, Any]) -> Dic
                                      + list(_da.get("bay_bom_rows") or []),
                                      job_drawing_numbers(summary),
                                      _assembly_page_owners(summary),
-                                     pack_mode=_pack_mode)
+                                     pack_mode=_pack_mode,
+                                 declared_product=declared_product_of(summary))
     payload = project_priced_route(compiled, final_estimates)
     estimate_summary["canonical_route_shadow"] = payload
     summary["estimate_summary"] = estimate_summary
@@ -3037,11 +3261,12 @@ def compile_job_route(
     page_owner: Optional[Mapping[int, str]] = None,
     finish_text_by_pn: Optional[Mapping[str, str]] = None,
     pack_mode: Optional[str] = None,
+    declared_product: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compile every route source into one job-level decision graph."""
     llm_extract = llm_extract or {}
     graph = build_part_graph(parts, llm_extract, bom_rows, known_assemblies, page_owner,
-                             pack_mode=pack_mode)
+                             pack_mode=pack_mode, declared_product=declared_product)
     raw: Dict[str, Mapping[str, Any]] = graph["raw"]
     kinds = {node.part_number: node.kind for node in graph["nodes"]}
     graph_quantities = graph["quantities"]
@@ -4136,6 +4361,8 @@ def compile_job_route(
         # empty on three consecutive runs for want of these two lines.
         "top_assembly": graph.get("top_assembly") or "",
         "top_assemblies": list(graph.get("top_assemblies") or []),
+        "product_root": graph.get("product_root") or "",
+        "declared_product": graph.get("declared_product") or "",
         "nodes": [asdict(node) for node in graph["nodes"]],
         "decisions": [asdict(decision) for decision in decisions],
         "issues": issues,
@@ -4527,6 +4754,8 @@ def project_priced_route(
         # `top_assemblies` is the whole forest.
         "top_assembly": route_graph.get("top_assembly") or "",
         "top_assemblies": list(route_graph.get("top_assemblies") or []),
+        "product_root": route_graph.get("product_root") or "",
+        "declared_product": route_graph.get("declared_product") or "",
         "nodes": list(route_graph.get("nodes") or []),
         "decisions": list(route_graph.get("decisions") or []),
         "priced_route_rows": rows,

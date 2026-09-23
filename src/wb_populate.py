@@ -1876,9 +1876,12 @@ def canonicalise_part_estimates_for_workbook(
     # on a clean population both are no-ops.
     try:
         from route_compiler import (fold_bom_row_fragments,
-                                    quarantine_interleave_artefacts)
+                                    quarantine_interleave_artefacts,
+                                    set_aside_outside_product)
         _issues = (canonical_route_payload(summary) or {}).get("issues")
         quarantine_interleave_artefacts(part_estimates, _issues, summary=summary)
+        # And what is not in the declared product — the other GA's own BOM — is not costed.
+        set_aside_outside_product(part_estimates, _issues, summary=summary)
         _da_rows = ((summary.get("document_analysis") or {}))
         fold_bom_row_fragments(part_estimates,
                                list(_da_rows.get("bom_rows") or [])

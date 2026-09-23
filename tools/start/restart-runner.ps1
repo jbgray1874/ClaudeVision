@@ -166,19 +166,53 @@ if ($task) {
 #
 # The step the obvious restart misses. Named before it is ended: a pid and a start time is
 # what tells you afterwards whether you stopped the thing you meant to.
+#
+# PYTHONW.EXE TOO, AND CHECKED AFTERWARDS. On 23 September 2026 this printed "ending pid
+# 41104" and the heartbeat on 8071 kept advertising pid 41104, build b4b4afa, started 19:21
+# the day before. Two faults. It looked only for python.exe, while the task starts the
+# runner windowless as pythonw.exe - the very name step 6 below already searches for. And
+# Stop-Process ran with SilentlyContinue and was never checked, so a refusal (a process
+# owned by another user or an elevated session) read as success. A kill is now confirmed
+# by looking again, and a survivor stops the restart: starting a second runner beside it
+# is the one outcome worse than doing nothing.
+$restartAt = Get-Date
 Start-Sleep -Seconds 1
-$procs = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
-           Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+function Get-RunnerProcs {
+    @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" `
+          -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+}
+function Get-Started($p) {
+    try { return [Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate) } catch { return $null }
+}
+$procs = Get-RunnerProcs
 if ($procs.Count -eq 0) {
     Write-Host "  no runner process was left running"
 } else {
     foreach ($p in $procs) {
-        $started = "unknown"
-        try { $started = ([Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate)).ToString("HH:mm:ss") } catch { }
-        Write-Host "  ending pid $($p.ProcessId) (started $started)" -ForegroundColor Yellow
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        $st = Get-Started $p
+        $started = if ($st) { $st.ToString("dd MMM HH:mm:ss") } else { "unknown" }
+        Write-Host "  ending pid $($p.ProcessId) $($p.Name) (started $started)" -ForegroundColor Yellow
+        try {
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+        } catch {
+            Write-Host "    refused: $($_.Exception.Message)" -ForegroundColor Red
+        }
     }
-    Start-Sleep -Milliseconds 800
+    Start-Sleep -Seconds 2
+    $left = Get-RunnerProcs
+    if ($left.Count -gt 0) {
+        Write-Host ""
+        Write-Host "  STOP. These runner processes are STILL RUNNING after being ended:" -ForegroundColor Red
+        foreach ($p in $left) {
+            $st = Get-Started $p
+            Write-Host "    pid $($p.ProcessId) $($p.Name) started $(if ($st) { $st.ToString('dd MMM HH:mm:ss') } else { '?' })" -ForegroundColor Red
+        }
+        Write-Host "  Usually this means they belong to another user or an elevated session." -ForegroundColor Yellow
+        Write-Host "  Open PowerShell as Administrator and run this script again." -ForegroundColor Yellow
+        Write-Host "  Nothing has been started - a second runner beside a stale one is worse." -ForegroundColor Green
+        exit 7
+    }
 }
 
 # -- 4. THE STALE BYTECODE CASE, ONLY WHEN ASKED --------------------------------------
@@ -225,9 +259,11 @@ $waited = 0
 while ($waited -lt 45) {
     Start-Sleep -Seconds 3
     $waited += 3
-    $now = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'" `
-                 -ErrorAction SilentlyContinue |
-             Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
+    # ONLY A PROCESS BORN AFTER THE RESTART COUNTS. Counting any runner meant a survivor
+    # satisfied this check on its first look and the restart was reported as done.
+    $now = @(Get-RunnerProcs | Where-Object {
+                 $st = Get-Started $_
+                 $st -and $st -ge $restartAt })
     if ($now.Count -gt 0) { break }
     Write-Host "  waiting for the runner to start ($waited s)..." -ForegroundColor DarkGray
 }
@@ -237,6 +273,11 @@ if ($now.Count -eq 0) {
     Write-Host "  Start one by hand and read the window:" -ForegroundColor Yellow
     Write-Host "      .\tools\start\start-runner.ps1" -ForegroundColor Yellow
     exit 6
+}
+
+foreach ($p in $now) {
+    $st = Get-Started $p
+    Write-Host "  new runner: pid $($p.ProcessId) $($p.Name) started $($st.ToString('HH:mm:ss'))" -ForegroundColor Green
 }
 
 if ($git) {
@@ -256,5 +297,8 @@ if ($git) {
     }
 }
 Write-Host ""
+Write-Host "  The checkout is only what is on disk. Confirm the CONNECTED runner with" -ForegroundColor Cyan
+Write-Host "  /api/estimate/runners: online 1, process_count 1, conflict false, and a build" -ForegroundColor Cyan
+Write-Host "  equal to the commit above." -ForegroundColor Cyan
 Write-Host "  Check the next job's first lines say that same commit, with no '+local" -ForegroundColor Cyan
 Write-Host "  edits', before you read a single number." -ForegroundColor Cyan

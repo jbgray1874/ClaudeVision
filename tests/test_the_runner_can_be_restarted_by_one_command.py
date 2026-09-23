@@ -324,3 +324,31 @@ def test_the_page_says_pushing_does_not_restart(portal):
     assert "does not restart" in tools.lower()
     at = tools.lower().index("does not restart")
     assert "restart-service.ps1 -Port 8071" in tools[at:at + 900]
+
+
+# ── a kill is confirmed, not assumed (23 Sep 2026) ────────────────────────────────────
+#
+# The script printed "ending pid 41104" and the heartbeat on 8071 went on advertising pid
+# 41104, build b4b4afa, started 19:21 the day before. It searched python.exe only while the
+# task runs pythonw.exe; it never checked the kill; and step 6 counted the survivor as the
+# restarted runner.
+
+def test_the_kill_step_finds_pythonw_too(script):
+    code = _code(script)
+    kill = code[code.index("function Get-RunnerProcs"):code.index("if ($Clean)")]
+    assert "pythonw.exe" in kill, "the windowless runner the task starts is never ended"
+
+
+def test_a_survivor_stops_the_restart(script):
+    code = _code(script)
+    stop = code.index("Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop")
+    recheck = code.index("$left = Get-RunnerProcs", stop)
+    refuse = code.index("exit 7", recheck)
+    start = code.index("Start-ScheduledTask -TaskName $TaskName")
+    assert stop < recheck < refuse < start, "a runner is started beside one that would not die"
+
+
+def test_only_a_runner_born_after_the_restart_counts(script):
+    code = _code(script)
+    wait = code[code.index("while ($waited -lt 45)"):code.index("NO RUNNER IS RUNNING")]
+    assert "$restartAt" in wait, "the old runner satisfies the 'did it come back' check"

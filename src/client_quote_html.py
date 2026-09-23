@@ -1065,6 +1065,24 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
         _title = ""
     _project = str(_di.get("project") or "").strip()
 
+    # ── THE PRODUCT THE ESTIMATOR NAMED OUTRANKS THE SHEET THE MODEL READ ─────────────
+    # 11650-06 went out titled AC0706-05: the extract's title block was the extender set's
+    # sheet, whose customer code is AC0706-05. The kit is AC0706-03 / 11650-06-GA, and the
+    # run was TOLD so — the portal's Drawing Number, resolved by the graph to one root. Where
+    # the read title block names some other sheet, its number, title and revision are that
+    # sheet's, so all three give way and the product's own node supplies them below.
+    _pl = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+           or summary.get("canonical_route_shadow") or {})
+    _product = str((_pl.get("product_root") if isinstance(_pl, dict) else "") or "").strip()
+    if _product:
+        try:
+            from route_compiler import _names_the_product
+            _same_sheet = _names_the_product(_number, _product)
+        except Exception:                                            # noqa: BLE001
+            _same_sheet = _number.upper() == _product.upper()
+        if not _same_sheet:
+            _number, _title, _rev_raw = _product, "", ""
+
     # The canonical top assembly is the next best statement of what the unit IS: it is the
     # thing every other part hangs off, and it carries the draughtsman's own description.
     if not _number or not _title:

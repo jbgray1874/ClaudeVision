@@ -1620,7 +1620,8 @@ def job_identity_codes(summary: Any) -> Tuple[str, ...]:
     out: List[str] = []
     if not isinstance(summary, dict):
         return ()
-    for _text in ((summary.get("document_analysis") or {}).get("drawing_number"),
+    for _text in (summary.get("declared_product"),
+                  (summary.get("document_analysis") or {}).get("drawing_number"),
                   summary.get("drawing_number"), summary.get("job_output_stem"),
                   str(summary.get("job_folder") or "").replace("\\", "/").split("/")[-1]):
         for _c in _codes(_text):
@@ -1861,7 +1862,9 @@ def _compiled_parent_map(parts: Any, summary: Any) -> Dict[str, set]:
         import route_compiler as _rc
         _g = _rc.build_part_graph(
             [p for p in (parts or []) if isinstance(p, dict)],
-            (summary or {}).get("llm_full_extract") or {} if isinstance(summary, dict) else {})
+            (summary or {}).get("llm_full_extract") or {} if isinstance(summary, dict) else {},
+            declared_product=_rc.declared_product_of(summary if isinstance(summary, dict)
+                                                     else {}))
         return {str(k).strip().upper(): {str(v).strip().upper() for v in (vs or set())}
                 for k, vs in (_g.get("parents") or {}).items()}
     except Exception as exc:                                         # noqa: BLE001
@@ -10547,7 +10550,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # Compile the route in shadow mode. The workbook remains on its legacy path until the
     # 2085 and 12120 projections agree and the cutover is explicitly enabled.
     try:
-        from route_compiler import compile_job_route, project_priced_route
+        from route_compiler import (compile_job_route, declared_product_of,
+                                    project_priced_route)
         # The writeup's finish text rides along: it is the population that actually
         # carries "SEE ASSEMBLY DRAWING" when the estimate records do not (11350-02's
         # bar), and the coat pass must read the field the report already prints.
@@ -10566,6 +10570,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             (summary or {}).get("llm_full_extract")
             if isinstance(summary, dict) else {},
             finish_text_by_pn=_finish_by_pn,
+            declared_product=declared_product_of(
+                summary if isinstance(summary, dict) else {}),
         )
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)
