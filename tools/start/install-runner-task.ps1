@@ -39,9 +39,11 @@ param(
     # THE SAME TRAP AS start-runner.ps1 HAD. A hard-coded port bakes ONE answer into a task
     # that then runs unattended at every logon, so when the wrong service is the live one the
     # runner polls into silence for ever and the page says "no runner connected". SDI_PORT if
-    # this window knows it, else 8072, which is what start-service.ps1 serves; pass -Server to
-    # pin it to the installed Windows service on 8071 instead.
-    [string] $Server   = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8072" })),
+    # this window knows it, else 8071 - the installed Windows service, the one the portal
+    # link and the pass checks use. It said 8072 until 23 Sep 2026, and the task it installed
+    # registered every restarted runner with the hand-started service instead, so 8071 read
+    # "no runner" while a healthy one sat on 8072. start-runner.ps1 already preferred 8071.
+    [string] $Server   = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8071" })),
     [string] $TaskName = "SDI Estimating Runner",
     [switch] $Remove
 )
