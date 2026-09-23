@@ -1916,10 +1916,15 @@ def build_part_graph(
         _rolled = quantities.get(identity)
         if _total and _rolled and abs(_total - _rolled) > 1e-6 and not _rec.get(
                 "is_assembly_parent"):
-            qty_notes.setdefault(identity, (
-                f"this roll-up costs {_rolled:g} per unit; the SolidWorks model counts "
-                f"{_total:g} in the whole product. One of them double-counts or misses a "
-                f"level — confirm before quoting"))
+            # ADDED, NEVER SET-IF-EMPTY. On the 11650-06 re-run this was written with
+            # setdefault and lost: _per_parent had already left a note on the extender, so
+            # the one sentence that would have said "18 against 3" never reached the page.
+            # A check that yields to any earlier remark is not a check.
+            _check = (f"CHECK: this roll-up costs {_rolled:g} per unit; the SolidWorks model "
+                      f"counts {_total:g} in the whole product. One of them double-counts or "
+                      f"misses a level — confirm before quoting")
+            qty_notes[identity] = (f"{qty_notes[identity]} / {_check}"
+                                   if qty_notes.get(identity) else _check)
             print(f"   [graph] {identity}: rolled up to {_rolled:g} per unit, the model "
                   f"counts {_total:g} — CHECK", flush=True)
 
