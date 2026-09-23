@@ -138,7 +138,11 @@ function Test-SdiService([string] $Base) {
     }
 }
 
-if ($Server) {
+if ($Server -and $Server.Contains(",")) {
+    # A LIST IS SERVED AS A LIST. The runner asks each for work; one that is down is
+    # reported once in the runner's own output and retried, so none is required here.
+    Write-Host "  serving every service on the list: $Server" -ForegroundColor Green
+} elseif ($Server) {
     if (-not (Test-SdiService $Server)) {
         Write-Host "Nothing is answering at $Server." -ForegroundColor Red
         Write-Host "  The runner would poll it for ever and the page would say" -ForegroundColor Yellow
@@ -167,13 +171,12 @@ if ($Server) {
         Write-Host "  probing $c ..." -ForegroundColor DarkGray
         if (Test-SdiService $c) { $answering += $c }
     }
-    if ($answering.Count -ge 1) { $Server = $answering[0] }
+    # ALL OF THEM, NOT THE FIRST. Picking one is what left the other page saying "No runner
+    # connected" beside a healthy runner, on 22 and 23 September. The runner takes a list.
+    if ($answering.Count -ge 1) { $Server = ($answering -join ",") }
     if ($answering.Count -gt 1) {
         Write-Host ""
-        Write-Host "  MORE THAN ONE SERVICE IS RUNNING: $($answering -join ' and ')" -ForegroundColor Yellow
-        Write-Host "  This runner will serve $Server. A page opened on any other port will say" -ForegroundColor Yellow
-        Write-Host "  'No runner connected' while this one works normally." -ForegroundColor Yellow
-        Write-Host "  Stop the one you are not using, or pin this with -Server <url>." -ForegroundColor Yellow
+        Write-Host "  more than one service is running: this runner serves them all" -ForegroundColor Green
         Write-Host ""
     }
     if (-not $Server) {
