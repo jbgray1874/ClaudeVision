@@ -1043,6 +1043,31 @@ def _reads_as_a_code(text: Any) -> bool:
     return bool(_CODE_SHAPED.match(str(text or "").strip()))
 
 
+def _product_revision(summary: Dict[str, Any], product: str) -> str:
+    """The revision of the product's OWN drawing: its record, else its PDF's file name."""
+    try:
+        from route_compiler import _names_the_product
+    except Exception:                                                # noqa: BLE001
+        return ""
+    for rec in _part_records(summary):
+        if _names_the_product(product, rec.get("part_number")):
+            for k in ("revision", "drawing_revision"):
+                v = str(rec.get(k) or "").strip()
+                if v:
+                    return v
+    for entry in (summary.get("job_source_pdfs") or []):
+        name = str((entry.get("name") if isinstance(entry, dict) else entry) or "")
+        name = name.replace("\\", "/").rsplit("/", 1)[-1]
+        stem_ = re.sub(r"\.pdf$", "", name, flags=re.IGNORECASE)
+        first = re.split(r"[\s_]+", stem_, maxsplit=1)[0]
+        if not _names_the_product(product, first):
+            continue
+        m = re.search(r"REV(?:ISION)?[\s._()\[-]*([A-Z]{1,2})\b", stem_.upper())
+        if m:
+            return m.group(1)
+    return ""
+
+
 def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
     """(drawing number, revision, unit description) for the quotation header.
 
@@ -1082,6 +1107,13 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
             _same_sheet = _number.upper() == _product.upper()
         if not _same_sheet:
             _number, _title, _rev_raw = _product, "", ""
+        # AND THE REVISION IS THE PRODUCT'S OWN SHEET'S. The 11650-02 run printed "11650-02-GA
+        # Rev B": B is the KIT's revision, read off another title block in the same pack, while
+        # the top's own drawing is 11650-02-GA TOP_revD.PDF. The product's record says it
+        # where it was read; otherwise its own file name does, as the drawing office wrote it.
+        _own_rev = _product_revision(summary, _product)
+        if _own_rev:
+            _rev_raw = _own_rev
 
     # The canonical top assembly is the next best statement of what the unit IS: it is the
     # thing every other part hangs off, and it carries the draughtsman's own description.

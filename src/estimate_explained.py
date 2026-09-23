@@ -3336,6 +3336,17 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # absent panel reads as an unwritten one.
     _focus: List[tuple] = []                                 # (£ at stake, html)
 
+    # WHAT WAS PRICED COMES BEFORE HOW MUCH. A run given the wrong Drawing Number prices a
+    # different product in full confidence (11650-02, 23 Sep 2026: the cabinet top, with the
+    # kit set aside), so the product and what was left out lead the list, above any money.
+    try:
+        from route_compiler import product_scope_sentences as _pss
+        import html as _html_mod
+        for _k, _line in enumerate(_pss(g.get("scan_doc"))):
+            _focus.append((20_000_000.0 - _k, _html_mod.escape(_line)))
+    except Exception:                                                # noqa: BLE001
+        pass
+
     _unpriced_n = len(_unpriced)
     if _unpriced_n:
         _focus.append((10_000_000.0, (                       # no price is the top of any list

@@ -240,6 +240,20 @@ def clean_operation(value: Any) -> str:
     return OPERATION_ALIASES.get(cleaned, cleaned)
 
 
+_GENERATED_LINE_CODES = frozenset({"PACKAGING", "DELIVERY", "POWDER"})
+
+
+def _is_generated_line(identity: Any, record: Any = None) -> bool:
+    """An order-level line the engine generates — packaging, delivery, powder, a plating
+    placeholder. It belongs to the JOB, not to any drawing, so it has no place in the
+    hierarchy and scoping by the product's BOM must never remove it."""
+    if str(identity or "").strip().upper() in _GENERATED_LINE_CODES:
+        return True
+    rec = record if isinstance(record, Mapping) else {}
+    return bool(rec.get("_commercial_placeholder") or rec.get("_plating_placeholder")
+                or str(rec.get("source") or "") == "commercial_placeholder")
+
+
 def _names_the_product(declared: Any, identity: Any) -> bool:
     """Does the Drawing Number the estimator typed name this assembly?
 
@@ -1725,16 +1739,34 @@ def build_part_graph(
                     continue
                 _reach.add(_n)
                 _stack.extend((children.get(_n) or {}).keys())
+            # WHO ELSE REACHES IT decides only what the record SAYS, never whether it is
+            # charged: every line off the product's path is set aside. A line reached from
+            # another GA is that GA's; a line nothing reaches at all is a MAPPING problem —
+            # named for the estimator, never quietly charged as if it were the product's.
+            #
+            # 23 Sep 2026, the 11650-02 run: the rule set aside only what another GA reached,
+            # and a Yiree screw row (x4 at £126.04) and a minted "End Panel" (£943.42) — both
+            # off the kit's sheets and joined to nothing — were charged to the cabinet top.
+            # £1,505 of a £1,956 unit. "Every charged material, bought-in item and labour
+            # operation must have an identifiable path back to" the product.
+            _via: Dict[str, str] = {}
             for _other in [t for t in top_ids if t and t != product_root]:
                 _stack = [_other]
-                _seen: Set[str] = set()
                 while _stack:
                     _n = _stack.pop()
-                    if _n in _seen or _n in _reach:
+                    if _n in _via or _n in _reach:
                         continue
-                    _seen.add(_n)
-                    outside_product.setdefault(_n, _other)
+                    _via[_n] = _other
                     _stack.extend((children.get(_n) or {}).keys())
+            _universe = set(raw) | set(extracted) | set(children) | set(parents) | set(records)
+            for _n in sorted(_universe):
+                if not _n or _n in _reach or _is_generated_line(_n, records.get(_n)):
+                    continue
+                outside_product[_n] = _via.get(_n, "")
+            # Read BEFORE the set-aside nodes lose their edges: which of the product's parts
+            # each set-aside GA takes — the tell that the wrong drawing was named.
+            _uses_by_root = {r: sorted(c for c in (children.get(r) or {}) if c in _reach)
+                             for r in {v for v in outside_product.values() if v}}
             for _gone in outside_product:
                 children.pop(_gone, None)
                 parents.pop(_gone, None)
@@ -1745,22 +1777,46 @@ def build_part_graph(
             # product's edges — the other root's count of it was never a count of the product.
             for _cid in list(parents):
                 parents[_cid] = {p for p in parents[_cid] if p not in outside_product}
-            for _via in sorted(set(outside_product.values())):
-                _members = sorted(k for k, v in outside_product.items() if v == _via)
+            for _via_root in sorted({v for v in outside_product.values() if v}):
+                _members = sorted(k for k, v in outside_product.items() if v == _via_root)
+                # A HINT THAT THE WRONG DRAWING WAS NAMED. The set-aside GA taking parts OF
+                # the product is what a kit looks like from its components' side: 11650-06-GA
+                # takes 3 of 11650-02-SA02, so a run named 11650-02 has costed a component
+                # drawing and set aside the thing that ships.
+                _uses = _uses_by_root.get(_via_root) or []
                 _product_issues.append({
                     "code": "outside_the_product",
-                    "root": _via,
+                    "root": _via_root,
                     "product": product_root,
                     "identities": _members,
-                    "detail": (f"{_via} is in the pack but is not the product ({product_root}, "
+                    "uses_the_products_parts": _uses,
+                    "detail": (f"{_via_root} is in the pack but is not the product ({product_root}, "
                                f"the Drawing Number this run was asked to estimate). "
                                f"{len(_members)} line(s) reached only from it were set aside, "
-                               f"not costed: {', '.join(_members)}"),
+                               f"not costed: {', '.join(_members)}"
+                               + (f". NOTE: {_via_root} itself uses {', '.join(_uses)} from "
+                                  f"this product — if {_via_root} is what ships, the Drawing "
+                                  f"Number should be {_via_root}" if _uses else "")),
                 })
                 print(f"   [graph] product is {product_root} (declared {_declared!r}); "
-                      f"{_via} is detail, not a second product — set aside "
+                      f"{_via_root} is detail, not a second product — set aside "
                       f"{len(_members)} line(s) it alone reaches: {', '.join(_members)}",
                       flush=True)
+            _unlinked = sorted(k for k, v in outside_product.items() if not v)
+            if _unlinked:
+                _product_issues.append({
+                    "code": "not_linked_to_the_product",
+                    "root": "",
+                    "product": product_root,
+                    "identities": _unlinked,
+                    "detail": (f"{len(_unlinked)} line(s) are in the pack but no assembly path "
+                               f"from {product_root} reaches them, so they are NOT charged: "
+                               f"{', '.join(_unlinked)}. If one belongs to the product, its "
+                               f"link to the BOM is what is missing — add it, do not re-add "
+                               f"the line by hand."),
+                })
+                print(f"   [graph] {len(_unlinked)} line(s) not linked to {product_root}, "
+                      f"not charged: {', '.join(_unlinked)}", flush=True)
             top_ids = [product_root]
             top_id = product_root
         else:
@@ -2420,7 +2476,8 @@ def outside_product_identities(issues: Any) -> Dict[str, str]:
     """identity -> the root it hung from, for every line set aside as not in the product."""
     out: Dict[str, str] = {}
     for issue in issues or []:
-        if isinstance(issue, Mapping) and issue.get("code") == "outside_the_product":
+        if isinstance(issue, Mapping) and issue.get("code") in (
+                "outside_the_product", "not_linked_to_the_product"):
             for ident in issue.get("identities") or []:
                 out[clean_part_number(ident)] = str(issue.get("root") or "")
     out.pop("", None)
@@ -2471,8 +2528,133 @@ def set_aside_outside_product(part_lists: Any, issues: Any,
                         "part_number": _pn,
                         "description": str(p.get("description") or ""),
                         "root": idents.get(clean_part_number(_pn), ""),
-                        "reason": "outside_the_product",
+                        "reason": ("outside_the_product"
+                                   if idents.get(clean_part_number(_pn)) else
+                                   "not_linked_to_the_product"),
                     })
+    return removed
+
+
+def product_scope(summary: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """What the run was asked to price and what it left out — for the top of every page.
+
+    The 11650-02 run of 23 Sep 2026 costed the cabinet top because that was the Drawing
+    Number it was given, set the whole Coffret kit aside, and said so NOWHERE a person reads:
+    the report opened on a confident £1,956.02. A rule that silently prices a different
+    product is worse than none, so this is what the report and the covering note lead with.
+
+    Returns {} when the run declared no product."""
+    if not isinstance(summary, Mapping):
+        return {}
+    es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"),
+                                                        Mapping) else {}
+    payload = (es or {}).get("canonical_route_shadow") or summary.get("canonical_route_shadow") \
+        or {}
+    if not isinstance(payload, Mapping):
+        payload = {}
+    declared = str(payload.get("declared_product") or summary.get("declared_product") or "")
+    product = str(payload.get("product_root") or "")
+    if not declared and not product:
+        return {}
+    issues = [i for i in (payload.get("issues") or []) if isinstance(i, Mapping)]
+    other_roots = [{"root": str(i.get("root") or ""),
+                    "identities": list(i.get("identities") or []),
+                    "uses": list(i.get("uses_the_products_parts") or [])}
+                   for i in issues if i.get("code") == "outside_the_product"]
+    unlinked = sorted({str(x) for i in issues if i.get("code") == "not_linked_to_the_product"
+                       for x in (i.get("identities") or [])})
+    late = sorted({str(e.get("part_number") or "")
+                   for e in (summary.get("set_aside_outside_product") or [])
+                   if isinstance(e, Mapping) and e.get("reason") == "not_linked_to_the_product"}
+                  - set(unlinked) - {""})
+    unresolved = next((i for i in issues if i.get("code") == "declared_product_not_resolved"),
+                      None)
+    title = ""
+    for node in payload.get("nodes") or []:
+        pn = node.get("part_number") if isinstance(node, Mapping) else getattr(
+            node, "part_number", None)
+        if product and str(pn or "") == product:
+            title = str((node.get("description") if isinstance(node, Mapping)
+                         else getattr(node, "description", "")) or "")
+            break
+    hint = next((f"{r['root']} was set aside, but it uses {', '.join(r['uses'])} from "
+                 f"{product}. If {r['root']} is what ships, the Drawing Number should be "
+                 f"{r['root']}." for r in other_roots if r["uses"]), "")
+    return {"declared": declared, "product": product, "title": title,
+            "other_roots": other_roots, "unlinked": unlinked + late,
+            "unresolved": str((unresolved or {}).get("detail") or ""), "hint": hint}
+
+
+def product_scope_sentences(summary: Optional[Mapping[str, Any]]) -> List[str]:
+    """The same, as plain sentences, most important first."""
+    sc = product_scope(summary)
+    if not sc:
+        return []
+    out: List[str] = []
+    if sc["unresolved"]:
+        out.append(sc["unresolved"])
+    if sc["product"]:
+        out.append(f"Priced as {sc['product']}"
+                   + (f" ({sc['title']})" if sc["title"] else "")
+                   + f" — the Drawing Number this run was given ({sc['declared']}).")
+    if sc["hint"]:
+        out.append(sc["hint"])
+    for r in sc["other_roots"]:
+        out.append(f"Set aside, not priced: {r['root']} and the {len(r['identities']) - 1} "
+                   f"line(s) only it reaches." if len(r["identities"]) > 1 else
+                   f"Set aside, not priced: {r['root']}.")
+    if sc["unlinked"]:
+        out.append(f"Not linked to {sc['product'] or 'the product'}, so not priced: "
+                   f"{', '.join(sc['unlinked'])}. If one belongs, its BOM link is missing.")
+    return out
+
+
+def set_aside_late_lines(part_estimates: List[Dict[str, Any]], payload: Any,
+                         summary: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """At write-out, the product's scope once more — for lines created AFTER the graph.
+
+    Pricing and commercial passes can mint a line after the last compile (a recogniser's
+    BI- item, a re-added bought-in). The graph never saw it, so no issue names it and the
+    identity gate above cannot. With a declared product, a line the graph does not hold —
+    by identity or alias — and that is not an order-level generated line has no path to the
+    product, and it is set aside with that reason. No declared product: nothing changes."""
+    if not isinstance(payload, Mapping) or not str(payload.get("product_root") or "").strip():
+        return []
+    known: Set[str] = set()
+    for node in payload.get("nodes") or []:
+        pn = node.get("part_number") if isinstance(node, Mapping) else getattr(
+            node, "part_number", None)
+        ev = (node.get("evidence") if isinstance(node, Mapping)
+              else getattr(node, "evidence", None)) or {}
+        known.add(clean_part_number(pn))
+        known.update(clean_part_number(a) for a in (ev.get("raw_aliases") or []))
+    known.discard("")
+    if not known:
+        return []
+    kept: List[Dict[str, Any]] = []
+    removed: List[Dict[str, Any]] = []
+    for part in part_estimates:
+        pn = clean_part_number(part.get("part_number") or part.get("item_number")) \
+            if isinstance(part, dict) else ""
+        if (not pn or pn in known or _is_generated_line(pn, part)):
+            kept.append(part)
+        else:
+            removed.append(part)
+    if removed:
+        part_estimates[:] = kept
+        _names = sorted({str(p.get("part_number") or "?") for p in removed})
+        print(f"   [graph] set aside {len(removed)} line(s) created after the graph with no "
+              f"path to {payload.get('product_root')}: {', '.join(_names)}", flush=True)
+        if isinstance(summary, dict):
+            _store = summary.setdefault("set_aside_outside_product", [])
+            _stored = {str(e.get("part_number") or "") for e in _store if isinstance(e, dict)}
+            for p in removed:
+                _pn = str(p.get("part_number") or "")
+                if _pn not in _stored:
+                    _stored.add(_pn)
+                    _store.append({"part_number": _pn,
+                                   "description": str(p.get("description") or ""),
+                                   "root": "", "reason": "not_linked_to_the_product"})
     return removed
 
 

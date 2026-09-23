@@ -9724,6 +9724,32 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _existing_pns = {str(p.get("part_number", "")).strip().upper() for p in parts if p.get("part_number")}
                 _seen_codes = set(_existing_pns)
                 _existing_descs = {str(p.get("description", "")).strip().upper() for p in parts if p.get("description")}
+                # AN ASSEMBLY'S OWN BOM ROW IS ON THE BOM TOO. The part records hold what is
+                # MADE or BOUGHT; a sub-assembly's row ("END PANEL GF CONVERSION PANEL SET
+                # AC0706-05", 11650-06-SA01) is often not among them. So "end panel" in the
+                # kit GA's text matched nothing, and a bought-in "End Panel" was minted and
+                # priced at £943.42 — half the unit on the 11650-02 run of 23 Sep 2026. Every
+                # BOM row and every assembly the extract names is part of what "already on the
+                # BOM" means.
+                _da_rows = ((summary.get("document_analysis") or {}) if isinstance(summary, dict)
+                            else {})
+                _bom_like = list(_da_rows.get("bom_rows") or []) + list(
+                    _da_rows.get("bay_bom_rows") or [])
+                _lfe = (summary.get("llm_full_extract") or {}) if isinstance(summary, dict) else {}
+                for _asm in (_lfe.get("assemblies") or []):
+                    if isinstance(_asm, dict):
+                        _bom_like.append(_asm)
+                        _bom_like.extend(c for c in (_asm.get("children") or [])
+                                         if isinstance(c, dict))
+                for _row in _bom_like:
+                    if not isinstance(_row, dict):
+                        continue
+                    _rd = str(_row.get("description") or "").strip().upper()
+                    _rp = str(_row.get("part_number") or "").strip().upper()
+                    if _rd:
+                        _existing_descs.add(_rd)
+                    if _rp:
+                        _existing_pns.add(_rp)
 
                 # DETERMINISTIC-PRIMARY: run the deterministic prose recogniser FIRST.
                 # It matches a vocabulary of bought-in component TYPES mined from SDI's own

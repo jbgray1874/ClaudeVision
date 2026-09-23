@@ -170,3 +170,108 @@ def test_the_quote_is_titled_by_the_product_not_the_sheet_the_model_read():
     assert number == "11650-06-GA", number
     assert "AC0706-05" not in f"{number} {rev} {product}"
     assert "COFFRET" in str(product).upper(), product
+
+
+# ── 23 Sep 2026, the 11650-02 run: charged only on a path from the product ──────────────
+#
+# "Every charged material, bought-in item and labour operation must have an identifiable
+# path back to" the product. The first cut set aside only what ANOTHER GA reached; a Yiree
+# row (x4 at £126.04) and a minted "End Panel" (£943.42), joined to nothing, were charged
+# to the cabinet top — £1,505 of a £1,956 unit.
+
+def _pack_with_orphans():
+    parts, extract = _pack()
+    parts += [
+        {"part_number": "YIREE CODE-DWG491667", "description": "YIREE CODE - DWG491667",
+         "quantity": 4, "page_roles": ["bought_in"]},
+        {"part_number": "BI-ENDPANEL", "description": "End Panel", "quantity": 1,
+         "page_roles": ["bought_in"], "source": "prose_recogniser_layer2"},
+        {"part_number": "PACKAGING", "description": "Packaging", "quantity": 1,
+         "_commercial_placeholder": True},
+    ]
+    return parts, extract
+
+
+def test_a_line_nothing_links_to_the_product_is_not_charged_and_is_named():
+    parts, extract = _pack_with_orphans()
+    g = rc.build_part_graph(parts, extract, declared_product="11650-02")
+    q = g["quantities"]
+    assert "YIREE CODE-DWG491667" not in q and "BI-ENDPANEL" not in q, q
+    issue = next(i for i in g["issues"] if i.get("code") == "not_linked_to_the_product")
+    assert {"YIREE CODE-DWG491667", "BI-ENDPANEL"} <= set(issue["identities"])
+    summary: dict = {}
+    rc.set_aside_outside_product(parts, g["issues"], summary=summary)
+    assert all(p["part_number"] not in {"YIREE CODE-DWG491667", "BI-ENDPANEL"} for p in parts)
+    reasons = {e["part_number"]: e["reason"] for e in summary["set_aside_outside_product"]}
+    assert reasons["BI-ENDPANEL"] == "not_linked_to_the_product"
+
+
+def test_an_order_level_line_is_never_scoped_out():
+    parts, extract = _pack_with_orphans()
+    g = rc.build_part_graph(parts, extract, declared_product="11650-02")
+    rc.set_aside_outside_product(parts, g["issues"])
+    assert any(p["part_number"] == "PACKAGING" for p in parts)
+
+
+def test_the_wrong_drawing_number_is_pointed_out():
+    """11650-06-GA takes 3 of 11650-02-SA02: a run named 11650-02 has priced a component
+    drawing and set aside the thing that ships. The page says so first."""
+    parts, extract = _pack()
+    compiled = rc.compile_job_route(parts, extract, declared_product="11650-02")
+    lines = rc.product_scope_sentences(
+        {"estimate_summary": {"canonical_route_shadow": compiled}})
+    assert lines[0].startswith("Priced as 11650-02-GA")
+    assert any("the Drawing Number should be 11650-06-GA" in t for t in lines), lines
+
+
+def test_a_line_minted_after_the_graph_is_scoped_at_write_out():
+    payload = {"product_root": "11650-06-GA",
+               "nodes": [{"part_number": "11650-06-GA"},
+                         {"part_number": "11650-04-03A",
+                          "evidence": {"raw_aliases": ["11650-04-03A PETG"]}}]}
+    lines = [{"part_number": "11650-04-03A PETG"}, {"part_number": "BI-LATEPANEL"},
+             {"part_number": "DELIVERY"}]
+    removed = rc.set_aside_late_lines(lines, payload)
+    assert [p["part_number"] for p in removed] == ["BI-LATEPANEL"]
+    assert [p["part_number"] for p in lines] == ["11650-04-03A PETG", "DELIVERY"]
+    # No declared product: nothing changes.
+    lines2 = [{"part_number": "BI-LATEPANEL"}]
+    assert rc.set_aside_late_lines(lines2, {"nodes": payload["nodes"]}) == []
+
+
+def test_an_assemblys_own_bom_row_counts_as_already_on_the_bom():
+    """The £943.42 'End Panel' was minted because the recogniser's 'already on the BOM' list
+    held part records only, and 06-SA01 is an assembly row. BOM rows and assemblies now count."""
+    import bought_in_recogniser as bir
+    assert bir._phrase_already_in_bom("End Panel",
+                                      ["END PANEL GF CONVERSION PANEL SET AC0706-05"])
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    call = src.index("_det_items = recognise_bought_in_in_prose(")
+    widen = src.index("for _row in _bom_like:")
+    assert widen < call and "_existing_descs.add(_rd)" in src[widen:call]
+
+
+def test_the_report_leads_with_what_was_priced():
+    import job_report_html as jr
+    parts, extract = _pack()
+    compiled = rc.compile_job_route(parts, extract, declared_product="11650-02")
+    html_ = jr._render_product_scope({"estimate_summary": {"canonical_route_shadow": compiled}})
+    assert "What this estimate prices" in html_ and "11650-06-GA" in html_
+    assert jr._render_product_scope({}) == ""
+
+
+def test_the_revision_is_the_products_own_sheets():
+    """The 11650-02 run printed '11650-02-GA Rev B': B is the kit's revision from another
+    title block; the top's own drawing is 11650-02-GA TOP_revD.PDF."""
+    from client_quote_html import _drawing_identity
+    summary = {
+        "llm_full_extract": {"drawing_info": {"drawing_number": "11650-02-GA",
+                                              "title": "TOP", "revision": "B"}},
+        "job_source_pdfs": [{"name": "11650-06-GA COFFRET HOSPITAL KIT_REVB.PDF"},
+                            {"name": "11650-02-GA TOP_revD.PDF"}],
+        "estimate_summary": {"canonical_route_shadow": {
+            "product_root": "11650-02-GA", "top_assembly": "11650-02-GA",
+            "nodes": [{"part_number": "11650-02-GA", "description": "TOP"}]}},
+    }
+    number, rev, _ = _drawing_identity(summary, "11650-02")
+    assert number == "11650-02-GA" and rev.upper().endswith("D"), (number, rev)

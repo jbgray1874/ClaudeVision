@@ -671,6 +671,26 @@ _CSS = """
 # Section renderers — each returns an HTML string, driven by the view-model
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _render_product_scope(summary: Dict[str, Any]) -> str:
+    """WHAT WAS PRICED, AND WHAT WAS LEFT OUT — before any figure.
+
+    The 11650-02 run of 23 Sep 2026 priced the cabinet top, because that was the Drawing
+    Number it was given, and set the whole Coffret kit aside; this page opened on the price and
+    said neither. Empty when the run declared no product."""
+    try:
+        from route_compiler import product_scope_sentences
+        lines = product_scope_sentences(summary)
+    except Exception:                                                # noqa: BLE001
+        lines = []
+    if not lines:
+        return ""
+    return ('<div style="border-left:4px solid #1F4E79;padding:4px 0 4px 14px;margin:14px 0">'
+            '<p style="margin:4px 0"><b>What this estimate prices</b></p><ul style="margin:4px 0 '
+            '4px 18px;padding:0">'
+            + "".join(f"<li style='margin:3px 0'>{_esc(t)}</li>" for t in lines)
+            + "</ul></div>")
+
+
 def _render_header(h: Dict[str, Any], has_parity: bool,
                    summary: Optional[Dict[str, Any]] = None) -> str:
     """THE MEETING FILE GETS A LETTERHEAD.
@@ -2617,6 +2637,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     ])
     body = "\n".join([
         _render_header(h, has_parity, summary),
+        _render_product_scope(summary),
         _render_summary(summary, record, h, hl),
         _render_decisions(record),
         _render_bom_tree(summary, record),
