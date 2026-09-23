@@ -345,3 +345,41 @@ def test_the_hint_names_the_shared_sub_assembly_not_a_fastener():
                                     declared_product="11650-02")
     lines = rc.product_scope_sentences({"estimate_summary": {"canonical_route_shadow": compiled}})
     assert any("uses 11650-02-SA02 from 11650-02-GA" in t for t in lines), lines
+
+
+def test_the_m4_pem_is_never_the_m6_pem():
+    """The 15:45 hint said the kit uses FIXING632 — the M6x12 PEM — where the kit's own table
+    lists the M4x12 PEM under the stem code FIXING. Pinned with the rows as the tables read
+    them: two studs, two identities, two counts, whichever product is named."""
+    parts = [
+        {"part_number": "11650-06-GA", "quantity": 1, "is_assembly_parent": True},
+        {"part_number": "11650-02-GA", "quantity": 1, "is_assembly_parent": True},
+        {"part_number": "11650-02-SA01", "quantity": 1, "is_sub_assembly": True},
+        {"part_number": "11650-02-SA02", "quantity": 1, "is_sub_assembly": True},
+        {"part_number": "FIXING632", "description": "M6x12mm THREADED PEM STUD", "quantity": 4,
+         "page_roles": ["bought_in"]},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 2,
+         "page_roles": ["bought_in"]},
+        {"part_number": "FIXING65", "description": "M5 SELF-CLINCH NUT, BZP", "quantity": 2},
+    ]
+    rows = [
+        {"part_number": "11650-02-SA01", "quantity": 1, "bom_parent": "11650-02-GA"},
+        {"part_number": "11650-02-SA02", "quantity": 1, "bom_parent": "11650-02-GA"},
+        {"part_number": "FIXING632", "description": "M6x12mm THREADED PEM STUD", "quantity": 4,
+         "bom_parent": "11650-02-SA01"},
+        {"part_number": "FIXING65", "description": "M5 SELF-CLINCH NUT, BZP", "quantity": 2,
+         "bom_parent": "11650-02-SA01"},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 2,
+         "bom_parent": "11650-02-SA02"},
+        {"part_number": "11650-02-SA02", "quantity": 3, "bom_parent": "11650-06-GA"},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 18,
+         "bom_parent": "11650-06-GA"},
+    ]
+    for product in ("11650-02", "11650-06-GA"):
+        g = rc.build_part_graph(parts, {}, rows, ["11650-02-GA", "11650-06-GA"],
+                                declared_product=product)
+        assert "FIXING" not in (g.get("aliases") or {}), g.get("aliases")
+        assert "FIXING632" not in (g["children"].get("11650-06-GA") or set())
+    g = rc.build_part_graph(parts, {}, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-02")
+    assert g["quantities"]["FIXING632"] == 4 and g["quantities"]["FIXING"] == 2
