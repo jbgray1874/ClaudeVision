@@ -615,6 +615,8 @@ def merge_job_pdf_summaries(
         "full_path": str(job_folder.resolve()),
         "job_folder": str(job_folder.resolve()),
         "job_output_stem": job_folder.name,
+        # The product the run was asked for (--product / the portal's Drawing Number).
+        "declared_product": str(os.environ.get("SDI_PRODUCT") or "").strip(),
         "scan_mode": "folder_as_job",
         "scanned_at": datetime.now().isoformat(timespec="seconds"),
         "job_source_pdfs": [],

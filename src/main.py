@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pdf", type=str, help="Process a single drawing file (PDF or DXF).")
     parser.add_argument("--drawing", type=str, help="Alias for --pdf (PDF or DXF).")
     parser.add_argument(
+        "--product", type=str, default=None,
+        help="The drawing number of the product being estimated (the portal's Drawing "
+             "Number). It is the only root the quantity roll-up starts from; any other "
+             "general arrangement in the pack counts only where the product reaches it.")
+    parser.add_argument(
         "--dxf",
         nargs="*",
         metavar="DXF_PATH",
@@ -368,6 +373,11 @@ def main() -> None:
     # quantity; everything downstream reads what it decided.
     if getattr(args, "order_qty", None):
         os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+    # THE PRODUCT, THE SAME WAY AND FOR THE SAME REASON. The portal's Drawing Number names
+    # the one assembly that ships; route_compiler.declared_product_of reads it, and the scan
+    # stamps it on the summary so a saved summary replays the same roots.
+    if str(getattr(args, "product", None) or "").strip():
+        os.environ["SDI_PRODUCT"] = str(args.product).strip()
 
     if getattr(args, "enquiry", None):
         _print_enquiry_plan(args.enquiry, args.enquiry_qty, args.order_qty)

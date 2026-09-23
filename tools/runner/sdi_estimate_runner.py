@@ -358,7 +358,8 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
                    units: int, client: str, pdf: Optional[Path] = None,
                    quantity_breaks: Optional[List[int]] = None,
                    manual_workbook: Optional[Path] = None,
-                   llm_only: bool = False, fresh_read: bool = False) -> List[str]:
+                   llm_only: bool = False, fresh_read: bool = False,
+                   product: str = "") -> List[str]:
     """Exactly what a person would type. --deliverables is not optional: the page
     promises a complete set every time, so it is not a flag the caller can forget.
 
@@ -378,7 +379,11 @@ def engine_command(engine_root: Path, engine_python: Path, job: Path,
         # dead run. The engine is the same; only when it speaks changes.
         "-u",
         str(Path(engine_root) / "src" / "main.py"),
-    ] + (["--pdf", str(pdf)] if pdf else ["--job", str(job)]) + [
+    ] + (["--pdf", str(pdf)] if pdf else ["--job", str(job)]) + (
+        # THE PRODUCT. The portal's Drawing Number is the one assembly that ships; every
+        # other GA in the folder counts only where the product reaches it.
+        ["--product", str(product).strip()] if str(product or "").strip() else []
+    ) + [
         "--order-qty", str(units),
     ] + (
         # THE OTHER QUANTITIES THE ESTIMATOR ASKED FOR. The estimate runs at the FIRST one
@@ -998,7 +1003,8 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
                          job["client"], pdf=pdf, manual_workbook=manual_wb,
                          quantity_breaks=[int(q) for q in (job.get("quantity_breaks") or [])],
                          llm_only=bool(job.get("llm_only")),
-                         fresh_read=bool(job.get("fresh_read")))
+                         fresh_read=bool(job.get("fresh_read")),
+                         product=str(job.get("drawing_number") or ""))
     say("$ " + " ".join(f'"{c}"' if " " in c else c for c in cmd))
     flush(force=True)
 
