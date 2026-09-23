@@ -352,3 +352,24 @@ def test_only_a_runner_born_after_the_restart_counts(script):
     code = _code(script)
     wait = code[code.index("while ($waited -lt 45)"):code.index("NO RUNNER IS RUNNING")]
     assert "$restartAt" in wait, "the old runner satisfies the 'did it come back' check"
+
+
+def test_a_cim_creation_date_is_already_a_datetime(script):
+    """Get-CimInstance returns CreationDate as a DateTime; the WMI-string converter threw on
+    it, so the 'born after the restart' check never passed and a healthy runner was reported
+    missing after 45 seconds."""
+    code = _code(script)
+    fn = code[code.index("function Get-Started"):code.index("$procs = Get-RunnerProcs")]
+    assert "-is [DateTime]" in fn
+
+
+def test_a_refused_task_install_is_not_reported_as_installed():
+    """Register-ScheduledTask 'Access is denied' is non-terminating: the installer printed
+    'Installed ... server 8071' and started the old task, still pointed at 8072."""
+    text = (_ROOT / "tools" / "start" / "install-runner-task.ps1").read_text(encoding="utf-8-sig")
+    code = _code(text)
+    reg = [m.start() for m in re.finditer(r"Register-ScheduledTask -TaskName", code)]
+    assert reg and all("-ErrorAction Stop" in code[r:r + 250] for r in reg)
+    refuse = code.index("exit 8")
+    assert refuse < code.index('Write-Host "Installed scheduled task')
+    assert refuse < code.index("Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop")

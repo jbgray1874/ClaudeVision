@@ -174,15 +174,41 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 # validation. If it is, install WITHOUT it rather than failing the whole installation and
 # leaving the machine with no task at all - a runner that starts at logon is far better than
 # none, and the message says which of the two got installed.
+# -ErrorAction Stop ON BOTH, AND THEN LOOK. On 23 Sep 2026 both calls failed "Access is
+# denied" - a CimException is NON-terminating, so nothing was caught - and the script went
+# on to print "Installed ... server http://localhost:8071" and start the OLD task, still
+# pointed at 8072. A refusal is now fatal, and success is read back from the task itself.
+$registerError = $null
 try {
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
-        -Settings $settings -Principal $principal -Force | Out-Null
+        -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
 } catch {
-    Write-Host "  note: Windows refused the 5-minute sweep ($($_.Exception.Message))." -ForegroundColor Yellow
-    Write-Host "        installing with the logon trigger only."
-    $triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
-        -Settings $settings -Principal $principal -Force | Out-Null
+    if ("$($_.Exception.Message)" -match "denied") {
+        $registerError = $_.Exception.Message
+    } else {
+        Write-Host "  note: Windows refused the 5-minute sweep ($($_.Exception.Message))." -ForegroundColor Yellow
+        Write-Host "        installing with the logon trigger only."
+        $triggers = @(New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+        try {
+            Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
+                -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+        } catch {
+            $registerError = $_.Exception.Message
+        }
+    }
+}
+$installed = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+$argsNow   = if ($installed) { "$($installed.Actions[0].Arguments)" } else { "" }
+if ($registerError -or -not ($argsNow -like "*$Server*")) {
+    Write-Host ""
+    Write-Host "  NOT INSTALLED. Windows refused to register the task: $registerError" -ForegroundColor Red
+    if ($argsNow) {
+        Write-Host "  The task that exists is unchanged and still runs:" -ForegroundColor Red
+        Write-Host "      $argsNow" -ForegroundColor Red
+    }
+    Write-Host "  Open PowerShell as Administrator (right-click, Run as administrator) and run" -ForegroundColor Yellow
+    Write-Host "  this again. Nothing has been started." -ForegroundColor Yellow
+    exit 8
 }
 
 Write-Host "Installed scheduled task '$TaskName'." -ForegroundColor Green

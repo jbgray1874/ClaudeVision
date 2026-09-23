@@ -182,7 +182,11 @@ function Get-RunnerProcs {
           -ErrorAction SilentlyContinue |
       Where-Object { $_.CommandLine -like '*sdi_estimate_runner*' })
 }
+# GET-CIMINSTANCE ALREADY HANDS BACK A DATETIME. The WMI-string converter threw on it, the
+# catch returned nothing, and the "born after the restart" test below could therefore never
+# pass: on 23 Sep 2026 it waited 45 seconds and declared NO RUNNER beside a healthy one.
 function Get-Started($p) {
+    if ($p.CreationDate -is [DateTime]) { return $p.CreationDate }
     try { return [Management.ManagementDateTimeConverter]::ToDateTime($p.CreationDate) } catch { return $null }
 }
 $procs = Get-RunnerProcs
