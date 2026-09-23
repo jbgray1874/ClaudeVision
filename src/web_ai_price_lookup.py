@@ -146,7 +146,8 @@ Respond with ONLY a JSON object in this exact format (no other text):
   "confidence": <0.3 to 0.65 — your confidence in this estimate>,
   "key_assumptions": ["<assumption 1>", "<assumption 2>"],
   "verify_against": ["<where to verify: e.g. 'Metals4U', 'RS Components', 'local powder coat supplier'>"],
-  "review_note": "<one sentence plain English note for the estimator about what to check>"
+  "review_note": "<one sentence plain English note for the estimator about what to check>",
+  "item_priced": "<what you priced, in plain words, and what ONE unit of your price is — e.g. 'M4 x 12 binding screw, one screw' or 'set of 4 screws'>"
 }}
 
 Be conservative — if you are unsure, use the low estimate. Do not invent specificity you don't have."""
@@ -165,8 +166,17 @@ def _build_spec_block(
     weight_kg: Optional[float] = None,
     operations: Optional[List[str]] = None,
     wanted_unit: Optional[str] = None,
+    ask: Optional[str] = None,
+    supply: Optional[str] = None,
 ) -> str:
     lines = []
+    # A BOUGHT-IN ITEM IS BOUGHT, NOT MADE. This prompt is written for fabricated parts
+    # ("a part from an engineering drawing", "trade/subcontract price"), and a supplier code
+    # with no noun reads as something to fabricate: the Yiree binding screw came back at
+    # £126.04. Said first, so the rest is read in that light.
+    if str(supply or "").strip().lower() == "bought_in":
+        lines.append("Supply: a PURCHASED catalogue component, bought in ready-made — price "
+                     "it as the item a distributor sells, not as a part to be fabricated.")
     if part_code:
         lines.append(f"Part code: {part_code}")
     if description:
@@ -201,6 +211,11 @@ def _build_spec_block(
         lines.append(f"Sold by: the {_wu}. Give the price PER {_wu.upper()} and set "
                      f"\"unit\" accordingly. If the listing is for a reel, roll, pack or "
                      f"coil, divide it down to one {_wu} and say so in price_basis.")
+    # THE BRIEF'S OWN REQUEST, WHICH NEVER REACHED THE MODEL. research_brief writes it — per
+    # unit, the pack it is sold in, a real current listing — and this block read only its own
+    # fixed fields, so every bought-in line was asked the generic question instead.
+    if ask:
+        lines.append(f"What is needed: {ask}")
     lines.append("Customer: UK retail/commercial display manufacturer")
     return "\n".join(lines)
 
@@ -396,7 +411,7 @@ def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") 
         k: spec.get(k)
         for k in ["material", "description", "thickness_mm", "part_code", "finish",
                   "colour", "quantity", "length_mm", "width_mm", "weight_kg", "operations",
-                  "wanted_unit"]
+                  "wanted_unit", "ask", "supply"]
     })
     prompt = _LLM_PROMPT_TEMPLATE.format(spec_block=spec_block)
 
@@ -439,6 +454,7 @@ def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") 
         "key_assumptions": list(parsed.get("key_assumptions") or []),
         "verify_against": list(parsed.get("verify_against") or []),
         "review_note": str(parsed.get("review_note") or "Verify against supplier quote before using for customer pricing."),
+        "item_priced": str(parsed.get("item_priced") or ""),
         "review_flag": True,
         "review_reason": (
             "This price was estimated by AI reasoning from part specification — "
@@ -553,7 +569,7 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
     spec_summary = _build_spec_block(**{
         k: spec.get(k)
         for k in ["material", "description", "thickness_mm", "part_code", "finish", "quantity",
-                  "wanted_unit"]
+                  "wanted_unit", "ask", "supply"]
     })
 
     user_content = (

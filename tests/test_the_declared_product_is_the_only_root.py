@@ -221,7 +221,10 @@ def test_the_wrong_drawing_number_is_pointed_out():
     lines = rc.product_scope_sentences(
         {"estimate_summary": {"canonical_route_shadow": compiled}})
     assert lines[0].startswith("Priced as 11650-02-GA")
-    assert any("the Drawing Number should be 11650-06-GA" in t for t in lines), lines
+    assert any("11650-06-GA is also in the pack and shares" in t
+               and "Check the Drawing Number names the one that ships" in t for t in lines), lines
+    # Stated as a fact to weigh, never as an instruction to switch.
+    assert not any("should be" in t for t in lines), lines
 
 
 def test_a_line_minted_after_the_graph_is_scoped_at_write_out():
@@ -344,7 +347,7 @@ def test_the_hint_names_the_shared_sub_assembly_not_a_fastener():
     compiled = rc.compile_job_route(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
                                     declared_product="11650-02")
     lines = rc.product_scope_sentences({"estimate_summary": {"canonical_route_shadow": compiled}})
-    assert any("uses 11650-02-SA02 from 11650-02-GA" in t for t in lines), lines
+    assert any("shares 11650-02-SA02 with 11650-02-GA" in t for t in lines), lines
 
 
 def test_the_m4_pem_is_never_the_m6_pem():
@@ -383,3 +386,24 @@ def test_the_m4_pem_is_never_the_m6_pem():
     g = rc.build_part_graph(parts, {}, rows, ["11650-02-GA", "11650-06-GA"],
                             declared_product="11650-02")
     assert g["quantities"]["FIXING632"] == 4 and g["quantities"]["FIXING"] == 2
+
+
+def test_the_title_is_the_products_own_file_label_not_a_sub_assemblys_title_block():
+    """16:49: the header read 'END PANEL GF CONVERSION PANEL SET' (06-SA01's title block) and
+    the scope line read an engine note. The product's file names it COFFRET HOSPITAL KIT."""
+    from client_quote_html import _drawing_identity
+    summary = {
+        "llm_full_extract": {"drawing_info": {"drawing_number": "11650-06-GA", "revision": "B",
+                                              "title": "END PANEL GF CONVERSION PANEL SET"}},
+        "job_source_pdfs": [{"name": "11650-06-GA COFFRET HOSPITAL KIT_REVB.PDF"},
+                            {"name": "11650-02-GA TOP_revD.PDF"}],
+        "estimate_summary": {"canonical_route_shadow": {
+            "product_root": "11650-06-GA", "declared_product": "11650-06-GA",
+            "top_assembly": "11650-06-GA", "issues": [],
+            "nodes": [{"part_number": "11650-06-GA",
+                       "description": "assembly (from the SolidWorks model's own tree)"}]}},
+    }
+    number, rev, title = _drawing_identity(summary, "11650-06")
+    assert number == "11650-06-GA" and "COFFRET HOSPITAL KIT" in str(title).upper(), title
+    lines = rc.product_scope_sentences(summary)
+    assert lines[0].startswith("Priced as 11650-06-GA (COFFRET HOSPITAL KIT)"), lines

@@ -1107,6 +1107,16 @@ def _drawing_identity(summary: Dict[str, Any], stem: str) -> tuple:
             _same_sheet = _number.upper() == _product.upper()
         if not _same_sheet:
             _number, _title, _rev_raw = _product, "", ""
+        # AND ITS TITLE IS ITS OWN FILE'S. See product_identity.title_from_files.
+        try:
+            from product_identity import title_from_files
+            _file_title = title_from_files(_product, [
+                (e.get("name") if isinstance(e, dict) else e)
+                for e in (summary.get("job_source_pdfs") or [])])
+        except Exception:                                            # noqa: BLE001
+            _file_title = ""
+        if _file_title:
+            _title = _file_title
         # AND THE REVISION IS THE PRODUCT'S OWN SHEET'S. The 11650-02 run printed "11650-02-GA
         # Rev B": B is the KIT's revision, read off another title block in the same pack, while
         # the top's own drawing is 11650-02-GA TOP_revD.PDF. The product's record says it

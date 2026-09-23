@@ -740,7 +740,8 @@ def test_a_castor_carries_enough_specification_to_be_researched():
 
     # And the rung asks with it, without the code we minted ourselves.
     src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
-    assert '"description": _sighted_desc or part.get("description")' in src
+    # The sighted description still wins outright; a drawing's line adds its research context.
+    assert '_sighted_desc or " — ".join(' in src
     assert '"code": "" if _sighted_desc else part.get("part_number")' in src
 
 

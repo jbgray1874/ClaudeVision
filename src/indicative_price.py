@@ -377,4 +377,6 @@ def resolve_indicative(line: Any, *, order_qty: int = 1, as_of: str = "",
         # how a castor with a researched price reached the sheet at zero.
         "price_is_reproducible": bool(found.get("price_is_reproducible")),
         "price_first_taken": _clean(found.get("price_first_taken")),
+        # What the researcher says it priced — shown on the line so a wrong match is seen.
+        "item_priced": _clean(found.get("item_priced")),
     }
