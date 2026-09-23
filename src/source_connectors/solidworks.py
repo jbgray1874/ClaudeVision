@@ -1922,9 +1922,45 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             _edges = per_parent_edges.get(_pn_key(pn)) or []
             _parents = {e[0] for e in _edges}
             if len(_parents) == 1:
-                _q = int(round(sum(q for _p, q in _edges)))
-                _basis = (f"per {next(iter(_parents))}, from the SolidWorks assembly's own "
-                          f"tree ({_total} in the whole product, all levels)")
+                # ── PER PARENT = CHILD'S PRODUCT TOTAL ÷ PARENT'S PRODUCT TOTAL ──────────
+                #
+                # The first cut SUMMED the edge list, and the 11650-06 re-run showed why that
+                # is wrong: the model lists the same parent->child edge more than once (per
+                # instance, per configuration, per SLDASM that reports it), so one extender
+                # per set was summed to SIX per set and costed at 18 — worse than the 9 this
+                # was written to fix. The edge list is a record of what was SEEN, not a count.
+                #
+                # Both full-depth figures ARE counts, and the model states them reliably: the
+                # extender is 3 in the product and its set is 3 in the product, so one set
+                # takes 3 / 3 = 1. That division is the per-parent figure, and it only stands
+                # where it comes out whole. Where the parent has no product total of its own
+                # (the top assembly is not a line in its own BOM), its multiplicity is 1 and
+                # the child's total is the per-parent count. The edges are consulted only when
+                # neither exists, and then deduplicated rather than added.
+                _parent = next(iter(_parents))
+                _prow = bom_by_pn.get(_pn_key(_parent))
+                _ptotal = (float(_prow.quantity) if _prow is not None and _prow.quantity
+                           else (1.0 if _pn_key(_parent) in asm_keys else None))
+                if _ptotal and _ptotal > 0 and abs(_total / _ptotal
+                                                   - round(_total / _ptotal)) < 1e-9:
+                    _q = int(round(_total / _ptotal))
+                    _basis = (f"per {_parent}: the SolidWorks model counts {_total} in the "
+                              f"whole product and {_ptotal:g} of {_parent}, so one takes "
+                              f"{_total}/{_ptotal:g} = {_q}")
+                elif _ptotal and _ptotal > 0:
+                    # It does not divide. The model is saying something this cannot turn into
+                    # a per-parent count, so it writes nothing and says so.
+                    flags.append(
+                        f"SolidWorks: {_total} in the whole product does not divide by the "
+                        f"{_ptotal:g} of {_parent} — no per-{_parent} count can be derived, "
+                        f"so the BOM edge decides")
+                    _q = 0
+                    _basis = ""
+                else:
+                    _distinct = sorted({q for _p, q in _edges})
+                    _q = int(round(_distinct[0])) if len(_distinct) == 1 else 0
+                    _basis = (f"per {_parent}, from the SolidWorks assembly's own tree "
+                              f"({_total} in the whole product, all levels)")
             elif len(_parents) > 1:
                 # One part under several parents: no single per-parent count exists, and the
                 # full-depth figure would be multiplied again under each of them. The

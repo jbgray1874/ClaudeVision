@@ -166,3 +166,55 @@ def test_two_paths_are_two_lines_that_add_up():
     assert len(node.qty_trail) == 2, node.qty_trail
     totals = sorted(float(t.rsplit("= ", 1)[1]) for t in node.qty_trail)
     assert sum(totals) == node.qty_per_unit, (totals, node.qty_per_unit)
+
+
+def test_a_repeated_edge_is_not_a_bigger_count():
+    """THE 11650-06 RE-RUN, REPRODUCED. The model listed the set->extender edge more than
+    once, the first cut SUMMED them, and one extender per set was costed as six — 18 in the
+    kit, worse than the 9 it was written to fix. The per-parent figure is now the child's
+    product total over the parent's: 3 extenders / 3 sets = 1."""
+    parts = _kit_parts()
+    # The drawing gets it wrong, so the model has to CORRECT it — which is the only way to
+    # prove the figure came from the ratio rather than from the drawing standing unopposed.
+    next(p for p in parts if p["part_number"] == "11650-04-03A")["quantity"] = 2
+    model = _model()
+    # The same edge, reported twice — per instance, per configuration or per SLDASM.
+    model.hierarchy["11650-06-SA01"] = [("11650-04-03A", 1.0), ("11650-04-03A", 1.0),
+                                        ("11650-04-03A", 1.0), ("11650-04-03A", 3.0)]
+    apply_native_to_pre_estimate(parts, model)
+    ext = next(p for p in parts if p["part_number"] == "11650-04-03A")
+    assert ext["quantity"] == 1, f"repeated edges were added up: {ext['quantity']}"
+    assert any("3/3 = 1" in f for f in ext["review_flags"]), ext["review_flags"]
+    assert _costed_qty(parts, "11650-04-03A") == 3
+
+
+def test_the_check_is_never_swallowed_by_an_earlier_note():
+    """The cross-check exists to say "rolled up to 18, the model counts 3". On the re-run it
+    was written only if the part had no note yet — and it had one — so the line that would
+    have caught the regression never reached the page.
+
+    A slider under two sets, each taking a different count by the drawing's BOM edges, with
+    its own record reading neither: the multi-parent note is written first, by _per_parent.
+    The model's product total then disagrees with the roll-up, and BOTH must be on the line."""
+    parts = [
+        {"part_number": "TOP", "quantity": 1, "is_assembly_parent": True,
+         "page_roles": ["assembly"]},
+        {"part_number": "SET-A", "quantity": 1, "is_assembly_parent": True,
+         "page_roles": ["assembly"]},
+        {"part_number": "SET-B", "quantity": 1, "is_assembly_parent": True,
+         "page_roles": ["assembly"]},
+        {"part_number": "SLIDER", "quantity": 1, "quantity_total_per_unit": 99,
+         "page_roles": ["detail"]},
+    ]
+    extract = {"assemblies": [
+        {"part_number": "TOP", "children": [{"part_number": "SET-A", "qty": 1},
+                                            {"part_number": "SET-B", "qty": 1}]},
+        {"part_number": "SET-A", "children": [{"part_number": "SLIDER", "qty": 2}]},
+        {"part_number": "SET-B", "children": [{"part_number": "SLIDER", "qty": 3}]},
+    ]}
+    graph = rc.build_part_graph(parts, llm_extract=extract)
+    note = str((graph.get("qty_notes") or {}).get("SLIDER") or "")
+    node = next(n for n in graph["nodes"] if n.part_number == "SLIDER")
+    note = note or str(getattr(node, "qty_note", "") or "")
+    assert "more than one parent" in note, f"the earlier note this test needs is absent: {note!r}"
+    assert "CHECK:" in note and "counts 99" in note, f"the check was swallowed: {note!r}"
