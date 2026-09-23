@@ -89,3 +89,29 @@ def test_the_brief_carries_the_context_and_the_line_says_what_was_priced():
     assert 'f"AI researched price £{_ind_price:,.2f}: priced as "' in src
     ip = (ROOT / "src" / "indicative_price.py").read_text(encoding="utf-8")
     assert '"item_priced": _clean(found.get("item_priced"))' in ip
+
+
+def test_the_earlier_fallback_asks_the_same_question(monkeypatch):
+    """The 19:30 run: D-204 was in the build and Yiree was still £126.04 with no 'priced as',
+    because PricingService._get_web_ai_fallback answers BEFORE the researched rung, with its
+    own spec — a bare code — and its stored answer to that bare code came straight back."""
+    import pricing_service as ps
+    import generated_price_cache as gpc
+    import web_ai_price_lookup as wl
+    seen = {}
+
+    def fake(spec, **kw):
+        seen.update(spec)
+        return {"found": True, "price_gbp": 0.85, "source_type": "llm_market_estimate",
+                "llm_provider": "xai", "price_is_reproducible": True,
+                "item_priced": "binding screw, one screw"}
+    monkeypatch.setattr(wl, "lookup_web_ai_price", fake)
+    monkeypatch.setattr(gpc, "cached_estimate", lambda spec, prov, model, compute, **k: compute())
+    svc = object.__new__(ps.PricingService)
+    part = dict(YIREE, research_context="also listed as 'Yiree Binding Screw', part of "
+                                        "'BINDING SCREW SPARE SET OF 4 AC0706-04'")
+    out = svc._get_web_ai_fallback(part)
+    assert "Yiree Binding Screw" in seen["description"], seen
+    assert seen.get("supply") == "bought_in"
+    assert "name a real current listing" in (seen.get("ask") or ""), seen
+    assert out["item_priced"] == "binding screw, one screw"
