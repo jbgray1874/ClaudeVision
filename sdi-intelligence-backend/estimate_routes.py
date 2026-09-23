@@ -116,6 +116,12 @@ LEASE_SECONDS = int(os.getenv("SDI_RUNNER_LEASE_SECONDS", "900"))
 # A runner that has not polled within this is treated as gone, and the page says
 # so rather than quietly queueing work nobody will pick up.
 RUNNER_ONLINE_SECONDS = int(os.getenv("SDI_RUNNER_ONLINE_SECONDS", "90"))
+# TWO RUNNERS ARE TWO THAT ARE BOTH STILL TALKING. A live runner checks in every 5 s, so two
+# real ones both appear inside 20 s. Judged over the 90 s online window instead, every restart
+# showed a conflict for a minute and a half — the process just stopped still counted — and on
+# 23 Sep 2026 the page told James "Two runners are running on this machine... Stop one" about
+# a runner that had been ended on purpose seconds before.
+RUNNER_CONFLICT_SECONDS = int(os.getenv("SDI_RUNNER_CONFLICT_SECONDS", "20"))
 
 
 # ── access gate, identical to app.py's ───────────────────────────────────────
@@ -307,14 +313,18 @@ class Runner:
     def online(self) -> bool:
         return (time.time() - self.last_seen) <= RUNNER_ONLINE_SECONDS
 
-    def live_processes(self) -> List[str]:
-        """Those that have answered inside the online window, newest first."""
+    def live_processes(self, within: Optional[float] = None) -> List[str]:
+        """Those that have answered inside the window (the online one by default), newest
+        first."""
         now = time.time()
+        window = RUNNER_ONLINE_SECONDS if within is None else within
         return [p for p, seen in sorted(self.processes.items(), key=lambda kv: -kv[1])
-                if (now - seen) <= RUNNER_ONLINE_SECONDS]
+                if (now - seen) <= window]
 
     def as_json(self) -> Dict[str, Any]:
-        live = self.live_processes()
+        # The processes STILL TALKING, where any are; a runner deep in a job does not claim,
+        # so it falls back to the online window rather than reading as nobody.
+        live = self.live_processes(RUNNER_CONFLICT_SECONDS) or self.live_processes()
         return {"runner_id": self.runner_id, "hostname": self.hostname,
                 "online": self.online, "run_id": self.run_id,
                 "seconds_since_seen": round(time.time() - self.last_seen, 1),
@@ -326,7 +336,7 @@ class Runner:
                 # three days. None says so; a number is only ever reported by runners
                 # that actually named themselves.
                 "process_count": len(live) or None,
-                "conflict": len(live) > 1,
+                "conflict": len(self.live_processes(RUNNER_CONFLICT_SECONDS)) > 1,
                 "busy_elsewhere": bool(self.busy_elsewhere and self.online)}
 
 
