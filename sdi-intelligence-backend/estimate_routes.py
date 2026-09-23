@@ -298,6 +298,10 @@ class Runner:
     # fails OPEN by design, so when it does not hold, nothing else was watching.
     processes: Dict[str, float] = field(default_factory=dict)
     build: str = ""
+    # BUSY FOR ANOTHER SERVICE. One runner serves every service on its list (the installed
+    # one on 8071 and a hand-started one on 8072); while it costs a job for one, the others
+    # hear from it through /runner/heartbeat and say so, instead of "No runner connected".
+    busy_elsewhere: bool = False
 
     @property
     def online(self) -> bool:
@@ -322,7 +326,8 @@ class Runner:
                 # three days. None says so; a number is only ever reported by runners
                 # that actually named themselves.
                 "process_count": len(live) or None,
-                "conflict": len(live) > 1}
+                "conflict": len(live) > 1,
+                "busy_elsewhere": bool(self.busy_elsewhere and self.online)}
 
 
 _RUNS: Dict[str, Run] = {}
@@ -575,6 +580,27 @@ def runners(x_sdi_key: Optional[str] = Header(default=None)):
             "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
 
 
+@router.post("/runner/heartbeat")
+def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """A runner saying it is alive while it works a job for ANOTHER service.
+
+    Never hands out work — that is the whole difference from /runner/claim, and the reason
+    it exists: a claim sent mid-job would give the runner a second job while SOLIDWORKS and
+    Excel are busy with the first."""
+    _check_key(x_sdi_key)
+    now = time.time()
+    with _LOCK:
+        runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
+        runner.hostname = req.hostname or runner.hostname
+        runner.last_seen = now
+        if req.process:
+            runner.processes[req.process] = now
+        if req.build:
+            runner.build = req.build
+        runner.busy_elsewhere = True
+    return {"ok": True}
+
+
 @router.post("/runner/claim")
 def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """A runner asking for work. Returns a run to execute, or nothing."""
@@ -589,6 +615,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
             runner.processes[req.process] = now
         if req.build:
             runner.build = req.build
+        runner.busy_elsewhere = False
 
         if _busy_runner() is not None:
             return {"run": None, "reason": "another run is in progress"}

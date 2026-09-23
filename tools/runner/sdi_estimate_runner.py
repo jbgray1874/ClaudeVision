@@ -671,7 +671,8 @@ _GIVE_UP_AFTER = 5
 def main() -> int:
     ap = argparse.ArgumentParser(description="SDI Estimating Intelligence runner")
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://10.0.0.5:8071"),
-                    help="Base URL of the SDI Intelligence service.")
+                    help="Base URL of the SDI Intelligence service. Several, comma-separated, "
+                         "and this one runner serves them all.")
     ap.add_argument("--engine-root", default=os.getenv("SDI_ENGINE_ROOT", r"C:\ClaudeVision"))
     ap.add_argument("--engine-python", default=os.getenv("SDI_ENGINE_PYTHON", ""))
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
@@ -723,11 +724,27 @@ def main() -> int:
         # NEVER FATAL. A runner that will not start because it cannot name its own build is
         # worse than one that cannot name it — say so and carry on.
         _build = f"unknown ({exc.__class__.__name__})"
-    base = a.server.rstrip("/") + "/api/estimate"
+    # ONE RUNNER, EVERY SERVICE ON THE LIST.
+    #
+    # James Gray, 23 Sep 2026: "this runner going down all the time is completely
+    # unacceptable." It had not gone down. On 22 and 23 September it was up, healthy and on
+    # the right build, and REGISTERED WITH THE OTHER SERVICE: the installed one on 8071 and a
+    # hand-started one on 8072 each keep their own queue and their own list of runners, and a
+    # runner polled exactly one of them. Whichever page somebody had open said "No runner
+    # connected". Five fixes to which port it should pick each moved the failure rather than
+    # removing it, because the fault was the choice itself.
+    #
+    # So there is no choice. --server takes a list, the runner asks every service on it for
+    # work in turn, and each one sees it as connected. One job still runs at a time — the
+    # single-runner lock and the one-SOLIDWORKS rule are about EXECUTION, and nothing here
+    # changes that — and while it runs, the other services get a heartbeat that cannot hand
+    # it a second job.
+    servers = [s.strip().rstrip("/") for s in str(a.server or "").split(",") if s.strip()]
     headers = {"X-SDI-Key": a.api_key} if a.api_key else {}
 
     print(f"SDI estimating runner")
-    print(f"  server   {a.server}")
+    for _s in servers:
+        print(f"  server   {_s}")
     print(f"  engine   {engine_root}")
     print(f"  python   {engine_python}{'' if engine_python.is_file() else '   (NOT FOUND — will fall back to python on PATH)'}")
     print(f"  runner   {runner_id}  ({platform.node()})")
@@ -736,7 +753,7 @@ def main() -> int:
     print(f"  polling every {a.poll_seconds:g}s — Ctrl+C to stop")
     print(f"  log      {log_path}\n")
 
-    complained = None
+    complained: Dict[str, Optional[str]] = {}
     consecutive = 0
     while True:
       # AN UNEXPECTED ERROR MUST NOT END THE DAY'S RUNNER SILENTLY.
@@ -751,58 +768,25 @@ def main() -> int:
       # Giving up is deliberate — a process looping on the same exception for ever looks
       # alive to the service and does no work, which is worse than being restarted.
       try:
-        try:
-            r = requests.post(f"{base}/runner/claim", json={
-                "runner_id": runner_id, "hostname": platform.node(),
-                "process": _process, "build": _build},
-                headers=headers, timeout=20)
-        except Exception as exc:                       # noqa: BLE001 — keep polling
-            # SAY IT ONCE. A runner that cannot reach the server prints a line a
-            # second, and the one useful message scrolls away.
-            complained = _say_once(complained, "unreachable",
-                f"cannot reach {a.server} — {exc}",
-                "   still trying; this will not be repeated until it changes.")
-            time.sleep(a.poll_seconds)
-            continue
-
-        # A REPLY IS NOT A FAILURE TO REPLY, and the difference is somebody's
-        # morning. The service answers on this port; if it answers 404 it is an
-        # OLDER BUILD that has no runner endpoints, and the fix is Ctrl+C on the
-        # service, not an hour spent on firewalls and ports.
-        if r.status_code == 404:
-            complained = _say_once(complained, "old-service",
-                f"the service at {a.server} answered 404 for the runner queue.",
-                "   It is running an older build with no runner endpoints.",
-                "   Restart app.py there — the page is served from disk on every",
-                "   request, but the routes are imported once at start-up.")
-            time.sleep(a.poll_seconds)
-            continue
-        if r.status_code == 401:
-            complained = _say_once(complained, "unauthorised",
-                f"the service at {a.server} rejected this runner (401).",
-                "   SDI_API_KEY must match on both sides. Pass --api-key, or set",
-                "   SDI_API_KEY in this runner's environment.")
-            time.sleep(a.poll_seconds)
-            continue
-        try:
-            r.raise_for_status()
-            job = (r.json() or {}).get("run")
-        except Exception as exc:                       # noqa: BLE001
-            complained = _say_once(complained, "bad-reply",
-                f"the service answered {r.status_code} — {exc}")
-            time.sleep(a.poll_seconds)
-            continue
-        if complained:
-            print(f"[{time.strftime('%H:%M:%S')}] connected to {a.server}.")
-        complained = None
-
-        if not job:
+        worked = False
+        for server in servers:
+            job, complained[server] = _ask_for_work(
+                requests, server, headers, runner_id, _process, _build,
+                complained.get(server))
+            if not job:
+                continue
+            base = server + "/api/estimate"
+            others = [o for o in servers if o != server]
+            with _heartbeat_while_busy(requests, others, headers, runner_id, _process,
+                                       _build):
+                _execute(requests, base, headers, job, engine_root, engine_python,
+                         runner_id)
+            worked = True
+            consecutive = 0
+            break           # back to the top of the list: no service waits behind another
+        if not worked:
             consecutive = 0
             time.sleep(a.poll_seconds)
-            continue
-
-        _execute(requests, base, headers, job, engine_root, engine_python, runner_id)
-        consecutive = 0
       except KeyboardInterrupt:
         print("\nstopped.")
         return 0
@@ -818,6 +802,93 @@ def main() -> int:
                   f"also in {log_path}.", file=sys.stderr)
             return 3
         time.sleep(a.poll_seconds)
+
+
+def _ask_for_work(requests, server: str, headers: Dict[str, str], runner_id: str,
+                  process: str, build: str,
+                  complained: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Ask ONE service for work. Returns (the run or None, the complaint now standing).
+
+    The claim is also this runner's heartbeat to that service — which is why every service
+    on the list is asked every cycle, not only the one that last had work."""
+    base = server + "/api/estimate"
+    try:
+        r = requests.post(f"{base}/runner/claim", json={
+            "runner_id": runner_id, "hostname": platform.node(),
+            "process": process, "build": build},
+            headers=headers, timeout=20)
+    except Exception as exc:                       # noqa: BLE001 — keep polling
+        # SAY IT ONCE. A runner that cannot reach the server prints a line a
+        # second, and the one useful message scrolls away.
+        return None, _say_once(complained, "unreachable",
+            f"cannot reach {server} — {exc}",
+            "   still trying; this will not be repeated until it changes.")
+
+    # A REPLY IS NOT A FAILURE TO REPLY, and the difference is somebody's
+    # morning. The service answers on this port; if it answers 404 it is an
+    # OLDER BUILD that has no runner endpoints, and the fix is Ctrl+C on the
+    # service, not an hour spent on firewalls and ports.
+    if r.status_code == 404:
+        return None, _say_once(complained, "old-service",
+            f"the service at {server} answered 404 for the runner queue.",
+            "   It is running an older build with no runner endpoints.",
+            "   Restart app.py there — the page is served from disk on every",
+            "   request, but the routes are imported once at start-up.")
+    if r.status_code == 401:
+        return None, _say_once(complained, "unauthorised",
+            f"the service at {server} rejected this runner (401).",
+            "   SDI_API_KEY must match on both sides. Pass --api-key, or set",
+            "   SDI_API_KEY in this runner's environment.")
+    try:
+        r.raise_for_status()
+        job = (r.json() or {}).get("run")
+    except Exception as exc:                       # noqa: BLE001
+        return None, _say_once(complained, "bad-reply",
+            f"the service at {server} answered {r.status_code} — {exc}")
+    if complained:
+        print(f"[{time.strftime('%H:%M:%S')}] connected to {server}.")
+    return job, None
+
+
+class _heartbeat_while_busy:
+    """While a job runs for one service, tell the OTHERS this runner is alive and busy.
+
+    Through /runner/heartbeat, never /runner/claim: a claim is a request for work, and a
+    service that had something queued would hand this runner a second job in the middle of
+    the first. An older service without the endpoint answers 404 and is simply shown
+    offline for the length of the job — which is how every service looked before."""
+
+    _EVERY = 15.0
+
+    def __init__(self, requests, servers: List[str], headers: Dict[str, str],
+                 runner_id: str, process: str, build: str) -> None:
+        self._args = (requests, servers, headers, runner_id, process, build)
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def _beat(self) -> None:
+        requests, servers, headers, runner_id, process, build = self._args
+        while not self._stop.is_set():
+            for server in servers:
+                try:
+                    requests.post(f"{server}/api/estimate/runner/heartbeat", json={
+                        "runner_id": runner_id, "hostname": platform.node(),
+                        "process": process, "build": build},
+                        headers=headers, timeout=10)
+                except Exception:                    # noqa: BLE001 — a beat, not a job
+                    pass
+            self._stop.wait(self._EVERY)
+
+    def __enter__(self) -> "_heartbeat_while_busy":
+        if self._args[1]:
+            self._thread = threading.Thread(target=self._beat, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=2)
 
 
 def _say_once(current: Optional[str], kind: str, *lines: str) -> Optional[str]:

@@ -43,7 +43,11 @@ param(
     # link and the pass checks use. It said 8072 until 23 Sep 2026, and the task it installed
     # registered every restarted runner with the hand-started service instead, so 8071 read
     # "no runner" while a healthy one sat on 8072. start-runner.ps1 already preferred 8071.
-    [string] $Server   = ("http://localhost:" + $(if ($env:SDI_PORT) { $env:SDI_PORT } else { "8071" })),
+    #
+    # AND THEN NEITHER. The runner now takes a LIST and serves every service on it, so the
+    # default is both local ports: whichever service is up - installed, hand-started, or
+    # both - sees the runner as connected. -Server still pins one (or a comma list).
+    [string] $Server   = $(if ($env:SDI_PORT) { "http://localhost:$($env:SDI_PORT)" } else { "http://localhost:8071,http://localhost:8072" }),
     [string] $TaskName = "SDI Estimating Runner",
     [switch] $Remove
 )
