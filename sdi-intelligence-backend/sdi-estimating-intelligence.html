@@ -403,6 +403,8 @@
         <div class="field">
           <label for="drawing">Drawing number</label>
           <input id="drawing" type="text" autocomplete="off">
+          <!-- WHICH DRAWING THIS PRICES, said before Run by the engine's own resolver. -->
+          <div id="productCheck" class="sub" style="margin-top:6px" aria-live="polite"></div>
         </div>
       </div>
 
@@ -1115,6 +1117,56 @@ function drawingNumberLooksWrong(){
   return !drawings.some(d => alnum(d.name).includes(want) || alnum(d.path).includes(want));
 }
 
+/* ── WHICH DRAWING WILL THIS PRICE? ───────────────────────────────────
+   James Gray, 23 Sep 2026: "we need to centre the job estimate around the drawing number
+   entered into the estimating portal." The Drawing Number is the product — the only root
+   the engine prices; every other GA in the pack is detail, charged only where the product's
+   BOM reaches it. The 11650-02 run priced the cabinet top because that is what 11650-02
+   names, set Tim's kit aside, and nobody could see it for forty minutes.
+
+   So the page asks the SERVICE, which runs the engine's own resolver over the files added
+   (product_identity.resolve_product), and says the answer under the field before Run:
+     one assembly   the product, its title and revision — and every OTHER assembly in the
+                    pack, named, so an estimator who meant one of those sees it now
+     none / several a correction is needed: Run is held, and nothing is chosen for them
+     a part drawing a single-part job; said, not blocked
+     no numbers     nothing to check against; said, not blocked */
+let productCheck = null, _pcTimer = null, _pcSeq = 0;
+function checkProduct(){
+  clearTimeout(_pcTimer);
+  _pcTimer = setTimeout(async () => {
+    const seq = ++_pcSeq;
+    const want = safe(drawing.value);
+    if(!want || !drawings.length){ productCheck = null; renderProductCheck(); refresh(); return; }
+    try{
+      const r = await api("/api/estimate/product-check", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({drawing_number: want, files: drawings.map(d => d.path)})});
+      const j = r.ok ? await r.json() : null;
+      if(seq !== _pcSeq) return;                 // a later keystroke has already asked
+      productCheck = j;
+    }catch(e){ if(seq === _pcSeq) productCheck = null; }
+    renderProductCheck(); refresh();
+  }, 350);
+}
+function productBlocks(){
+  return !!(productCheck && (productCheck.status === "none" || productCheck.status === "many"));
+}
+function renderProductCheck(){
+  const box = document.getElementById("productCheck");
+  if(!box) return;
+  if(!productCheck){ box.textContent = ""; box.style.color = ""; return; }
+  const st = productCheck.status;
+  const colour = st === "ok" ? ((productCheck.others || []).length ? "var(--warn)" : "var(--ok)")
+               : (st === "none" || st === "many") ? "var(--bad)"
+               : st === "not_an_assembly" ? "var(--warn)" : "";
+  box.style.color = colour;
+  box.style.fontWeight = (st === "none" || st === "many" || (productCheck.others || []).length)
+                       ? "600" : "";
+  box.textContent = productCheck.message || "";
+}
+drawing.addEventListener("input", checkProduct);
+
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
   return (c && d) ? `${OUTPUT_ROOT}\\${c}\\${d}` : "";
@@ -1134,6 +1186,7 @@ function refresh(){
   if(!safe(drawing.value))            missing.push("drawing number");
   if(!drawings.length)                missing.push("at least one drawing");
   if(!runnersOnline)                  missing.push("an estimating runner (none connected)");
+  if(productBlocks())                 missing.push("a Drawing Number that names one drawing in the pack (see under the field)");
 
   // Once a run has started, keep showing the folder the SERVER stamped — that is
   // where the files actually are, and "where did it go?" is the first question
@@ -1193,7 +1246,7 @@ function refresh(){
                     + "nothing from this panel at all, and regenerating a client quote needs "
                     + "the units, client and drawing number but no drawing file and no runner.";
     req.style.color = "";
-  }else if(drawingNumberLooksWrong()){
+  }else if(!productCheck && drawingNumberLooksWrong()){
     req.textContent = "Check the drawing number — " + safe(drawing.value)
                     + " does not appear in any drawing you have added";
     req.style.color = "var(--bad)";
@@ -1370,6 +1423,7 @@ function renderFiles(){
     li.appendChild(x); fileList.appendChild(li);
   });
   fileEmpty.style.display = drawings.length ? "none" : "";
+  if(typeof checkProduct === "function") checkProduct();   // the files changed the answer
   refreshPrint();
 }
 $("clearFiles").onclick = () => { drawings = []; renderFiles(); refresh(); };
