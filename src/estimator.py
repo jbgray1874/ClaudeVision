@@ -2621,7 +2621,11 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 # render; putting it in the brief invites an answer about a part number
                 # no supplier has ever listed.
                 {"code": "" if _sighted_desc else part.get("part_number"),
-                 "description": _sighted_desc or part.get("description"),
+                 # AND WHAT THE PACK SAYS THIS IS, where its own words are only a code.
+                 "description": (
+                     _sighted_desc or " — ".join(
+                         x for x in (str(part.get("description") or "").strip(),
+                                     str(part.get("research_context") or "").strip()) if x)),
                  "quantity": part.get("quantity"),
                  # A LINE'S OWN UNIT, WHICH THE BRIEF NEVER USED TO SEE. The edging stub
                  # carries `unit_of_measure = "m"` and this dict did not pass it on, so the
@@ -2643,6 +2647,13 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             _ind = {}
         _ind_price = _safe_float((_ind or {}).get("price_gbp"))
         if _ind_price is not None and _ind_price > 0:
+            # WHAT WAS ACTUALLY PRICED, on the line. £126.04 for "a screw" is obviously wrong
+            # only once somebody can see the model priced something else; said here, it is
+            # visible before anyone reaches the total.
+            if (_ind or {}).get("item_priced"):
+                part.setdefault("review_flags", []).append(
+                    f"AI researched price £{_ind_price:,.2f}: priced as "
+                    f"{_ind['item_priced']}")
             return {
                 "result": {"selected": {
                     "source": (_ind.get("evidence") or {}).get("source"),
@@ -2660,6 +2671,7 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                         "calculation": _ind.get("calculation"),
                         "label": _ind.get("label"),
                         "price_first_taken": _ind.get("price_first_taken"),
+                        "item_priced": _ind.get("item_priced"),
                     },
                 }},
                 "applied_unit_cost": _ind_price,
@@ -3231,6 +3243,7 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         # so it does not have to be refused in the first place.
         "wanted_unit": _brief.get("wanted_unit"),
         "ask": _brief.get("ask"),
+        "supply": ("bought_in" if _brief.get("kind") == "bought_in_component" else ""),
     }) or {}
     if not _found.get("found"):
         return {}
@@ -3277,6 +3290,8 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         # thing.
         "price_is_reproducible": bool(_found.get("price_is_reproducible")),
         "price_first_taken": _found.get("price_first_taken") or "",
+        # What the model says it priced, in its own words, and per what.
+        "item_priced": _found.get("item_priced") or "",
     }
 
 
@@ -10388,6 +10403,15 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # stamped here — resolved from the SAME customer name the workbook header prints
     # (job_customer), which is the lesson the £— register learned the hard way.
     _finish_std = customer_finish_standard(job_customer(summary)) if summary else None
+
+    # WHAT EACH BOUGHT-IN LINE IS, for the research brief — its other names in the pack and
+    # the assembly it sits in. See research_context: the Yiree screw was researched as a bare
+    # supplier code and came back at £126.04 each.
+    try:
+        from research_context import stamp_research_context
+        stamp_research_context(estimable_parts, summary)
+    except Exception as _rc_exc:                                     # noqa: BLE001
+        print(f"   [pricing] research context not stamped ({_rc_exc})", flush=True)
 
     part_estimates: List[Dict[str, Any]] = []
     _failed_parts: List[Dict[str, Any]] = []
