@@ -359,6 +359,16 @@ PACKAGING_CONFIG = {
 COMMERCIAL_LINE_GBP_PER_ORDER = {
 }
 
+# ── THE ESTIMATE SHEET WE WRITE READS SHORT ─────────────────────────────────────────────
+# James Gray, 23 Sep 2026: remove the rows not written to "to compress it for it to be easier
+# to read from estimating. Not the blank one we use as the source but the one we create."
+# Unused line slots in each block are GROUPED AND HIDDEN, never deleted: every slot keeps its
+# formulas and every total keeps its row addresses (see workbook_compact). An estimator opens
+# a group with the outline button to add a line. False writes the full-length sheet as before.
+ESTIMATE_COMPACT_UNUSED_SLOTS = os.getenv("SDI_ESTIMATE_COMPACT", "1").strip().lower() \
+    not in {"0", "false", "no", "off"}
+
+
 # --- The estimator's two requests about the sheet itself --------------------------
 #
 # "For ease of process / check can all quantity breaks be on one sheet / show formulas

@@ -195,6 +195,8 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_CANONICAL_ROUTE_WORKBOOK=0` | Fall back to the legacy per-part labour loop instead of the compiled route (default **on**) |
 | `SDI_DUALPATH_BOM=0` | Read the BOM with the deterministic reader only, without the vision cross-check (default **on**) |
 | `SDI_ORDER_QTY` | Order quantity for the run, when it is not given on the command line |
+| `SDI_PRODUCT` | The product's drawing number (the portal's Drawing Number; set by `--product`). The only root the quantity roll-up starts from; everything off its BOM path is set aside, not charged |
+| `SDI_ESTIMATE_COMPACT` | `0` writes the Estimate sheet full length. Default: unused line slots in the generated workbook are grouped and hidden (never deleted; the template is untouched) |
 | `SDI_OUTPUT_ROOT` | Where reports and estimates are written (default `C:\ClaudeVision\output`) |
 | `SDI_AISHEETS_DIR` | Where the estimator-override loop writes the regenerated client quote (default the AISheets share). Point at a local folder on a test box with no share mounted |
 | `SDI_OVERRIDE_XLSX_DIR` | Where the estimator-override loop saves the amended workbook as the `_MANUAL_OVERRIDE` record (default: same as `SDI_AISHEETS_DIR`; set to the job's Live Enquiry folder to keep the override beside its pack) |

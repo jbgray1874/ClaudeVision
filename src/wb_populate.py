@@ -6971,6 +6971,25 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     except Exception as _e:
         _flag(f"could not run the hygiene check over the workbook: {_e}", flags)
 
+    # ── Fold away the unused line slots — this book only, never the template ──
+    # Grouped and hidden, not deleted: formulas and row addresses stay exactly where the
+    # totals, the quantity sweep, the report and the quote read them. See workbook_compact.
+    if getattr(config, "ESTIMATE_COMPACT_UNUSED_SLOTS", True):
+        try:
+            from workbook_compact import compact_estimate
+            _cmp = compact_estimate(wb)
+            if _cmp.get("refused"):
+                _flag(f"Estimate sheet left full length: {_cmp['refused']}.", flags)
+            elif _cmp.get("hidden"):
+                print(f"   [wb_populate] Estimate sheet compacted: {_cmp['hidden']} unused "
+                      f"slot(s) grouped and hidden — "
+                      + "; ".join(f"{s_['title'] or 'block'} {s_['used']} shown/"
+                                  f"{s_['hidden']} hidden" for s_ in _cmp["sections"])
+                      + ". Open a group (the + at the left) to add a line.", flush=True)
+        except Exception as _ce:                                     # noqa: BLE001
+            _flag(f"could not compact the Estimate sheet ({_ce}); written full length.",
+                  flags)
+
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
     safe_name = re.sub(r'[<>:"/\\|?*]', "_", job_folder_name).strip()

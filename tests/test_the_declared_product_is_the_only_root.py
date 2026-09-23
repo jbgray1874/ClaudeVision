@@ -275,3 +275,111 @@ def test_the_revision_is_the_products_own_sheets():
     }
     number, rev, _ = _drawing_identity(summary, "11650-02")
     assert number == "11650-02-GA" and rev.upper().endswith("D"), (number, rev)
+
+
+# ── 23 Sep 2026, the 15:45 11650-02 run: real parts caught by the not-linked rule ─────────
+
+def _top_and_kit_as_the_tables_read():
+    """The extract placed 02-SA02 under the kit only; BOTH GAs' own tables list it."""
+    parts = [
+        {"part_number": "11650-06-GA", "description": "COFFRET HOSPITAL KIT", "quantity": 1,
+         "is_assembly_parent": True},
+        {"part_number": "11650-02-GA", "description": "TOP ASSEMBLY", "quantity": 1,
+         "is_assembly_parent": True},
+        {"part_number": "11650-02-SA02", "description": "TOP RSB", "quantity": 1,
+         "is_sub_assembly": True},
+        {"part_number": "11650-02-03M", "description": "RSB PLATE", "quantity": 1},
+        {"part_number": "ROSS HANDLING-TS-15M5X10", "description": "ROSS HANDLING - TS-15M5X10",
+         "quantity": 2, "page_roles": ["bought_in"]},
+    ]
+    extract = {"assemblies": [
+        {"part_number": "11650-06-GA", "children": [{"part_number": "11650-02-SA02", "qty": 3}]},
+        {"part_number": "11650-02-SA02", "children": [{"part_number": "11650-02-03M", "qty": 1}]},
+    ]}
+    rows = [
+        {"part_number": "11650-02-SA02", "quantity": 3, "bom_parent": "11650-06-GA"},
+        {"part_number": "11650-02-SA02", "quantity": 1, "bom_parent": "11650-02-GA"},
+        {"part_number": "ROSS HANDLING - TS-15M5X10", "quantity": 2, "bom_parent": "11650-02-GA"},
+    ]
+    return parts, extract, rows
+
+
+def test_a_part_on_two_general_arrangements_tables_is_linked_under_both():
+    """The top lost its RSB sub-assembly: the table-stated edge was refused because the
+    extract had placed the part under the kit."""
+    parts, extract, rows = _top_and_kit_as_the_tables_read()
+    g = rc.build_part_graph(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-02")
+    assert g["quantities"].get("11650-02-SA02") == 1, g["quantities"]
+    assert g["quantities"].get("11650-02-03M") == 1
+    g = rc.build_part_graph(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-06-GA")
+    assert g["quantities"].get("11650-02-SA02") == 3 and g["quantities"]["11650-02-03M"] == 3
+
+
+def test_a_row_restating_a_sub_assemblys_part_on_its_parent_is_still_refused():
+    """The protection that stays: an exploded table on the kit's GA lists the RSB plate the
+    kit already reaches THROUGH 02-SA02 — linking it again would count it twice."""
+    parts, extract, rows = _top_and_kit_as_the_tables_read()
+    rows.append({"part_number": "11650-02-03M", "quantity": 3, "bom_parent": "11650-06-GA"})
+    g = rc.build_part_graph(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-06-GA")
+    assert g["quantities"]["11650-02-03M"] == 3, g["quantities"]
+
+
+def test_a_spaced_hyphen_is_the_same_code():
+    """The Ross handles fell off the top: linked as 'ROSS HANDLING - TS-15M5X10', costed as
+    'ROSS HANDLING-TS-15M5X10', and the second read as not linked."""
+    assert rc.clean_part_number("ROSS HANDLING - TS-15M5X10") == "ROSS HANDLING-TS-15M5X10"
+    parts, extract, rows = _top_and_kit_as_the_tables_read()
+    g = rc.build_part_graph(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-02")
+    assert g["quantities"].get("ROSS HANDLING-TS-15M5X10") == 2, g["quantities"]
+    unlinked = [i for i in g["issues"] if i.get("code") == "not_linked_to_the_product"]
+    assert not any("ROSS" in x for i in unlinked for x in i["identities"])
+
+
+def test_the_hint_names_the_shared_sub_assembly_not_a_fastener():
+    parts, extract, rows = _top_and_kit_as_the_tables_read()
+    compiled = rc.compile_job_route(parts, extract, rows, ["11650-02-GA", "11650-06-GA"],
+                                    declared_product="11650-02")
+    lines = rc.product_scope_sentences({"estimate_summary": {"canonical_route_shadow": compiled}})
+    assert any("uses 11650-02-SA02 from 11650-02-GA" in t for t in lines), lines
+
+
+def test_the_m4_pem_is_never_the_m6_pem():
+    """The 15:45 hint said the kit uses FIXING632 — the M6x12 PEM — where the kit's own table
+    lists the M4x12 PEM under the stem code FIXING. Pinned with the rows as the tables read
+    them: two studs, two identities, two counts, whichever product is named."""
+    parts = [
+        {"part_number": "11650-06-GA", "quantity": 1, "is_assembly_parent": True},
+        {"part_number": "11650-02-GA", "quantity": 1, "is_assembly_parent": True},
+        {"part_number": "11650-02-SA01", "quantity": 1, "is_sub_assembly": True},
+        {"part_number": "11650-02-SA02", "quantity": 1, "is_sub_assembly": True},
+        {"part_number": "FIXING632", "description": "M6x12mm THREADED PEM STUD", "quantity": 4,
+         "page_roles": ["bought_in"]},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 2,
+         "page_roles": ["bought_in"]},
+        {"part_number": "FIXING65", "description": "M5 SELF-CLINCH NUT, BZP", "quantity": 2},
+    ]
+    rows = [
+        {"part_number": "11650-02-SA01", "quantity": 1, "bom_parent": "11650-02-GA"},
+        {"part_number": "11650-02-SA02", "quantity": 1, "bom_parent": "11650-02-GA"},
+        {"part_number": "FIXING632", "description": "M6x12mm THREADED PEM STUD", "quantity": 4,
+         "bom_parent": "11650-02-SA01"},
+        {"part_number": "FIXING65", "description": "M5 SELF-CLINCH NUT, BZP", "quantity": 2,
+         "bom_parent": "11650-02-SA01"},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 2,
+         "bom_parent": "11650-02-SA02"},
+        {"part_number": "11650-02-SA02", "quantity": 3, "bom_parent": "11650-06-GA"},
+        {"part_number": "FIXING", "description": "M4x12mm THREADED PEM STUD", "quantity": 18,
+         "bom_parent": "11650-06-GA"},
+    ]
+    for product in ("11650-02", "11650-06-GA"):
+        g = rc.build_part_graph(parts, {}, rows, ["11650-02-GA", "11650-06-GA"],
+                                declared_product=product)
+        assert "FIXING" not in (g.get("aliases") or {}), g.get("aliases")
+        assert "FIXING632" not in (g["children"].get("11650-06-GA") or set())
+    g = rc.build_part_graph(parts, {}, rows, ["11650-02-GA", "11650-06-GA"],
+                            declared_product="11650-02")
+    assert g["quantities"]["FIXING632"] == 4 and g["quantities"]["FIXING"] == 2
