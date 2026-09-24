@@ -57,3 +57,14 @@ def test_the_report_does_not_call_an_open_scope_sound():
     src = (ROOT / "src" / "job_report_html.py").read_text(encoding="utf-8")
     i = src.index("Powder coating scoped to the right parts")
     assert "powder_scope_mixed_members" in src[i - 1500:i]
+
+
+def test_an_assembly_priced_only_in_its_flag_and_with_no_line_is_asked():
+    p = {"part_number": "12312-01-08X", "description": "SILICONE LED DIFFUSER, L: 3.944m",
+         "review_flags": ["AI researched price £32.50: priced as SILICONE LED DIFFUSER, one length"]}
+    s = {"manufacturing_writeup": {"parts": [p]}, "estimate_summary": {
+        "part_estimates": [], "canonical_route_shadow": {"issues": [], "nodes": [
+            {"part_number": "12312-01-08X", "kind": "assembly", "qty_own": 1,
+             "qty_per_unit": 1, "qty_trail": []}]}}}
+    ds = cf.costed_job(s)["decisions_required"]
+    assert any(d["part"] == "12312-01-08X" and "£32.50" in d["issue"] for d in ds), ds
