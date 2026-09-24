@@ -28,10 +28,27 @@ def _words(text: Any) -> str:
 
 
 def _is_bought_in(p: Mapping[str, Any]) -> bool:
+    """Do we BUY this line? Every marker the engine writes, and one fact that needs none.
+
+    The Yiree key reached the price lookup with none of the first four markers and was
+    researched as a made part ("local sheet metal fabricator quotes", £65 each). A line with
+    no material to cut and no measured geometry, that is not an assembly, is not something
+    we make — nothing on the job says what we would make it from."""
     roles = [str(r).lower() for r in (p.get("page_roles") or [])]
-    return bool(p.get("is_bought_in") or "bought_in" in roles
-                or str(p.get("canonical_kind") or "").lower() == "bought_in"
-                or str(p.get("part_type") or "").lower() in ("bought_in", "bought-in"))
+    if (p.get("is_bought_in") or "bought_in" in roles
+            or str(p.get("canonical_kind") or "").lower() == "bought_in"
+            or str(p.get("part_type") or "").lower() in ("bought_in", "bought-in")
+            or str(p.get("material_family") or "").lower() == "bought_in"
+            or str(p.get("normalized_material") or "").upper().replace("-", "_")
+            in ("BOUGHT_IN", "PURCHASED")):
+        return True
+    if p.get("is_assembly_parent") or p.get("is_sub_assembly") or p.get("assembly_children"):
+        return False
+    geom = p.get("normalized_geometry") or {}
+    measured = any(geom.get(k) for k in ("blank_length_mm", "blank_width_mm", "weight_kg")) \
+        or any(p.get(k) for k in ("length_mm", "width_mm", "thickness_mm", "dxf_path"))
+    material = str(p.get("normalized_material") or p.get("material") or "").strip()
+    return not measured and not material
 
 
 def research_context(part: Mapping[str, Any], others: Iterable[Mapping[str, Any]],

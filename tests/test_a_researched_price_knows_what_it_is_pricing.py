@@ -115,3 +115,14 @@ def test_the_earlier_fallback_asks_the_same_question(monkeypatch):
     assert seen.get("supply") == "bought_in"
     assert "name a real current listing" in (seen.get("ask") or ""), seen
     assert out["item_priced"] == "binding screw, one screw"
+
+
+def test_a_line_with_nothing_to_make_it_from_is_asked_as_a_purchase():
+    """The Yiree key had no bought-in marker and was researched as a made part — "local sheet
+    metal fabricator quotes", £65 each. No material, no geometry, not an assembly: bought."""
+    key = {"part_number": "YIREE KEY", "description": "YIREE KEY - DWG888000", "quantity": 2}
+    assert rc._is_bought_in(key)
+    made = {"part_number": "11650-03-02M", "description": "ARM",
+            "normalized_material": "MILD_STEEL", "thickness_mm": 2.0}
+    assert not rc._is_bought_in(made)
+    assert not rc._is_bought_in({"part_number": "11650-06-SA02", "is_sub_assembly": True})
