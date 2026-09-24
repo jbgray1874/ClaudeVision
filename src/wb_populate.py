@@ -6104,8 +6104,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                    per_part_ops=_PER_PART_OPS,
                                    one_row_per_job=_ONE_ROW_PER_JOB)
 
+            # THE DRAWING'S MATERIAL ON THE ROW, THE SUBSTITUTE NAMED. 12312-01-03A is FOAMED
+            # PVC and was priced from ACRYLIC (no Foamex rate); its CNC row read "3mm ACRYLIC"
+            # while AI Provenance said FOAMED PVC. The grouping key is unchanged.
+            _mpa = pe.get("material_priced_as") if isinstance(pe.get("material_priced_as"), dict) else {}
+            _shown = (f"{_mpa.get('arbitrated_material')} (priced as {_mpa.get('priced_material')})"
+                      if _mpa.get("arbitrated_material") and _mpa.get("priced_material") else _mat)
             g = _groups.setdefault(key, {
-                "wb_op": wb_op, "material": _mat, "thickness": _thk,
+                "wb_op": wb_op, "material": _mat, "thickness": _thk, "material_shown": _shown,
                 # The tuple that DECIDED this grouping. material/thickness above are only
                 # those of the first part to land here, which for a one-row-per-job
                 # department is an accident of ordering.
@@ -6359,7 +6365,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # Boxing a finished assembly is not a gauge operation, so the row names the parts and
         # stops. Every part-scoped row is untouched: there the gauge is the part's own and it
         # is the most useful thing on the line.
-        _rd = labour_row_description(wb_op, g["material"],
+        _rd = labour_row_description(wb_op, g.get("material_shown") or g["material"],
                                      None if g.get("assembly_scoped") else g["thickness"],
                                      g["parts"], g["bends"], g["holes"],
                                      work_ops=g.get("engine_ops") or ())

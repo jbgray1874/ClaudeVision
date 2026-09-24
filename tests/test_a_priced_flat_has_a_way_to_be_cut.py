@@ -65,3 +65,13 @@ def test_the_gap_reaches_the_review_list():
     issues = [d["issue"] for d in job["decisions_required"]
               if d["kind"] == "manufacturing_decision"]
     assert any("12312-01-04G" in i for i in issues) and any("12312-01-03A" in i for i in issues)
+
+
+def test_the_labour_row_names_the_drawings_material_and_the_substitute():
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert 'g.get("material_shown") or g["material"]' in src
+    est = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"material_priced_as": (dict(part["material_priced_as"])' in est
+    from wb_populate import labour_row_description
+    row = labour_row_description("CNC", "FOAMED PVC (priced as ACRYLIC)", 3, ["12312-01-03A"])
+    assert "FOAMED PVC" in row and "priced as ACRYLIC" in row
