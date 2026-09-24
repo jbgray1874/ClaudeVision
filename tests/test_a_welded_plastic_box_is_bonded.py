@@ -32,3 +32,27 @@ def test_timber_keeps_the_strip_alone():
     ga = _ga("MDF")
     costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
     assert "glue" not in costs and "welding" not in costs
+
+
+def test_a_plastic_assembly_of_loose_panels_is_bonded_without_a_weld_note():
+    """12633-00-GA: three acrylic sub-assemblies, no fixings, no weld note anywhere."""
+    ga = _ga("ACRYLIC")
+    ga["textual_operations"] = []
+    ga["assembly_children"] = ["12633-02-01P", "12633-02-02P", "12633-02-03P"]
+    costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "glue" in costs
+
+
+def test_an_assembly_with_fixings_is_screwed_not_glued():
+    ga = _ga("ACRYLIC")
+    ga["textual_operations"] = []
+    ga["assembly_children"] = ["X-01P", "X-02P", "FIXING43"]
+    costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "glue" not in costs
+
+
+def test_an_assembly_of_other_material_is_left_alone():
+    ga = _ga("MILD STEEL")
+    ga["textual_operations"] = []
+    costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "glue" not in costs

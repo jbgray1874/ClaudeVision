@@ -6441,6 +6441,31 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                     f"bonding event on this assembly. Confirm the joint method (solvent cement "
                     f"or adhesive)")
 
+    # A PLASTIC ASSEMBLY OF LOOSE PANELS IS BONDED, WHETHER OR NOT THE WORD "WELD" APPEARS.
+    # 12633-00-GA (Avanti chiller shelf): the wine lifter, beer plinth and choc holder are
+    # clear acrylic panels, butt-jointed and slotted, with no fixings anywhere on the pack and
+    # no weld note — so D-240, which reads the note, would charge no joining at all. An
+    # assembly whose own material is a plastic, holding two or more parts and no fixings,
+    # is put together with cement: one bonding event, flagged so the joint method is
+    # confirmed. An assembly holding fasteners is screwed, and is left alone.
+    _is_plastic_asm = any(k in (_mat_u or "") for k in (
+        "ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS"))
+    _asm_kids = [str(k).upper() for k in (part.get("assembly_children") or [])]
+    _has_fixings = any(re.search(r"FIX|SCREW|BOLT|NUT|RIVET|STUD|WASHER|BI-", k)
+                       for k in _asm_kids)
+    if (part.get("is_assembly_parent") and _is_plastic_asm and len(_asm_kids) >= 2
+            and not _has_fixings and "glue" not in ops):
+        ops.append("glue")
+        part["acrylic_bonded"] = True
+        try:
+            record_operation(part, "glue", "plastic_assembly_is_bonded")
+        except Exception:                                            # noqa: BLE001
+            pass
+        part.setdefault("review_flags", []).append(
+            f"glue added: {part.get('part_number')} is a {_mat_u} assembly of "
+            f"{len(_asm_kids)} parts with no fixings, so it is bonded — one bonding event. "
+            f"Confirm the joint method (solvent cement or adhesive)")
+
     # DRES — a structural (CO2/WELD) weld is dressed/linished to clean the bead before
     # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
     # lands on the route (timing set in the run/setup tables below). Config-gated; spot/
