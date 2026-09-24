@@ -3557,6 +3557,13 @@ def _finalize_scan_summary(
     try:
         from drawing_job_merge import apply_mirror_geometry, settle_handed_pairs
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
+        try:
+            from drawing_job_merge import propose_missing_cuts
+            for _cp in propose_missing_cuts(summary["manufacturing_writeup"]["parts"]):
+                print(f"   [route] {_cp['part_number']}: measured flat, no cutting operation "
+                      f"-> {_cp['result']}", flush=True)
+        except Exception as _pc_err:                                 # noqa: BLE001
+            print(f"   [route] missing-cut check skipped: {_pc_err}", flush=True)
         if _mirrored:
             print("   [mirror] " + "; ".join(
                 f"{m.get('part_number')} inherits the measured flat of {m.get('mirrored_from')}"

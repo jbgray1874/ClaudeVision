@@ -2838,10 +2838,11 @@ _DECISION_KIND_WORDS = {
     "missing_price": ("t-bad", "Missing price"),
     "market_figure": ("t-bad", "Market figure"),
     "manufacturing_decision": ("t-warn", "Manufacturing decision"),
+    "quantity_check": ("t-warn", "Quantity check"),
     "indicative_rate": ("t-info", "Indicative rate"),
 }
-_DECISION_ORDER = {"missing_price": 0, "market_figure": 1, "manufacturing_decision": 2,
-                   "indicative_rate": 3}
+_DECISION_ORDER = {"missing_price": 0, "market_figure": 1, "quantity_check": 2,
+                   "manufacturing_decision": 3, "indicative_rate": 4}
 
 # Plain string, not an f-string: it carries braces. Opens the diagnostics for print, because
 # a closed <details> prints closed and the evidence would be absent from the paper copy.

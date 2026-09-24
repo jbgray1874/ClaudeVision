@@ -1829,6 +1829,54 @@ def build_part_graph(
               + (f"; linked {', '.join(_linked)}, which nothing else reached" if _linked
                  else ""), flush=True)
 
+    # ── A TABLE THAT LISTS AN ASSEMBLY AND ITS CONTENTS COUNTS THE CONTENTS ONCE ─────────
+    #
+    # 12312-01-GA, 24 Sep 2026: the GA's parts table lists the LIGHTING ASM and, beside it, the
+    # LED driver, LED tape, power cord and Y-splitter the lighting assembly holds (through
+    # 08X). Each is x1 on both routes, so the roll-up summed 2 of each: £43.39 a unit of
+    # purchases the drawing never asked for. The table-wide rule above does not fire — this
+    # table also lists assemblies — so this is the same principle per row: where one table
+    # lists sub-assembly S and part c, c is reached through S, and the table's count for c is
+    # exactly what S already brings, the table is naming S's contents, not adding more. The
+    # direct edge goes and the line says so; a count that differs is a genuine extra and stays.
+    _counted_once: Dict[str, str] = {}
+    _by_table: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
+    for _row in bom_rows or []:
+        if not isinstance(_row, Mapping):
+            continue
+        for _c, _p, _q in _bom_stated_edges([_row], aliases, _known_now):
+            _by_table.setdefault((_p, str(_row.get("bom_sheet") or "")), []).append((_c, _q))
+
+    def _count_through(_top: str, _target: str, _seen: Tuple[str, ...] = ()) -> float:
+        """How many of _target one _top holds, summed over every path below it."""
+        if _top in _seen:
+            return 0.0
+        _n = 0.0
+        for _k, _kq in (children.get(_top) or {}).items():
+            _kq = number(_kq, 1.0) or 1.0
+            _n += _kq if _k == _target else _kq * _count_through(_k, _target, _seen + (_top,))
+        return _n
+
+    for (_p, _sheet), _rows in sorted(_by_table.items()):
+        _listed = {c for c, _ in _rows}
+        _subs = [c for c in _listed if children.get(c) and c in (children.get(_p) or {})]
+        if not _subs:
+            continue
+        for _c, _q in _rows:
+            if _c in _subs or number((children.get(_p) or {}).get(_c), None) != _q:
+                continue
+            for _s in _subs:
+                _via = _count_through(_s, _c) * (number(children[_p].get(_s), 1.0) or 1.0)
+                if _via and abs(_via - _q) < 1e-9:
+                    children[_p].pop(_c, None)
+                    (parents.get(_c) or set()).discard(_p)
+                    _counted_once[_c] = (
+                        f"listed on {_p}'s table beside {_s}, which already holds {_q:g}; "
+                        f"counted once, through {_s}. If {_p} needs {_q:g} more loose, add them")
+                    print(f"   [bom] {_c}: {_p}'s table lists it beside {_s}, which holds "
+                          f"it — counted once", flush=True)
+                    break
+
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
     top_id = aliases.get(top_id, top_id)
@@ -2423,6 +2471,9 @@ def build_part_graph(
         qty_notes[_c] = f"{qty_notes[_c]} / {_note}" if qty_notes.get(_c) else _note
         print(f"   [graph] {_c}: {_t:g} from {_p}'s printed exploded list (roll-up said "
               f"{_rolled:g})", flush=True)
+
+    for _c, _note in sorted(_counted_once.items()):
+        qty_notes[_c] = f"{qty_notes[_c]} / {_note}" if qty_notes.get(_c) else _note
 
     # ── TWO ROADS TO ONE NUMBER ───────────────────────────────────────────────────
     #
