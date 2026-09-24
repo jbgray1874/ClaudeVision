@@ -4065,6 +4065,96 @@ def open_on_sheet(wb, sheet_name: str) -> None:
         sel.activeCell = first
         sel.sqref = first
 
+OVERFLOW_NEST_SHEET = "Sheet Material Overflow"
+
+_CELL_REF = re.compile(r"(\$?)([A-Z]{1,3})(\$?)(\d+)(?![\d(])")
+
+
+def _reads_only_its_own_row(formula: str, row: int) -> bool:
+    """True when every cell a formula reads sits on its own row and its own sheet, so the
+    formula can be moved to another row or sheet and still compute the same thing there."""
+    body = re.sub(r'"[^"]*"', '""', str(formula))
+    if "!" in body or ":" in body:
+        return False
+    for dollar_col, _col, dollar_row, r in _CELL_REF.findall(body.upper()):
+        if dollar_row or int(r) != row:
+            return False
+    return True
+
+
+def nest_overflow_rows(wb, ws, block: Mapping[str, Any], parts: Sequence[Dict[str, Any]],
+                       write_inputs) -> Dict[str, Tuple[str, int]]:
+    """Write each overflow part onto a copy of the block's first row, on its own sheet.
+
+    The copy carries every cell of the template's first block row that is not an input: the
+    parts-per-sheet and cost-per-part formulas, translated to the new row, and the constants
+    (scrap, cutting speed). `write_inputs(sheet, row, part)` is the same writer the block
+    uses, so the inputs are the block's inputs. Returns {part number: (sheet title, row)};
+    empty when the template row cannot be copied faithfully.
+    """
+    from openpyxl.formula.translate import Translator
+    first = int(block["first_row"])
+    inputs = {int(block[k]) for k in block if str(k).startswith("col_")}
+    header = first - 1
+    cells = [c for c in ws[first] if c.column >= int(block["col_desc"])]
+    formulas = [c for c in cells if isinstance(c.value, str) and c.value.startswith("=")
+                and c.column not in inputs]
+    if not formulas or not all(_reads_only_its_own_row(c.value, first) for c in formulas):
+        return {}
+    if OVERFLOW_NEST_SHEET in wb.sheetnames:
+        del wb[OVERFLOW_NEST_SHEET]
+    nest = wb.create_sheet(OVERFLOW_NEST_SHEET)
+    nest.cell(row=1, column=int(block["col_desc"]),
+              value=(f"{ws.title} Other Sheet Material block full — these parts are nested "
+                     f"by the block's own formulas and priced from here on the Bill of "
+                     f"Materials. Total Material Cost does not add this sheet."))
+    last_col = max(c.column for c in cells if c.value is not None)
+    for c in ws[header]:
+        if c.value is not None and int(block["col_desc"]) <= c.column <= last_col:
+            nest.cell(row=2, column=c.column, value=c.value)
+    out: Dict[str, Tuple[str, int]] = {}
+    for i, pe in enumerate(parts):
+        r = 3 + i
+        for c in cells:
+            if c.column in inputs or c.value is None:
+                continue
+            v = c.value
+            if isinstance(v, str) and v.startswith("="):
+                v = Translator(v, origin=c.coordinate).translate_formula(
+                    f"{c.column_letter}{r}")
+            nest.cell(row=r, column=c.column, value=v)
+        write_inputs(nest, r, pe)
+        pn = str(pe.get("part_number") or "").strip()
+        if pn:
+            out[pn] = (nest.title, r)
+    return out
+
+
+def point_bom_lines_at_nest_rows(ws, bom: Mapping[str, Any],
+                                 nest_rows: Mapping[str, Tuple[str, int]]) -> List[str]:
+    """Price each spilled Bill of Materials line from its nest row: the line total becomes
+    the nest row's Cost Per Part cell (a line total, scrap included), so the line's own
+    scrap is zero and its price is that total over its quantity."""
+    moved: List[str] = []
+    keys = {str(k).strip().upper(): v for k, v in nest_rows.items()}
+    for r in range(int(bom["first_row"]), int(bom["last_row"]) + 1):
+        code = str(ws.cell(row=r, column=int(bom["col_code"])).value or "").strip().upper()
+        desc = str(ws.cell(row=r, column=int(bom["col_desc"])).value or "")
+        if code not in keys or "block full" not in desc:
+            continue
+        title, nr = keys[code]
+        qty = ws.cell(row=r, column=int(bom["col_qty"])).coordinate
+        ws.cell(row=r, column=int(bom["col_price"]),
+                value=f"=IFERROR('{title}'!M{nr}/{qty},\"\")")
+        ws.cell(row=r, column=int(bom["col_scrap"]), value=0)
+        ws.cell(row=r, column=int(bom["col_supplier"]), value="Other Sheet Material nest")
+        ws.cell(row=r, column=int(bom["col_desc"]),
+                value=(desc.split(" — ")[0] + f" — Other Sheet Material block full: nested "
+                       f"by the block's own formulas on '{title}' row {nr}"))
+        moved.append(str(ws.cell(row=r, column=int(bom["col_code"])).value).strip())
+    return moved
+
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -4582,6 +4672,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # below itemises it on the 'BOM Overflow' sheet. Nothing is dropped and nothing points
     # at a row that isn't there.
     _spilled_from_blocks: List[Dict[str, Any]] = []
+    _board_spill: List[Dict[str, Any]] = []
     for _blk_name, _blk_list, _blk_key in (("Sheet Steel", steel_parts, "steel"),
                                            ("Other Sheet Material", board_parts, "other_sheet"),
                                            ("Wire", wire_parts, "tube")):
@@ -4622,6 +4713,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _flag(f"{_blk_name} overflow {_sp.get('part_number')}: costed on the NET-PART "
                       f"basis, not the block's nested basis, so it is under-stated against an "
                       f"identical part that fitted in the block — estimator input.", flags)
+                if _blk_key == "other_sheet":
+                    _board_spill.append(_sp)
                 _spilled_from_blocks.append(dict(_sp) | {
                     "description": f"{_sp.get('description') or ''} — {_basis}",
                     "unit_cost_gbp": _scost,
@@ -5241,11 +5334,8 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     # ── Other Sheet block: desc, qty, length, width, thickness ─────────────
     o = cm["other_sheet"]
-    row = o["first_row"]
-    for pe in board_parts:
-        if row > o["last_row"]:
-            _flag(f"Other-sheet overflow: {len(board_parts)} board parts, block full — extras DROPPED.", flags)
-            break
+
+    def _write_board_row(ws, row: int, pe: Dict[str, Any]) -> None:
         me = pe.get("material_estimate") or {}
         ng = pe.get("normalized_geometry") or {}
         # ONE READER. See costed_facts.blank_dimensions: this looked in two holders and
@@ -5303,7 +5393,35 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             ws.cell(row=row, column=o["col_cost_per_sheet"], value=_sheet_price)
         else:
             _flag(f"Other-sheet {pe.get('part_number')} has no sheet price — Cost Per Part will be 0.", flags)
+
+    row = o["first_row"]
+    for pe in board_parts:
+        if row > o["last_row"]:
+            _flag(f"Other-sheet overflow: {len(board_parts)} board parts, block full — extras DROPPED.", flags)
+            break
+        _write_board_row(ws, row, pe)
         row += 1
+
+    # ── A FULL BLOCK'S OVERFLOW, NESTED BY THE BLOCK'S OWN CELLS ──────────────────────
+    # D-248. A spilled board part used to carry the engine's net-part cost, which leaves out
+    # the sheet drop the block charges: 12633-00's Choc Holder front panel and dividers went
+    # out at £0.48 and £0.22 against the block's nest. Reproducing the nest out here failed
+    # once already (the engine's parts-per-sheet is not the workbook's), so this does not:
+    # each spilled part gets a row on a sheet beside the Estimate carrying the block's OWN
+    # formulas, copied from its first row, and the Bill of Materials line reads its price
+    # from there. Only when every formula in that row reads its own row is this done; any
+    # other shape leaves the line on the declared net-part basis.
+    try:
+        _board_nest_rows = (nest_overflow_rows(wb, ws, o, _board_spill, _write_board_row)
+                            if _board_spill else {})
+    except Exception as _ne:                                         # noqa: BLE001
+        _board_nest_rows = {}
+        _flag(f"could not nest the Other Sheet Material overflow ({_ne}); left on the "
+              f"net-part basis.", flags)
+    if _board_spill and not _board_nest_rows:
+        _flag("Other Sheet Material overflow left on the net-part basis: the block's first "
+              "row has a formula that reads outside its own row, so it cannot be copied.",
+              flags)
 
     # ── Labour block: one row per (part, operation) ────────────────────────
     # Operations live in labour_estimate.costs_gbp (its KEYS are the operation names).
@@ -6996,6 +7114,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _write_estimator_inputs(ws, _inputs, flags)
     _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)
+
+    if _board_nest_rows:
+        _moved = point_bom_lines_at_nest_rows(ws, cm["bom"], _board_nest_rows)
+        if _moved:
+            flags[:] = [f for f in flags if not (
+                "overflow" in f and "NET-PART basis" in f
+                and any(str(pn) in f for pn in _moved))]
+            _flag(f"Other Sheet Material block full: {', '.join(_moved)} nested by the "
+                  f"block's own formulas on the '{OVERFLOW_NEST_SHEET}' sheet and priced "
+                  f"from there on the Bill of Materials.", flags)
 
     # ── Force Excel to recalc on open ──────────────────────────────────────
     try:
