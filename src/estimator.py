@@ -6423,6 +6423,23 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 _mf_w["welding_required"] = False
             if isinstance(part.get("risk_flags"), list):
                 part["risk_flags"] = [f for f in part["risk_flags"] if f != "weld_required"]
+            # ON ACRYLIC, "WELD" IS A SOLVENT WELD. 12633-10-GA, a clear PMMA box of six butt
+            # panels: the weld cue was stripped as a metal process and nothing replaced it, so
+            # the box was costed with no bonding at all. A plastic assembly that the drawing
+            # says is welded is cemented — one glue event, the joining the strip note itself
+            # names. Timber keeps the strip alone; its joining is the joinery route's.
+            if any(k in (_mat_u or "") for k in ("ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE",
+                                                  "PETG", "PVC", "ABS")) and "glue" not in ops:
+                ops.append("glue")
+                part["acrylic_bonded"] = True
+                try:
+                    record_operation(part, "glue", "plastic_weld_is_solvent_bond")
+                except Exception:                                    # noqa: BLE001
+                    pass
+                part.setdefault("review_flags", []).append(
+                    f"glue added: the drawing's weld cue on {_mat_u} is a solvent weld — one "
+                    f"bonding event on this assembly. Confirm the joint method (solvent cement "
+                    f"or adhesive)")
 
     # DRES — a structural (CO2/WELD) weld is dressed/linished to clean the bead before
     # finishing. Chain a dress_welds op after the welding op so the DRES dept labour
