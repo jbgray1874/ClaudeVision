@@ -50,7 +50,7 @@ def test_the_powder_decision_names_the_scope_the_sheet_charges():
     d = next(d for d in cf.costed_job(s)["decisions_required"]
              if d["part"] == "12312-01-101")
     assert "12312-01-02M, 12312-01-101, 12312-01-14M" in d["assumption"]
-    assert "both" not in d["assumption"] and "choose" in d["action"]
+    assert "both" not in d["assumption"] and "mixed route" in d["action"]
 
 
 def test_the_report_does_not_call_an_open_scope_sound():

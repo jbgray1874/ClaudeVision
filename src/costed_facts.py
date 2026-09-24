@@ -2000,9 +2000,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "assumption": (f"the sheet charges one P.Coat scope: {', '.join(_charged)}"
                            f"{f' (£{_coat_gbp:,.2f} a unit)' if _coat_gbp else ''}"
                            if _charged else "no P.Coat row is charged on the sheet"),
-            "action": ("choose: coat the assembly after it is built (one coat over the case — "
-                       "its members' own RAW notes are pre-finish), or coat the parts before "
-                       "assembly; the P.Coat row and powder area follow the choice"),
+            "action": ("say which parts are coated before assembly and which after: the whole "
+                       "case after build (members' RAW notes read as pre-finish), every part "
+                       "before, or a mixed route naming each — the P.Coat rows and powder "
+                       "area follow the answer"),
             "owner": "estimator", "gbp_at_stake": _coat_gbp or None,
         })
     for part in job_parts(source):
@@ -2112,9 +2113,23 @@ def costed_job(source: Any) -> Dict[str, Any]:
             _eff = float(_node.get("qty_per_unit"))
         except (TypeError, ValueError):
             continue
-        if abs(_own - _eff) < 1e-9:
-            continue
         _trails = [str(t) for t in (_node.get("qty_trail") or []) if t]
+        if abs(_own - _eff) < 1e-9:
+            # COUNTED ONCE IS A JUDGEMENT, SO IT IS ASKED. route_compiler drops a table's row
+            # for a part its listed sub-assembly already holds at the same count — right for a
+            # repeated description, wrong for a genuine spare the table adds. Equal counts
+            # cannot tell the two apart; a person can.
+            _qn = str(_node.get("qty_note") or "")
+            if "counted once" in _qn:
+                decisions.append({
+                    "part": _line["part_number"], "kind": "quantity_check",
+                    "issue": (f"{_line['part_number']}: listed twice (a table and a "
+                              f"sub-assembly) and costed once, at {_eff:g}"),
+                    "assumption": _qn,
+                    "action": ("confirm it is one item described twice — or, if the table "
+                               "adds a spare or second item, raise the line"),
+                    "owner": "estimator", "gbp_at_stake": None})
+            continue
         if len(_trails) == 1 and not str(_node.get("qty_note") or ""):
             continue
         _each = _money_of(_line) / _eff if _eff else 0.0
