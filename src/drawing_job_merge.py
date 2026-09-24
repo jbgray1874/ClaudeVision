@@ -2281,6 +2281,21 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             _apply_field(part, _field, base[_key], "mirror_of_measured",
                          note=f"mirrored from {base.get('part_number')}")
 
+        # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
+        # was listed on a kit page tagged as bought-in, so it carried that role; it was then
+        # nested and charged as fabricated steel from the plain arm's flat while its provenance
+        # still read "Bought-in / catalogue component". The base was measured (checked above),
+        # so it is a part we cut, and so is its opposite hand: the stale role is cleared, and
+        # said so.
+        if _got and (part.get("is_bought_in") or "bought_in" in (part.get("page_roles") or [])):
+            part["is_bought_in"] = False
+            part["page_roles"] = [r for r in (part.get("page_roles") or []) if r != "bought_in"]
+            if str(part.get("canonical_kind") or "").lower() == "bought_in":
+                part["canonical_kind"] = base.get("canonical_kind") or "part"
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} was tagged bought-in by the page it was listed on; it "
+                f"takes {base.get('part_number')}'s measured flat, so it is made, not bought")
+
         if not _got:
             continue            # blank AND rollup already complete — genuinely nothing to do
         part.setdefault("review_flags", []).append(

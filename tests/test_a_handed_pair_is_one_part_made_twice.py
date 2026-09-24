@@ -280,3 +280,19 @@ def test_two_unmeasured_hands_still_inherit_nothing():
     _djm.apply_mirror_geometry([base, hand])
     assert base["normalized_geometry"]["blank_length_mm"] == 400.0
     assert hand["normalized_geometry"]["blank_length_mm"] == 200.0
+
+
+def test_a_hand_given_a_made_parts_flat_is_no_longer_bought_in():
+    """11650-06: Mirror11650-03-02M was listed on a kit page tagged bought-in, then nested as
+    steel from the plain arm's flat while its provenance said 'catalogue component'."""
+    import drawing_job_merge as _djm
+    base = {"part_number": "11650-03-02M", "normalized_material": "MILD STEEL",
+            "normalized_geometry": {"geometry_source": "dxf", "bounding_box_flat_mm": [552.77, 58.61],
+                                    "blank_length_mm": 552.77, "blank_width_mm": 58.61}}
+    hand = {"part_number": "Mirror11650-03-02M", "description": "HANDED ARM BRACKET",
+            "page_roles": ["assembly", "bought_in"], "is_bought_in": True,
+            "normalized_geometry": {}}
+    _djm.apply_mirror_geometry([base, hand])
+    assert hand["is_bought_in"] is False
+    assert "bought_in" not in hand["page_roles"]
+    assert any("made, not bought" in f for f in hand.get("review_flags", []))
