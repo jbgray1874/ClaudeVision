@@ -155,3 +155,13 @@ def test_a_member_weld_cue_already_bonds_the_assembly_so_no_second_glue():
                                 textual_operations=["welding"]),
                         _member("12633-02-05P", 410, 37, "12633-02-GA")])
     assert sum("glue" in cost for cost in c.values()) == 1
+
+
+def test_an_assembly_record_skipped_as_junk_does_not_stop_its_members_being_bonded():
+    """12633-01-GA had a record with no material, dimensions or operations: skipped from
+    costing, so neither its own rule nor the member rule bonded the wine lifter."""
+    c = _costs_by_part([{"part_number": "12633-01-GA", "is_assembly_parent": True,
+                         "assembly_children": ["12633-01-01P", "12633-01-02P"]},
+                        _member("12633-01-01P", 450, 292, "12633-01-GA"),
+                        _member("12633-01-02P", 450, 38, "12633-01-GA")])
+    assert sum("glue" in cost for cost in c.values()) == 1
