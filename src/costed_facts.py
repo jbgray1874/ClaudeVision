@@ -1983,20 +1983,49 @@ def costed_job(source: Any) -> Dict[str, Any]:
         if not isinstance(_iss, Mapping) \
                 or str(_iss.get("code")) != "powder_scope_mixed_members":
             continue
+        # SAY WHAT THE SHEET CHARGES, NOT WHAT MIGHT. 12312-01-GA: the decision read "both
+        # the assembly coat and the coated members' lines stand" while the sheet carried ONE
+        # P.Coat row, on 02M, 101 and 14M, and the case leaves had none. The estimator is
+        # asked to choose against the scope actually priced.
+        _coat_rows = [r for r in (_workbook_rows(source) or [])
+                      if "powder_coating" in [str(o) for o in (r.get("engine_operations") or [])]
+                      or str(r.get("wb_operation") or "").upper().replace(" ", "") in ("P.COAT", "POWDERCOAT")]
+        _charged = sorted({str(pn) for r in _coat_rows for pn in (r.get("part_numbers") or [])})
+        _coat_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _coat_rows), 2)
         decisions.append({
             "part": str(_iss.get("part_number") or ""),
             "kind": "manufacturing_decision",
             "issue": str(_iss.get("message") or "the powder scope is mixed between "
                          "the assembly and its members"),
-            "assumption": "both the assembly coat and the coated members' lines stand "
-                          "until ruled",
-            "action": "rule whether the assembly coat covers the coated members (drop "
-                      "their lines) or is a separate finishing stage (keep both)",
-            "owner": "estimator", "gbp_at_stake": None,
+            "assumption": (f"the sheet charges one P.Coat scope: {', '.join(_charged)}"
+                           f"{f' (£{_coat_gbp:,.2f} a unit)' if _coat_gbp else ''}"
+                           if _charged else "no P.Coat row is charged on the sheet"),
+            "action": ("choose: coat the assembly after it is built (one coat over the case — "
+                       "its members' own RAW notes are pre-finish), or coat the parts before "
+                       "assembly; the P.Coat row and powder area follow the choice"),
+            "owner": "estimator", "gbp_at_stake": _coat_gbp or None,
         })
     for part in job_parts(source):
         if not isinstance(part, Mapping):
             continue
+        # AN ASSEMBLY THAT CARRIES A PRICE OF ITS OWN AND CHARGES NOTHING. 12312-01-08X, the
+        # 3.944 m silicone LED diffuser, reached the tree holding four purchased items, so it
+        # was an assembly — £0 by design — while the AI had priced the diffuser itself at
+        # £32.50. "Nil by design" hid a purchase: the length is something SDI buys.
+        _line = _by_pn.get(str(part.get("part_number") or "").upper())
+        _own_price = _num(((part.get("system_cost") or {}) if isinstance(
+            part.get("system_cost"), Mapping) else {}).get("unit_cost_gbp"))
+        if _line is not None and _line.get("kind") == "assembly" and not _money_of(_line) \
+                and _own_price > 0:
+            decisions.append({
+                "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
+                "issue": (f"{part.get('part_number')} ({part.get('description') or 'no description'}) "
+                          f"is costed as an assembly at £0, but it carries its own price of "
+                          f"£{_own_price:,.2f}"),
+                "assumption": "nothing charged for the item itself — only its members",
+                "action": ("if SDI buys it (a length, a housing), charge it as a purchased line; "
+                           "if its members are the whole of it, confirm £0"),
+                "owner": "estimator", "gbp_at_stake": round(_own_price, 2)})
         _gap = part.get("route_gap")
         if isinstance(_gap, Mapping) and _gap.get("issue"):
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
