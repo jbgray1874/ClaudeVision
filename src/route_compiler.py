@@ -867,6 +867,7 @@ def _raw_identity_aliases(
     rather than one being chosen by length — a coin toss that deletes evidence is worse
     than two rows somebody can see.
     """
+    from part_identity import threads_differ
     extracted_bought_in = {
         identity: record for identity, record in extracted.items()
         if _bought_in_record(record)
@@ -886,6 +887,11 @@ def _raw_identity_aliases(
             smaller = tokens if len(tokens) <= len(candidate_tokens) else candidate_tokens
             larger = candidate_tokens if smaller is tokens else tokens
             if not smaller.issubset(larger):
+                continue
+            # THE THREAD IS PART OF THE ITEM. _description_tokens drops every M-number, so
+            # "PEM STUD M6" and "M4 PEM STUD" reduce to the same two words; an M4 is never
+            # an alias of an M6 (task #8, the 11650 M4/M6 PEM merge).
+            if threads_differ(record.get("description"), candidate_record.get("description")):
                 continue
             matches.append(candidate)
         if len(matches) == 1:

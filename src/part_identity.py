@@ -144,6 +144,27 @@ def strip_code_label(raw: Any) -> str:
     return stripped or text
 
 
+_THREAD = re.compile(r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?!\.?\d)")
+
+
+def thread_sizes(description: Any) -> frozenset:
+    """The metric thread sizes a description names: "M4x12mm PEM STUD" -> {"4"}.
+
+    ONE READING OF A THREAD FOR EVERY MATCHER. 11650-06's M4 PEM stud was poured into
+    FIXING632, an M6 stud, because a description matcher dropped the thread and kept "PEM",
+    "STUD" and "12". D-214 taught the estimator's matcher; the route compiler's alias pass
+    tokenised the thread away as well (it drops every M-number), so the same M4 could still
+    be aliased onto an M6 identity there. Every matcher asks this one function.
+    """
+    return frozenset(_THREAD.findall(str(description or "").upper()))
+
+
+def threads_differ(a: Any, b: Any) -> bool:
+    """True when both descriptions name a thread and the threads are not the same."""
+    ta, tb = thread_sizes(a), thread_sizes(b)
+    return bool(ta and tb and ta != tb)
+
+
 def stem_duplicate_target(code: Any, others: Any) -> str:
     """The fuller code this one is a truncated stem of, or "" when it stands alone.
 

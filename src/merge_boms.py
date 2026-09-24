@@ -145,8 +145,8 @@ def _identity(code: Any) -> str:
 
 
 def _threads(row: Dict[str, Any]) -> set:
-    return set(re.findall(r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?![0-9])",
-                          str(row.get("description") or "").upper()))
+    from part_identity import thread_sizes
+    return set(thread_sizes(row.get("description")))
 
 
 def _same_article(a: Dict[str, Any], b: Dict[str, Any], exact: bool = False) -> bool:
