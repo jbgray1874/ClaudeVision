@@ -1829,54 +1829,6 @@ def build_part_graph(
               + (f"; linked {', '.join(_linked)}, which nothing else reached" if _linked
                  else ""), flush=True)
 
-    # ── A TABLE THAT LISTS AN ASSEMBLY AND ITS CONTENTS COUNTS THE CONTENTS ONCE ─────────
-    #
-    # 12312-01-GA, 24 Sep 2026: the GA's parts table lists the LIGHTING ASM and, beside it, the
-    # LED driver, LED tape, power cord and Y-splitter the lighting assembly holds (through
-    # 08X). Each is x1 on both routes, so the roll-up summed 2 of each: £43.39 a unit of
-    # purchases the drawing never asked for. The table-wide rule above does not fire — this
-    # table also lists assemblies — so this is the same principle per row: where one table
-    # lists sub-assembly S and part c, c is reached through S, and the table's count for c is
-    # exactly what S already brings, the table is naming S's contents, not adding more. The
-    # direct edge goes and the line says so; a count that differs is a genuine extra and stays.
-    _counted_once: Dict[str, str] = {}
-    _by_table: Dict[Tuple[str, str], List[Tuple[str, float]]] = {}
-    for _row in bom_rows or []:
-        if not isinstance(_row, Mapping):
-            continue
-        for _c, _p, _q in _bom_stated_edges([_row], aliases, _known_now):
-            _by_table.setdefault((_p, str(_row.get("bom_sheet") or "")), []).append((_c, _q))
-
-    def _count_through(_top: str, _target: str, _seen: Tuple[str, ...] = ()) -> float:
-        """How many of _target one _top holds, summed over every path below it."""
-        if _top in _seen:
-            return 0.0
-        _n = 0.0
-        for _k, _kq in (children.get(_top) or {}).items():
-            _kq = number(_kq, 1.0) or 1.0
-            _n += _kq if _k == _target else _kq * _count_through(_k, _target, _seen + (_top,))
-        return _n
-
-    for (_p, _sheet), _rows in sorted(_by_table.items()):
-        _listed = {c for c, _ in _rows}
-        _subs = [c for c in _listed if children.get(c) and c in (children.get(_p) or {})]
-        if not _subs:
-            continue
-        for _c, _q in _rows:
-            if _c in _subs or number((children.get(_p) or {}).get(_c), None) != _q:
-                continue
-            for _s in _subs:
-                _via = _count_through(_s, _c) * (number(children[_p].get(_s), 1.0) or 1.0)
-                if _via and abs(_via - _q) < 1e-9:
-                    children[_p].pop(_c, None)
-                    (parents.get(_c) or set()).discard(_p)
-                    _counted_once[_c] = (
-                        f"listed on {_p}'s table beside {_s}, which already holds {_q:g}; "
-                        f"counted once, through {_s}. If {_p} needs {_q:g} more loose, add them")
-                    print(f"   [bom] {_c}: {_p}'s table lists it beside {_s}, which holds "
-                          f"it — counted once", flush=True)
-                    break
-
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
     top_id = aliases.get(top_id, top_id)
@@ -2434,6 +2386,53 @@ def build_part_graph(
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
+    # ── A TABLE THAT LISTS AN ASSEMBLY AND ITS CONTENTS COUNTS THE CONTENTS ONCE ─────────
+    #
+    # 12312-01-GA, 24 Sep 2026: the GA's parts table lists the LIGHTING ASM and, beside it, the
+    # LED driver, LED tape, power cord and Y-splitter the lighting assembly holds (through
+    # 08X). Each is x1 on both routes, so the roll-up summed 2 of each: £43.39 a unit of
+    # purchases the drawing never asked for. The table-wide rule above does not fire — this
+    # table also lists assemblies — so this is the same principle per row: where one table
+    # lists sub-assembly S and part c, c is reached through S, and the table's count for c is
+    # exactly what S already brings, the table is naming S's contents, not adding more. The
+    # direct edge goes and the line says so; a count that differs is a genuine extra and stays.
+    _counted_once: Dict[str, str] = {}
+    def _count_through(_top: str, _target: str, _seen: Tuple[str, ...] = ()) -> float:
+        """How many of _target one _top holds, summed over every path below it."""
+        if _top in _seen:
+            return 0.0
+        _n = 0.0
+        for _k, _kq in (children.get(_top) or {}).items():
+            _kq = number(_kq, 1.0) or 1.0
+            _n += _kq if _k == _target else _kq * _count_through(_k, _target, _seen + (_top,))
+        return _n
+
+    # EVERY PARENT, NOT ONLY ONE TABLE. The 14:57 rerun kept 2 of each: the GA's edge to the
+    # lighting assembly and its edge to the driver arrived from different reads, so no single
+    # table group held both. The fact that matters is the parent's own children: it holds S
+    # directly AND holds c directly, and S already brings c at that count. The line is then
+    # asked (costed_facts, "counted once"), so a genuine spare is a person's call, not lost.
+    for _p in sorted(children):
+        _direct = dict(children.get(_p) or {})
+        _rows = [(c, number(q, 1.0) or 1.0) for c, q in _direct.items()]
+        _subs = [c for c in _direct if children.get(c)]
+        if not _subs:
+            continue
+        for _c, _q in _rows:
+            if _c in _subs or number((children.get(_p) or {}).get(_c), None) != _q:
+                continue
+            for _s in _subs:
+                _via = _count_through(_s, _c) * (number(children[_p].get(_s), 1.0) or 1.0)
+                if _via and abs(_via - _q) < 1e-9:
+                    children[_p].pop(_c, None)
+                    (parents.get(_c) or set()).discard(_p)
+                    _counted_once[_c] = (
+                        f"listed under {_p} beside {_s}, which already holds {_q:g}; "
+                        f"counted once, through {_s}. If {_p} needs {_q:g} more loose, add them")
+                    print(f"   [bom] {_c}: {_p} lists it beside {_s}, which holds "
+                          f"it — counted once", flush=True)
+                    break
+
     for _root in top_ids:
         add_descendants(_root, 1.0, set(), (f"{_root} x1",))
     for identity in identities:
@@ -4655,10 +4654,10 @@ def compile_job_route(
                 "message": (f"powder is required on {_d.target_id} AND on "
                             f"{', '.join(sorted(_coated_desc))} while "
                             f"{', '.join(sorted(_leaf_desc - _coated_desc))} carry no "
-                            f"coat of their own — the scope is genuinely mixed and a "
-                            f"person must rule whether the assembly coat covers the "
-                            f"coated members (drop their lines) or is a separate stage "
-                            f"(keep both). Both charges stand until ruled."),
+                            f"coat of their own — the drawings do not settle which parts "
+                            f"are coated before assembly and which after, so a person "
+                            f"rules; the sheet charges the scope named in the decision "
+                            f"until then."),
             })
 
     # Hierarchy is a source claim too. It records why leaf work is inapplicable to a parent

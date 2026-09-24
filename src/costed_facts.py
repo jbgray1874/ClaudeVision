@@ -2006,18 +2006,31 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "area follow the answer"),
             "owner": "estimator", "gbp_at_stake": _coat_gbp or None,
         })
-    for part in job_parts(source):
-        if not isinstance(part, Mapping):
-            continue
+    def _priced_assembly(part: Mapping[str, Any]) -> None:
         # AN ASSEMBLY THAT CARRIES A PRICE OF ITS OWN AND CHARGES NOTHING. 12312-01-08X, the
         # 3.944 m silicone LED diffuser, reached the tree holding four purchased items, so it
         # was an assembly — £0 by design — while the AI had priced the diffuser itself at
         # £32.50. "Nil by design" hid a purchase: the length is something SDI buys.
-        _line = _by_pn.get(str(part.get("part_number") or "").upper())
+        _pn_u = str(part.get("part_number") or "").upper()
+        _line = _by_pn.get(_pn_u)
         _own_price = _num(((part.get("system_cost") or {}) if isinstance(
             part.get("system_cost"), Mapping) else {}).get("unit_cost_gbp"))
-        if _line is not None and _line.get("kind") == "assembly" and not _money_of(_line) \
-                and _own_price > 0:
+        if not _own_price:
+            # The 14:57 rerun: 08X reached the report as a group header, its price only in
+            # the flag the pricer leaves ("AI researched price £32.50: priced as ...").
+            for _f in (part.get("review_flags") or []):
+                _m = re.search(r"AI researched price £([0-9,]+(?:\.[0-9]+)?)", str(_f))
+                if _m:
+                    _own_price = _num(_m.group(1).replace(",", ""))
+                    break
+        _is_asm = ((_line is not None and _line.get("kind") == "assembly")
+                   or str((nodes.get(_pn_u) or {}).get("kind") or "") == "assembly"
+                   or bool(part.get("is_assembly_parent") or part.get("assembly_children")))
+        _charged = _money_of(_line) if _line is not None else 0.0
+        if _is_asm and not _charged and _own_price > 0 \
+                and not any(d.get("part") == str(part.get("part_number") or "")
+                            and "carries its own price" in str(d.get("issue"))
+                            for d in decisions):
             decisions.append({
                 "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
                 "issue": (f"{part.get('part_number')} ({part.get('description') or 'no description'}) "
@@ -2027,6 +2040,11 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "action": ("if SDI buys it (a length, a housing), charge it as a purchased line; "
                            "if its members are the whole of it, confirm £0"),
                 "owner": "estimator", "gbp_at_stake": round(_own_price, 2)})
+
+    for part in job_parts(source):
+        if not isinstance(part, Mapping):
+            continue
+        _priced_assembly(part)
         _gap = part.get("route_gap")
         if isinstance(_gap, Mapping) and _gap.get("issue"):
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
@@ -2097,6 +2115,15 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "action": "pick which figure is right; the drawing contradicts itself",
                 "owner": "estimator", "gbp_at_stake": None,
             })
+    # The sheet's list drops an assembly that has no line of its own — which is exactly the
+    # case being looked for — so the write-up's own records are checked as well.
+    _seen_parts = {str(p.get("part_number") or "").upper() for p in job_parts(source)
+                   if isinstance(p, Mapping)}
+    for part in (((source.get("manufacturing_writeup") or {}).get("parts") or [])
+                 if isinstance(source, Mapping) else []):
+        if isinstance(part, Mapping) and str(part.get("part_number") or "").upper() \
+                not in _seen_parts:
+            _priced_assembly(part)
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
     # costed at 2, reached once through the lighting assembly and once from the GA's table.
