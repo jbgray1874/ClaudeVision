@@ -84,3 +84,20 @@ def test_the_labour_row_names_the_drawings_material_and_the_substitute():
     assert "_shown = material_shown_on_row(pe, _mat)" in src
     row = labour_row_description("CNC", "FOAMED PVC (priced as ACRYLIC)", 3, ["12312-01-03A"])
     assert "FOAMED PVC" in row and "priced as ACRYLIC" in row
+
+
+def test_pmma_takes_the_acrylic_rule_and_the_laser_survives_the_acrylic_route():
+    """12633-10: the files say PMMA, the title block ACRYLIC. The shop rule is ACRYLIC ->
+    laser; and the estimator's acrylic route drops laser unless the part carries a laser
+    signal, so the proposal must set one."""
+    parts = [{"part_number": "12633-10-01P", "description": "FRONT PANEL", "material": "PMMA",
+              "thickness_mm": 5, "geometry_source": "dxf", "quantity": 2}]
+    propose_missing_cuts(parts)
+    assert parts[0]["inferred_operations"] == ["laser_cutting"]
+    assert parts[0]["cut_method"] == "laser" and not parts[0].get("route_gap")
+
+
+def test_a_general_arrangement_dxf_is_never_proposed_as_a_cut():
+    parts = [{"part_number": "12633-10-GA", "description": "CONSUMABLE HOLDER",
+              "material": "ACRYLIC", "geometry_source": "dxf", "quantity": 1}]
+    assert propose_missing_cuts(parts) == [] and not parts[0].get("inferred_operations")
