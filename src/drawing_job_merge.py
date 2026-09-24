@@ -1967,6 +1967,96 @@ def settle_handed_pairs(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return settled
 
 
+_CUT_OPS = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting",
+            "punching", "guillotine")
+_METHOD_TO_OP = {"laser": "laser_cutting", "router": "cnc_routing", "punch": "punching"}
+# Stock a router cuts when the shop has not said otherwise: board, foam board and plastic sheet.
+_ROUTED_STOCK = ("FOAM", "PVC", "ACRYLIC", "PERSPEX", "PMMA", "PETG", "HIPS", "ABS",
+                 "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER")
+# Stock whose cutting method the flat does not tell us (a graphic may arrive cut to shape).
+_UNSAID_STOCK = ("CARD", "PAPER", "VINYL", "FABRIC", "BOOK", "LABEL", "FILM")
+
+
+def _has_measured_flat(part: Dict[str, Any]) -> bool:
+    ng = part.get("normalized_geometry") or {}
+    src = " ".join(str(v or "") for v in (part.get("geometry_source"), ng.get("geometry_source")))
+    return bool(part.get("flat_pattern_detected") or part.get("dxf_path")
+                or "dxf" in src.lower() or "mirror_of_measured" in src)
+
+
+def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """A part priced from a measured flat must have a way to become that flat.
+
+    12312-01-GA: the 03A back panel (3 mm Foamex, its own DXF, nested and charged as material)
+    and the 04G card graphic had no cutting row and nothing said so — the drawing's notes name
+    the laser for the steel pages and nothing for these two. Generic, per part with a measured
+    flat and no cutting operation:
+      - the shop's own rule for the material (config.CUT_METHOD_BY_MATERIAL) is applied;
+      - otherwise board / plastic sheet is PROPOSED for the router, inferred, and put to the
+        estimator as a decision (the machine is a shop choice);
+      - card, paper, vinyl, or a part priced as BOUGHT-IN, is not given a machine: how it
+        becomes the drawn shape is asked (bought cut to shape, or cut here, and on what).
+    Returns what it did, for the log.
+    """
+    try:
+        import config as _cfg
+        rules = list(getattr(_cfg, "CUT_METHOD_BY_MATERIAL", []) or [])
+    except Exception:                                               # pragma: no cover
+        rules = []
+    done: List[Dict[str, str]] = []
+    for part in parts or []:
+        if not isinstance(part, dict) or not _has_measured_flat(part):
+            continue
+        if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
+                or part.get("assembly_children") or part.get("supplied_by_third_party"):
+            continue
+        ops = [str(o) for o in ((part.get("textual_operations") or [])
+                                + (part.get("inferred_operations") or []))]
+        if any(o in _CUT_OPS for o in ops):
+            continue
+        pn = str(part.get("part_number") or "")
+        mat = str(part.get("normalized_material") or part.get("material") or "").upper()
+        mat_key = re.sub(r"[\s-]+", "_", mat.strip())
+        shown = str(part.get("material") or part.get("normalized_material") or "").strip()
+        bought = bool(part.get("is_bought_in")) or "bought_in" in (part.get("page_roles") or []) \
+            or str(part.get("canonical_kind") or "").lower() == "bought_in"
+        if bought or any(w in mat for w in _UNSAID_STOCK) or not mat:
+            part["route_gap"] = {
+                "issue": (f"{pn} has a measured flat and a material charge "
+                          f"({shown or 'material unstated'}), but nothing cuts it to "
+                          f"that shape"),
+                "assumption": ("priced as a bought item — no SDI cutting row" if bought
+                               else "no cutting row — the drawing does not say how"),
+                "action": ("say how it becomes the drawn shape: bought cut to shape (price it "
+                           "as supplied), or cut here — and on which machine"),
+            }
+            done.append({"part_number": pn, "result": "asked"})
+            continue
+        rule = next((r for r in rules if str(r.get("material") or "").upper() == mat_key
+                     and (r.get("max_thickness_mm") is None
+                          or (part.get("thickness_mm") or 0) <= r["max_thickness_mm"])), None)
+        if rule and _METHOD_TO_OP.get(str(rule.get("method"))):
+            op, why = _METHOD_TO_OP[str(rule["method"])], f"SDI shop rule for {mat_key}"
+        elif any(w in mat for w in _ROUTED_STOCK):
+            op, why = "cnc_routing", f"proposed — no shop rule names {shown}"
+            part["route_gap"] = {
+                "issue": f"{pn}: cutting proposed as CNC routing ({shown} sheet)",
+                "assumption": ("routed from its measured flat and timed on the sheet — no SDI "
+                               f"shop rule names {shown}"),
+                "action": ("confirm the machine; add the material to "
+                           "CUT_METHOD_BY_MATERIAL so the next job does not ask"),
+            }
+        else:
+            continue
+        inf = list(part.get("inferred_operations") or [])
+        inf.append(op)
+        part["inferred_operations"] = inf
+        part.setdefault("review_flags", []).append(
+            f"{pn} had a measured flat and no cutting operation; {op} added ({why})")
+        done.append({"part_number": pn, "result": op})
+    return done
+
+
 def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Give a mirrored part the flat pattern of the part it mirrors.
 
@@ -2648,6 +2738,7 @@ def augment_summary_with_dxf(
     # A mirrored part has its own hand's flat only when somebody exported one. Where nobody
     # did, its other hand was measured and is sitting in this same list.
     report["mirror_inherited"] = apply_mirror_geometry(parts)
+    report["cuts_proposed"] = propose_missing_cuts(parts)
     # AFTER THE GEOMETRY, DELIBERATELY. Mirroring fills what a hand is MISSING; this settles
     # what the two hands each answered and disagreed about, which only has meaning once both
     # records are as complete as they are going to get.

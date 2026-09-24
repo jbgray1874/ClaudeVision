@@ -1983,20 +1983,57 @@ def costed_job(source: Any) -> Dict[str, Any]:
         if not isinstance(_iss, Mapping) \
                 or str(_iss.get("code")) != "powder_scope_mixed_members":
             continue
+        # SAY WHAT THE SHEET CHARGES, NOT WHAT MIGHT. 12312-01-GA: the decision read "both
+        # the assembly coat and the coated members' lines stand" while the sheet carried ONE
+        # P.Coat row, on 02M, 101 and 14M, and the case leaves had none. The estimator is
+        # asked to choose against the scope actually priced.
+        _coat_rows = [r for r in (_workbook_rows(source) or [])
+                      if "powder_coating" in [str(o) for o in (r.get("engine_operations") or [])]
+                      or str(r.get("wb_operation") or "").upper().replace(" ", "") in ("P.COAT", "POWDERCOAT")]
+        _charged = sorted({str(pn) for r in _coat_rows for pn in (r.get("part_numbers") or [])})
+        _coat_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _coat_rows), 2)
         decisions.append({
             "part": str(_iss.get("part_number") or ""),
             "kind": "manufacturing_decision",
             "issue": str(_iss.get("message") or "the powder scope is mixed between "
                          "the assembly and its members"),
-            "assumption": "both the assembly coat and the coated members' lines stand "
-                          "until ruled",
-            "action": "rule whether the assembly coat covers the coated members (drop "
-                      "their lines) or is a separate finishing stage (keep both)",
-            "owner": "estimator", "gbp_at_stake": None,
+            "assumption": (f"the sheet charges one P.Coat scope: {', '.join(_charged)}"
+                           f"{f' (£{_coat_gbp:,.2f} a unit)' if _coat_gbp else ''}"
+                           if _charged else "no P.Coat row is charged on the sheet"),
+            "action": ("choose: coat the assembly after it is built (one coat over the case — "
+                       "its members' own RAW notes are pre-finish), or coat the parts before "
+                       "assembly; the P.Coat row and powder area follow the choice"),
+            "owner": "estimator", "gbp_at_stake": _coat_gbp or None,
         })
     for part in job_parts(source):
         if not isinstance(part, Mapping):
             continue
+        # AN ASSEMBLY THAT CARRIES A PRICE OF ITS OWN AND CHARGES NOTHING. 12312-01-08X, the
+        # 3.944 m silicone LED diffuser, reached the tree holding four purchased items, so it
+        # was an assembly — £0 by design — while the AI had priced the diffuser itself at
+        # £32.50. "Nil by design" hid a purchase: the length is something SDI buys.
+        _line = _by_pn.get(str(part.get("part_number") or "").upper())
+        _own_price = _num(((part.get("system_cost") or {}) if isinstance(
+            part.get("system_cost"), Mapping) else {}).get("unit_cost_gbp"))
+        if _line is not None and _line.get("kind") == "assembly" and not _money_of(_line) \
+                and _own_price > 0:
+            decisions.append({
+                "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
+                "issue": (f"{part.get('part_number')} ({part.get('description') or 'no description'}) "
+                          f"is costed as an assembly at £0, but it carries its own price of "
+                          f"£{_own_price:,.2f}"),
+                "assumption": "nothing charged for the item itself — only its members",
+                "action": ("if SDI buys it (a length, a housing), charge it as a purchased line; "
+                           "if its members are the whole of it, confirm £0"),
+                "owner": "estimator", "gbp_at_stake": round(_own_price, 2)})
+        _gap = part.get("route_gap")
+        if isinstance(_gap, Mapping) and _gap.get("issue"):
+            _line = _by_pn.get(str(part.get("part_number") or "").upper())
+            decisions.append({
+                "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
+                "issue": str(_gap.get("issue")), "assumption": str(_gap.get("assumption") or ""),
+                "action": str(_gap.get("action") or ""), "owner": "estimator",
+                "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
         _tc = thickness_conflict(part, boilerplate_mm=_boiler)
         if _tc:
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
@@ -2059,6 +2096,38 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "action": "pick which figure is right; the drawing contradicts itself",
                 "owner": "estimator", "gbp_at_stake": None,
             })
+    # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
+    # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
+    # costed at 2, reached once through the lighting assembly and once from the GA's table.
+    # Comparing a row's stated count with its costed count is mechanical, so it is asked here
+    # rather than left in a column. A count multiplied down ONE route (2 per sub-assembly, 3
+    # sub-assemblies) is the cascade doing its job and is not asked; two routes, or none that
+    # explains it, is.
+    for _ident, _node in sorted(nodes.items()):
+        _line = _by_pn.get(_ident)
+        if _line is None:
+            continue
+        try:
+            _own = float(_node.get("qty_own"))
+            _eff = float(_node.get("qty_per_unit"))
+        except (TypeError, ValueError):
+            continue
+        if abs(_own - _eff) < 1e-9:
+            continue
+        _trails = [str(t) for t in (_node.get("qty_trail") or []) if t]
+        if len(_trails) == 1 and not str(_node.get("qty_note") or ""):
+            continue
+        _each = _money_of(_line) / _eff if _eff else 0.0
+        decisions.append({
+            "part": _line["part_number"], "kind": "quantity_check",
+            "issue": (f"{_line['part_number']}: its BOM row states {_own:g}, the sheet costs "
+                      f"{_eff:g}"),
+            "assumption": ("; ".join(_trails) if _trails else "no route recorded")
+                          + (f" — {_node.get('qty_note')}" if _node.get("qty_note") else ""),
+            "action": (f"confirm {_eff:g} per unit, or correct the line to {_own:g}"
+                       + (f" (£{abs(_eff - _own) * _each:,.2f} a unit at the sheet's price)"
+                          if _each else "")),
+            "owner": "estimator", "gbp_at_stake": round(abs(_eff - _own) * _each, 2) or None})
     for l in house:
         decisions.append({
             "part": l["part_number"], "kind": "indicative_rate",
@@ -2093,11 +2162,14 @@ def costed_job(source: Any) -> Dict[str, Any]:
     manufacturing = [d for d in decisions if d["kind"] == "manufacturing_decision"]
     if manufacturing:
         reasons.append(f"{len(manufacturing)} manufacturing decision(s) open")
+    _qty_checks = [d for d in decisions if d["kind"] == "quantity_check"]
+    if _qty_checks:
+        reasons.append(f"{len(_qty_checks)} quantity check(s) open")
     blocking_n = (sum(1 for v in (inv.get("violations") or [])
                       if isinstance(v, dict) and v.get("severity") == "blocking")
                   if inv is not None else 0)
     status = ("provisional" if (unpriced or market or not calculated or blocking_n or inv is None)
-              else ("reviewable" if (house or manufacturing) else "firm"))
+              else ("reviewable" if (house or manufacturing or _qty_checks) else "firm"))
     # DRAFT is narrower than PROVISIONAL. A quote is a draft while a person still owes it
     # something — a price, a replacement for a market guess, a manufacturing decision, or a
     # blocking check to clear. "The checks have not run yet" and "the sheet was not read
@@ -2162,13 +2234,14 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
 
     prices, market = _n("missing_price"), _n("market_figure")
     mfg, house = _n("manufacturing_decision"), _n("indicative_rate")
+    qty = _n("quantity_check")
     # A kind none of the four buckets recognises must still be SEEN: on the 12:28 run of
     # 7332-01 an "advisory" entry sat in the list, the headline said "7 to settle" and
     # the phrase added to 6, because total counted every row and the phrase counted four
     # kinds. The headline and the phrase are one tally or they are two lies — so every
     # row lands in a named bucket, and an unclassified kind is counted as blocking, not
     # quietly dropped: an open item nobody classified is not thereby advisory.
-    other = len(ds) - (prices + market + mfg + house)
+    other = len(ds) - (prices + market + mfg + house + qty)
     bits: List[str] = []
     if prices:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
@@ -2176,6 +2249,8 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{market} market figure{'s' if market != 1 else ''} to replace")
     if mfg:
         bits.append(f"{mfg} manufacturing decision{'s' if mfg != 1 else ''}")
+    if qty:
+        bits.append(f"{qty} quantity check{'s' if qty != 1 else ''}")
     if house:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
     if other:

@@ -1115,7 +1115,17 @@ not what a reader takes from a heading like this one.</td></tr>
     # powder on. A report claiming a process the sheet does not price is worse than silence.
     from costed_facts import part_numbers_with_operation
     _pc_parts = part_numbers_with_operation(summary, "powder_coating", "p.coat")
-    if _pc_parts:
+    # NOT "SOUND" WHILE THE SCOPE IS AN OPEN DECISION. 12312-01-GA printed this beside a
+    # decision saying the powder scope was genuinely mixed — the reassurance and the question
+    # cannot both be true, and the question is the one a person has to answer.
+    _pc_open = any(isinstance(_i, dict) and _i.get("code") == "powder_scope_mixed_members"
+                   for _i in ((((summary.get("estimate_summary") or {})
+                                .get("canonical_route_shadow") or {}).get("issues")) or []))
+    if _pc_parts and _pc_open:
+        rows += (f'<tr><td><span class="tag t-warn">Check</span></td><td><b>Powder coating charged on '
+                 f'{len(_pc_parts)} part(s): {_esc(", ".join(sorted(_pc_parts)))}.</b> '
+                 f'Whether that is the right scope is an open decision — see Decisions required.</td></tr>')
+    elif _pc_parts:
         rows += (f'<tr><td><span class="tag t-good">Sound</span></td><td><b>Powder coating scoped to the right parts.</b> '
                  f'{len(_pc_parts)} part(s) are <b>charged</b> powder coating — not applied blanket '
                  f'across raw/assembly parts.</td></tr>')
@@ -2838,10 +2848,11 @@ _DECISION_KIND_WORDS = {
     "missing_price": ("t-bad", "Missing price"),
     "market_figure": ("t-bad", "Market figure"),
     "manufacturing_decision": ("t-warn", "Manufacturing decision"),
+    "quantity_check": ("t-warn", "Quantity check"),
     "indicative_rate": ("t-info", "Indicative rate"),
 }
-_DECISION_ORDER = {"missing_price": 0, "market_figure": 1, "manufacturing_decision": 2,
-                   "indicative_rate": 3}
+_DECISION_ORDER = {"missing_price": 0, "market_figure": 1, "quantity_check": 2,
+                   "manufacturing_decision": 3, "indicative_rate": 4}
 
 # Plain string, not an f-string: it carries braces. Opens the diagnostics for print, because
 # a closed <details> prints closed and the evidence would be absent from the paper copy.
