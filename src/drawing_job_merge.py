@@ -1992,6 +1992,35 @@ def _has_measured_flat(part: Dict[str, Any]) -> bool:
                 or "dxf" in src.lower() or "mirror_of_measured" in src)
 
 
+_BEND_CALLOUT = re.compile(r"\b(?:UP|DOWN)\s*\d{2,3}(?:\.\d+)?\s*°", re.I)
+
+
+def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> int:
+    """How many bend callouts ("UP 105°", "DOWN 90°") the part's own drawing sheets print.
+
+    12633-00-GA: SolidWorks counted two bend features on the wine lifter base (right — its flat
+    pattern prints UP 105° / DOWN 105°) and one on the beer plinth's bottom panel (wrong — a flat
+    400 x 71 plate, with no callout on its sheet). A model feature count describes how the model
+    was built; the callout is the drawing office saying the part is bent. Returns parts stamped.
+    """
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    text_by_page: Dict[Any, str] = {}
+    for pg in pages or []:
+        if isinstance(pg, dict):
+            text_by_page[pg.get("page_number")] = " ".join(
+                str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text"))
+    n = 0
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        counts = [len(_BEND_CALLOUT.findall(text_by_page.get(p, "")))
+                  for p in (part.get("pages") or []) if not isinstance(p, dict)]
+        if counts and max(counts):
+            part["drawing_bend_callouts"] = max(counts)
+            n += 1
+    return n
+
+
 def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     """A part priced from a measured flat must have a way to become that flat.
 

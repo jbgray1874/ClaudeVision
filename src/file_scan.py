@@ -3558,7 +3558,8 @@ def _finalize_scan_summary(
         from drawing_job_merge import apply_mirror_geometry, settle_handed_pairs
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
         try:
-            from drawing_job_merge import propose_missing_cuts
+            from drawing_job_merge import propose_missing_cuts, stamp_drawing_bend_callouts
+            stamp_drawing_bend_callouts(summary["manufacturing_writeup"]["parts"], summary)
             for _cp in propose_missing_cuts(summary["manufacturing_writeup"]["parts"]):
                 print(f"   [route] {_cp['part_number']}: measured flat, no cutting operation "
                       f"-> {_cp['result']}", flush=True)

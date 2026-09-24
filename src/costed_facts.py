@@ -2124,6 +2124,33 @@ def costed_job(source: Any) -> Dict[str, Any]:
         if isinstance(part, Mapping) and str(part.get("part_number") or "").upper() \
                 not in _seen_parts:
             _priced_assembly(part)
+    # ── HOW A PLASTIC ASSEMBLY IS JOINED IS A PERSON'S CALL ──────────────────────
+    # 12633-00-GA review: "three glue charges should not be added merely because there are
+    # three GAs. Confirm the joining method for each assembly." The engine costs one bonding
+    # event (glue + flame polish) wherever a plastic assembly is welded or holds loose panels
+    # and no fixings; that is a working assumption, so it is one decision naming every
+    # assembly it was made for, not a flag per record.
+    _bonded: List[str] = []
+    _seen_b: set = set()
+    for _bp in list(job_parts(source)) + list(
+            ((source.get("manufacturing_writeup") or {}).get("parts") or [])
+            if isinstance(source, Mapping) else []):
+        if isinstance(_bp, Mapping) and _bp.get("acrylic_bonded"):
+            _k = str(_bp.get("part_number") or "")
+            if _k and _k.upper() not in _seen_b:
+                _seen_b.add(_k.upper())
+                _bonded.append(_k)
+    if _bonded:
+        decisions.append({
+            "part": ", ".join(_bonded), "kind": "manufacturing_decision",
+            "issue": (f"How {', '.join(_bonded)} {'is' if len(_bonded) == 1 else 'are'} "
+                      f"joined"),
+            "assumption": ("one bonding event each (Glue, with the flame-polish that goes with "
+                           "it) — no drawing states the joint"),
+            "action": ("confirm per assembly: solvent cement, adhesive, or a push/tab fit "
+                       "with no glue; drop the glue rows where it is not bonded"),
+            "owner": "estimator", "gbp_at_stake": None})
+
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
     # costed at 2, reached once through the lighting assembly and once from the GA's table.
