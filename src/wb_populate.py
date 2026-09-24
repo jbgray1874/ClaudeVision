@@ -6990,6 +6990,19 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _flag(f"could not compact the Estimate sheet ({_ce}); written full length.",
                   flags)
 
+    # ── The book opens on the money, not the working ────────────────────────
+    # James Gray, 24 Sep 2026: "switch off the formulas to show the values". The blank
+    # template on the share was saved with Formulas > Show Formulas selected, and every book
+    # written from it opened showing =IF(H96=0,… in place of the price — whatever
+    # SHOW_FORMULAS_ON_ESTIMATE said, because nothing set the view; it was inherited. The view
+    # is set here on every sheet of the book we write. The template is not touched, and an
+    # estimator who wants the working presses Ctrl+` (or turns the switch on in config).
+    for _ws in wb.worksheets:
+        try:
+            _ws.sheet_view.showFormulas = False
+        except Exception:                                            # noqa: BLE001
+            pass
+
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
     safe_name = re.sub(r'[<>:"/\\|?*]', "_", job_folder_name).strip()

@@ -117,3 +117,18 @@ def test_totals_are_unchanged_and_a_line_in_an_opened_slot_counts(tmp_path):
     wb = _estimate(); wc.compact_estimate(wb); wb["Estimate"]["D6"] = 18
     wbf = _estimate(); wbf["Estimate"]["D6"] = 18
     assert recalc(wb, "short18") == recalc(wbf, "full18")
+
+
+def test_the_book_opens_on_values_even_when_the_template_shows_formulas():
+    """The blank template on the share was saved with Show Formulas selected; the book we
+    write must open on the money whatever the template's view was."""
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    view = src.index("_ws.sheet_view.showFormulas = False")
+    assert view < src.index("wb.save(out_path)")
+    wb = _estimate()
+    wb["Estimate"].sheet_view.showFormulas = True        # as the template arrives
+    for _ws in wb.worksheets:                            # what the writer does
+        _ws.sheet_view.showFormulas = False
+    import io
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    assert not openpyxl.load_workbook(buf)["Estimate"].sheet_view.showFormulas
