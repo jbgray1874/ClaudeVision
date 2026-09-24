@@ -81,6 +81,77 @@ def test_an_acrylic_base_takes_its_linebend_from_the_charged_fold_count():
          "geometry_source": "dxf", "quantity": 1, "cut_method": "laser",
          "inferred_operations": ["laser_cutting"],
          "normalized_geometry": {"blank_length_mm": 450, "blank_width_mm": 292.1},
-         "solidworks_bend_features": 2}
+         "solidworks_bend_features": 2, "drawing_bend_callouts": 2}
     costs = (estimator.estimate_part(p, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
     assert "linebend" in costs
+
+
+def test_a_model_bend_the_drawing_never_calls_out_is_not_charged():
+    """12633-02-01P: one SolidWorks bend feature on a flat 400 x 71 plate, no callout."""
+    p = {"part_number": "12633-02-01P", "description": "BOTTOM PANEL", "material": "ACRYLIC",
+         "normalized_material": "ACRYLIC", "thickness_mm": 5, "normalized_thickness_mm": 5,
+         "geometry_source": "dxf", "quantity": 1, "cut_method": "laser",
+         "inferred_operations": ["laser_cutting"],
+         "normalized_geometry": {"blank_length_mm": 400, "blank_width_mm": 71},
+         "solidworks_bend_features": 1}
+    costs = (estimator.estimate_part(p, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "linebend" not in costs
+    flags = " | ".join(str(f) for f in p.get("review_flags") or [])
+    assert "is CHARGED" not in flags and "fold(s) charged" not in flags
+    assert "no Linebend charged" in flags
+
+
+def test_bend_callouts_are_counted_off_the_parts_own_sheet():
+    from drawing_job_merge import stamp_drawing_bend_callouts
+    parts = [{"part_number": "12633-01-01P", "pages": [3]},
+             {"part_number": "12633-02-01P", "pages": [5]}]
+    summary = {"pages": [{"page_number": 3, "pdfplumber_text": "FLAT PATTERN UP  105°  R 1 DOWN  105°  R 1"},
+                         {"page_number": 5, "pdfplumber_text": "BOTTOM PANEL 400 71 5"}]}
+    assert stamp_drawing_bend_callouts(parts, summary) == 1
+    assert parts[0]["drawing_bend_callouts"] == 2 and "drawing_bend_callouts" not in parts[1]
+
+
+def test_the_joint_method_is_one_decision_naming_every_bonded_assembly():
+    import costed_facts as cf
+    parts = [{"part_number": "12633-01-GA", "acrylic_bonded": True},
+             {"part_number": "12633-02-GA", "acrylic_bonded": True},
+             {"part_number": "12633-03-01P"}]
+    job = cf.costed_job({"manufacturing_writeup": {"parts": parts},
+                         "estimate_summary": {"part_estimates": []}})
+    hits = [d for d in job["decisions_required"] if "joined" in str(d.get("issue"))]
+    assert len(hits) == 1 and "12633-01-GA" in hits[0]["part"] and "12633-02-GA" in hits[0]["part"]
+
+
+def _member(pn, L, W, owner, **kw):
+    d = {"part_number": pn, "description": pn, "material": "ACRYLIC",
+         "normalized_material": "ACRYLIC", "thickness_mm": 5, "normalized_thickness_mm": 5,
+         "geometry_source": "dxf", "quantity": 1, "cut_method": "laser",
+         "inferred_operations": ["laser_cutting"],
+         "normalized_geometry": {"blank_length_mm": L, "blank_width_mm": W},
+         "owning_assembly": owner}
+    d.update(kw)
+    return d
+
+
+def _costs_by_part(parts):
+    res = estimator.estimate_document(parts, {"pages": []})
+    pes = res.get("part_estimates") or (res.get("estimate_summary") or {}).get("part_estimates") or []
+    return {pe.get("part_number"): ((pe.get("labour_estimate") or {}).get("costs_gbp") or {})
+            for pe in pes}
+
+
+def test_an_assembly_known_only_by_its_members_is_bonded_once_on_the_largest():
+    """12633-00-GA: the wine lifter exists only as a graph node, so no assembly record could
+    carry its bonding."""
+    c = _costs_by_part([_member("12633-01-01P", 450, 292, "12633-01-GA"),
+                        _member("12633-01-02P", 450, 38, "12633-01-GA"),
+                        _member("12633-01-03P", 450, 20, "12633-01-GA")])
+    glued = [pn for pn, cost in c.items() if "glue" in cost]
+    assert glued == ["12633-01-01P"]
+
+
+def test_a_member_weld_cue_already_bonds_the_assembly_so_no_second_glue():
+    c = _costs_by_part([_member("12633-02-01P", 400, 71, "12633-02-GA",
+                                textual_operations=["welding"]),
+                        _member("12633-02-05P", 410, 37, "12633-02-GA")])
+    assert sum("glue" in cost for cost in c.values()) == 1

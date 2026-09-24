@@ -8065,10 +8065,39 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # the model's count lives. The press brake and the line bender bend the same bends.
         if not _bends and not _model_measured_zero_bends(part):
             try:
-                from fold_count import press_brake_folds as _pbf_acr     # noqa: PLC0415
-                _bends = int((_pbf_acr(part) or {}).get("count") or 0)
+                from fold_count import (press_brake_folds as _pbf_acr,     # noqa: PLC0415
+                                        MODEL_FEATURES as _MF, DASHED_PROXY as _DP)
+                _fc = _pbf_acr(part) or {}
+                # A MODEL FEATURE COUNT IS CORROBORATED BY THE DRAWING OR IT IS NOT A BEND.
+                # 12633-02-01P, a flat 400 x 71 plate, carried one SolidWorks bend feature;
+                # 12633-01-01P carried two and its sheet prints UP 105° / DOWN 105°. A dashed
+                # line read off a view is never enough on its own.
+                if _fc.get("source") == _MF and not part.get("drawing_bend_callouts"):
+                    _fc = {}
+                if _fc.get("source") == _DP:
+                    _fc = {}
+                _bends = int(_fc.get("count") or 0)
             except Exception:                                          # noqa: BLE001
                 pass
+        # ONE SENTENCE ABOUT THE BENDS, AND IT MATCHES THE SHEET. The press-brake fold lines
+        # ("fold count: 2 ... is CHARGED", "2 fold(s) charged") were written before this
+        # branch rules the brake out for acrylic, so 12633-00-GA's book said bends were
+        # charged beside a Labour section with no Linebend. They are replaced by what is true
+        # here: Linebend carries these bends, or it carries none and why.
+        _rf = part.get("review_flags")
+        if isinstance(_rf, list):
+            part["review_flags"] = [f for f in _rf if not (isinstance(f, str) and (
+                f.startswith("fold count:") or "fold(s) charged" in f))]
+        _sw_b = _safe_int(part.get("solidworks_bend_features")) or 0
+        if _bends > 0:
+            part.setdefault("review_flags", []).append(
+                f"{_bends} bend(s) charged as Linebend — acrylic is bent hot on the line, "
+                f"not on the press brake")
+        elif _sw_b:
+            part.setdefault("review_flags", []).append(
+                f"no Linebend charged: the SolidWorks model carries {_sw_b} bend feature(s), "
+                f"but neither the flat pattern nor this part's drawing sheet shows a bend — "
+                f"costed as a flat part. Confirm against the drawing")
         if _L > 0 and _W > 0:
             _spd = float(_drv.get("laser_cut_mm_per_sec", 50.0)) or 50.0
             _pps = (select_sheet_size(part.get("normalized_material"), _L, _W) or {}).get("parts_per_sheet") or 1
@@ -10570,6 +10599,45 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if isinstance(_ap, dict) and _ap.get("assembly_children"):
             _cm = [_mat_by_pn.get(str(k).strip().upper(), "") for k in _ap["assembly_children"]]
             _ap["child_materials"] = [m for m in _cm if m]
+    # AN ASSEMBLY WITH NO RECORD OF ITS OWN IS STILL BONDED. 12633-00-GA: the wine lifter and
+    # choc holder exist only as graph nodes minted from the SolidWorks tree, so no rule on an
+    # assembly RECORD ever ran for them and their panels were costed with no joining. Their
+    # members know who owns them (owning_assembly); where two or more plastic members share an
+    # owner, none is a fastener, the owner has no record that D-241 will glue, and no member
+    # carries a weld cue D-240 will turn into a bond, the largest member carries the bonding —
+    # the acrylic route then books Glue and its flame-polish on it, once.
+    _PLAST = ("ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS")
+    _asm_records = {str(p.get("part_number") or "").strip().upper() for p in (parts or [])
+                    if isinstance(p, dict) and p.get("assembly_children")}
+    _by_owner: Dict[str, List[Dict[str, Any]]] = {}
+    for _mp in (parts or []):
+        if isinstance(_mp, dict) and _mp.get("owning_assembly"):
+            _by_owner.setdefault(str(_mp["owning_assembly"]).strip().upper(), []).append(_mp)
+    for _own, _members in _by_owner.items():
+        if _own in _asm_records or len(_members) < 2:
+            continue
+        _mats = [str(m.get("normalized_material") or m.get("material") or "").upper()
+                 for m in _members]
+        if not all(any(k in mt for k in _PLAST) for mt in _mats):
+            continue
+        if any(re.search(r"FIX|SCREW|BOLT|NUT|RIVET|STUD|WASHER|^BI-",
+                         str(m.get("part_number") or "").upper()) for m in _members):
+            continue
+        if any(m.get("acrylic_bonded") or "welding" in (m.get("textual_operations") or [])
+               for m in _members):
+            continue
+
+        def _area(m: Dict[str, Any]) -> float:
+            _g = m.get("normalized_geometry") or {}
+            return (_safe_float(_g.get("blank_length_mm")) or 0.0) * (
+                _safe_float(_g.get("blank_width_mm")) or 0.0)
+        _host = max(_members, key=_area)
+        _host["acrylic_bonded"] = True
+        _host["bonded_for_assembly"] = _own
+        _host.setdefault("review_flags", []).append(
+            f"glue booked on {_host.get('part_number')} for {_own}: {len(_members)} plastic "
+            f"parts with no fixings are bonded — one bonding event for the assembly. Confirm "
+            f"the joint method (solvent cement, adhesive, or a push/tab fit with no glue)")
     for idx, part in enumerate(estimable_parts, start=1):
         part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
         if debug:
