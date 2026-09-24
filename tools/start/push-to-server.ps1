@@ -62,6 +62,7 @@ param(
         "src/config.py",
         "src/bought_in_recogniser.py",
         "src/part_code_conventions.py",
+        "src/part_identity.py",
         "src/department_codes.py",
         "src/supplier_reference.py"
     ),

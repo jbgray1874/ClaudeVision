@@ -373,3 +373,27 @@ def test_a_refused_task_install_is_not_reported_as_installed():
     refuse = code.index("exit 8")
     assert refuse < code.index('Write-Host "Installed scheduled task')
     assert refuse < code.index("Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop")
+
+
+# ── a launcher and its child are one runner; the service is asked, not the reader ────
+
+def test_a_venv_launcher_and_its_child_are_reported_as_one_runner(script):
+    """24 Sep 2026: pythonw 61184 and 53776, both 11:08:00, were read as two runners. They
+    were the venv launcher and the interpreter it starts."""
+    code = _code(script)
+    assert "ParentProcessId" in code
+    assert "$roots.Count -gt 1" in code and "exit 8" in code
+
+
+def test_the_restart_ends_by_asking_the_service(script):
+    code = _code(script)
+    ask = code.index("/api/estimate/runners")
+    assert ask > code.index("Start-ScheduledTask -TaskName")
+    for check in ("process_count -ne 1", "$mine.conflict", "+local edits", "StartsWith($headSha)"):
+        assert check in code, check
+    assert "exit 9" in code and "exit 10" in code and "PASS" in code
+
+
+def test_the_service_can_be_on_another_machine(script):
+    params = script[script.index("param("):script.index("\n)", script.index("param("))]
+    assert "$Service" in params and "SDI_SERVICE_URL" in _code(script)
