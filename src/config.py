@@ -349,8 +349,11 @@ PACKAGING_CONFIG = {
 #   £ PER ORDER, not per unit — commercial_lines divides by the order quantity and writes the
 #   divisor onto the line, so an estimator changing the quantity can see what moved.
 #   HELD EMPTY BY DECISION: the estimators are producing their own calculation for packaging
-#   and delivery, so both lines stay at the honest £0 "estimator to price" until those real
-#   figures land. A real number from the people who ship the job beats an invented one, and an
+#   and delivery. Until those figures land, each line is a researched market indication for
+#   the WHOLE order (commercial_lines rung 4), divided by the order quantity and marked
+#   indicative — 11650-06 at 2 off: £55 packaging and £85 delivery the order, £27.50 and
+#   £42.50 a unit. Only if the research returns nothing does a line stay at £0 for the
+#   estimator. A real number from the people who ship the job beats an invented one, and an
 #   invented figure here would carry no "check me" flag of its own.
 #
 #   When the calculation arrives, put the per-ORDER figures here and nothing else changes —
@@ -2593,6 +2596,15 @@ def hourly_rate(op: str):
 # Max unit cost applied silently to auto-detected bought-in lines (fuzzy catalogue match).
 # Above this → reject match and flag for manual pricing (prevents "BRACKET" -> £13k hits).
 BOUGHT_IN_MAX_PLAUSIBLE_GBP = 750.0
+
+# Bench fitting added to a bought-in's buy price, in minutes at the handling rate. It is for a
+# LOOSE fitting nothing else accounts for. A bought-in an assembly's BOM lists is placed (or,
+# in a kit, packed) during that assembly's own labour, so it takes none — 11650-06's Yiree
+# screw was researched at £1.25 and charged £2.29 because two minutes were added on top of a
+# line the kit's packing time already covered. 0 turns the uplift off everywhere; True below
+# puts it back on BOM-listed lines too.
+BOUGHT_IN_FITTING_MIN_PER_PART = 2.0
+BOUGHT_IN_FITTING_WHEN_ON_AN_ASSEMBLY_BOM = False
 
 # Data sufficiency — suppress headline total when auto-estimate is not DXF-backed enough.
 # credible_cost_ratio: share of document £ from parts with part-level DXF (not PDF/inferred).
