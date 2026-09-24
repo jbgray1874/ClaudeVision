@@ -356,7 +356,13 @@ while ($asked -lt 90) {
     try {
         $resp = Invoke-RestMethod -Uri "$Service/api/estimate/runners" -Headers $hdr -TimeoutSec 10
         $mine = @($resp.runners | Where-Object { $_.online -and "$($_.hostname)" -ieq $me }) | Select-Object -First 1
-        if ($mine -and $headSha -and "$($mine.build)".StartsWith($headSha)) { break }
+        # WAIT FOR THE WHOLE PASS, NOT THE FIRST SIGN OF LIFE. The service keeps counting a
+        # process for its conflict window (20 s) after the last time it asked for work, so the
+        # runner this script just ended is still "live" for a few seconds. On 24 Sep 2026 the
+        # check read process_count 2 / conflict true at 15:20 against one healthy runner.
+        if ($mine -and $headSha -and "$($mine.build)".StartsWith($headSha) `
+                -and $mine.process_count -eq 1 -and -not $mine.conflict `
+                -and [int]$resp.online -eq 1) { break }
     } catch {
         $resp = $null
     }

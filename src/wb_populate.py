@@ -83,7 +83,7 @@ try:
     from config import MATERIAL_TOTAL_ERROR_TOLERANT as _MATERIAL_TOTAL_ERROR_TOLERANT
 except Exception:
     _MATERIAL_TOTAL_ERROR_TOLERANT = True
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 # The one module that answers "do we make this or buy it". Identity-only and
 # dependency-free, so it is safe to ask anywhere — including inside the finish gate,
@@ -1514,6 +1514,29 @@ def _is_timber(mat: str) -> bool:
 
 class CanonicalRouteUnavailable(RuntimeError):
     """The authoritative route was requested but could not be compiled."""
+
+
+def material_shown_on_row(pe: Mapping[str, Any], priced: Any) -> str:
+    """The material a labour row names: the drawing's, with any substitute it was priced as.
+
+    12312-01-03A is FOAMED PVC priced from ACRYLIC. The 16:04 rerun still read "3mm ACRYLIC"
+    because material_priced_as did not reach the workbook's record — the substitution flag
+    did (review_flags, "material_unpriceable_substituted"), so either one is enough.
+    """
+    priced = str(priced or "")
+    mpa = pe.get("material_priced_as") if isinstance(pe.get("material_priced_as"), Mapping) else {}
+    drawn, sub = mpa.get("arbitrated_material"), mpa.get("priced_material")
+    if not (drawn and sub):
+        for f in (pe.get("review_flags") or []):
+            if isinstance(f, Mapping) and f.get("flag") == "material_unpriceable_substituted":
+                m = re.match(r"\s*(.+?) is not priceable .*?and ([A-Z0-9_ ]+?), read from",
+                             str(f.get("detail") or ""))
+                if m:
+                    drawn, sub = m.group(1).strip(), m.group(2).strip()
+                break
+    if drawn and sub and str(drawn).upper() != str(sub).upper():
+        return f"{drawn} (priced as {sub})"
+    return priced
 
 
 def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None,
@@ -6107,9 +6130,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # THE DRAWING'S MATERIAL ON THE ROW, THE SUBSTITUTE NAMED. 12312-01-03A is FOAMED
             # PVC and was priced from ACRYLIC (no Foamex rate); its CNC row read "3mm ACRYLIC"
             # while AI Provenance said FOAMED PVC. The grouping key is unchanged.
-            _mpa = pe.get("material_priced_as") if isinstance(pe.get("material_priced_as"), dict) else {}
-            _shown = (f"{_mpa.get('arbitrated_material')} (priced as {_mpa.get('priced_material')})"
-                      if _mpa.get("arbitrated_material") and _mpa.get("priced_material") else _mat)
+            _shown = material_shown_on_row(pe, _mat)
             g = _groups.setdefault(key, {
                 "wb_op": wb_op, "material": _mat, "thickness": _thk, "material_shown": _shown,
                 # The tuple that DECIDED this grouping. material/thickness above are only

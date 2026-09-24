@@ -118,3 +118,15 @@ def test_every_article_reaches_the_workbook_at_its_own_quantity():
     assert float(grommet["quantity"]) == 3
     assert float(lines["FIXING-M6-WASHER"]["quantity"]) == 4
     assert float(lines["FIXING-M5-EXTERNALLY-SERRATED-WASHER"]["quantity"]) == 2
+
+
+def test_a_p_p_row_is_bought_in_whatever_family_its_words_suggest():
+    """12312-01's power cord read as cable stock and was costed as a made part on an 80 x 40
+    fallback blank. P/P on an SDI drawing means a purchased item."""
+    ext = _extract()
+    cord = next(r for r in ext["bom"] if "Power Cord" in r["description"])
+    cord["material_family"] = "wire"
+    cord["is_bought_in"] = False
+    job = lfe.normalize_job(ext)
+    part = next(p for p in job["parts"] if "POWER-CORD" in p["part_number"])
+    assert part["is_bought_in"] is True and part["material_family"] == "bought_in"

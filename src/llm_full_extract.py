@@ -525,6 +525,19 @@ def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
         split_category_code_rows(job.get("bom") or [])
     except Exception:                                   # pragma: no cover - import guard
         pass
+    # "P/P" IS THE DRAWING SAYING "WE BUY THIS". 12312-01's power cord ("Power Cord UK Plug
+    # to C13 IEC Kettle Lead Cable 2m") came back from the extract with a cable family, was
+    # projected as a made part, and was costed from a default material rate on an 80 x 40
+    # fallback blank — "we cut this part and had no drawing of it". SDI prints P/P against a
+    # purchased item; the code column's own statement outranks a family guessed from words.
+    for _row in job.get("bom") or []:
+        if isinstance(_row, dict) and str(_row.get("printed_code") or _row.get("part_number")
+                                          or "").strip().upper().startswith("P/P"):
+            _row["is_bought_in"] = True
+            _row["is_fabricated"] = False
+            if str(_row.get("material_family") or "").lower() != "bought_in":
+                _row["material_family_read"] = _row.get("material_family")
+                _row["material_family"] = "bought_in"
     _already_projected = isinstance(job.get("parts"), list) and bool(job["parts"])
     # WHAT THE DRAWING SHOWS IS NOT WHAT WE SUPPLY -- AND THIS IS THE SECOND DOOR.
     #
