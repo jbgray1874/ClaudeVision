@@ -165,3 +165,17 @@ def test_an_assembly_record_skipped_as_junk_does_not_stop_its_members_being_bond
                         _member("12633-01-01P", 450, 292, "12633-01-GA"),
                         _member("12633-01-02P", 450, 38, "12633-01-GA")])
     assert sum("glue" in cost for cost in c.values()) == 1
+
+
+def test_a_costed_record_with_one_child_does_not_stop_its_members_being_bonded():
+    """20:52 run: SolidWorks listed only the base under 12633-01-GA, so D-241 (two or more
+    children) passed the record by, and the member rule stood down for it."""
+    c = _costs_by_part([{"part_number": "12633-01-GA", "is_assembly_parent": True,
+                         "description": "WINE LIFTER", "material": "ACRYLIC",
+                         "normalized_material": "ACRYLIC", "quantity": 1,
+                         "textual_operations": ["assembly"],
+                         "assembly_children": ["12633-01-01P"]},
+                        _member("12633-01-01P", 450, 292, "12633-01-GA"),
+                        _member("12633-01-02P", 450, 38, "12633-01-GA"),
+                        _member("12633-01-03P", 450, 20, "12633-01-GA")])
+    assert sum("glue" in cost for cost in c.values()) == 1

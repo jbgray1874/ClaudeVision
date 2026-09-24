@@ -10612,8 +10612,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # ONLY A RECORD THAT WILL BE COSTED can carry its own bond. 12633-01-GA had a record —
     # no material, no dimensions, no operations — and was skipped as junk above, so D-241
     # never ran on it while this pass stood down for it: the wine lifter got no joining.
+    # AND ONE THAT WILL BOND ITSELF — D-241 needs two or more children on the record. The
+    # SolidWorks tree gave 12633-01-GA's record one child (the base), so D-241 passed it by
+    # and this pass must not stand down for it either.
     _asm_records = {str(p.get("part_number") or "").strip().upper() for p in estimable_parts
-                    if isinstance(p, dict) and p.get("assembly_children")}
+                    if isinstance(p, dict) and len(p.get("assembly_children") or []) >= 2}
     _by_owner: Dict[str, List[Dict[str, Any]]] = {}
     for _mp in (parts or []):
         if isinstance(_mp, dict) and _mp.get("owning_assembly"):
