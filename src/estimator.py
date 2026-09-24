@@ -8197,10 +8197,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _st.setdefault("linebend", float(_drv.get("linebend_setup_min", 30.0)))
 
         if _bonded:
-            # bonded multi-panel assembly: glue joints + flame-polish, ONE op per assembly
-            _rt["glue"] = round(_rt.get("glue", 0.0) + float(_drv.get("glue_min_per_assembly", 2.4)), 4)
+            # bonded multi-panel assembly: glue joints + flame-polish, ONE op per assembly —
+            # on a member hosting it, divided by that member's pieces per assembly (D-249)
+            _per = float(_safe_float(part.get("bond_pieces_per_event")) or 1.0)
+            _rt["glue"] = round(_rt.get("glue", 0.0) + float(_drv.get("glue_min_per_assembly", 2.4)) / _per, 4)
             _st.setdefault("glue", float(_drv.get("glue_setup_min", 30.0)))
-            _rt["manual_labour_acrylic"] = round(_rt.get("manual_labour_acrylic", 0.0) + float(_drv.get("flame_min_per_assembly", 1.2)), 4)
+            _rt["manual_labour_acrylic"] = round(_rt.get("manual_labour_acrylic", 0.0) + float(_drv.get("flame_min_per_assembly", 1.2)) / _per, 4)
             _st.setdefault("manual_labour_acrylic", float(_drv.get("flame_setup_min", 15.0)))
 
         # THE COMPILER HAS TO KNOW ABOUT AN OP TO CHARGE IT UNDER CUTOVER. These acrylic ops
@@ -10639,7 +10641,18 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _g = m.get("normalized_geometry") or {}
             return (_safe_float(_g.get("blank_length_mm")) or 0.0) * (
                 _safe_float(_g.get("blank_width_mm")) or 0.0)
-        _host = max(_members, key=_area)
+        # ONE EVENT PER ASSEMBLY, NOT PER PIECE OF ITS HOST. The sheet charges a part's time
+        # times the part's quantity, and 12633-03-01P is two front panels in one choc holder:
+        # hosted there, the glue and its flame-polish were charged twice (D-249). The fewest-off
+        # member hosts it, and its minutes are divided by its pieces per assembly.
+        _fewest = min(_safe_float(m.get("quantity")) or 1.0 for m in _members)
+        _host = max((m for m in _members if (_safe_float(m.get("quantity")) or 1.0) == _fewest),
+                    key=_area)
+        _own_qty = next((_safe_float(p.get("quantity")) for p in (parts or [])
+                         if isinstance(p, dict)
+                         and str(p.get("part_number") or "").strip().upper() == _own
+                         and _safe_float(p.get("quantity"))), None) or 1.0
+        _host["bond_pieces_per_event"] = max(1.0, _fewest / _own_qty)
         _host["acrylic_bonded"] = True
         _host["bonded_for_assembly"] = _own
         _host.setdefault("review_flags", []).append(

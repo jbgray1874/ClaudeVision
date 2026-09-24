@@ -179,3 +179,28 @@ def test_a_costed_record_with_one_child_does_not_stop_its_members_being_bonded()
                         _member("12633-01-02P", 450, 38, "12633-01-GA"),
                         _member("12633-01-03P", 450, 20, "12633-01-GA")])
     assert sum("glue" in cost for cost in c.values()) == 1
+
+
+def _glue_run_min(parts):
+    res = estimator.estimate_document(parts, {"pages": []})
+    pes = res.get("part_estimates") or (res.get("estimate_summary") or {}).get("part_estimates") or []
+    return {pe.get("part_number"): ((pe.get("process_estimate") or {})
+                                    .get("run_times_min_per_unit") or {}).get("glue")
+            for pe in pes}
+
+
+def test_one_bonding_event_per_assembly_whatever_its_host_quantity():
+    """21:50 run: the choc holder's glue was hosted on 12633-03-01P, two front panels per
+    holder, and the sheet charged the per-piece time twice — Glue qty 4 for three assemblies."""
+    one = _glue_run_min([_member("12633-03-01P", 450, 45, "12633-03-GA", quantity=1),
+                         _member("12633-03-02P", 202, 45, "12633-03-GA", quantity=3)])
+    two = _glue_run_min([_member("12633-03-01P", 450, 45, "12633-03-GA", quantity=2),
+                         _member("12633-03-02P", 202, 45, "12633-03-GA", quantity=3)])
+    assert one["12633-03-01P"] and two["12633-03-01P"]
+    assert abs(two["12633-03-01P"] * 2 - one["12633-03-01P"]) < 1e-6
+
+
+def test_the_fewest_off_member_hosts_the_bond():
+    g = _glue_run_min([_member("12633-03-01P", 450, 45, "12633-03-GA", quantity=2),
+                       _member("12633-03-02P", 202, 45, "12633-03-GA", quantity=1)])
+    assert g.get("12633-03-02P") and not g.get("12633-03-01P")
