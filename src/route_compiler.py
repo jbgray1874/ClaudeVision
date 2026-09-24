@@ -1245,6 +1245,7 @@ def build_part_graph(
         _mint = None
     if _mint is not None:
         _minted_by_code: Dict[str, Set[str]] = {}
+        _descs_by_code: Dict[str, List[str]] = {}
         for _r in bom_rows or []:
             if not isinstance(_r, Mapping):
                 continue
@@ -1254,8 +1255,19 @@ def build_part_graph(
             _m = clean_part_number(_mint(_r.get("description"), _rc))
             if _m and _m != _rc:
                 _minted_by_code.setdefault(_rc, set()).add(_m)
+                _descs_by_code.setdefault(_rc, []).append(str(_r.get("description") or ""))
+
+        def _one_item(_descs: List[str]) -> bool:
+            # Same minted code is not enough: M6 and M5 washers mint the same one.
+            try:
+                from estimator import _bought_in_token_set as _toks, _bought_in_same_item as _same
+            except Exception:                                        # pragma: no cover
+                return True
+            _sets = [_toks({"description": d}) for d in dict.fromkeys(_descs)]
+            _sets = [t for t in _sets if t is not None]
+            return all(_same(_sets[0], t) for t in _sets[1:]) if _sets else True
         for _rc, _ms in _minted_by_code.items():
-            if len(_ms) == 1:
+            if len(_ms) == 1 and _one_item(_descs_by_code.get(_rc, [])):
                 _m = next(iter(_ms))
                 if _m in raw_original:
                     aliases.setdefault(_rc, _m)

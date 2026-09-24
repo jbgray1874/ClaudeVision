@@ -1535,6 +1535,12 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
                 "label": "nothing to charge here — an assembly's material is its members'"}
+    # SUPPLIED BY ANOTHER PARTY, PER THE DRAWING: £0 on purpose, with the party named.
+    if part.get("supplied_by_third_party") and not money:
+        return {"class": "supplied_by_third_party", "firmness": NIL, "owner": "nobody",
+                "label": (f"supplied by {str(part['supplied_by_third_party']).title()} per the "
+                          f"drawing — listed at £0 so the pack is complete; if SDI is buying "
+                          f"it, price the line")}
     # THE SAME ARTICLE UNDER A SECOND NAME IS NOT A MISSING PRICE. wb_populate puts the
     # money on one line and writes "SAME ARTICLE AS <kept>: costed there, not here" on the
     # other. 11650-06: FIXINGTBC read that way beside BI-KNURLEDKNOB (32 x £0.85, charged),
