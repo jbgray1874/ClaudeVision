@@ -1975,6 +1975,14 @@ _ROUTED_STOCK = ("FOAM", "PVC", "ACRYLIC", "PERSPEX", "PMMA", "PETG", "HIPS", "A
                  "POLYCARBONATE", "POLYPROP", "DIBOND", "ACM", "MDF", "PLY", "BOARD", "TIMBER")
 # Stock whose cutting method the flat does not tell us (a graphic may arrive cut to shape).
 _UNSAID_STOCK = ("CARD", "PAPER", "VINYL", "FABRIC", "BOOK", "LABEL", "FILM")
+# Other names for a material the shop table already rules on. 12633-10's files say PMMA and its
+# title block says ACRYLIC; one plastic, one rule.
+_MATERIAL_ALIASES = {"PMMA": "ACRYLIC", "PERSPEX": "ACRYLIC", "PLEXIGLAS": "ACRYLIC",
+                     "CAST_ACRYLIC": "ACRYLIC", "EXTRUDED_ACRYLIC": "ACRYLIC",
+                     "CLEAR_ACRYLIC": "ACRYLIC", "MS": "MILD_STEEL", "CR4": "MILD_STEEL"}
+# A general arrangement or assembly drawing is never a cut blank, even when its DXF is read
+# before the record is marked an assembly.
+_ASSEMBLY_CODE = re.compile(r"(?:^|[-\s_])(?:GA|ASSY|ASSEMBLY|ASM)$", re.I)
 
 
 def _has_measured_flat(part: Dict[str, Any]) -> bool:
@@ -2008,7 +2016,8 @@ def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         if not isinstance(part, dict) or not _has_measured_flat(part):
             continue
         if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
-                or part.get("assembly_children") or part.get("supplied_by_third_party"):
+                or part.get("assembly_children") or part.get("supplied_by_third_party") \
+                or _ASSEMBLY_CODE.search(str(part.get("part_number") or "").strip()):
             continue
         ops = [str(o) for o in ((part.get("textual_operations") or [])
                                 + (part.get("inferred_operations") or []))]
@@ -2017,6 +2026,7 @@ def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         pn = str(part.get("part_number") or "")
         mat = str(part.get("normalized_material") or part.get("material") or "").upper()
         mat_key = re.sub(r"[\s-]+", "_", mat.strip())
+        mat_key = _MATERIAL_ALIASES.get(mat_key, mat_key)
         shown = str(part.get("material") or part.get("normalized_material") or "").strip()
         bought = bool(part.get("is_bought_in")) or "bought_in" in (part.get("page_roles") or []) \
             or str(part.get("canonical_kind") or "").lower() == "bought_in"
@@ -2051,6 +2061,11 @@ def propose_missing_cuts(parts: List[Dict[str, Any]]) -> List[Dict[str, str]]:
         inf = list(part.get("inferred_operations") or [])
         inf.append(op)
         part["inferred_operations"] = inf
+        # The acrylic route keeps its laser only on a laser SIGNAL (cut_method / is_laser_cut)
+        # and drops it otherwise — so the machine chosen here is stated where it looks.
+        if not part.get("cut_method"):
+            part["cut_method"] = {"laser_cutting": "laser", "cnc_routing": "router",
+                                  "punching": "punch"}.get(op, "")
         part.setdefault("review_flags", []).append(
             f"{pn} had a measured flat and no cutting operation; {op} added ({why})")
         done.append({"part_number": pn, "result": op})
