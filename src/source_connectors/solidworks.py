@@ -1639,7 +1639,17 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
                 for c in (p.get("assembly_children") or []) if str(c).strip()
             }
             _kids_up = {k.upper() for k in _known_kids}
-            if _kids_up and _kids_up <= _claimed:
+            # AN OPPOSITE HAND IS NOT A VARIANT. "Mirror11650-03-GA" shares the slider with
+            # 11650-03-GA — that is what a handed pair is — so every member this census could
+            # see was already claimed, and 11650-06's handed arm set was kept "as evidence,
+            # never priced" while the kit's own BOM lists it: HANDED ARM x3. A parent the
+            # naming convention marks as the mirror of a code is its own article.
+            try:
+                from part_code_conventions import is_mirror_code as _is_mirror
+                _handed = _is_mirror(_clean_pn(str(parent)))
+            except Exception:                                        # noqa: BLE001
+                _handed = False
+            if _kids_up and _kids_up <= _claimed and not _handed:
                 print(f"   [hierarchy] '{_clean_pn(str(parent))}' NOT minted — every "
                       f"member it names ({', '.join(sorted(_known_kids))}) already "
                       f"belongs to an existing assembly. A model configuration tree over "

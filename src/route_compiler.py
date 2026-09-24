@@ -2013,6 +2013,19 @@ def build_part_graph(
         # the chimera's ten-digit head cannot pass this.
         if re.match(r"^\d{4,5}-\d{2}\b", str(ident)):
             continue
+        # NOR IS A MIRROR OF ONE. "Mirror11650-03-GA" is SolidWorks' name for the opposite
+        # hand of 11650-03-GA — a naming convention, not two rows zipped. It is spelled with
+        # its base's characters in order, so it scans as an interleave of the base and any
+        # other "Mirror…" code: 11650-06 dropped the handed arm set (Mirror11650-03-GA,
+        # HANDED ARM x3) and its bracket (Mirror11650-03-02M x3) from the graph this way,
+        # and the kit was costed with one hand.
+        try:
+            from part_code_conventions import is_mirror_code, mirror_base
+            _mb = mirror_base(str(ident)) if is_mirror_code(str(ident)) else ""
+        except Exception:                                            # noqa: BLE001
+            _mb = ""
+        if _mb and re.match(r"^\d{4,5}-\d{2}\b", _mb):
+            continue
         # NO CHILD EXEMPTION. The first version skipped anything the hierarchy claimed as a
         # child — and the zipped BOM row is claimed by the GA precisely BECAUSE it came off
         # the BOM table, so the guard exempted its own target and 1100997755-E0P2D-GM0
