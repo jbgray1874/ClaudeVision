@@ -111,6 +111,74 @@ def _rows_by_item(rows: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     return {str(r["item_number"]): r for r in rows}
 
 
+_DESC_NOISE = {"THE", "AND", "WITH", "FOR", "TYPE", "EACH", "OFF", "SDI", "FIXING", "FIXINGS"}
+
+
+def _desc_words(row: Dict[str, Any]) -> set:
+    return {w for w in re.findall(r"[A-Z]{3,}", str(row.get("description") or "").upper())
+            if w not in _DESC_NOISE}
+
+
+def _is_mirror(code: Any) -> bool:
+    """The other hand of a part is a different part: 06M-H never agrees with 06M."""
+    try:
+        from part_code_conventions import is_mirror_code
+        return bool(is_mirror_code(str(code or "")))
+    except Exception:                                                 # pragma: no cover
+        return False
+
+
+_CATEGORY_CODES = {"FIXING", "FIXINGS", "FIXINGTBC", "STDPART", "HARDWARE"}
+
+
+def _identity(code: Any) -> str:
+    """A code that names one article. "FIXING", "STD PART", "-", "TBC" name a category or
+    nothing — the minter's own rule — so rows carrying them are told apart by their words."""
+    try:
+        from part_identity import is_placeholder_identity
+        if is_placeholder_identity(code):
+            return ""
+    except Exception:                                                 # pragma: no cover
+        pass
+    c = _bare(code or "")
+    return "" if c in _CATEGORY_CODES else c
+
+
+def _threads(row: Dict[str, Any]) -> set:
+    return set(re.findall(r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?![0-9])",
+                          str(row.get("description") or "").upper()))
+
+
+def _same_article(a: Dict[str, Any], b: Dict[str, Any], exact: bool = False) -> bool:
+    """Could these two readings be the same line? Unknown (a blank description) counts as yes.
+
+    `exact` is for rows with no code: the words are then the whole identity, so "M6 WASHER"
+    and "M6 STAR WASHER" are two lines, not one read twice.
+    """
+    wa, wb = _desc_words(a), _desc_words(b)
+    if not wa or not wb:
+        return True
+    ta, tb = _threads(a), _threads(b)
+    if ta and tb and ta != tb:
+        return False
+    return wa == wb if exact else bool(wa & wb)
+
+
+def _read_elsewhere(row: Dict[str, Any], others: List[Dict[str, Any]]) -> bool:
+    """Is this row's article on the other reader's table under some item number?"""
+    code = _identity(row.get("part_ref", ""))
+    words = _desc_words(row)
+    for o in others:
+        oc = _identity(o.get("part_ref", ""))
+        if code and oc:
+            if code == oc:
+                return True
+            continue
+        if words and _same_article(row, o, exact=True):
+            return True
+    return False
+
+
 def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, Any]],
                    parent_label: str) -> Tuple[List[Dict[str, Any]], List[str]]:
     """Reconcile one parent's A-rows and B-rows. Returns (merged_rows, findings)."""
@@ -130,8 +198,13 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
             a_code, b_code = _bare(a.get("part_ref", "")), _bare(b.get("part_ref", ""))
             a_qty, b_qty = int(a["quantity"]), int(b["quantity"])
             code_agree = (a_code == b_code) or (a_code == "" and b_code == "") \
-                or (a_code and b_code and (a_code in b_code or b_code in a_code))
+                or (a_code and b_code and (a_code in b_code or b_code in a_code)
+                    and _is_mirror(a.get("part_ref")) == _is_mirror(b.get("part_ref")))
             qty_agree = (a_qty == b_qty)
+            # A code that only names a category (FIXING) settles nothing, so the words decide.
+            two_lines = (not code_agree and not _same_article(a, b)) or (
+                not (_identity(a_code) or _identity(b_code))
+                and not _same_article(a, b, exact=True))
             # THE ROW CONTEST SETTLES THE CODE AND THE QUANTITY. It does not settle the
             # rest of the line, and taking the winner wholesale threw away every column
             # the loser read and the winner did not — a description vision transcribed
@@ -140,18 +213,43 @@ def reconcile_page(a_bom: Optional[Dict[str, Any]], b_bom: Optional[Dict[str, An
             # below arbitrates stay arbitrated by it; every other field is merged under
             # precedence, so gaps fill and genuine conflicts are recorded.
             _decided = ("part_ref", "quantity")
-            if code_agree and qty_agree:
+            if code_agree and qty_agree and not two_lines:
                 row = dict(a); row["source"] = "BOTH"; row["confidence"] = "HIGH"; row["flag"] = ""
                 _notes = _merge_records(row, b, winner_source=PATH_A_SOURCE,
                                         loser_source=PATH_B_SOURCE, decided=_decided,
                                         label=f"[{parent_label}] item {item}")
                 findings.extend(_notes)
                 merged.append(row)
+            elif two_lines:
+                # TWO READINGS OF TWO LINES. The readers numbered the table differently (an
+                # unnumbered FIXING row, a skipped item), so item N is a different article on
+                # each. Merging them put one line's code on the other's description — 12312-01
+                # shipped "M6 WASHER" on the 06M side bracket and lost the washers. Each row
+                # stays whole; the deterministic one is kept as its own line unless vision
+                # read that article at another item number.
+                row = dict(b); row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
+                row["flag"] = (f"item {item} read as different lines — vision "
+                               f"'{b.get('part_ref','')}' {b.get('description','')!r}, deterministic "
+                               f"'{a.get('part_ref','')}' {a.get('description','')!r}; not merged")
+                merged.append(row)
+                findings.append(f"[{parent_label}] item {item}: {row['flag']}")
+                if not _read_elsewhere(a, b_rows):
+                    keep = dict(a); keep["source"] = "A_ONLY"; keep["confidence"] = "MED"
+                    keep["flag"] = (f"A-only — item {item} read by vision as a different line "
+                                    f"('{b.get('description','')}') — review")
+                    merged.append(keep)
+                    findings.append(f"[{parent_label}] item {item}: deterministic line "
+                                    f"'{a.get('part_ref','')}' {a.get('description','')!r} kept "
+                                    f"as its own line — vision did not read it elsewhere")
             else:
                 # conflict -> Grok wins (your Q1), flag override + drawing-inconsistency
                 row = dict(b)
+                # The description goes with the code that won. The text layer's description
+                # names ITS code, so ranking it over vision's would label one part with
+                # another's words (12312-01: "SIDE BRACKET" on the 06M-H hand).
+                _decided_here = _decided + (("description",) if not code_agree else ())
                 _notes = _merge_records(row, a, winner_source=PATH_B_SOURCE,
-                                        loser_source=PATH_A_SOURCE, decided=_decided,
+                                        loser_source=PATH_A_SOURCE, decided=_decided_here,
                                         label=f"[{parent_label}] item {item}")
                 findings.extend(_notes)
                 row["source"] = "B_OVERRIDE"; row["confidence"] = "LOW"
@@ -282,6 +380,12 @@ def merge_pages_into_parents(pages: List[Dict[str, Any]]) -> Tuple[List[Dict[str
                 entry["rows"].append(_r)
                 continue
             prior_code = _bare(prior.get("part_number") or prior.get("part_ref") or "")
+            if not _identity(prior_code) and not _identity(code) \
+                    and not _same_article(prior, row, exact=True):
+                # Two code-less lines under one item number (an unnumbered FIXING row the
+                # readers numbered differently). The description is their only identity.
+                entry["rows"].append(dict(row, sheet=_sheet))
+                continue
             if prior_code == code:
                 # The same line on a second sheet. Record where it was seen; do not
                 # count it twice — and READ IT. Noting the sheet and nothing else meant
