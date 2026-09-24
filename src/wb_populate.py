@@ -2928,7 +2928,7 @@ def canonical_labour_groups(
                     group["bh"] += float(_h)
                 if _r and _r > 0:
                     group["run_hours_per_unit"] = (
-                        group.get("run_hours_per_unit") or 0.0) + float(_r)
+                        group.get("run_hours_per_unit") or 0.0) + float(_r) * qty
                 group.setdefault("hours_by_part", {})[str(_asm_id)] = {
                     "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1)}
                 group["assembly_own_time"] = True
@@ -2953,7 +2953,11 @@ def canonical_labour_groups(
                 "run_hours_per_unit") or {}
             _rh = _safe({str(k).strip().lower(): v for k, v in _rhpu.items()}.get(operation))
             if _rh and _rh > 0:
-                group["run_hours_per_unit"] = (group.get("run_hours_per_unit") or 0.0) + _rh
+                # PER PIECE, TIMES THE PIECES. The engine's run time is one piece's; the row's
+                # throughput is its piece count over these hours, so a part two-off per unit
+                # added one piece's time and the sheet charged one piece: 12633-03-01P's
+                # second front panel was never lasered (D-250).
+                group["run_hours_per_unit"] = (group.get("run_hours_per_unit") or 0.0) + _rh * qty
             # The same record on the canonical path, so a grouped row can show its working
             # whichever route built it. See the note in populate_workbook: only the SUM was
             # kept, so a row combining a long strap and a small cap could not be audited.
