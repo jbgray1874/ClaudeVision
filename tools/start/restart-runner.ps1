@@ -62,7 +62,13 @@ param(
     # command that quietly deletes things is a command people stop trusting.
     [switch] $Clean,
     # Do not start it again - just stop it.
-    [switch] $StopOnly
+    [switch] $StopOnly,
+    # The service this runner reports to, asked at the end whether it sees exactly one
+    # runner on the commit on disk. Empty means SDI_SERVICE_URL, else this machine's
+    # SDI_PORT, else 8071. On a runner server that reports to a portal on another box,
+    # pass that box: -Service http://<portal-server>:8071
+    [string] $Service = "",
+    [string] $ApiKey  = $env:SDI_API_KEY
 )
 
 $ErrorActionPreference = "Stop"
@@ -279,9 +285,35 @@ if ($now.Count -eq 0) {
     exit 6
 }
 
-foreach ($p in $now) {
-    $st = Get-Started $p
-    Write-Host "  new runner: pid $($p.ProcessId) $($p.Name) started $($st.ToString('HH:mm:ss'))" -ForegroundColor Green
+# ONE RUNNER IS A LAUNCHER AND ITS CHILD. The venv python(w).exe starts the base
+# interpreter as a child with the same command line, so a healthy restart shows two pids
+# born in the same second. On 24 Sep 2026 that was read as two runners (61184 and 53776
+# at 11:08:00). A runner is a process whose parent is not itself a runner process; only
+# two of THOSE is a second engine.
+$settle = 0
+do {
+    Start-Sleep -Seconds 2
+    $settle += 2
+    $now = @(Get-RunnerProcs | Where-Object { $st = Get-Started $_; $st -and $st -ge $restartAt })
+    $ids = @($now | ForEach-Object { $_.ProcessId })
+    $roots = @($now | Where-Object { $ids -notcontains $_.ParentProcessId })
+} while ($settle -lt 6)
+foreach ($r in $roots) {
+    $st = Get-Started $r
+    $kids = @($now | Where-Object { $_.ParentProcessId -eq $r.ProcessId })
+    if ($kids.Count -gt 0) {
+        Write-Host "  new runner: pid $($kids[0].ProcessId) $($kids[0].Name) started $($st.ToString('HH:mm:ss')) (venv launcher pid $($r.ProcessId) - the same runner)" -ForegroundColor Green
+    } else {
+        Write-Host "  new runner: pid $($r.ProcessId) $($r.Name) started $($st.ToString('HH:mm:ss'))" -ForegroundColor Green
+    }
+}
+if ($roots.Count -gt 1) {
+    Write-Host ""
+    Write-Host "  STOP. $($roots.Count) SEPARATE RUNNERS STARTED - not a launcher and its child." -ForegroundColor Red
+    Write-Host "  Something besides the scheduled task is starting one (a startup shortcut," -ForegroundColor Yellow
+    Write-Host "  a second task, an open start-runner window). Run this with -StopOnly," -ForegroundColor Yellow
+    Write-Host "  remove the extra starter, then run it again." -ForegroundColor Yellow
+    exit 8
 }
 
 if ($git) {
@@ -300,9 +332,58 @@ if ($git) {
         Write-Host "  (Read from the last fetch, so the real gap may be larger.)" -ForegroundColor Yellow
     }
 }
+
+# -- 7. ASK THE SERVICE, DO NOT ASK THE READER TO ----------------------------------------
+#
+# The pass the reviewer asks for before every job - online 1, process_count 1, conflict
+# false, build = HEAD with no +local edits - was a command typed by hand after every
+# restart. It is the only proof the job will run on this commit, so this script asks it.
+if (-not $Service) {
+    if ($env:SDI_SERVICE_URL) { $Service = $env:SDI_SERVICE_URL }
+    elseif ($env:SDI_PORT)    { $Service = "http://localhost:$($env:SDI_PORT)" }
+    else                      { $Service = "http://localhost:8071" }
+}
+$Service = ($Service -split ",")[0].TrimEnd("/")
+$headSha = if ($git) { "$sha".Trim() } else { "" }
+$hdr = @{}
+if ($ApiKey) { $hdr["X-SDI-Key"] = $ApiKey }
+$mine = $null
+$resp = $null
+$asked = 0
 Write-Host ""
-Write-Host "  The checkout is only what is on disk. Confirm the CONNECTED runner with" -ForegroundColor Cyan
-Write-Host "  /api/estimate/runners: online 1, process_count 1, conflict false, and a build" -ForegroundColor Cyan
-Write-Host "  equal to the commit above." -ForegroundColor Cyan
+Write-Host "  asking $Service which runner it sees..."
+while ($asked -lt 90) {
+    try {
+        $resp = Invoke-RestMethod -Uri "$Service/api/estimate/runners" -Headers $hdr -TimeoutSec 10
+        $mine = @($resp.runners | Where-Object { $_.online -and "$($_.hostname)" -ieq $me }) | Select-Object -First 1
+        if ($mine -and $headSha -and "$($mine.build)".StartsWith($headSha)) { break }
+    } catch {
+        $resp = $null
+    }
+    Start-Sleep -Seconds 5
+    $asked += 5
+}
+if (-not $resp) {
+    Write-Host "  COULD NOT CONFIRM: $Service did not answer /api/estimate/runners." -ForegroundColor Red
+    Write-Host "  Is the service up, and is -Service (or SDI_SERVICE_URL) the portal this runner reports to?" -ForegroundColor Yellow
+    exit 10
+}
+$fails = @()
+if (-not $mine)                                   { $fails += "the service sees no online runner from $me" }
+else {
+    if ([int]$resp.online -ne 1)                  { $fails += "online is $($resp.online), not 1" }
+    if ($mine.process_count -ne 1)                { $fails += "process_count is $(if ($null -eq $mine.process_count) { 'unknown' } else { $mine.process_count }), not 1" }
+    if ($mine.conflict)                           { $fails += "conflict is true - two processes are claiming work" }
+    if ($headSha -and -not "$($mine.build)".StartsWith($headSha)) { $fails += "build is '$($mine.build)', HEAD is $headSha" }
+    if ("$($mine.build)" -like "*+local edits*")  { $fails += "build carries +local edits" }
+}
+if ($fails.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  FAIL - do not run a job yet:" -ForegroundColor Red
+    foreach ($f in $fails) { Write-Host "    - $f" -ForegroundColor Red }
+    exit 9
+}
+Write-Host "  PASS - $Service sees one runner on $me, one process, no conflict, build $($mine.build)" -ForegroundColor Green
+Write-Host ""
 Write-Host "  Check the next job's first lines say that same commit, with no '+local" -ForegroundColor Cyan
 Write-Host "  edits', before you read a single number." -ForegroundColor Cyan

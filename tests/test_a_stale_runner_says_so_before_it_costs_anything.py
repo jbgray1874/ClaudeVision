@@ -74,7 +74,11 @@ def test_it_says_how_long_ago_not_merely_that_it_happened():
     import re
     _saved = build_stamp._IMPORTED_AT
     try:
-        build_stamp._IMPORTED_AT = time.time() - 1800
+        # Anchored to the newest source file, not the clock: "now minus 30 minutes" fails
+        # whenever nothing in src/ was edited in the last half hour.
+        newest = max(p.stat().st_mtime for p in build_stamp._SRC.rglob("*.py")
+                     if "__pycache__" not in p.parts)
+        build_stamp._IMPORTED_AT = newest - 1800
         said = build_stamp.source_changed_since_import() or ""
     finally:
         build_stamp._IMPORTED_AT = _saved
