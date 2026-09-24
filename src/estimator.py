@@ -6432,6 +6432,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                                                   "PETG", "PVC", "ABS")) and "glue" not in ops:
                 ops.append("glue")
                 part["acrylic_bonded"] = True
+                if part.get("owning_assembly") and not part.get("is_assembly_parent"):
+                    part.setdefault("bonded_for_assembly", part.get("owning_assembly"))
                 try:
                     record_operation(part, "glue", "plastic_weld_is_solvent_bond")
                 except Exception:                                    # noqa: BLE001
@@ -10607,7 +10609,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # carries a weld cue D-240 will turn into a bond, the largest member carries the bonding —
     # the acrylic route then books Glue and its flame-polish on it, once.
     _PLAST = ("ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS")
-    _asm_records = {str(p.get("part_number") or "").strip().upper() for p in (parts or [])
+    # ONLY A RECORD THAT WILL BE COSTED can carry its own bond. 12633-01-GA had a record —
+    # no material, no dimensions, no operations — and was skipped as junk above, so D-241
+    # never ran on it while this pass stood down for it: the wine lifter got no joining.
+    _asm_records = {str(p.get("part_number") or "").strip().upper() for p in estimable_parts
                     if isinstance(p, dict) and p.get("assembly_children")}
     _by_owner: Dict[str, List[Dict[str, Any]]] = {}
     for _mp in (parts or []):
