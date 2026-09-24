@@ -2136,7 +2136,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
             ((source.get("manufacturing_writeup") or {}).get("parts") or [])
             if isinstance(source, Mapping) else []):
         if isinstance(_bp, Mapping) and _bp.get("acrylic_bonded"):
-            _k = str(_bp.get("part_number") or "")
+            _k = str(_bp.get("bonded_for_assembly") or _bp.get("part_number") or "")
             if _k and _k.upper() not in _seen_b:
                 _seen_b.add(_k.upper())
                 _bonded.append(_k)

@@ -10599,6 +10599,45 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if isinstance(_ap, dict) and _ap.get("assembly_children"):
             _cm = [_mat_by_pn.get(str(k).strip().upper(), "") for k in _ap["assembly_children"]]
             _ap["child_materials"] = [m for m in _cm if m]
+    # AN ASSEMBLY WITH NO RECORD OF ITS OWN IS STILL BONDED. 12633-00-GA: the wine lifter and
+    # choc holder exist only as graph nodes minted from the SolidWorks tree, so no rule on an
+    # assembly RECORD ever ran for them and their panels were costed with no joining. Their
+    # members know who owns them (owning_assembly); where two or more plastic members share an
+    # owner, none is a fastener, the owner has no record that D-241 will glue, and no member
+    # carries a weld cue D-240 will turn into a bond, the largest member carries the bonding —
+    # the acrylic route then books Glue and its flame-polish on it, once.
+    _PLAST = ("ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS")
+    _asm_records = {str(p.get("part_number") or "").strip().upper() for p in (parts or [])
+                    if isinstance(p, dict) and p.get("assembly_children")}
+    _by_owner: Dict[str, List[Dict[str, Any]]] = {}
+    for _mp in (parts or []):
+        if isinstance(_mp, dict) and _mp.get("owning_assembly"):
+            _by_owner.setdefault(str(_mp["owning_assembly"]).strip().upper(), []).append(_mp)
+    for _own, _members in _by_owner.items():
+        if _own in _asm_records or len(_members) < 2:
+            continue
+        _mats = [str(m.get("normalized_material") or m.get("material") or "").upper()
+                 for m in _members]
+        if not all(any(k in mt for k in _PLAST) for mt in _mats):
+            continue
+        if any(re.search(r"FIX|SCREW|BOLT|NUT|RIVET|STUD|WASHER|^BI-",
+                         str(m.get("part_number") or "").upper()) for m in _members):
+            continue
+        if any(m.get("acrylic_bonded") or "welding" in (m.get("textual_operations") or [])
+               for m in _members):
+            continue
+
+        def _area(m: Dict[str, Any]) -> float:
+            _g = m.get("normalized_geometry") or {}
+            return (_safe_float(_g.get("blank_length_mm")) or 0.0) * (
+                _safe_float(_g.get("blank_width_mm")) or 0.0)
+        _host = max(_members, key=_area)
+        _host["acrylic_bonded"] = True
+        _host["bonded_for_assembly"] = _own
+        _host.setdefault("review_flags", []).append(
+            f"glue booked on {_host.get('part_number')} for {_own}: {len(_members)} plastic "
+            f"parts with no fixings are bonded — one bonding event for the assembly. Confirm "
+            f"the joint method (solvent cement, adhesive, or a push/tab fit with no glue)")
     for idx, part in enumerate(estimable_parts, start=1):
         part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
         if debug:

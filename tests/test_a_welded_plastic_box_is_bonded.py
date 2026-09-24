@@ -120,3 +120,38 @@ def test_the_joint_method_is_one_decision_naming_every_bonded_assembly():
                          "estimate_summary": {"part_estimates": []}})
     hits = [d for d in job["decisions_required"] if "joined" in str(d.get("issue"))]
     assert len(hits) == 1 and "12633-01-GA" in hits[0]["part"] and "12633-02-GA" in hits[0]["part"]
+
+
+def _member(pn, L, W, owner, **kw):
+    d = {"part_number": pn, "description": pn, "material": "ACRYLIC",
+         "normalized_material": "ACRYLIC", "thickness_mm": 5, "normalized_thickness_mm": 5,
+         "geometry_source": "dxf", "quantity": 1, "cut_method": "laser",
+         "inferred_operations": ["laser_cutting"],
+         "normalized_geometry": {"blank_length_mm": L, "blank_width_mm": W},
+         "owning_assembly": owner}
+    d.update(kw)
+    return d
+
+
+def _costs_by_part(parts):
+    res = estimator.estimate_document(parts, {"pages": []})
+    pes = res.get("part_estimates") or (res.get("estimate_summary") or {}).get("part_estimates") or []
+    return {pe.get("part_number"): ((pe.get("labour_estimate") or {}).get("costs_gbp") or {})
+            for pe in pes}
+
+
+def test_an_assembly_known_only_by_its_members_is_bonded_once_on_the_largest():
+    """12633-00-GA: the wine lifter exists only as a graph node, so no assembly record could
+    carry its bonding."""
+    c = _costs_by_part([_member("12633-01-01P", 450, 292, "12633-01-GA"),
+                        _member("12633-01-02P", 450, 38, "12633-01-GA"),
+                        _member("12633-01-03P", 450, 20, "12633-01-GA")])
+    glued = [pn for pn, cost in c.items() if "glue" in cost]
+    assert glued == ["12633-01-01P"]
+
+
+def test_a_member_weld_cue_already_bonds_the_assembly_so_no_second_glue():
+    c = _costs_by_part([_member("12633-02-01P", 400, 71, "12633-02-GA",
+                                textual_operations=["welding"]),
+                        _member("12633-02-05P", 410, 37, "12633-02-GA")])
+    assert sum("glue" in cost for cost in c.values()) == 1
