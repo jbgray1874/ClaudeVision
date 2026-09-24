@@ -81,7 +81,10 @@ def is_ignored_ga_dxf(path: Path) -> bool:
     name = path.name.upper()
     if "-GA_" in name or "_GA_" in name:
         return True
-    if re.search(r"[-_]GA[-_.]", name, flags=re.IGNORECASE):
+    # A SPACE ENDS THE CODE AS WELL AS A HYPHEN DOES. "12633-00-GA Display Chiller
+    # Shelf_revB.DXF" is the GA drawing exported whole; with only [-_.] after the GA it was
+    # taken for a flat, promoted as an orphan part, and named after another part (D-247).
+    if re.search(r"[-_]GA(?:[-_.\s]|$)", name, flags=re.IGNORECASE):
         return True
     cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     for token in cfg.get("ignore_dxf_name_tokens", ["-GA-", "_GA_"]):
@@ -921,11 +924,6 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
     return None
 
 
-def _numeric_part_prefix(part_number: str) -> str:
-    m = re.match(r"^(\d+)", str(part_number or "").upper())
-    return m.group(1) if m else ""
-
-
 def _dxf_code_is_in_this_job(dxf_code: str, parts_by_key: Dict[str, Dict[str, Any]]) -> bool:
     """Could this DXF's code belong under the assembly this job's parts sit under?
 
@@ -960,34 +958,60 @@ def _dxf_code_is_in_this_job(dxf_code: str, parts_by_key: Dict[str, Dict[str, An
     return _code.startswith("-".join(_common))
 
 
-def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str) -> str:
-    """Best-effort description from pooled BOM rows sharing the numeric family prefix."""
+_REV_IN_NAME = re.compile(r"(?<![A-Z])REV[_\s-]*[A-Z0-9]{1,2}(?![A-Z0-9])", re.I)
+_GAUGE_WORD = re.compile(r"^\d+(?:\.\d+)?\s*MM$", re.I)
+
+
+def _description_from_dxf_name(path: Path, part_number: str) -> str:
+    """What the drawing office typed after the code: "12633-01-02P - BOTTLE SUPPORT - 5MM
+    PMMA" gives BOTTLE SUPPORT. The code, the revision, the gauge and the material words are
+    facts read elsewhere, not the name of the part. Empty when nothing else is left."""
+    stem = path.stem
+    _code = str(part_number or "").strip()
+    if _code:
+        stem = re.sub(r"[\s_-]*".join(re.escape(c) for c in re.sub(r"[\s_-]", "", _code)),
+                      " ", stem, count=1, flags=re.I)
+    stem = _REV_IN_NAME.sub(" ", stem)
+    kept: List[str] = []
+    for seg in re.split(r"\s+-\s+|_", stem):
+        words = seg.strip(" -").split()
+        if not words:
+            continue
+        if all(_GAUGE_WORD.match(w) or material_from_dxf_filename(Path(f"{w}.dxf"))
+               for w in words):
+            continue
+        kept.append(" ".join(words))
+    return " - ".join(kept)
+
+
+def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str,
+                                dxf_path: Optional[Path] = None) -> str:
+    """The part's OWN description: its own BOM row, else the words in its own filename.
+
+    NEVER A SIBLING'S. This used to take the longest description on any BOM row sharing the
+    job number, so the 12633-00-GA drawing export was named "Bottle Support" (14 characters,
+    the longest in the pack) and the AI pricer then researched a price for a bottle support
+    under the GA's code (D-247). A family prefix says which job a row is from, not which part.
+    """
     pn_key = _normalize_part_key(part_number)
-    prefix = _numeric_part_prefix(pn_key)
     bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
-    best_desc = ""
-    best_len = 0
     for row in bom_rows:
-        row_pn = _normalize_part_key(str(row.get("part_number") or ""))
-        if not row_pn:
-            continue
-        row_prefix = _numeric_part_prefix(row_pn)
-        if row_prefix != prefix and not row_pn.startswith(prefix):
-            continue
-        desc = str(row.get("description") or row_pn).strip()
-        if len(desc) > best_len:
-            best_desc = desc
-            best_len = len(desc)
-    return best_desc or pn_key
+        if _normalize_part_key(str(row.get("part_number") or "")) == pn_key:
+            desc = str(row.get("description") or "").strip()
+            if desc:
+                return desc
+    if dxf_path is not None:
+        named = _description_from_dxf_name(dxf_path, part_number)
+        if named:
+            return named
+    return pn_key
 
 
 def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path: Path) -> Dict[str, Any]:
     """Standalone part record for a flat DXF with no PDF detail page in the writeup."""
     parsed_pn = part_number_from_dxf_path(dxf_path) or part_number
     pn = _normalize_part_key(parsed_pn) or part_number
-    desc = _description_for_orphan_dxf(summary, pn)
-    if desc == pn or desc == part_number:
-        desc = dxf_path.stem.replace("_", " ").strip()
+    desc = _description_for_orphan_dxf(summary, pn, dxf_path)
     part = _empty_part_record(pn, description=desc, quantity=None)
     # Born with a source. A quantity of 1 written silently is indistinguishable from a
     # quantity of 1 somebody established, and the next pass is free to replace it.
