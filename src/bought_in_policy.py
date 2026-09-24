@@ -276,7 +276,17 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     if part.get("dxf_augmented") or part.get("dxf_measured_outline"):
         return True
     _gs = str(part.get("geometry_source") or "").lower()
-    return "dxf" in _gs and _gs != "dxf_matched_no_geometry"
+    if "dxf" in _gs and _gs != "dxf_matched_no_geometry":
+        return True
+    # THE OPPOSITE HAND OF A MEASURED FLAT IS MEASURED TOO. apply_mirror_geometry copies a
+    # flat only from a base whose own geometry ranks at DXF or model, so "mirror_of_measured"
+    # is a measured flat one step removed. 11650-06's Mirror11650-03-02M was nested, lasered
+    # and folded from the plain arm's flat, and still classified bought-in from the kit page
+    # it was listed on — so every tab called a part the sheet cuts a catalogue component.
+    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                           dict) else {}
+    return (str(_ng.get("geometry_source") or "").lower() == "mirror_of_measured"
+            and bool(_ng.get("mirrored_from")))
 
 
 def looks_fabricated_for_identity(part: Dict[str, Any]) -> bool:

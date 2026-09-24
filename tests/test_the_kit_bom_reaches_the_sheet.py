@@ -162,3 +162,39 @@ def test_both_askers_apply_the_check():
     assert 'if _spec.get("supply") == "bought_in" and not answers_a_purchase(result):' in ps
     assert '_spec["purchase_check"] = 1' in ps
     assert "from pricing_service import answers_a_purchase as _purchase" in es
+
+
+# ── the same article named twice is not a missing price ─────────────────────────────────
+
+def test_a_same_article_line_is_nil_not_a_missing_price():
+    """06:24 11650-06: FIXINGTBC read 'SAME ARTICLE AS BI-KNURLEDKNOB: costed there, not
+    here' beside the charged knob (32 x £0.85), yet the headline said '3 prices missing'."""
+    import costed_facts as cf
+    part = {"part_number": "FIXINGTBC", "description": "M4 KNURLED KNOB", "quantity": 26,
+            "page_roles": ["bought_in"]}
+    row = ("FIXINGTBC  M4 KNURLED KNOB [ESSENTRA: KSM4----N3--5A0] — SAME ARTICLE AS "
+           "BI-KNURLEDKNOB: costed there, not here")
+    o = cf._price_origin(part, "bought_in", "bom", 0.0, 0.0, 22, False, row_text=row)
+    assert o["firmness"] == cf.NIL and o["class"] == "same_article"
+    assert "BI-KNURLEDKNOB" in o["label"] and "26" in o["label"]
+
+
+def test_a_genuinely_unpriced_line_is_still_missing():
+    import costed_facts as cf
+    part = {"part_number": "YIREE KEY", "description": "YIREE KEY - DWG888000", "quantity": 2,
+            "page_roles": ["bought_in"]}
+    o = cf._price_origin(part, "bought_in", "bom", 0.0, 0.0, 25, False,
+                         row_text="YIREE KEY — NOT YET PRICED: enter the per-unit figure")
+    assert o["firmness"] == cf.UNPRICED
+
+
+def test_a_mirrored_measured_flat_is_fabrication_evidence():
+    from bought_in_policy import has_fabrication_evidence
+    bracket = {"part_number": "Mirror11650-03-02M", "page_roles": ["assembly", "bought_in"],
+               "normalized_geometry": {"geometry_source": "mirror_of_measured",
+                                       "mirrored_from": "11650-03-02M",
+                                       "blank_length_mm": 552.77, "blank_width_mm": 58.61}}
+    assert has_fabrication_evidence(bracket)
+    assert rc._bought_in_record(bracket) is False
+    assert not has_fabrication_evidence({"part_number": "YIREE KEY",
+                                         "page_roles": ["bought_in"]})
