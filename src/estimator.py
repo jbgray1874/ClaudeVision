@@ -8282,15 +8282,27 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # A standard-commodity provisional takes no bench-fitting uplift — it is placed during
         # the assembly labour the parent already carries — so its unit total IS the buy price.
         #
-        # AND SO DOES ANY BOUGHT-IN AN ASSEMBLY'S BOM LISTS. 11650-06: the Yiree binding screw
-        # was researched at £1.25 and charged £2.29 — two minutes of handling added to the buy
-        # price, on a screw that sits in a spare set packed with the kit, whose packing and
-        # assembly time is already on the labour rows. The uplift is for a loose fitting that
-        # nothing else accounts for; a line on an assembly's BOM is accounted for by that
-        # assembly. The minutes are config, and 0 turns the uplift off everywhere.
-        _owner = str(part.get("owning_assembly") or "").strip()
-        if _is_commodity_provisional or (
-                _owner and not getattr(config, "BOUGHT_IN_FITTING_WHEN_ON_AN_ASSEMBLY_BOM", False)):
+        #
+        # AND SO DOES A LINE WHOSE FITTING IS CHARGED ELSEWHERE, OR NEVER HAPPENS. 11650-06:
+        # the Yiree binding screw was researched at £1.25 and charged £2.29 — two minutes of
+        # handling on a screw packed loose in a "SPARE SET OF 4". D-207 waived the uplift for
+        # every line an assembly's BOM lists, and review said why that is unsafe: the BOM says
+        # where an item belongs, not which operation's time fits it, and the assembly rows are
+        # a fixed time per assembly, not per item fitted. So the uplift stays by default and
+        # is waived only where the record shows it is not needed:
+        #   - a pressed insert (PEM, clinch) — its own MANM insert row times each one
+        #     (MANM_INSERT_SECONDS_EACH), so two minutes on top is the same work twice;
+        #   - an item in an assembly its own description calls a spare or loose set — it is
+        #     bagged and packed, never fitted (BOUGHT_IN_LOOSE_SET_TOKENS).
+        _blob = " ".join(str(part.get(k) or "") for k in ("part_number", "description")).upper()
+        _pressed = bool(getattr(config, "BOOK_MANM_INSERT_LABOUR", False)) and any(
+            str(t).upper() in _blob for t in (getattr(config, "MANM_INSERT_PART_TOKENS", None)
+                                              or []))
+        _owner_desc = str(part.get("owning_assembly_description") or "").upper()
+        _loose = bool(_owner_desc) and any(
+            str(t).upper() in _owner_desc
+            for t in (getattr(config, "BOUGHT_IN_LOOSE_SET_TOKENS", None) or []))
+        if _is_commodity_provisional or _pressed or _loose:
             _fitting_cost = 0.0
         else:
             _fitting_min = _safe_float(getattr(config, "BOUGHT_IN_FITTING_MIN_PER_PART", 2.0))

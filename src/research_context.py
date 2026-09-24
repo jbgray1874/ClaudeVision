@@ -120,6 +120,19 @@ def owning_assembly(part: Mapping[str, Any], bom_rows: Iterable[Mapping[str, Any
     return found[0] if found else ""
 
 
+def _description_of(code: str, parts: Iterable[Mapping[str, Any]],
+                    rows: Iterable[Mapping[str, Any]]) -> str:
+    """The owning assembly's own words, from its part record or a BOM row naming it."""
+    key = _words(code).upper()
+    for src in (parts or [], rows or []):
+        for r in src:
+            if isinstance(r, Mapping) and _words(r.get("part_number")).upper() == key:
+                d = _words(r.get("description"))
+                if d:
+                    return d
+    return ""
+
+
 def stamp_research_context(parts: List[Dict[str, Any]], summary: Optional[Mapping[str, Any]]
                            ) -> int:
     """Stamp `research_context` on every bought-in part the pack says more about, and
@@ -132,6 +145,7 @@ def stamp_research_context(parts: List[Dict[str, Any]], summary: Optional[Mappin
             _own = owning_assembly(p, rows)
             if _own:
                 p["owning_assembly"] = _own
+                p["owning_assembly_description"] = _description_of(_own, parts, rows)
         if not isinstance(p, dict) or not _is_bought_in(p) or p.get("research_context"):
             continue
         ctx = research_context(p, parts, rows)

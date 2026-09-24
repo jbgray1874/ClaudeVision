@@ -4879,8 +4879,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # failure the break mechanism exists to prevent, on the one line that moves. A line
         # that knows its order cost at each break gets the template's own formula, and the
         # break writer fills its row, so D6 drives it like every other break-priced line.
-        _at_breaks = ((pe.get("commercial_line") or {}).get("order_gbp_at_breaks")
-                      if isinstance(pe.get("commercial_line"), dict) else None)
+        #
+        # EVERY PER-ORDER LINE, NOT ONLY THE ONE THE PACKING METHOD PRICED. The test was
+        # `order_gbp_at_breaks`, which only the stated packing method writes; packaging and
+        # delivery priced from a house figure or researched for the whole order carry
+        # `order_gbp` alone, so 11650-06 wrote £27.50 and £42.50 as literals while the break
+        # table beside them held £3.06 and £4.72 at 18 off — the 18-off unit carried the
+        # 2-off freight, about £62 too much. The break table fills a row for any line with
+        # an order figure, so any line with an order figure reads it.
+        _cl_rec = pe.get("commercial_line") if isinstance(pe.get("commercial_line"), dict) \
+            else {}
+        _at_breaks = _cl_rec.get("order_gbp_at_breaks") or (
+            {"order": _cl_rec["order_gbp"]} if _safe(_cl_rec.get("order_gbp")) else None)
         _mpb_cfg = dict(getattr(config, "MATERIAL_PRICE_BREAK", {}) or {})
         if _at_breaks and _mpb_cfg.get("enabled"):
             _t = row + int(_mpb_cfg.get("row_offset", -6))
