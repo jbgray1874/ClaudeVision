@@ -68,10 +68,19 @@ def test_the_gap_reaches_the_review_list():
 
 
 def test_the_labour_row_names_the_drawings_material_and_the_substitute():
+    """16:04 rerun: the CNC row still read "3mm ACRYLIC" — material_priced_as never reached
+    the workbook's record; the substitution flag did."""
+    from wb_populate import labour_row_description, material_shown_on_row
+    flag = {"severity": "warning", "flag": "material_unpriceable_substituted",
+            "detail": ("FOAMED PVC is not priceable by this engine -- no sheet rate and no "
+                       "GBP/kg -- and ACRYLIC, read from inference, is. Priced from ACRYLIC.")}
+    assert material_shown_on_row({"review_flags": [flag]}, "ACRYLIC") == \
+        "FOAMED PVC (priced as ACRYLIC)"
+    assert material_shown_on_row({"material_priced_as": {
+        "arbitrated_material": "FOAMED PVC", "priced_material": "ACRYLIC"}}, "ACRYLIC") == \
+        "FOAMED PVC (priced as ACRYLIC)"
+    assert material_shown_on_row({}, "MILD_STEEL") == "MILD_STEEL"
     src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert 'g.get("material_shown") or g["material"]' in src
-    est = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
-    assert '"material_priced_as": (dict(part["material_priced_as"])' in est
-    from wb_populate import labour_row_description
+    assert "_shown = material_shown_on_row(pe, _mat)" in src
     row = labour_row_description("CNC", "FOAMED PVC (priced as ACRYLIC)", 3, ["12312-01-03A"])
     assert "FOAMED PVC" in row and "priced as ACRYLIC" in row
