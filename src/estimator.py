@@ -8531,6 +8531,10 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "production_substitution": (dict(part["production_substitution"])
                                     if isinstance(part.get("production_substitution"), dict)
                                     else None),
+        # The drawing's material and the one it was priced from, when they differ — so a
+        # labour row says "FOAMED PVC (priced as ACRYLIC)" rather than the substitute alone.
+        "material_priced_as": (dict(part["material_priced_as"])
+                               if isinstance(part.get("material_priced_as"), dict) else None),
         "drawn_thickness_mm": part.get("drawn_thickness_mm"),
         # Preserve the evidence which explains the route on the costed record. This nested
         # field is shadow-only during migration: no existing workbook consumer reads it, so
