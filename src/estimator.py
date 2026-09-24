@@ -3252,6 +3252,15 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
     }) or {}
     if not _found.get("found"):
         return {}
+    # ASKED AS A PURCHASE, ANSWERED AS A MADE PART: not an answer. The same check the first
+    # asker makes (pricing_service.answers_a_purchase), so neither rung can carry it.
+    if _brief.get("kind") == "bought_in_component":
+        try:
+            from pricing_service import answers_a_purchase as _purchase
+            if not _purchase(_found):
+                return {}
+        except ImportError:
+            pass
     return {
         "price_gbp": _found.get("price_gbp"),
         "unit": _found.get("unit"),
@@ -9445,6 +9454,13 @@ def _bought_in_token_set(part: Dict[str, Any]) -> Optional[set]:
     keep = {t for t in toks if t.lower() not in _BI_STOPWORDS and len(t) > 1}
     # Stem words to 6 chars so ELECTRICS/ELECTRIC etc. align; keep numbers as-is.
     stemmed = {(t[:6] if not t.replace(".", "").isdigit() else t) for t in keep}
+    # THE THREAD SIZE IS ONE TOKEN, NOT A LETTER AND A NUMBER. "M4x12mm" split into M, 4,
+    # x, 12, mm and the single letters were dropped, so the thread vanished: an M4 PEM stud
+    # and "PEM STUD M6 x 12mm" shared PEM, STUD and 12 and were read as one item. On 11650-06
+    # the kit's M4 x 18 was poured into FIXING632 (M6) and the M4 never got a line. Kept as
+    # "M4"/"M6" so _bought_in_same_item can refuse two different threads.
+    stemmed |= {"THREAD:M" + m for m in
+                _re.findall(r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?=\s*(?:X|-|\b|[A-Z]))", desc)}
     words = {t for t in stemmed if not t.replace(".", "").isdigit()}
     if not words:
         return None
@@ -9457,6 +9473,13 @@ def _bought_in_same_item(a: set, b: set) -> bool:
     description's words being a subset of the longer's is a match (e.g. {LOOM,50} ⊂
     {ELECTR,LOOM,50}; {DOME,RIVET} ⊂ {DOME,FIXING,RIVET,10,4.0}).
     """
+    # Two different thread sizes are two different items, whatever else they share.
+    at = {t for t in a if t.startswith("THREAD:")}
+    bt = {t for t in b if t.startswith("THREAD:")}
+    if at and bt and at != bt:
+        return False
+    a = a - at
+    b = b - bt
     aw = {t for t in a if not t.replace(".", "").isdigit()}
     bw = {t for t in b if not t.replace(".", "").isdigit()}
     an = {t for t in a if t.replace(".", "").isdigit()}

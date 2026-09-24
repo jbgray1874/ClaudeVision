@@ -53,6 +53,29 @@ def _ai_indicative_supplier(result: Dict[str, Any]) -> str:
     return f"AI market estimate ({_prov})" if _prov else "AI market estimate"
 
 
+# What a researched answer cites when it has priced a MADE part. Config-extendable.
+_FABRICATION_EVIDENCE = ("FABRICAT", "SHEET METAL", "LASER CUT", "MACHINE SHOP", "MACHINING",
+                         "CNC ", "PRESSWORK", "METALWORK", "WELDING")
+
+
+def answers_a_purchase(result: Dict[str, Any]) -> bool:
+    """Did a researched price for a BOUGHT-IN line price something you can buy?
+
+    11650-06: the Yiree key (DWG888000) was asked as a purchased catalogue component and came
+    back at £65 each with "local sheet metal fabricator quotes" as its evidence — the model
+    priced having a key MADE. The number answers a different question from the one asked, and
+    the cache then held it still on every run. An answer whose own evidence is a fabrication
+    quote is refused for a bought-in line: the line falls to the next rung, or to the
+    estimator, rather than carrying a made-part price as a purchase."""
+    terms = tuple(getattr(config, "RESEARCH_FABRICATION_EVIDENCE_TERMS", None)
+                  or _FABRICATION_EVIDENCE)
+    blob = " ".join(
+        [str(v) for v in (result.get("verify_against") or [])]
+        + [str(result.get(k) or "") for k in ("price_basis", "item_priced", "supplier_name",
+                                              "source_type")]).upper()
+    return not any(t.upper() in blob for t in terms)
+
+
 def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """A stable, reproducible provisional for a generically-named standard bought-in — a
     PALLET, a perforated-panel clip — from config.STANDARD_COMMODITY_PRICE_GBP, keyed on the
@@ -1460,6 +1483,9 @@ class PricingService:
                               "quantity": part.get("quantity"),
                               "is_bought_in": True})
                 _spec["supply"] = "bought_in"
+                # A new key for the purchase brief, so an answer cached before
+                # answers_a_purchase existed (the key's £65 "fabricator" figure) is asked again.
+                _spec["purchase_check"] = 1
                 if _brief.get("kind") == _BIC and _brief.get("ask"):
                     _spec["ask"] = _brief["ask"]
                     _spec["wanted_unit"] = _brief.get("wanted_unit")
@@ -1516,6 +1542,12 @@ class PricingService:
             else:
                 self._web_ai_consec_timeouts = 0
         if not result or not result.get("found") or not result.get("price_gbp"):
+            return None
+        if _spec.get("supply") == "bought_in" and not answers_a_purchase(result):
+            print(f"   [pricing] researched price for "
+                  f"{part.get('part_number') or _spec.get('description')} refused: asked as a "
+                  f"purchase, answered as a made part ({_ai_indicative_supplier(result)}, "
+                  f"£{float(result['price_gbp']):.2f}) — estimator to price", flush=True)
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
         return {
