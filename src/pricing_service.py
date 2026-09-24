@@ -53,26 +53,30 @@ def _ai_indicative_supplier(result: Dict[str, Any]) -> str:
     return f"AI market estimate ({_prov})" if _prov else "AI market estimate"
 
 
-# What a researched answer cites when it has priced a MADE part. Config-extendable.
-_FABRICATION_EVIDENCE = ("FABRICAT", "SHEET METAL", "LASER CUT", "MACHINE SHOP", "MACHINING",
-                         "CNC ", "PRESSWORK", "METALWORK", "WELDING")
+# Who an answer says to BUY from, when it has priced a MADE part. A supplier TYPE, matched
+# only in the "buy it from" fields — never in the item's description, where a PEM stud is
+# rightly "a self-clinching fastener for sheet metal" and a knob may be "CNC machined".
+# Config-extendable.
+_FABRICATION_SUPPLIERS = ("FABRICATOR", "FABRICATION", "MACHINE SHOP", "MACHINIST",
+                          "LASER CUTTING SERVICE", "CNC SERVICE", "SUBCONTRACT")
 
 
 def answers_a_purchase(result: Dict[str, Any]) -> bool:
     """Did a researched price for a BOUGHT-IN line price something you can buy?
 
     11650-06: the Yiree key (DWG888000) was asked as a purchased catalogue component and came
-    back at £65 each with "local sheet metal fabricator quotes" as its evidence — the model
-    priced having a key MADE. The number answers a different question from the one asked, and
-    the cache then held it still on every run. An answer whose own evidence is a fabrication
-    quote is refused for a bought-in line: the line falls to the next rung, or to the
-    estimator, rather than carrying a made-part price as a purchase."""
-    terms = tuple(getattr(config, "RESEARCH_FABRICATION_EVIDENCE_TERMS", None)
-                  or _FABRICATION_EVIDENCE)
-    blob = " ".join(
-        [str(v) for v in (result.get("verify_against") or [])]
-        + [str(result.get(k) or "") for k in ("price_basis", "item_priced", "supplier_name",
-                                              "source_type")]).upper()
+    back at £65 each, to be verified against "local sheet metal fabricator quotes" — the model
+    priced having a key MADE. An answer whose OWN SUPPLIERS are makers is refused for a
+    bought-in line: it falls to the next rung, or to the estimator.
+
+    NARROW ON PURPOSE (D-216). The first cut searched the whole answer for SHEET METAL, CNC,
+    MACHINING…, and on the 05:40 run the M4 knob and the M4 PEM stud — both genuinely bought —
+    came back unpriced beside the key. The supplier a price is checked against says whether
+    it is a purchase; the words describing the item do not."""
+    terms = tuple(getattr(config, "RESEARCH_FABRICATION_SUPPLIER_TERMS", None)
+                  or _FABRICATION_SUPPLIERS)
+    blob = " ".join([str(v) for v in (result.get("verify_against") or [])]
+                    + [str(result.get("supplier_name") or "")]).upper()
     return not any(t.upper() in blob for t in terms)
 
 

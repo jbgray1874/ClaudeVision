@@ -1231,6 +1231,34 @@ def build_part_graph(
             _kind_records, _refused_cross_kind,
             listed=_bom_listed | _hierarchy_codes).items():
         aliases.setdefault(_src, _dst)
+    # A VAGUE CODE IS THE RECORD THE SHARED RULE MADE OF IT. The drawing prints "FIXING" for
+    # an uncoded stud; file_scan mints the record from the row's words through
+    # part_identity.synthesise_bought_in_code ("M4x12mm THREADED PEM STUD" -> BI-PEMSTUD),
+    # and this graph kept "FIXING". Two names for one fact: 11650-06's printed kit count
+    # (18) landed on a FIXING leaf nothing costs, and the costed BI-PEMSTUD was rolled up to
+    # 30 instead. Joined here only where a record under the minted code already exists, and
+    # only where every row printing that code mints the same one — "FIXING" over a stud and
+    # "FIXING" over a knob are two parts and stay apart.
+    try:
+        from part_identity import synthesise_bought_in_code as _mint
+    except Exception:                                                # pragma: no cover
+        _mint = None
+    if _mint is not None:
+        _minted_by_code: Dict[str, Set[str]] = {}
+        for _r in bom_rows or []:
+            if not isinstance(_r, Mapping):
+                continue
+            _rc = clean_part_number(_r.get("part_number") or _r.get("part_code"))
+            if not _rc or _rc in raw_original or _rc in aliases:
+                continue
+            _m = clean_part_number(_mint(_r.get("description"), _rc))
+            if _m and _m != _rc:
+                _minted_by_code.setdefault(_rc, set()).add(_m)
+        for _rc, _ms in _minted_by_code.items():
+            if len(_ms) == 1:
+                _m = next(iter(_ms))
+                if _m in raw_original:
+                    aliases.setdefault(_rc, _m)
     # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
     # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
     # the extract survived as a node of its own — a leaf with no parent and no geometry,

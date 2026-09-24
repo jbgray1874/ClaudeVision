@@ -106,6 +106,56 @@ def test_a_purchase_answered_as_a_made_part_is_refused():
     assert answers_a_purchase(bought)
 
 
+def test_words_describing_a_bought_item_do_not_refuse_it():
+    """D-216: the 05:40 run left the M4 knob and PEM stud unpriced beside the key. What an
+    item is FOR ("fastener for sheet metal", "CNC machined") is not who it is bought from."""
+    pem = {"found": True, "price_gbp": 0.12, "verify_against": ["RS Components", "Essentra"],
+           "price_basis": "self-clinching fastener for sheet metal, per stud",
+           "item_priced": "M4x12 PEM stud"}
+    knob = {"found": True, "price_gbp": 0.85, "supplier_name": "Elite Sourcing Solutions Ltd",
+            "item_priced": "CNC machined knurled knob M4"}
+    assert answers_a_purchase(pem) and answers_a_purchase(knob)
+
+
+def test_the_kits_printed_count_lands_on_the_costed_stud():
+    """The drawing prints the uncoded stud as FIXING; the record is BI-PEMSTUD (the shared
+    naming rule). The 05:40 graph had FIXING 18 (costed by nothing) and BI-PEMSTUD 30."""
+    parts = [{"part_number": "11650-06-GA", "is_assembly_parent": True},
+             {"part_number": "11650-02-SA02", "is_assembly_parent": True},
+             {"part_number": "11650-03-SA01", "is_assembly_parent": True},
+             {"part_number": "11650-03-01M", "description": "SLIDER"},
+             {"part_number": "11650-02-04M", "description": "TAB"},
+             {"part_number": "BI-PEMSTUD", "description": "M4x12mm THREADED PEM STUD",
+              "page_roles": ["bought_in"],
+              "bom_parents": [{"parent": "11650-02-SA02", "qty": 2},
+                              {"parent": "11650-03-SA01", "qty": 2},
+                              {"parent": "11650-06-GA", "qty": 18}]}]
+    pem = "M4x12mm THREADED PEM STUD"
+    rows = [
+        {"part_number": "11650-02-SA02", "quantity": 3, "bom_parent": "11650-06-GA", "bom_sheet": "K#0"},
+        {"part_number": "11650-03-SA01", "quantity": 3, "bom_parent": "11650-06-GA", "bom_sheet": "K#0"},
+        {"part_number": "FIXING", "description": pem, "quantity": 2, "bom_parent": "11650-02-SA02", "bom_sheet": "T#2"},
+        {"part_number": "FIXING", "description": pem, "quantity": 2, "bom_parent": "11650-03-SA01", "bom_sheet": "A#1"},
+        {"part_number": "11650-03-01M", "quantity": 2, "bom_parent": "11650-03-SA01", "bom_sheet": "A#1"},
+        {"part_number": "11650-02-04M", "quantity": 2, "bom_parent": "11650-02-SA02", "bom_sheet": "T#2"},
+        {"part_number": "FIXING", "description": pem, "quantity": 18, "bom_parent": "11650-06-GA", "bom_sheet": "K#1"},
+        {"part_number": "11650-03-01M", "quantity": 12, "bom_parent": "11650-06-GA", "bom_sheet": "K#1"},
+        {"part_number": "11650-02-04M", "quantity": 6, "bom_parent": "11650-06-GA", "bom_sheet": "K#1"}]
+    g = rc.build_part_graph(parts, {}, bom_rows=rows)
+    assert "FIXING" not in g["records"]
+    assert g["quantities"]["BI-PEMSTUD"] == 18
+
+
+def test_one_vague_code_over_two_different_items_stays_two():
+    parts = [{"part_number": "A-GA", "is_assembly_parent": True},
+             {"part_number": "BI-PEMSTUD", "description": "M4 PEM STUD", "page_roles": ["bought_in"]},
+             {"part_number": "BI-KNURLEDKNOB", "description": "M4 KNURLED KNOB", "page_roles": ["bought_in"]}]
+    rows = [{"part_number": "FIXING", "description": "M4 PEM STUD", "quantity": 2, "bom_parent": "A-GA"},
+            {"part_number": "FIXING", "description": "M4 KNURLED KNOB", "quantity": 4, "bom_parent": "A-GA"}]
+    g = rc.build_part_graph(parts, {}, bom_rows=rows)
+    assert g["aliases"].get("FIXING") is None
+
+
 def test_both_askers_apply_the_check():
     ps = (ROOT / "src" / "pricing_service.py").read_text(encoding="utf-8")
     es = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
