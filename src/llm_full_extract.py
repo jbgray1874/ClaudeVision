@@ -497,6 +497,7 @@ def project_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         bought = False
     return {
         "part_number": pn,
+        "printed_code": row.get("printed_code") or None,
         "description": row.get("description"),
         "material": row.get("material") or None,
         "material_family": fam or None,
@@ -516,6 +517,14 @@ def normalize_job(job: Dict[str, Any]) -> Dict[str, Any]:
     """Project the schema's `bom` onto the `parts` shape the engine reads. In place."""
     if not isinstance(job, dict):
         return job
+    # ONE CATEGORY CODE, SEVERAL ARTICLES. "P/P" over an LED driver, a tape and a grommet is
+    # three parts; keyed on the code, the projection below kept the first and dropped the
+    # rest. Each article takes its own identity first (part_identity), printed code kept.
+    try:
+        from part_identity import split_category_code_rows
+        split_category_code_rows(job.get("bom") or [])
+    except Exception:                                   # pragma: no cover - import guard
+        pass
     _already_projected = isinstance(job.get("parts"), list) and bool(job["parts"])
     # WHAT THE DRAWING SHOWS IS NOT WHAT WE SUPPLY -- AND THIS IS THE SECOND DOOR.
     #

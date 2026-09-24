@@ -275,6 +275,87 @@ _MINTED_CODE = re.compile(r"^BI-[A-Z]+$", re.IGNORECASE)
 _CONCEPT_CODE = re.compile(r"^[A-Z0-9][A-Z0-9-]*-CPT\d{2}$")
 
 
+_ARTICLE_NOISE = {"THE", "AND", "OF", "WITH", "FOR", "A", "AN", "TO", "IN"}
+
+
+def _article_words(description: Any) -> List[str]:
+    return [w for w in re.findall(r"[A-Z0-9]+(?:\.[0-9]+)?", str(description or "").upper())
+            if w not in _ARTICLE_NOISE]
+
+
+def category_code_identities(rows: Iterable[Any], code_key: str = "part_number",
+                             desc_key: str = "description") -> Dict[int, str]:
+    """{index: identity} for rows whose code names a CATEGORY shared by different articles.
+
+    12312-01-GA prints nine purchased lines under "P/P" (LED driver, LED tape, grommets,
+    Velcro hook, Velcro loop, two EPDM tapes, two cables) and two washers under "FIXING".
+    Keyed on the code, every stage from the extract to the workbook kept one record per code,
+    so one driver x2 stood in for the lot and the rest carried no line and no price.
+
+    A category code (part_code_conventions.is_category_not_a_code) printed over rows that name
+    DIFFERENT articles is not an identity. Each article becomes "<printed code>-<its words>",
+    "P/P-LED-POWER-DRIVER-24V", so the line still shows the code the drawing printed and an
+    estimator can rename it. Where every row under the code names one article, nothing changes
+    and the existing vague-code handling (the BI- alias) applies. Derived from the row alone
+    plus its siblings, so every stage that sees the same table derives the same identity.
+    """
+    try:
+        from part_code_conventions import bare_code, is_category_not_a_code
+    except Exception:                                               # pragma: no cover
+        return {}
+    listed = list(rows or [])
+    groups: Dict[str, List[int]] = {}
+    for i, row in enumerate(listed):
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get(code_key) or "").strip()
+        if code and is_category_not_a_code(code):
+            groups.setdefault(bare_code(code), []).append(i)
+    out: Dict[int, str] = {}
+    for idxs in groups.values():
+        by_article: Dict[Tuple[str, ...], List[int]] = {}
+        for i in idxs:
+            words = tuple(_article_words(listed[i].get(desc_key)))
+            if words:
+                by_article.setdefault(words, []).append(i)
+        if len(by_article) < 2:
+            continue
+        articles = list(by_article)
+        slugs: Dict[Tuple[str, ...], str] = {}
+        for words in articles:
+            n = min(4, len(words))
+            while True:
+                slug = "-".join(words[:n])
+                clash = [o for o in articles if o != words and "-".join(o[:n]) == slug]
+                if not clash or n >= len(words):
+                    break
+                n += 1
+            slugs[words] = slug
+        used: Dict[str, int] = {}
+        for words in articles:
+            printed = str(listed[by_article[words][0]].get(code_key) or "").strip().upper()
+            ident = f"{printed}-{slugs[words]}"
+            used[ident] = used.get(ident, 0) + 1
+            if used[ident] > 1:
+                ident = f"{ident}-{used[ident]}"
+            for i in by_article[words]:
+                out[i] = ident
+    return out
+
+
+def split_category_code_rows(rows: Iterable[Any], code_key: str = "part_number",
+                             desc_key: str = "description") -> int:
+    """Apply category_code_identities in place, keeping the printed code. Returns rows changed."""
+    listed = list(rows or [])
+    new = category_code_identities(listed, code_key, desc_key)
+    for i, ident in new.items():
+        row = listed[i]
+        if str(row.get(code_key) or "") != ident:
+            row.setdefault("printed_code", row.get(code_key))
+            row[code_key] = ident
+    return len(new)
+
+
 def is_sighted_code(identity: Any) -> bool:
     """True when this code was minted for a part SIGHTED on a render (concept_scan)."""
     return bool(_CONCEPT_CODE.match(str(identity or "").strip().upper()))

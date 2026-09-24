@@ -750,6 +750,11 @@ def merge_job_pdf_summaries(
     }
     merged_doc = dict(merged.get("document_analysis") or {})
     merged_doc["bom_rows"] = _merge_truncated_bom_codes(list(bom_by_key.values()))
+    try:
+        from part_identity import split_category_code_rows
+        split_category_code_rows(merged_doc["bom_rows"])
+    except Exception:                                                   # noqa: BLE001
+        pass
     merged["document_analysis"] = merged_doc
 
     primary_gs = primary_summary.get("geometry_summary") or {}
@@ -2188,6 +2193,18 @@ def _finalize_scan_summary(
                       f"reader missed; vision overrode {_cnt.get('override', 0)}; "
                       f"vision missed {_cnt.get('a_only', 0)}", flush=True)
             if _dp.get("rows"):
+                # One category code over several articles is several parts, from here on
+                # (part_identity.category_code_identities) — the reconciler below and every
+                # reader of bom_rows see the same identity per article.
+                try:
+                    from part_identity import split_category_code_rows
+                    _n_split = split_category_code_rows(_dp["rows"])
+                    if _n_split:
+                        print(f"   [bom-identity] {_n_split} row(s) under a shared category "
+                              f"code (P/P, FIXING...) given one identity per article",
+                              flush=True)
+                except Exception as _sp_err:                          # noqa: BLE001
+                    _debug(f"category-code split skipped: {_sp_err}")
                 _da["bom_rows"] = _dp["rows"]
                 _da["bom_code_quality_findings"] = _dp.get("findings", [])
                 _debug(f"dual-path bom_rows applied: {len(_dp['rows'])} rows")
@@ -2305,6 +2322,14 @@ def _finalize_scan_summary(
                 return False
             if _FAKE_PN_PATTERNS.match(pn_stripped):
                 return False
+            # A category code carrying its article's words ("P/P-SEMI-BLIND-RUBBER-GROMMET")
+            # is an identity part_identity gave a shared "P/P" row — no digit needed.
+            try:
+                from part_code_conventions import is_category_not_a_code as _is_cat
+                if "-" in pn_stripped and _is_cat(pn_stripped.split("-", 1)[0]):
+                    return True
+            except Exception:                                           # noqa: BLE001
+                pass
             # Real part numbers always have digits
             if not re.search(r'\d', pn_stripped):
                 return False

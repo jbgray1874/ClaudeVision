@@ -443,7 +443,22 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
     by_page = _title_block_material_by_page(summary)
     thick_by_page = _title_block_thickness_by_page(summary)
     graph_qty = graph_quantity_by_code(summary)
-    for row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+    _all_rows = list((summary.get("document_analysis") or {}).get("bom_rows") or [])
+    # A category code over several articles ("P/P" over a driver, a tape and a grommet) is
+    # several graph nodes, one per article (part_identity.category_code_identities) — so the
+    # row is looked up by its article's identity, through any alias the graph joined it to.
+    try:
+        from part_identity import category_code_identities
+        _article_id = category_code_identities([dict(r) if isinstance(r, Mapping) else {}
+                                                for r in _all_rows])
+    except Exception:                                               # pragma: no cover
+        _article_id = {}
+    _aliases: Dict[str, str] = {}
+    for _payload in route_payloads(summary):
+        for _k, _v in ((_payload.get("aliases") or {}) if isinstance(_payload, Mapping)
+                       else {}).items():
+            _aliases.setdefault(_text(_k).upper(), _text(_v).upper())
+    for _row_index, row in enumerate(_all_rows):
         if not isinstance(row, Mapping):
             continue
         code = _text(row.get("part_number"))
@@ -532,7 +547,9 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         # differ matters to the money: a general arrangement printing three install
         # arrangements, a part nested inside a multiple sub-assembly, or two readers who
         # disagreed and one of them lost.
-        _g = graph_qty.get(code.upper()) or {}
+        _ident = _text(_article_id.get(_row_index) or code).upper()
+        _g = (graph_qty.get(_ident) or graph_qty.get(_aliases.get(_ident, ""))
+              or graph_qty.get(code.upper()) or {})
         _own = row.get("quantity")
         _effective = _g.get("qty_effective")
         _qty_notes: List[str] = []

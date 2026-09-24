@@ -467,6 +467,104 @@ def _raw_parts(parts: Sequence[Mapping[str, Any]]) -> Dict[str, Mapping[str, Any
     return result
 
 
+def _split_category_codes(
+    llm_extract: Mapping[str, Any],
+    bom_rows: Optional[Sequence[Mapping[str, Any]]],
+) -> Tuple[Dict[str, Any], Optional[List[Dict[str, Any]]]]:
+    """Copies of the extract and the BOM rows with each article under a shared category code
+    ("P/P", "FIXING") given its own identity (part_identity.category_code_identities).
+
+    12312-01-GA: nine purchased lines printed "P/P" were one graph node — the LED driver, x2 —
+    and the tape, grommets, Velcro, EPDM and cables had no line and no price. Every stage after
+    this keys on the part number, so the split is made here, on the way in, for all of them:
+      - the extract's BOM rows are the naming authority;
+      - its pre-projected parts pool (first row per code) is re-pointed by description, and a
+        category-coded part matching no row is left to the BOM rows that carry it;
+      - an assembly child printed as the bare category code stands for every article under it,
+        each at its own row's quantity;
+      - the dual-path rows take the extract's identity for the same article, or their own.
+    """
+    from part_identity import _article_words, category_code_identities
+    try:
+        from part_code_conventions import bare_code, is_category_not_a_code
+    except Exception:                                               # pragma: no cover
+        return dict(llm_extract or {}), (list(bom_rows) if bom_rows is not None else None)
+    ext = dict(llm_extract or {})
+    bom = [dict(r) if isinstance(r, Mapping) else r for r in (ext.get("bom") or [])]
+    new = category_code_identities(bom)
+    # {bare category code: [(article words, identity, qty)]}
+    split: Dict[str, List[Tuple[Tuple[str, ...], str, Any]]] = {}
+    for i, ident in new.items():
+        row = bom[i]
+        _bc = bare_code(row.get("part_number"))
+        entry = (tuple(_article_words(row.get("description"))), ident, row.get("qty"))
+        if entry[1] not in {e[1] for e in split.get(_bc, [])}:
+            split.setdefault(_bc, []).append(entry)
+        row.setdefault("printed_code", row.get("part_number"))
+        row["part_number"] = ident
+    # Rows split upstream (llm_full_extract.normalize_job) carry the printed code.
+    for row in bom:
+        if isinstance(row, dict) and row.get("printed_code") \
+                and is_category_not_a_code(str(row["printed_code"])) \
+                and row.get("part_number") != row.get("printed_code"):
+            _bc = bare_code(row["printed_code"])
+            if row["part_number"] not in {e[1] for e in split.get(_bc, [])}:
+                split.setdefault(_bc, []).append(
+                    (tuple(_article_words(row.get("description"))), row["part_number"],
+                     row.get("qty")))
+
+    def _match(code: Any, desc: Any) -> Optional[str]:
+        words = tuple(_article_words(desc))
+        for w, ident, _q in split.get(bare_code(code), []):
+            if words and (words == w or words[:4] == w[:4]):
+                return ident
+        return None
+
+    if split:
+        ext["bom"] = bom
+        parts = []
+        for p in ext.get("parts") or []:
+            if isinstance(p, Mapping) and bare_code(p.get("part_number")) in split:
+                ident = _match(p.get("part_number"), p.get("description"))
+                if not ident:
+                    continue
+                p = dict(p, part_number=ident, printed_code=p.get("part_number"))
+            parts.append(p)
+        if "parts" in ext:
+            ext["parts"] = parts
+        asms = []
+        for a in ext.get("assemblies") or []:
+            if not isinstance(a, Mapping):
+                asms.append(a)
+                continue
+            kids = []
+            for k in a.get("children") or []:
+                _code = k.get("part_number") if isinstance(k, Mapping) else k
+                if bare_code(_code) in split:
+                    kids.extend({"part_number": ident, "qty": q}
+                                for _w, ident, q in split[bare_code(_code)])
+                else:
+                    kids.append(k)
+            asms.append(dict(a, children=kids))
+        ext["assemblies"] = asms
+
+    rows_out: Optional[List[Dict[str, Any]]] = None
+    if bom_rows is not None:
+        rows_out = [dict(r) if isinstance(r, Mapping) else r for r in bom_rows]
+        own = category_code_identities(rows_out)
+        for i, row in enumerate(rows_out):
+            if not isinstance(row, dict):
+                continue
+            code = row.get("part_number") or row.get("part_code")
+            if not code or not is_category_not_a_code(str(code)):
+                continue
+            ident = _match(code, row.get("description")) or own.get(i)
+            if ident:
+                row.setdefault("printed_code", code)
+                row["part_number"] = ident
+    return ext, rows_out
+
+
 def _extract_part_records(llm_extract: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Canonical BOM identities and classifications read by the full-job extract.
 
@@ -1180,7 +1278,7 @@ def build_part_graph(
     summary unread. `bom_rows` closes that: see _bom_stated_edges for why it can only ever
     connect an orphan.
     """
-    llm_extract = llm_extract or {}
+    llm_extract, bom_rows = _split_category_codes(llm_extract or {}, bom_rows)
     raw_original = _raw_parts(parts)
     extracted = _extract_part_records(llm_extract)
     # The codes some assembly names as a child, read BEFORE aliasing so the alias pass can
@@ -1252,7 +1350,10 @@ def build_part_graph(
             _rc = clean_part_number(_r.get("part_number") or _r.get("part_code"))
             if not _rc or _rc in raw_original or _rc in aliases:
                 continue
-            _m = clean_part_number(_mint(_r.get("description"), _rc))
+            # A split category row ("FIXING-M6-WASHER") mints from the code the drawing
+            # printed, exactly as the unsplit row would have.
+            _m = clean_part_number(_mint(_r.get("description"),
+                                         _r.get("printed_code") or _rc))
             if _m and _m != _rc:
                 _minted_by_code.setdefault(_rc, set()).add(_m)
                 _descs_by_code.setdefault(_rc, []).append(str(_r.get("description") or ""))
@@ -1269,7 +1370,12 @@ def build_part_graph(
         for _rc, _ms in _minted_by_code.items():
             if len(_ms) == 1 and _one_item(_descs_by_code.get(_rc, [])):
                 _m = next(iter(_ms))
-                if _m in raw_original:
+                # AND THE RECORD UNDER THAT CODE IS THE SAME ITEM. M6 and M5 washers both
+                # mint BI-WASHER; once split, each is a group of one, so the group test above
+                # no longer compares them — the record's own description has to.
+                _rec_desc = str((raw_original.get(_m) or {}).get("description") or "")
+                if _m in raw_original and (not _rec_desc or _one_item(
+                        _descs_by_code.get(_rc, [])[:1] + [_rec_desc])):
                     aliases.setdefault(_rc, _m)
     # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
     # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
