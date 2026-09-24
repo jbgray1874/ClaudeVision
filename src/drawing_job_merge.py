@@ -2281,6 +2281,31 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             _apply_field(part, _field, base[_key], "mirror_of_measured",
                          note=f"mirrored from {base.get('part_number')}")
 
+        # ONE FLAT IS CUT ONE WAY. 11650-06's extender pair shares one DXF; the handed panel
+        # carried laser_cutting and the plain one only a drawn hole_machining, so the plain
+        # panel was nested and costed with nothing to cut its profile. Where this hand has NO
+        # cutting operation and the hand it pairs with has one, it takes that one, inferred
+        # and flagged. Other operations (a drilled hole, a countersink) are not copied —
+        # whether the pair really differs there is a question for a person.
+        _cut_ops = ("laser_cutting", "cnc_routing", "waterjet_cutting", "plasma_cutting",
+                    "punching", "guillotine")
+
+        def _ops(p):
+            return [str(o) for o in ((p.get("textual_operations") or [])
+                                     + (p.get("inferred_operations") or []))]
+        _base_cut = [o for o in _ops(base) if o in _cut_ops]
+        if _base_cut and not any(o in _cut_ops for o in _ops(part)):
+            _inf = list(part.get("inferred_operations") or [])
+            for _o in dict.fromkeys(_base_cut):
+                if _o not in _inf:
+                    _inf.append(_o)
+            part["inferred_operations"] = _inf
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} had no cutting operation; it is cut from the same "
+                f"flat as {base.get('part_number')}, so it takes {', '.join(dict.fromkeys(_base_cut))} "
+                f"from that hand. Its other operations are its own — confirm any the two hands "
+                f"do not share")
+
         # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
         # was listed on a kit page tagged as bought-in, so it carried that role; it was then
         # nested and charged as fabricated steel from the plain arm's flat while its provenance

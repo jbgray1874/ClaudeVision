@@ -1535,6 +1535,21 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     if kind == "assembly" and not money:
         return {"class": "nil_by_design", "firmness": NIL, "owner": "nobody",
                 "label": "nothing to charge here — an assembly's material is its members'"}
+    # THE SAME ARTICLE UNDER A SECOND NAME IS NOT A MISSING PRICE. wb_populate puts the
+    # money on one line and writes "SAME ARTICLE AS <kept>: costed there, not here" on the
+    # other. 11650-06: FIXINGTBC read that way beside BI-KNURLEDKNOB (32 x £0.85, charged),
+    # and the headline still said "3 prices missing", naming the knob as one of them — the
+    # read-back knew the marker, this classifier did not. Nil by design, with the count this
+    # line carried stated, so a difference from the charged line's count is visible here.
+    _same = re.search(r"SAME ARTICLE AS\s+([^\s:]+)", str(row_text or ""), re.IGNORECASE)
+    if _same and not money:
+        _own_q = part.get("quantity")
+        return {"class": "same_article", "firmness": NIL, "owner": "nobody",
+                "label": (f"the same article is costed on {_same.group(1)} — this line is "
+                          f"the drawing's second name for it"
+                          + (f"; its own count here ({_num(_own_q):g}) is not charged — the "
+                             f"quantity on {_same.group(1)} is"
+                             if _num(_own_q) else ""))}
     if kind == "commercial" and not money:
         # "Delivery is not required" — Tony Ford, 16 Sep 2026 — is an ANSWER: the line's
         # £0 is a person's decision, and asking somebody to price it on every run is how
