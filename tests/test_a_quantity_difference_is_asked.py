@@ -43,3 +43,11 @@ def test_a_count_multiplied_down_one_route_is_not_asked():
 def test_a_matching_count_is_not_asked():
     job = cf.costed_job(_summary(1, 1, ["GA x1 -> PP x1 = 1"]))
     assert not [d for d in job["decisions_required"] if d["kind"] == "quantity_check"]
+
+
+def test_a_line_counted_once_is_asked_so_a_spare_is_not_lost():
+    job = cf.costed_job(_summary(1, 1, ["GA x1 -> LA x1 -> 08X x1 -> PP x1 = 1"],
+                                 note="listed on GA's table beside LA, which already holds 1; "
+                                      "counted once, through LA"))
+    qc = [d for d in job["decisions_required"] if d["kind"] == "quantity_check"]
+    assert len(qc) == 1 and "costed once" in qc[0]["issue"]
