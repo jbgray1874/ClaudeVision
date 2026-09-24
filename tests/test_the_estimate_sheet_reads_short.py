@@ -132,3 +132,37 @@ def test_the_book_opens_on_values_even_when_the_template_shows_formulas():
     import io
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     assert not openpyxl.load_workbook(buf)["Estimate"].sheet_view.showFormulas
+
+
+def test_the_book_opens_on_the_estimate_scrolled_to_the_top_left():
+    """James Gray, 24 Sep 2026: open on the estimating sheet, page at the top left."""
+    import io
+    import wb_populate
+    src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
+    assert src.index('open_on_sheet(wb, cm["estimate_sheet"])') < src.index("wb.save(out_path)")
+    wb = _estimate()
+    other = wb.create_sheet("Labour", 0)                  # the template saved on another tab,
+    wb.active = 0
+    other.sheet_view.tabSelected = True
+    est = wb["Estimate"]
+    est.sheet_view.topLeftCell = "A120"                   # scrolled down the page,
+    est.sheet_view.selection[0].activeCell = "M96"
+    est.sheet_view.selection[0].sqref = "M96"
+    wb_populate.open_on_sheet(wb, "Estimate")
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    back = openpyxl.load_workbook(buf)
+    assert back.active.title == "Estimate"
+    assert not back["Labour"].sheet_view.tabSelected
+    sv = back["Estimate"].sheet_view
+    assert sv.topLeftCell == "A1" and sv.selection[0].activeCell == "A1"
+
+
+def test_a_frozen_heading_stays_frozen_and_the_page_starts_below_it():
+    import wb_populate
+    wb = _estimate()
+    est = wb["Estimate"]
+    est.freeze_panes = "A8"
+    est.sheet_view.pane.topLeftCell = "A200"
+    wb_populate.open_on_sheet(wb, "Estimate")
+    assert est.sheet_view.pane.state == "frozen" and est.sheet_view.pane.ySplit == 7
+    assert est.sheet_view.pane.topLeftCell == "A8"

@@ -4014,6 +4014,34 @@ def _stated_shop_time_source(group: Any, stated: Dict[str, str]) -> str:
     return "a stated shop figure"
 
 
+
+def open_on_sheet(wb, sheet_name: str) -> None:
+    """Make `sheet_name` the tab the book opens on, scrolled to its top-left cell.
+
+    A frozen pane keeps its split, and its scrolling pane starts just past the split. Every
+    other tab is deselected, so Excel does not open with a group of sheets selected.
+    """
+    from openpyxl.utils import get_column_letter
+    est = wb[sheet_name]
+    idx = wb.worksheets.index(est)
+    for ws in wb.worksheets:
+        ws.sheet_view.tabSelected = ws is est
+    wb.active = idx
+    for view in wb.views or []:
+        view.activeTab = idx
+        view.firstSheet = 0
+    sv = est.sheet_view
+    sv.topLeftCell = "A1"
+    if sv.pane is not None and sv.pane.state in ("frozen", "frozenSplit"):
+        first = f"{get_column_letter(int(sv.pane.xSplit or 0) + 1)}{int(sv.pane.ySplit or 0) + 1}"
+        sv.pane.topLeftCell = first
+    else:
+        sv.pane = None
+        first = "A1"
+    for sel in sv.selection or []:
+        sel.activeCell = first
+        sel.sqref = first
+
 def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional[str]:
     """Open the template, populate inputs from `summary`, save-as to output dir.
     `job_folder_name` is the drawing-folder basename, used for the output filename.
@@ -7012,6 +7040,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _ws.sheet_view.showFormulas = False
         except Exception:                                            # noqa: BLE001
             pass
+
+    # ── ...on the Estimate sheet, scrolled to its top-left ──────────────────
+    # James Gray, 24 Sep 2026: the book should open on the estimating sheet with the page
+    # at the top left, so the compact estimate is the first thing estimating reads. The tab
+    # and scroll position are otherwise whatever the template was last saved with.
+    try:
+        open_on_sheet(wb, cm["estimate_sheet"])
+    except Exception as _oe:                                          # noqa: BLE001
+        _flag(f"could not set the book to open on the Estimate sheet ({_oe}).", flags)
 
     # ── Save-As to output dir with folder-name + timestamp ─────────────────
     os.makedirs(cm["output_dir"], exist_ok=True)
