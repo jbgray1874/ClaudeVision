@@ -8123,6 +8123,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     system_unit_cost = _safe_float(system_cost.get("applied_unit_cost"))
     system_cost_result = system_cost.get("result", {})
     matched_part_code = system_cost.get("matched_part_code")
+    _bought_in_fitting_gbp = None
 
     # A STANDARD-COMMODITY PROVISIONAL IS A MATERIAL BUY, PRICED AT ITS CONFIG FIGURE.
     #
@@ -8280,15 +8281,26 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     if bought_in_candidate and system_unit_cost is not None:
         # A standard-commodity provisional takes no bench-fitting uplift — it is placed during
         # the assembly labour the parent already carries — so its unit total IS the buy price.
-        if _is_commodity_provisional:
+        #
+        # AND SO DOES ANY BOUGHT-IN AN ASSEMBLY'S BOM LISTS. 11650-06: the Yiree binding screw
+        # was researched at £1.25 and charged £2.29 — two minutes of handling added to the buy
+        # price, on a screw that sits in a spare set packed with the kit, whose packing and
+        # assembly time is already on the labour rows. The uplift is for a loose fitting that
+        # nothing else accounts for; a line on an assembly's BOM is accounted for by that
+        # assembly. The minutes are config, and 0 turns the uplift off everywhere.
+        _owner = str(part.get("owning_assembly") or "").strip()
+        if _is_commodity_provisional or (
+                _owner and not getattr(config, "BOUGHT_IN_FITTING_WHEN_ON_AN_ASSEMBLY_BOM", False)):
             _fitting_cost = 0.0
         else:
-            _fitting_min = float(getattr(config, "BOUGHT_IN_FITTING_MIN_PER_PART", 2.0) or 2.0)
+            _fitting_min = _safe_float(getattr(config, "BOUGHT_IN_FITTING_MIN_PER_PART", 2.0))
+            _fitting_min = 2.0 if _fitting_min is None else max(0.0, _fitting_min)
             _manm_rate = float((HOURLY_RATES_GBP or {}).get("handling", 31.18))
             _fitting_cost = (_fitting_min / 60.0) * _manm_rate
         unit_total_raw = float(system_unit_cost) + _fitting_cost
         extended_total_raw = unit_total_raw * quantity
         costing_basis = "system_cost_per_part"
+        _bought_in_fitting_gbp = round(_fitting_cost, 4)
     else:
         # Material Price Break LOOKUP — workbook col J formula (rows 11-25):
         # J = LOOKUP($D$6, 'Material Price Break'!$D$4:$N$4, price_row)
@@ -8306,6 +8318,24 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             extended_total_raw = float((extended_material_cost + total_labour_cost) * qty_multiplier)
             unit_total_raw = (extended_total_raw / quantity) if quantity else extended_total_raw
             costing_basis = f"computed_material_plus_labour_qty_break_x{qty_multiplier:.3f}"
+    # ONE LINE, ONE SOURCE. A bought-in charged at its bought-in price had its material block
+    # still carrying the config-rate fallback the geometry path wrote before it found nothing
+    # to cut — and the AI Provenance tab reads the material block, so the Yiree screw's AI
+    # market price was labelled "config_default_material_rates". Where the bought-in price is
+    # what the line charges, it is the line's price source.
+    _system_cost_source = _build_price_source_metadata(
+        system_cost_result,
+        fallback_source="system_cost_not_found",
+        applied=system_unit_cost is not None,
+        applied_basis="GBP_each" if system_unit_cost is not None else None,
+        # The same expression as applied_to_total below, so the stamp and the
+        # sibling flag cannot disagree about whether this price reached the total.
+        affects_total=bool(bought_in_candidate and system_unit_cost is not None),
+    )
+    if costing_basis == "system_cost_per_part":
+        material["price_source"] = dict(_system_cost_source)
+        if _bought_in_fitting_gbp:
+            material["price_source"]["bought_in_fitting_gbp_each"] = _bought_in_fitting_gbp
     unit_total = _round_money(unit_total_raw)
     extended_total = _round_money(extended_total_raw)
     markups = (WORKBOOK_EQUIVALENT_PRICING or {}).get("sell_markup_options_pct") or {"low": 10.0, "standard": 20.0, "premium": 35.0}
@@ -8512,16 +8542,10 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                 "extended_cost_gbp": round((system_unit_cost or 0.0) * quantity, 2) if system_unit_cost is not None else None,
                 "matched_part_code": matched_part_code,
                 "part_description": part.get("description"),
-                "source": _build_price_source_metadata(
-                    system_cost_result,
-                    fallback_source="system_cost_not_found",
-                    applied=system_unit_cost is not None,
-                    applied_basis="GBP_each" if system_unit_cost is not None else None,
-                    # The same expression as applied_to_total below, so the stamp and the
-                    # sibling flag cannot disagree about whether this price reached the total.
-                    affects_total=bool(bought_in_candidate and system_unit_cost is not None),
-                ),
+                "source": _system_cost_source,
                 "applied_to_total": bought_in_candidate and system_unit_cost is not None,
+                "fitting_gbp_each": _bought_in_fitting_gbp,
+                "owning_assembly": part.get("owning_assembly") or None,
             },
             "overhead": {
                 "unit_overhead_cost_gbp": None,

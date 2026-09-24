@@ -407,3 +407,18 @@ def test_the_title_is_the_products_own_file_label_not_a_sub_assemblys_title_bloc
     assert number == "11650-06-GA" and "COFFRET HOSPITAL KIT" in str(title).upper(), title
     lines = rc.product_scope_sentences(summary)
     assert lines[0].startswith("Priced as 11650-06-GA (COFFRET HOSPITAL KIT)"), lines
+
+
+def test_a_mirror_the_bom_lists_on_its_own_line_is_not_folded_into_its_base():
+    """11650-06: the kit BOM prints 'Mirror11650-03-GA' HANDED ARM x3 and
+    'Mirror11650-03-02M' x3. The mirror rule fell back onto the base part (it looked only for
+    the drawing's '<code> MIR' spelling), and the handed arm set was merged into the plain
+    one — 3 arms costed where the kit has 6. 11350's case (no separate listing in the model's
+    spelling) still joins."""
+    ids = {"11650-03-SA01", "MIRROR11650-03-SA01", "11650-03-02M", "MIRROR11650-03-02M"}
+    assert rc._drawing_code_aliases(ids).get("MIRROR11650-03-SA01") == "11650-03-SA01"
+    assert rc._drawing_code_aliases(
+        ids, listed={"MIRROR11650-03-SA01", "MIRROR11650-03-02M"}) == {}
+    assert rc._drawing_code_aliases(
+        {"11350-01-02 MIR", "MIRROR11350-01-02M", "11350-01-02"},
+        listed={"11350-01-02 MIR", "11350-01-02"}) == {"MIRROR11350-01-02M": "11350-01-02 MIR"}

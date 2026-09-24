@@ -555,7 +555,8 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
 
 def _drawing_code_aliases(identities: Iterable[str],
                           records: Optional[Mapping[str, Mapping[str, Any]]] = None,
-                          refused: Optional[List[Dict[str, str]]] = None) -> Dict[str, str]:
+                          refused: Optional[List[Dict[str, str]]] = None,
+                          listed: Optional[Iterable[str]] = None) -> Dict[str, str]:
     """Join the codes the FILES use to the codes the DRAWING's BOM uses.
 
     THE SAME PART UNDER TWO NAMES IS TWO PARTS, and that is the expensive failure. On 11350
@@ -622,6 +623,15 @@ def _drawing_code_aliases(identities: Iterable[str],
                             "target_kind": _record_kind(b) or "unstated"})
         return False
 
+    # THE CODES THE DRAWING'S OWN BOM PRINTS. A mirror falls back onto its base only "for
+    # packs where the drawing does not list the mirror separately" — and the test for that
+    # looked only for the drawing's "<code> MIR" spelling. 11650-06's kit BOM lists the
+    # handed arm AS "Mirror11650-03-GA" and "Mirror11650-03-02M" (x3 each): listed
+    # separately, in the model's spelling, so the fallback fired and the handed arm set was
+    # folded into the plain one — 3 arms costed where the kit has 6. A mirror the BOM prints
+    # under its own code is its own line.
+    _listed = {str(c).strip().upper() for c in (listed or []) if str(c).strip()}
+
     aliases: Dict[str, str] = {}
     for identity in sorted(known):
         # Same part, two spellings: bind the shorter onto the drawing's own.
@@ -630,8 +640,16 @@ def _drawing_code_aliases(identities: Iterable[str],
             if _may_merge(identity, _canon):
                 aliases[identity] = _canon
             continue
+        _mirror_listed = False
+        try:
+            from part_code_conventions import is_mirror_code as _is_mirror
+            _mirror_listed = _is_mirror(identity) and identity in _listed
+        except Exception:                                            # noqa: BLE001
+            pass
         for _t in alias_targets(identity):
             _hit = _by_squash.get(_squash(_t.strip().upper()))
+            if _mirror_listed and _hit and not _is_mirror(_hit):
+                continue          # the BOM lists this hand on its own line: never its base
             if _hit and _hit != identity and _may_merge(identity, _hit):
                 aliases[identity] = _hit
                 break
@@ -1205,9 +1223,13 @@ def build_part_graph(
             if isinstance(_rec, Mapping):
                 _kind_records.setdefault(str(_id).strip().upper(), _rec)
     _refused_cross_kind: List[Dict[str, str]] = []
+    _bom_listed = {clean_part_number(r.get("part_number") or r.get("part_code"))
+                   for r in (bom_rows or []) if isinstance(r, Mapping)}
+    _bom_listed.discard("")
     for _src, _dst in _drawing_code_aliases(
             set(raw_original) | set(extracted) | _hierarchy_codes,
-            _kind_records, _refused_cross_kind).items():
+            _kind_records, _refused_cross_kind,
+            listed=_bom_listed | _hierarchy_codes).items():
         aliases.setdefault(_src, _dst)
     # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
     # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
