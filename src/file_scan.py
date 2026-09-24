@@ -223,6 +223,22 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         # 3) No match -> ADD clean bought-in row
         _cc = _clean_code(_desc, _code)
         _dup = next((_p for _p in _parts_recon if _p_code(_p) == _cc.upper()), None)
+        # THE SAME MINTED CODE IS NOT THE SAME ITEM. "M6 WASHER" and "M5 SERRATED WASHER"
+        # both mint BI-WASHER; filed as a second occurrence, the M5 washers became extra M6
+        # ones (12312-01 prints both as unnumbered FIXING rows). Where the item already
+        # holding the code is a different item by the thread-aware test, this row gets a
+        # code of its own, with the thread it names.
+        if _dup is not None:
+            _a = _E_recon._bought_in_token_set({"description": _desc})
+            _b = _E_recon._bought_in_token_set(_dup)
+            if _a is not None and _b is not None and not _E_recon._bought_in_same_item(_a, _b):
+                _thr = _re_recon.findall(
+                    r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?=\s*(?:X|-|\b|[A-Z]))", _desc.upper())
+                _alt = f"{_cc}-M{_thr[0]}" if len(set(_thr)) == 1 else f"{_cc}-{len(_parts_recon)}"
+                print(f"   [recon-row] '{_desc}' mints {_cc}, already held by a different "
+                      f"item ('{_dup.get('description')}') — carried as {_alt}", flush=True)
+                _cc = _alt
+                _dup = next((_p for _p in _parts_recon if _p_code(_p) == _cc.upper()), None)
         if _dup is not None:
             # The row is a SECOND OCCURRENCE of a known item, not a duplicate to drop —
             # its own table's parent and quantity still count.

@@ -198,3 +198,29 @@ def test_a_mirrored_measured_flat_is_fabrication_evidence():
     assert rc._bought_in_record(bracket) is False
     assert not has_fabrication_evidence({"part_number": "YIREE KEY",
                                          "page_roles": ["bought_in"]})
+
+
+# ── two unnumbered FIXING washers stay two (12312-01) ───────────────────────────────────
+
+def test_two_washers_that_mint_one_code_stay_two_lines():
+    import file_scan
+    summary = {"estimate_summary": {"part_estimates": [
+        {"part_number": "FIXING320", "description": "M6 x 15 PEM STUD", "page_roles": ["bought_in"], "quantity": 4},
+        {"part_number": "FIXING65", "description": "M5 SELF CLINCH NUT", "page_roles": ["bought_in"], "quantity": 2}]}}
+    rows = [{"part_code": "FIXING", "description": "M6 WASHER", "qty": 4, "bom_parent": "12312-01-GA"},
+            {"part_code": "FIXING", "description": "M5 SERRATED WASHER", "qty": 2, "bom_parent": "12312-01-GA"}]
+    file_scan._reconcile_dualpath_into_part_estimates(summary, {"rows": rows})
+    pes = {p["part_number"]: p for p in summary["estimate_summary"]["part_estimates"]}
+    assert "BI-WASHER" in pes and "BI-WASHER-M5" in pes, sorted(pes)
+    assert pes["BI-WASHER"]["quantity"] == 4 and pes["BI-WASHER-M5"]["quantity"] == 2
+    assert pes["FIXING320"]["quantity"] == 4 and pes["FIXING65"]["quantity"] == 2
+
+
+def test_a_vague_code_over_two_washer_sizes_is_not_aliased():
+    parts = [{"part_number": "12312-01-GA", "is_assembly_parent": True},
+             {"part_number": "BI-WASHER", "description": "M6 WASHER", "page_roles": ["bought_in"]},
+             {"part_number": "BI-WASHER-M5", "description": "M5 SERRATED WASHER", "page_roles": ["bought_in"]}]
+    rows = [{"part_number": "FIXING", "description": "M6 WASHER", "quantity": 4, "bom_parent": "12312-01-GA"},
+            {"part_number": "FIXING", "description": "M5 SERRATED WASHER", "quantity": 2, "bom_parent": "12312-01-GA"}]
+    g = rc.build_part_graph(parts, {}, bom_rows=rows)
+    assert g["aliases"].get("FIXING") is None

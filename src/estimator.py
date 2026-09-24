@@ -7626,6 +7626,17 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # not the drawing. They must pass through UNPRICED (£0, estimator-to-price); running them
     # through material/labour/PricingService would assign a spurious handling/web-AI cost and
     # defeat the whole point. Return the stub's £0 intact.
+    # SUPPLIED BY ANOTHER PARTY PER THE DRAWING: on the sheet at £0 with the party named,
+    # never offered to the price chain (see third_party_supply).
+    if part.get("supplied_by_third_party"):
+        part["material_estimate"] = {"unit_material_cost_gbp": 0.0, "cost_per_part_gbp": 0.0,
+                                     "extended_material_cost_gbp": 0.0,
+                                     "cost_method": "supplied_by_third_party"}
+        part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
+        part["costing_basis"] = "supplied_by_third_party"
+        part["unit_cost_gbp"] = part["unit_total_cost_gbp"] = 0.0
+        part["extended_total_cost_gbp"] = 0.0
+        return part
     if part.get("_commercial_placeholder") or str(part.get("source") or "") == "commercial_placeholder":
         # A PLACEHOLDER THAT HAS BEEN PRICED IS NO LONGER UNPRICED. This zeroed the line
         # unconditionally, so a packaging figure the market had just returned was thrown
@@ -10476,6 +10487,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         stamp_research_context(estimable_parts, summary)
     except Exception as _rc_exc:                                     # noqa: BLE001
         print(f"   [pricing] research context not stamped ({_rc_exc})", flush=True)
+    # WHAT THE DRAWING SAYS SOMEBODY ELSE SUPPLIES is listed at £0, never researched as ours.
+    try:
+        from third_party_supply import mark_third_party_supplied
+        _tp = mark_third_party_supplied(estimable_parts, summary)
+        if isinstance(summary, dict) and _tp:
+            summary["third_party_supplied"] = _tp
+    except Exception as _tp_exc:                                     # noqa: BLE001
+        print(f"   [scope] third-party supply note not read ({_tp_exc})", flush=True)
 
     part_estimates: List[Dict[str, Any]] = []
     _failed_parts: List[Dict[str, Any]] = []
