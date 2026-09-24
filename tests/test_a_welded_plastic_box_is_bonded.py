@@ -56,3 +56,31 @@ def test_an_assembly_of_other_material_is_left_alone():
     ga["textual_operations"] = []
     costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
     assert "glue" not in costs
+
+
+def test_an_assembly_with_no_material_of_its_own_is_bonded_when_its_children_are_acrylic():
+    """12633-00-GA: the wine lifter and beer plinth were minted from the SolidWorks tree with
+    no material, so the assembly's own material could not say it was acrylic."""
+    ga = {"part_number": "12633-02-GA", "description": "BEER PLINTH", "is_assembly_parent": True,
+          "assembly_children": ["12633-02-01P", "12633-02-02P"], "quantity": 1,
+          "child_materials": ["ACRYLIC", "ACRYLIC"]}
+    costs = (estimator.estimate_part(ga, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "glue" in costs
+
+
+def test_the_children_materials_are_stamped_before_costing():
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    i = src.index('_ap["child_materials"]')
+    assert i < src.index("part_estimate = estimate_part(part, job_quantity=_order_qty)")
+
+
+def test_an_acrylic_base_takes_its_linebend_from_the_charged_fold_count():
+    """12633-01-01P: two bends in the SolidWorks tree and no Linebend row."""
+    p = {"part_number": "12633-01-01P", "description": "BASE", "material": "ACRYLIC",
+         "normalized_material": "ACRYLIC", "thickness_mm": 5, "normalized_thickness_mm": 5,
+         "geometry_source": "dxf", "quantity": 1, "cut_method": "laser",
+         "inferred_operations": ["laser_cutting"],
+         "normalized_geometry": {"blank_length_mm": 450, "blank_width_mm": 292.1},
+         "solidworks_bend_features": 2}
+    costs = (estimator.estimate_part(p, job_quantity=1).get("labour_estimate") or {}).get("costs_gbp") or {}
+    assert "linebend" in costs

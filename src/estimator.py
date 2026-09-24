@@ -6448,8 +6448,13 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # assembly whose own material is a plastic, holding two or more parts and no fixings,
     # is put together with cement: one bonding event, flagged so the joint method is
     # confirmed. An assembly holding fasteners is screwed, and is left alone.
-    _is_plastic_asm = any(k in (_mat_u or "") for k in (
-        "ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS"))
+    _PLASTICS = ("ACRYLIC", "PMMA", "PERSPEX", "POLYCARBONATE", "PETG", "PVC", "ABS")
+    _kid_mats = [str(m) for m in (part.get("child_materials") or []) if m]
+    # Its own material, or — an assembly minted from a model tree carries none — every child
+    # it holds being a plastic.
+    _is_plastic_asm = (any(k in (_mat_u or "") for k in _PLASTICS)
+                       or (bool(_kid_mats) and all(any(k in m for k in _PLASTICS)
+                                                   for m in _kid_mats)))
     _asm_kids = [str(k).upper() for k in (part.get("assembly_children") or [])]
     _has_fixings = any(re.search(r"FIX|SCREW|BOLT|NUT|RIVET|STUD|WASHER|BI-", k)
                        for k in _asm_kids)
@@ -6462,7 +6467,7 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         except Exception:                                            # noqa: BLE001
             pass
         part.setdefault("review_flags", []).append(
-            f"glue added: {part.get('part_number')} is a {_mat_u} assembly of "
+            f"glue added: {part.get('part_number')} is a {_mat_u or (_kid_mats[0] if _kid_mats else 'plastic')} assembly of "
             f"{len(_asm_kids)} parts with no fixings, so it is bonded — one bonding event. "
             f"Confirm the joint method (solvent cement or adhesive)")
 
@@ -8054,6 +8059,16 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _bends = (_safe_int((part.get("manufacturing_features") or {}).get("bend_count"))
                       or _safe_int(part.get("fold_count_textual"))
                       or len(part.get("angles_deg") or []))
+        # THE ONE FOLD COUNT EVERY CONSUMER ASKS. 12633-01-01P, the wine lifter base: two
+        # 105° bends counted in the SolidWorks feature tree, the brake fold correctly ruled
+        # out for acrylic — and no Linebend, because this branch never asked fold_count, where
+        # the model's count lives. The press brake and the line bender bend the same bends.
+        if not _bends and not _model_measured_zero_bends(part):
+            try:
+                from fold_count import press_brake_folds as _pbf_acr     # noqa: PLC0415
+                _bends = int((_pbf_acr(part) or {}).get("count") or 0)
+            except Exception:                                          # noqa: BLE001
+                pass
         if _L > 0 and _W > 0:
             _spd = float(_drv.get("laser_cut_mm_per_sec", 50.0)) or 50.0
             _pps = (select_sheet_size(part.get("normalized_material"), _L, _W) or {}).get("parts_per_sheet") or 1
@@ -10544,6 +10559,17 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
 
     part_estimates: List[Dict[str, Any]] = []
     _failed_parts: List[Dict[str, Any]] = []
+    # WHAT AN ASSEMBLY IS MADE OF, FOR THE RULES THAT ASK. 12633-00-GA's wine lifter and
+    # beer plinth were minted from the SolidWorks tree with no material of their own (an
+    # assembly never carries one), so D-241 could not see they were acrylic and charged no
+    # bonding. Their children's materials are stamped on them here, before any is costed.
+    _mat_by_pn = {str(p.get("part_number") or "").strip().upper():
+                  str(p.get("normalized_material") or p.get("material") or "").upper()
+                  for p in (parts or []) if isinstance(p, dict)}
+    for _ap in (parts or []):
+        if isinstance(_ap, dict) and _ap.get("assembly_children"):
+            _cm = [_mat_by_pn.get(str(k).strip().upper(), "") for k in _ap["assembly_children"]]
+            _ap["child_materials"] = [m for m in _cm if m]
     for idx, part in enumerate(estimable_parts, start=1):
         part_number = part.get("part_number") or part.get("item_number") or f"part_{idx}"
         if debug:
