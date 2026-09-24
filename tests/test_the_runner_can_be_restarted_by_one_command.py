@@ -397,3 +397,12 @@ def test_the_restart_ends_by_asking_the_service(script):
 def test_the_service_can_be_on_another_machine(script):
     params = script[script.index("param("):script.index("\n)", script.index("param("))]
     assert "$Service" in params and "SDI_SERVICE_URL" in _code(script)
+
+
+def test_the_service_check_waits_out_the_stopped_runners_window(script):
+    """15:20, 24 Sep 2026: FAIL process_count 2 against one runner — the stopped process was
+    still inside the service's 20 s conflict window when the check stopped at the first
+    matching build."""
+    code = _code(script)
+    loop = code[code.index("while ($asked -lt 90)"):code.index("if (-not $resp)")]
+    assert "process_count -eq 1" in loop and "-not $mine.conflict" in loop
