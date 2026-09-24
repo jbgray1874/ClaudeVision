@@ -248,3 +248,35 @@ def test_the_resolver_refuses_an_empty_value_on_its_own():
     for empty in (None, "", [], {}):
         assert sp.apply_field(part, "normalized_material", empty, "solidworks_api") is False
     assert part["normalized_material"] == "PETG"
+
+
+def test_an_unmeasured_base_takes_the_measured_hands_flat():
+    """11650-06: the handed extender carried the only DXF (420 x 133); the plain hand had the
+    PANEL default envelope, 400 x 300, so the pair was nested at two sizes. Two hands are one
+    flat, whichever was measured — the base is filled from the hand at mirror rank."""
+    import drawing_job_merge as _djm
+    import document_builder as _db
+    base = {"part_number": "11650-04-03A",
+            "normalized_geometry": {"geometry_source": "inferred",
+                                    "blank_length_mm": 400.0, "blank_width_mm": 300.0}}
+    hand = {"part_number": "11650-04-03A-HANDED",
+            "normalized_geometry": {"geometry_source": "dxf", "bounding_box_flat_mm": [420.0, 133.0],
+                                    "blank_length_mm": 420.0, "blank_width_mm": 133.0}}
+    _djm.apply_mirror_geometry([base, hand])
+    assert _db.flat_blank_mm(base) == (420.0, 133.0)
+    assert base["normalized_geometry"]["geometry_source"] == "mirror_of_measured"
+    assert base["normalized_geometry"]["mirrored_from"] == "11650-04-03A-HANDED"
+    assert _db.flat_blank_mm(hand) == (420.0, 133.0)
+
+
+def test_two_unmeasured_hands_still_inherit_nothing():
+    import drawing_job_merge as _djm
+    base = {"part_number": "88A", "normalized_geometry": {"geometry_source": "inferred",
+                                                          "blank_length_mm": 400.0,
+                                                          "blank_width_mm": 300.0}}
+    hand = {"part_number": "88A-HANDED", "normalized_geometry": {"geometry_source": "inferred",
+                                                                 "blank_length_mm": 200.0,
+                                                                 "blank_width_mm": 100.0}}
+    _djm.apply_mirror_geometry([base, hand])
+    assert base["normalized_geometry"]["blank_length_mm"] == 400.0
+    assert hand["normalized_geometry"]["blank_length_mm"] == 200.0

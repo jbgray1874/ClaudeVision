@@ -2597,14 +2597,15 @@ def hourly_rate(op: str):
 # Above this → reject match and flag for manual pricing (prevents "BRACKET" -> £13k hits).
 BOUGHT_IN_MAX_PLAUSIBLE_GBP = 750.0
 
-# Bench fitting added to a bought-in's buy price, in minutes at the handling rate. It is for a
-# LOOSE fitting nothing else accounts for. A bought-in an assembly's BOM lists is placed (or,
-# in a kit, packed) during that assembly's own labour, so it takes none — 11650-06's Yiree
-# screw was researched at £1.25 and charged £2.29 because two minutes were added on top of a
-# line the kit's packing time already covered. 0 turns the uplift off everywhere; True below
-# puts it back on BOM-listed lines too.
+# Bench fitting added to a bought-in's buy price, in minutes at the handling rate. 0 turns it
+# off everywhere. It applies to every bought-in charged at its bought-in price EXCEPT where the
+# record shows the fitting is charged elsewhere or never happens: a pressed insert (its own
+# MANM insert row, MANM_INSERT_SECONDS_EACH) and an item whose owning assembly's description
+# names it a spare or loose set (bagged and packed, not fitted). Appearing on an assembly's BOM
+# is NOT enough — that says where an item belongs, not which operation's time fits it
+# (review of D-207, 24 Sep 2026).
 BOUGHT_IN_FITTING_MIN_PER_PART = 2.0
-BOUGHT_IN_FITTING_WHEN_ON_AN_ASSEMBLY_BOM = False
+BOUGHT_IN_LOOSE_SET_TOKENS = ["SPARE", "LOOSE", "SET OF"]
 
 # Data sufficiency — suppress headline total when auto-estimate is not DXF-backed enough.
 # credible_cost_ratio: share of document £ from parts with part-level DXF (not PDF/inferred).

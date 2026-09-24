@@ -44,19 +44,38 @@ def _unit(est):
     return est["cost_breakdown"]["unit_total_cost_gbp"]
 
 
-def test_a_screw_on_an_assemblys_bom_charges_what_it_costs(ai_priced):
-    est = estimator.estimate_part(_screw(owning_assembly="11650-06-SA02"), job_quantity=2)
+def _fit():
+    rate = float(estimator.HOURLY_RATES_GBP.get("handling", 31.18))
+    return config.BOUGHT_IN_FITTING_MIN_PER_PART / 60.0 * rate
+
+
+def test_a_screw_packed_in_a_spare_set_charges_what_it_costs(ai_priced):
+    est = estimator.estimate_part(_screw(owning_assembly="11650-06-SA02",
+                                         owning_assembly_description="BINDING SCREW SPARE SET OF 4"),
+                                  job_quantity=2)
     assert est["cost_breakdown"]["costing_basis"] == "system_cost_per_part"
     assert _unit(est) == pytest.approx(1.25)
     assert not est["cost_breakdown"]["system_cost"]["fitting_gbp_each"]
 
 
+def test_being_on_an_assemblys_bom_does_not_waive_the_fitting(ai_priced):
+    """Review of D-207: the BOM says where an item belongs, not which operation fits it."""
+    est = estimator.estimate_part(_screw(owning_assembly="A-101",
+                                         owning_assembly_description="HINGE BRACKET ASSY"),
+                                  job_quantity=2)
+    assert _unit(est) == pytest.approx(1.25 + _fit(), abs=0.01)
+
+
+def test_a_pressed_insert_is_timed_by_its_own_insert_row(ai_priced):
+    est = estimator.estimate_part(_screw(part_number="FIXING", description="M4x12mm THREADED PEM STUD",
+                                         owning_assembly="11650-03-SA01"), job_quantity=2)
+    assert _unit(est) == pytest.approx(1.25)
+
+
 def test_a_loose_bought_in_still_takes_its_fitting(ai_priced):
     est = estimator.estimate_part(_screw(), job_quantity=2)
-    rate = float(estimator.HOURLY_RATES_GBP.get("handling", 31.18))
-    fit = config.BOUGHT_IN_FITTING_MIN_PER_PART / 60.0 * rate
-    assert _unit(est) == pytest.approx(1.25 + fit, abs=0.01)
-    assert est["cost_breakdown"]["system_cost"]["fitting_gbp_each"] == pytest.approx(fit, abs=1e-3)
+    assert _unit(est) == pytest.approx(1.25 + _fit(), abs=0.01)
+    assert est["cost_breakdown"]["system_cost"]["fitting_gbp_each"] == pytest.approx(_fit(), abs=1e-3)
 
 
 def test_zero_minutes_in_config_means_no_fitting(ai_priced, monkeypatch):
@@ -65,7 +84,7 @@ def test_zero_minutes_in_config_means_no_fitting(ai_priced, monkeypatch):
 
 
 def test_the_line_names_the_price_that_set_it(ai_priced):
-    est = estimator.estimate_part(_screw(owning_assembly="11650-06-SA02"), job_quantity=2)
+    est = estimator.estimate_part(_screw(), job_quantity=2)
     ps = est["material_estimate"]["price_source"]
     assert ps["source_name"] == "xAI Grok LLM - INDICATIVE"
     assert "config_default_material_rates" not in str(ps)
@@ -78,6 +97,9 @@ def test_the_owning_assembly_is_read_from_the_bom_not_a_file_name():
     assert owning_assembly({"part_number": "YIREE CODE - DWG491667"}, rows) == "11650-06-SA02"
     assert owning_assembly({"part_number": "X1", "bom_parent": "11650-06-GA KIT_REVB.PDF"}) == ""
     assert owning_assembly({"part_number": "X1", "bom_parents": [{"parent": "A-101"}]}) == "A-101"
+    rows.append({"part_number": "11650-06-SA02", "description": "BINDING SCREW SPARE SET OF 4",
+                 "bom_parent": "11650-06-GA"})
     parts = [_screw()]
     stamp_research_context(parts, {"document_analysis": {"bom_rows": rows}})
     assert parts[0]["owning_assembly"] == "11650-06-SA02"
+    assert parts[0]["owning_assembly_description"] == "BINDING SCREW SPARE SET OF 4"

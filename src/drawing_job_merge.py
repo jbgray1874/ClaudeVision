@@ -2070,6 +2070,20 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # thing this rule must never do. At or above dxf (80) is measured; that also
         # excludes mirror_of_measured (75), so an inherited flat is still not inheritable.
         from source_precedence import rank as _rank
+        # TWO HANDS ARE ONE FLAT, WHICHEVER OF THEM WAS MEASURED. 11650-06: the handed
+        # extender carried the pack's only DXF (420 x 133) and the plain one had nothing but
+        # the PANEL default envelope, 400 x 300 — so this rule refused (the base was not
+        # measured) and the two hands of one panel were nested at different sizes, £4.51
+        # against £2.43 a part. Where the base is unmeasured and THIS hand is, the same rule
+        # runs the other way: the base is filled from this hand, at the same rank and with
+        # the same guards. Nothing is inherited from an unmeasured hand in either direction.
+        _twin_ng = part.get("normalized_geometry") or {}
+        _twin_src = str(_twin_ng.get("geometry_source") or part.get("geometry_source") or "")
+        if _rank(_base_src) < _rank("dxf") <= _rank(_twin_src):
+            part, base = base, part
+            base_pn = str(base.get("part_number") or "")
+            base_ng = base.get("normalized_geometry") or {}
+            _base_src = _twin_src
         if _rank(_base_src) < _rank("dxf"):
             _refuse(part, base_pn,
                     f"{base_pn}'s own geometry came from "
@@ -2109,9 +2123,14 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # this one's either.
         _ng = part.get("normalized_geometry") or {}
         _ml, _mw = flat_blank_mm(part)
-        _blank_conflict = bool(_ml and _mw
+        # A GUESS IS NOT A DISAGREEMENT. Only a blank this hand MEASURED can conflict with
+        # the other hand's; an inferred envelope (the 400 x 300 PANEL default) is the gap
+        # this rule exists to fill, and treating it as a reading kept it.
+        _own_src = str(_ng.get("geometry_source") or part.get("geometry_source") or "")
+        _own_measured = _rank(_own_src) >= _rank("dxf")
+        _blank_conflict = bool(_own_measured and _ml and _mw
                                and (abs(_ml - _bl) > 0.5 or abs(_mw - _bw) > 0.5))
-        if _ml and _mw:
+        if _ml and _mw and _own_measured:
             if _blank_conflict:
                 part.setdefault("review_flags", []).append(
                     f"HANDED PAIR DISAGREES: this part measures {_ml:g} x {_mw:g}mm and "
