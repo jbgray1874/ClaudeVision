@@ -278,7 +278,8 @@ def choose_udef_description_row(desc: Any, rows: List[Any]):
     return survivors[0][1], ""
 
 
-def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True) -> bool:
+def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = True,
+                              structure_decides: bool = True) -> bool:
     """May a market price be asked for this line at all? False for anything we make or build.
 
     ONE TEST FOR EVERY MARKET RUNG. It lived inside the web/AI fallback gate only, and the
@@ -305,14 +306,22 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
             return False
     except ImportError:
         pass
-    if part.get("bom_children") or part.get("children") or part.get("assembly_children"):
+    # STRUCTURE IS NOT ALWAYS AN ANSWER. A purchased item can be an assembly in the model:
+    # 12312-01-08X, "SILICONE LED DIFFUSER, L: 3.944m", is the parent of the lighting parts in
+    # the SolidWorks tree and still a length SDI buys. The researched-price rung asks with
+    # structure_decides=False, so its figure reaches the "carries its own price" question
+    # rather than vanishing (D-254); a -GA code, an assembly word or fabrication still refuses.
+    _structural = bool(part.get("bom_children") or part.get("children")
+                       or part.get("assembly_children"))
+    if structure_decides and _structural:
         return False       # it has parts under it, so its cost comes from them
 
     if skip_rollup_parents:
         _pn = str(part.get("part_number") or "").upper()
         _desc = str(part.get("description") or "").upper()
         _is_parent = (
-            bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))
+            (structure_decides
+             and (bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))))
             or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
             or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
             or _pn.endswith("-GA") or "-GA-" in _pn
