@@ -2601,7 +2601,16 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     # unpriced, the release gate refuses to publish, and the workbook says which source
     # would have answered it. That is the whole contract: a price or a named gap, never a
     # zero and never a figure nobody can check.
-    if best_price is None:
+    #
+    # AND ONLY FOR SOMETHING YOU CAN BUY. The web/AI rung above refused assemblies and parts we
+    # make; this one did not ask, so a SolidWorks mirror assembly came back "£85.00, one
+    # complete mirror unit" (D-252). The same test, from the same place.
+    try:
+        from pricing_service import is_something_you_can_buy as _buyable
+        _market_ok = _buyable(part)
+    except Exception:                                            # noqa: BLE001
+        _market_ok = True
+    if best_price is None and _market_ok:
         try:
             from indicative_price import resolve_indicative as _rung4
 
