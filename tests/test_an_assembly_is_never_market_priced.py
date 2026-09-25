@@ -37,9 +37,18 @@ def test_a_mirror_assembly_is_not_sent_for_a_market_price(monkeypatch):
     assert _asked(monkeypatch, part) == []
 
 
-def test_a_record_with_children_is_not_sent_either(monkeypatch):
-    part = {"part_number": "X-100", "description": "ARM", "assembly_children": ["X-101"]}
+def test_an_assembly_by_its_own_words_is_not_sent_either(monkeypatch):
+    part = {"part_number": "X-100", "description": "ARM SUB ASSEMBLY",
+            "assembly_children": ["X-101"], "is_assembly_parent": True}
     assert _asked(monkeypatch, part) == []
+
+
+def test_a_purchased_item_that_is_a_parent_in_the_model_is_still_researched(monkeypatch):
+    """12312-01-08X, 25 Sep: the diffuser parents the lighting parts in the SolidWorks tree.
+    Blocking it on structure left the 3.944 m diffuser at £0 with no question asked (D-254)."""
+    part = {"part_number": "12312-01-08X", "description": "SILICONE LED DIFFUSER, L: 3.944m",
+            "assembly_children": ["P/P-LED-POWER-DRIVER-24V"], "is_assembly_parent": True}
+    assert len(_asked(monkeypatch, part)) == 1
 
 
 def test_a_bought_in_still_reaches_the_last_rung(monkeypatch):

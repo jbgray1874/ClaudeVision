@@ -2607,7 +2607,7 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     # complete mirror unit" (D-252). The same test, from the same place.
     try:
         from pricing_service import is_something_you_can_buy as _buyable
-        _market_ok = _buyable(part)
+        _market_ok = _buyable(part, structure_decides=False)
     except Exception:                                            # noqa: BLE001
         _market_ok = True
     if best_price is None and _market_ok:
