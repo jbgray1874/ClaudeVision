@@ -1343,26 +1343,6 @@ def main() -> None:
             _sdd_html = write_source_drawing_html(
                 summary, OUTPUT_DIR / "estimates", job=str(scan_label or ""),
                 dxf_paths=_sdd_dxfs, tables=_sdd_tables)
-            # ── THE TWO QUESTIONS THAT COME BEFORE A PRICE ─────────────────────────
-            # What parts did you find, and what work did you decide each one needs. Written
-            # every run beside the audit, because they were only reachable by opening a costed
-            # workbook — the wrong artefact for the question — and the route half was not
-            # reachable at all: the audit read `canonical_route` while every real run writes
-            # `canonical_route_shadow`, so its Operations sheet was empty on every job.
-            try:
-                from bom_and_route_extract import write_both as _write_extracts
-                _ex = _write_extracts(summary, OUTPUT_DIR / "estimates",
-                                      job=str(scan_label or ""), want="both")
-                for _k in ("xlsx", "html"):
-                    if _ex.get(_k):
-                        print(f"   -> BOMs and routes ({_k}): {Path(_ex[_k]).resolve()}")
-                        (summary.setdefault("saved_output_paths", {}))[
-                            f"boms_and_routes_{_k}"] = _ex[_k]
-                print(f"   -> {_ex.get('boms', 0)} BOM row(s), "
-                      f"{_ex.get('routes', 0)} route decision(s)")
-            except Exception as _ex_err:
-                print(f"   -> BOMs and routes not written: "
-                      f"{type(_ex_err).__name__}: {_ex_err}", flush=True)
             if _sdd_html:
                 print(f"   -> Source drawing data (HTML): {_sdd_html.resolve()}")
                 (summary.setdefault("saved_output_paths", {}))[
@@ -1370,6 +1350,29 @@ def main() -> None:
         except Exception as _sdd_err:
             print(f"   -> Source drawing data not written: "
                   f"{type(_sdd_err).__name__}: {_sdd_err}", flush=True)
+        # INDEPENDENT OF THE AUDIT ABOVE. This sat inside the source-drawing-data try, so any
+        # failure there (a DXF the audit could not re-read) skipped the extract too, and the log
+        # named only the audit: 11650-06's 25 Sep run filed no BOMs and Routes (D-253).
+        # ── THE TWO QUESTIONS THAT COME BEFORE A PRICE ─────────────────────────
+        # What parts did you find, and what work did you decide each one needs. Written
+        # every run beside the audit, because they were only reachable by opening a costed
+        # workbook — the wrong artefact for the question — and the route half was not
+        # reachable at all: the audit read `canonical_route` while every real run writes
+        # `canonical_route_shadow`, so its Operations sheet was empty on every job.
+        try:
+            from bom_and_route_extract import write_both as _write_extracts
+            _ex = _write_extracts(summary, OUTPUT_DIR / "estimates",
+                                  job=str(scan_label or ""), want="both")
+            for _k in ("xlsx", "html"):
+                if _ex.get(_k):
+                    print(f"   -> BOMs and routes ({_k}): {Path(_ex[_k]).resolve()}")
+                    (summary.setdefault("saved_output_paths", {}))[
+                        f"boms_and_routes_{_k}"] = _ex[_k]
+            print(f"   -> {_ex.get('boms', 0)} BOM row(s), "
+                  f"{_ex.get('routes', 0)} route decision(s)")
+        except Exception as _ex_err:
+            print(f"   -> BOMs and routes not written: "
+                  f"{type(_ex_err).__name__}: {_ex_err}", flush=True)
 
         # ── Price read-back: stamp the REAL Excel-computed totals into the JSON ──
         # wb_populate writes Excel FORMULAS; the true unit cost is computed by Excel on load,
