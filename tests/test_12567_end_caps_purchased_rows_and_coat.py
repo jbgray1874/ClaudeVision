@@ -360,3 +360,18 @@ def test_the_named_hand_carries_the_bases_hardware():
     assert {e.part_number: e.qty for e in nodes["12567-05-02M"].children} == {"BI-PEMSTUD": 2.0}
     assert nodes["12567-05-02M"].kind == "leaf" and nodes["12567-05-01M"].kind == "leaf"
     assert abs(g["quantities"]["BI-PEMSTUD"] - 4.0) < 1e-9
+
+
+# D-276: a market lookup that found nothing is a MISSING price, not a market figure.
+
+def test_an_ai_lookup_with_no_money_is_a_missing_price():
+    import costed_facts as cf
+    part = {"part_number": "P/P-POWER-CORD-UK-PLUG", "supplier": "xAI Grok LLM - INDICATIVE",
+            "material_estimate": {"cost_method": "market_ai_indicative",
+                                  "price_source": {"source_name": "xai"}}}
+    empty = cf._price_origin(part, "bought_in", None, None, 0.0, None, False,
+                             row_text="[AI ESTIMATE - INDICATIVE, NOT A QUOTE]")
+    assert empty["firmness"] == cf.UNPRICED
+    priced = cf._price_origin(part, "bought_in", None, 2.35, 2.35, None, False,
+                              row_text="[AI ESTIMATE - INDICATIVE, NOT A QUOTE]")
+    assert priced["firmness"] == cf.INDICATIVE_MARKET

@@ -1634,7 +1634,13 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                 "label": ("priced by the estimator's stated method, consumables live "
                           "from SDI Live — reproducible between runs; verify the "
                           "method's steps, not the arithmetic")}
-    if any(t in tokens for t in _MARKET_AI_TOKENS) or (money and _row_says_ai):
+    # A MARKET LOOKUP THAT RETURNED NOTHING IS A MISSING PRICE, NOT A MARKET FIGURE. On
+    # 12567-01's 16:48 book the cord, both Velcro strips, the JST lead, both grommets and
+    # both splitters carried "xAI Grok LLM - INDICATIVE" as supplier and no price, and were
+    # counted among "14 market figures to replace (£123.95)" — a total that was only the two
+    # LED tapes, two diffusers, packaging and delivery. Eight £0 lines read as priced. The
+    # lookup's label says where a figure was LOOKED FOR; only money says one was found (D-276).
+    if money and (any(t in tokens for t in _MARKET_AI_TOKENS) or _row_says_ai):
         who = supplier or ps.get("supplier_source") or "AI/market lookup"
         return {"class": "market_ai", "firmness": INDICATIVE_MARKET, "owner": "estimator",
                 "label": f"researched market price ({who}) — not a quotation, "
