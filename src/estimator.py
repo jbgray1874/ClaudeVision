@@ -2739,6 +2739,17 @@ def _model_measured_zero_bends(part: Dict[str, Any]) -> bool:
     mf = part.get("manufacturing_features") or {}
     if not isinstance(mf, dict):
         return False
+    # A ZERO FROM A SHORT EXPORT IS NOT A MEASUREMENT OF THE PART. 12614-01-14M's DXF carried
+    # no bends; its sheet prints DOWN 40.6° and DOWN 49.4° and its model has two bend
+    # features. Where the drawing's own callouts and the model agree on a non-zero count, a
+    # DXF zero does not rule the fold out (D-259).
+    try:
+        _callouts = int(part.get("drawing_bend_callouts") or 0)
+        _features = int(part.get("solidworks_bend_features") or 0)
+    except (TypeError, ValueError):
+        _callouts = _features = 0
+    if _callouts and _features >= _callouts:
+        return False
     count = mf.get("bend_count")
     if count is None or _safe_int(count):
         return False         # absent, or a real count — neither is a measured zero

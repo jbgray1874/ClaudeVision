@@ -54,7 +54,7 @@ _LABEL = {
     MODEL_FEATURES: "the SolidWorks bend features",
     DASHED_PROXY: "dashed lines read off a drawing view",
     NO_EVIDENCE: "nothing on this part",
-    CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model agrees with",
+    CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model confirms",
 }
 
 
@@ -138,7 +138,9 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # with it does (D-255).
     _callouts = _int(part.get("drawing_bend_callouts")) if isinstance(part, dict) else None
     _model = solidworks_bend_features(part)
-    if (source == FLAT_PATTERN and _callouts and _model and _callouts == _model
+    # The model must CONFIRM the callouts (at least as many features), never supply the
+    # number: 12614-01's side panels print 11 callouts where the model has 12 (D-259).
+    if (source == FLAT_PATTERN and _callouts and _model and _model >= _callouts
             and _callouts > count):
         count, source = _callouts, CALLOUTS_AND_MODEL
 

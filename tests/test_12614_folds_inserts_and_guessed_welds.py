@@ -115,3 +115,60 @@ def test_a_weld_the_drawing_states_is_not_asked():
         "manufacturing_writeup": {"parts": []}}
     assert not [d for d in cf.costed_job(source)["decisions_required"]
                 if "inferred, not drawn" in str(d.get("issue"))]
+
+
+# ── D-259: the drawing must be read in full, and a short DXF zero is not a measurement ──
+
+def test_the_best_text_layer_counts_the_callouts():
+    """pdfplumber drops rotated callouts (12614-01 fascia: 6 of 10); another layer keeps them."""
+    import drawing_job_merge as djm
+    short = "DOWN 90° R 1 " * 6
+    full = "DOWN 90° R 1 " * 10
+    parts = [{"part_number": "01M", "pages": [5]}]
+    djm.stamp_drawing_bend_callouts(parts, {"pages": [
+        {"page_number": 5, "pdfplumber_text": short, "pypdf_text": full}]})
+    assert parts[0]["drawing_bend_callouts"] == 10
+
+
+def test_a_page_read_twice_is_not_counted_twice():
+    import drawing_job_merge as djm
+    t = "UP 90° R 1 DOWN 90° R 1"
+    parts = [{"part_number": "X", "pages": [1]}]
+    djm.stamp_drawing_bend_callouts(parts, {"pages": [
+        {"page_number": 1, "pdfplumber_text": t, "normalized_text": t}]})
+    assert parts[0]["drawing_bend_callouts"] == 2
+
+
+def test_the_model_confirms_the_callouts_it_does_not_supply_them():
+    r = fc.press_brake_folds({"bend_count_dxf": 6, "drawing_bend_callouts": 11,
+                              "solidworks_bend_features": 12})
+    assert r["count"] == 11
+
+
+def test_a_dxf_zero_does_not_rule_out_folds_the_drawing_and_model_agree_on():
+    import estimator
+    part = {"manufacturing_features": {"bend_count": 0, "bend_count_source": "dxf"},
+            "drawing_bend_callouts": 2, "solidworks_bend_features": 2}
+    assert estimator._model_measured_zero_bends(part) is False
+    part2 = {"manufacturing_features": {"bend_count": 0, "bend_count_source": "dxf"}}
+    assert estimator._model_measured_zero_bends(part2) is True
+
+
+def test_a_dxf_zero_ruling_is_lifted_when_the_drawing_and_model_say_it_folds():
+    import drawing_job_merge as djm
+    part = {"part_number": "14M", "pages": [16], "solidworks_bend_features": 2,
+            "operations_ruled_out": {"folding": "DXF flat pattern measured 0 bend lines — "
+                                                "the part does not fold"}}
+    djm.stamp_drawing_bend_callouts([part], {"pages": [
+        {"page_number": 16, "pdfplumber_text": "DOWN 49.4° R 1.76 DOWN 40.6° R 1.76"}]})
+    assert "folding" not in part["operations_ruled_out"]
+    assert any("folding reinstated" in f for f in part["review_flags"])
+
+
+def test_a_dxf_zero_ruling_stands_without_the_model():
+    import drawing_job_merge as djm
+    part = {"part_number": "Z", "pages": [1],
+            "operations_ruled_out": {"folding": "DXF flat pattern measured 0 bend lines"}}
+    djm.stamp_drawing_bend_callouts([part], {"pages": [
+        {"page_number": 1, "pdfplumber_text": "DOWN 90° R 1"}]})
+    assert "folding" in part["operations_ruled_out"]

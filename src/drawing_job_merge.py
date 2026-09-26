@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import source_precedence
 from source_precedence import apply_field as _apply_field
@@ -2019,6 +2019,23 @@ def _has_measured_flat(part: Dict[str, Any]) -> bool:
 _BEND_CALLOUT = re.compile(r"\b(?:UP|DOWN)\s*\d{2,3}(?:\.\d+)?\s*°", re.I)
 
 
+def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
+    """This summary page's text as PyMuPDF reads it (rotated text included), or ''."""
+    path = str(page.get("source_pdf_path") or "")
+    local = page.get("source_page_number") or page.get("pdf_page_number") or page.get("page_number")
+    if not path:
+        return ""
+    try:
+        if path not in docs:
+            import pymupdf                                              # noqa: PLC0415
+            docs[path] = pymupdf.open(path)
+        doc = docs[path]
+        idx = int(local) - 1
+        return doc[idx].get_text() if 0 <= idx < len(doc) else ""
+    except Exception:                                                   # noqa: BLE001
+        return ""
+
+
 def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> int:
     """How many bend callouts ("UP 105°", "DOWN 90°") the part's own drawing sheets print.
 
@@ -2028,20 +2045,53 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
     was built; the callout is the drawing office saying the part is bent. Returns parts stamped.
     """
     pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
-    text_by_page: Dict[Any, str] = {}
+    # THE BEST READING OF EACH PAGE, NOT THE FIRST. Bend callouts sit along the bend lines,
+    # and on a vertical bend line they are ROTATED text, which pdfplumber drops: 12614-01's
+    # fascia sheet prints 10 UP/DOWN callouts and pdfplumber returned 6 — the same short
+    # count as its DXF, so the drawing could not correct it (D-259). Each text layer the page
+    # carries is counted separately (never concatenated, which would double a page read
+    # twice), and the page's own PDF is read with PyMuPDF where it is available.
+    count_by_page: Dict[Any, int] = {}
+    _mupdf_docs: Dict[str, Any] = {}
     for pg in pages or []:
-        if isinstance(pg, dict):
-            text_by_page[pg.get("page_number")] = " ".join(
-                str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text"))
+        if not isinstance(pg, dict):
+            continue
+        layers = [str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text",
+                                                 "pypdf_text", "text")]
+        layers.append(_mupdf_page_text(pg, _mupdf_docs))
+        count_by_page[pg.get("page_number")] = max(
+            len(_BEND_CALLOUT.findall(t)) for t in layers)
+    for _doc in _mupdf_docs.values():
+        try:
+            _doc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
     n = 0
     for part in parts or []:
         if not isinstance(part, dict):
             continue
-        counts = [len(_BEND_CALLOUT.findall(text_by_page.get(p, "")))
+        counts = [count_by_page.get(p, 0)
                   for p in (part.get("pages") or []) if not isinstance(p, dict)]
         if counts and max(counts):
             part["drawing_bend_callouts"] = max(counts)
             n += 1
+            # A DXF ZERO THAT THE DRAWING AND THE MODEL CONTRADICT IS LIFTED. 12614-01-14M:
+            # the flat's bend layer was empty, the DXF pass recorded "folding ruled out", and
+            # the route kept the fold off although the sheet prints DOWN 40.6° / 49.4° and the
+            # model has two bend features. The ruling is replaced by a note, not deleted
+            # silently (D-259).
+            try:
+                _features = int(part.get("solidworks_bend_features") or 0)
+            except (TypeError, ValueError):
+                _features = 0
+            _ruled = (part.get("operations_ruled_out") or {})
+            if (_features >= part["drawing_bend_callouts"] and "folding" in _ruled
+                    and "0 bend" in str(_ruled.get("folding"))):
+                _ruled.pop("folding", None)
+                part.setdefault("review_flags", []).append(
+                    f"folding reinstated: the DXF's bend layer was empty, but the drawing "
+                    f"prints {part['drawing_bend_callouts']} bend callout(s) and the model has "
+                    f"{_features} bend feature(s) — the export was short, the part folds")
     return n
 
 
