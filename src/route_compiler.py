@@ -1750,6 +1750,45 @@ def build_part_graph(
             records[_owner]["hierarchy_source"] = "assembly_page"
             break
 
+    # ── THE OTHER HAND CARRIES THE SAME HARDWARE ──────────────────────────────────────────
+    # 12567-05-02M's sheet says "refer to drawing 12567-05-01M for all details", and 05-01M's
+    # details include a parts list: two M6x20 PEM studs. The hand took the base's flat, gauge,
+    # bends and fold (D-265, D-270) and none of its hardware, so the kit carried 2 studs where
+    # each cap takes 2 — 4 (D-275). A hand named by its code ("-H", "MIR") is the same case.
+    # Copied only where the base's children are ALL hardware (a purchased insert is part of
+    # the part; a cut child is not) and the hand states no children of its own, at the base's
+    # own counts. The hand stays a cut part carrying inserts, as the base does.
+    try:
+        from part_code_conventions import mirror_base as _mirror_base_code
+    except Exception:                                                # noqa: BLE001
+        _mirror_base_code = None
+    for _hid, _hrec in list(raw.items()):
+        if not isinstance(_hrec, Mapping) or _hid in children:
+            continue
+        _base_pn = (_mirror_base_code(str(_hrec.get("part_number") or ""))
+                    if _mirror_base_code else "") or str(_hrec.get("mirror_of") or "")
+        if not _base_pn:
+            continue
+        _bid = clean_part_number(_base_pn)
+        _bid = aliases.get(_bid, _bid)
+        _bkids = children.get(_bid) or {} if _bid and _bid != _hid else {}
+        if not _bkids:
+            continue
+
+        def _is_hardware(_c: str) -> bool:
+            _kr = dict(records.get(_c) or {})
+            _kr.setdefault("part_number", _c)
+            return bool(_bought_in_record(_kr) or str(_c).upper().startswith("BI-")
+                        or bought_in_policy.is_bought_in(_kr))
+
+        if not all(_is_hardware(_c) for _c in _bkids):
+            continue
+        for _c, _q in _bkids.items():
+            children.setdefault(_hid, {})[_c] = _q
+            parents.setdefault(_c, set()).add(_hid)
+        print(f"   [graph] {_hid} is the other hand of {_bid} and carries its hardware too: "
+              + ", ".join(f"{_c} x{_q:g}" for _c, _q in sorted(_bkids.items())), flush=True)
+
     # ── A PRINTED EXPLODED LIST IS THE PRODUCT'S COUNT, NOT A SECOND PATH ─────────────────
     #
     # 11650-06, 23 Sep 2026: the kit GA's sheet 2 prints the whole kit exploded — slider 12,

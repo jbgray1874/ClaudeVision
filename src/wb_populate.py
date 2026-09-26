@@ -552,6 +552,32 @@ _TUBE_OP_REMAP = {
 
 
 
+def pin_lines_that_price_themselves(bom_parts: List[Dict[str, Any]], n_rows: int
+                                    ) -> List[Dict[str, Any]]:
+    """Keep the lines whose price is the SHEET'S arithmetic inside the template's rows.
+
+    The BOM block spills its tail to the 'BOM Overflow' sheet when a job has more lines than
+    rows, and that sheet lists a unit price and a quantity — the shape of a bought-in. The
+    POWDER line is not that shape: it is written as kilos times a rate on the Estimate sheet
+    and priced by `_price_explicitly_withheld`, so `_bom_line_price` has nothing to say
+    about it. Appended last, it was the first thing to spill, and on 12567-01's 16:48 book
+    the powder reached the overflow sheet with no price and its money left the total
+    (D-273). A cross-reference row ("priced on line N") is the same shape of line. Those
+    stay on the sheet; plain bought-ins spill first. Order among the rest is unchanged.
+    """
+    if len(bom_parts) <= n_rows:
+        return list(bom_parts)
+
+    def _stays(p: Dict[str, Any]) -> bool:
+        return bool(p.get("_consumable_qty_unknown") or p.get("_bom_cross_reference")
+                    or p.get("_bom_overflow_consolidated"))
+
+    pinned = [p for p in bom_parts if _stays(p)]
+    rest = [p for p in bom_parts if not _stays(p)]
+    head = max(0, n_rows - 1 - len(pinned))
+    return rest[:head] + pinned + rest[head:]
+
+
 def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
     """Best-available unit price for a BOM line. Withheld/unpriced -> None.
 
@@ -4763,6 +4789,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _n_rows = b["last_row"] - b["first_row"] + 1
     _bom_overflow_parts: List[Dict[str, Any]] = []
     if len(bom_parts) > _n_rows:
+        bom_parts = pin_lines_that_price_themselves(bom_parts, _n_rows)
         _bom_overflow_parts = bom_parts[_n_rows - 1:]
         _ov_total = 0.0
         for _op in _bom_overflow_parts:

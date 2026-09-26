@@ -45,6 +45,16 @@ AREA_TOLERANCE = 0.10
 # a transposed export is not read as a disagreement.
 DIMENSION_TOLERANCE = 0.10
 
+# A DXF THIS MUCH LARGER THAN THE MODEL'S FLAT DID NOT MEASURE THE PART. The "larger is
+# kept" branch below is right for a border a few per cent wide or a bend allowance the model
+# develops differently — but 12567-02-10M's DXF measured 1,477 x 346 mm against a model flat
+# of 225.5 x 38.35 mm, fifty-nine times the area and the exact extents of a different part's
+# sheet, and it was kept "as the only direct measurement of the file" (D-272). A blank cannot
+# be three times the flat it develops any more than it can be smaller: past this ratio, with
+# both sides over, the DXF measured drawing extents or a border, and the model's measured flat
+# is the blank. The two are still recorded side by side.
+DXF_EXTENTS_RATIO = 3.0
+
 DXF = "dxf"
 NATIVE = "native"
 
@@ -128,6 +138,18 @@ def arbitrate_flat(dxf_length_mm: Any, dxf_width_mm: Any,
                            f"model flat {nl:g} x {nw:g}mm — a developed blank cannot be "
                            f"smaller than the flat it develops, so the DXF is missing "
                            f"geometry (commonly the outer profile). Costed from the model")}
+
+    _both_sides_over = (max(dl, dw) > max(nl, nw) * (1.0 + dimension_tolerance)
+                        and min(dl, dw) > min(nl, nw) * (1.0 + dimension_tolerance))
+    if ratio is not None and ratio >= DXF_EXTENTS_RATIO and _both_sides_over:
+        return {"winner": NATIVE, "agree": False, "unreconciled": False,
+                "dxf_incomplete": False, "dxf_is_extents": True,
+                "area_ratio": round(ratio, 4),
+                "reason": (f"DXF flat {dl:g} x {dw:g}mm is {ratio:.0f}x the area of the model "
+                           f"flat {nl:g} x {nw:g}mm, with both sides over — a developed blank "
+                           f"cannot be that much larger than the flat it develops, so the DXF "
+                           f"measured drawing extents or a border, not the profile. Costed "
+                           f"from the model's flat; the DXF figure is kept on the record")}
 
     return {"winner": DXF, "agree": False, "unreconciled": True,
             "dxf_incomplete": False,

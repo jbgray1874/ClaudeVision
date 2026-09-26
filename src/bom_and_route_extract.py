@@ -406,6 +406,26 @@ def _disagreements(row: Mapping[str, Any]) -> str:
     return " | ".join(out)
 
 
+def quantity_difference_note(qty_trail: Sequence[Any]) -> str:
+    """Why a line's own count differs from the costed one, when the graph left no note.
+
+    12567-01 (16:48 book): every side-header part read "this line states 1; the quoted unit
+    is costed at 2 — no reason recorded for the difference", while the column beside it
+    printed the reason in full: "12567-01-GA x1 -> 12567-03-GA x2 (BOM) -> 12567-03-101 x1".
+    A cascade down a multiple sub-assembly is the ordinary case and it needs no note from the
+    graph; saying "no reason" beside the trail that is the reason told an estimator to doubt
+    the one figure on the row that was right (D-274). Where a trail exists, the note reads
+    it; only a difference with no trail at all is unexplained.
+    """
+    _trail = [str(t) for t in (qty_trail or []) if str(t or "").strip()]
+    if _trail:
+        return ("multiplied down the assembly tree — the line's own figure is per parent, the "
+                "costed figure is per quoted unit; the trail beside this row shows each "
+                "parent's count and who stated it")
+    return ("no reason recorded for the difference — check the assembly tree and this line's "
+            "parent before quoting")
+
+
 def graph_quantity_by_code(summary: Mapping[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Part number -> what the assembly graph settled as its per-quoted-unit quantity.
 
@@ -566,8 +586,7 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         except (TypeError, ValueError):
             _differs = ""
         if _differs and not _qty_notes:
-            _qty_notes.append("no reason recorded for the difference — check the assembly tree "
-                              "and this line's parent before quoting")
+            _qty_notes.append(quantity_difference_note(_g.get("qty_trail") or []))
         rows.append({
             "part_number": code,
             "description": _text(row.get("description")),

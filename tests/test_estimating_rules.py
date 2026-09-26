@@ -2428,11 +2428,17 @@ def test_an_incomplete_dxf_loses_to_the_model():
     eq(v["winner"], DXF, "agreement keeps the direct measurement of the file")
     ok(v["agree"] and not v["unreconciled"], "and is not flagged for review")
 
-    # Larger is also a disagreement, but swapping in the model trades one unverified number
-    # for another. Keep the DXF, mark it unreconciled, send it to a human.
-    v = arbitrate_flat(400.0, 300.0, 60.0, 34.0)
-    eq(v["winner"], DXF, "a too-large DXF is still the only direct measurement of the file")
+    # Somewhat larger is a disagreement, and swapping in the model trades one unverified
+    # number for another. Keep the DXF, mark it unreconciled, send it to a human.
+    v = arbitrate_flat(70.0, 40.0, 60.0, 34.0)
+    eq(v["winner"], DXF, "a somewhat-large DXF is still the only direct measurement of the file")
     ok(v["unreconciled"], "but the two are unreconciled and must reach a person")
+    # Many times larger on both sides is not a blank of this part at all: the DXF measured
+    # drawing extents or a border (12567-02-10M, 59x the model flat), and the model's
+    # measured flat is the blank (D-272).
+    v = arbitrate_flat(400.0, 300.0, 60.0, 34.0)
+    eq(v["winner"], NATIVE, "a DXF many times the model flat measured extents, not the part")
+    ok(v.get("dxf_is_extents") and not v["unreconciled"], "and is named as extents, not left open")
 
     # One-sided evidence is not a conflict, and must not be reported as agreement.
     eq(arbitrate_flat(None, None, 60.0, 34.0)["winner"], NATIVE, "model only")

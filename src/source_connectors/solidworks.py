@@ -2154,8 +2154,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                         _reject_dxf_geometry(part, nat, fl, fw, _verdict, flags)
                         part.setdefault("review_flags", []).append(
                             f"DXF flat pattern REJECTED and replaced by the model's: "
-                            f"{_verdict['reason']}. Check the DXF export — the file does not "
-                            f"contain the whole part")
+                            f"{_verdict['reason']}. "
+                            + ("Check the DXF export — the file carries a border or another "
+                               "sheet's extents beside the profile"
+                               if _verdict.get("dxf_is_extents") else
+                               "Check the DXF export — the file does not contain the whole "
+                               "part"))
                         out["geometry_rejected"] = out.get("geometry_rejected", 0) + 1
                     elif _verdict["unreconciled"]:
                         part["flat_unreconciled"] = True
