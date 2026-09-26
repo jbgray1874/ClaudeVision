@@ -2440,6 +2440,72 @@ def restate_material_observations(summary: Dict[str, Any]) -> int:
     return changed
 
 
+def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
+                                   ) -> List[Dict[str, Any]]:
+    """A bought-in record for every table row no record already stands for.
+
+    THE PRINTED CODE IS NOT THE IDENTITY OF A CLASS-CODED ROW. This pass keyed rows on the
+    code the drawing printed, and 12567-02-GA prints "P/P" against twelve different
+    articles: the first P/P row took the name, every other P/P row was "already present",
+    and the two EPDM tape lengths — read by the deterministic reader only, so never in the
+    extract — had no record, no cost and no line on the Estimate while sitting in full on
+    BOMs & Routes (D-277). A bare "FIXING" row (the M6 washer) was refused as reference-like
+    for the same reason. Each class-coded row takes the per-article identity the whole
+    pipeline already uses (part_identity.category_code_identities), so it is one record, one
+    graph node and one line; a row that names only its class and no article stays out.
+    Rows with a real non-SDI code behave as before.
+    """
+    from part_identity import category_code_identities, synthesise_bought_in_code
+    from part_code_conventions import is_category_not_a_code
+    _rows = [r for r in (bom_rows or []) if isinstance(r, dict)]
+    _article_ids = category_code_identities(_rows)
+    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts
+                     if isinstance(p, dict)}
+    _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
+    out: List[Dict[str, Any]] = []
+    for _i, row in enumerate(_rows):
+        _article = _article_ids.get(_i) or ""
+        pn = _article or str(row.get("part_number") or "").strip()
+        dsc = str(row.get("description") or "").strip()
+        qty = row.get("quantity") or 1
+        if not _article and is_category_not_a_code(pn):
+            # ONE row under the class word: no siblings to tell it apart from, so the
+            # shared minter names it from its words (a lone "FIXING  M6 WASHER" is
+            # BI-WASHER, as the fastener pass would spell it). Words that name nothing
+            # leave a class word standing alone, and that is not a line.
+            _article = synthesise_bought_in_code(dsc, pn) or ""
+            if not _article:
+                continue
+            pn = _article
+        if not pn or pn.upper() in _existing_pns:
+            continue
+        if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
+            continue
+        if not _article and not _is_valid_part_identifier(pn):
+            continue
+        if not _is_good_description(pn) and not _is_good_description(dsc):
+            continue
+        effective_pn = pn if len(pn) >= 3 else dsc[:40]
+        effective_desc = dsc or pn
+        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=None)
+        # Born with a source, so the next pass has something to weigh itself against.
+        _apply_field(rec, "quantity", qty, "bom_tree")
+        rec["page_roles"] = ["bought_in"]
+        rec["pages"] = []
+        rec["materials"] = []
+        rec["source"] = "non_sdi_bom_row"
+        if _article:
+            rec["printed_code"] = str(row.get("part_number") or "").strip()
+            rec["is_bought_in"] = True
+        # WHICH TABLE LISTED IT, so the graph can hang it where the drawing says.
+        _bp = str(row.get("bom_parent") or row.get("source_pdf") or "").strip()
+        if _bp:
+            rec["bom_parent"] = _bp
+        out.append(rec)
+        _existing_pns.add(effective_pn.upper())
+    return out
+
+
 def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     parts = build_part_index(summary)
 
@@ -2538,32 +2604,12 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
             )
 
     # Fix B: bought_in records for non-SDI BOM rows (e.g. WINDMILL 1164: WSF45 ticket strip)
-    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts}
+    _non_sdi_bought_in = bought_in_rows_without_records(
+        (summary.get("document_analysis") or {}).get("bom_rows") or [], parts)
+    # Fix C below reads both of these: the names now on the record, and the SDI code shape.
+    _existing_pns = {str(p.get("part_number") or "").upper() for p in parts} | {
+        str(r.get("part_number") or "").upper() for r in _non_sdi_bought_in}
     _SDI_PN_RE = re.compile(r"^\d{4,5}-\d{2}-\d{2,3}[A-Z]?$")
-    _non_sdi_bought_in: List[Dict[str, Any]] = []
-    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
-        pn = str(row.get("part_number") or "").strip()
-        dsc = str(row.get("description") or "").strip()
-        qty = row.get("quantity") or 1
-        if not pn or pn.upper() in _existing_pns:
-            continue
-        if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
-            continue
-        if not _is_valid_part_identifier(pn):
-            continue
-        if not _is_good_description(pn) and not _is_good_description(dsc):
-            continue
-        effective_pn = pn if len(pn) >= 3 else dsc[:40]
-        effective_desc = dsc or pn
-        rec = _empty_part_record(effective_pn, description=effective_desc, quantity=None)
-        # Born with a source, so the next pass has something to weigh itself against.
-        _apply_field(rec, "quantity", qty, "bom_tree")
-        rec["page_roles"] = ["bought_in"]
-        rec["pages"] = []
-        rec["materials"] = []
-        rec["source"] = "non_sdi_bom_row"
-        _non_sdi_bought_in.append(rec)
-        _existing_pns.add(effective_pn.upper())
     if _non_sdi_bought_in:
         parts.extend(_non_sdi_bought_in)
         if os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}:

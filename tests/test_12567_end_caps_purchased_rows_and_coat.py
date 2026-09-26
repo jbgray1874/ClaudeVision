@@ -375,3 +375,35 @@ def test_an_ai_lookup_with_no_money_is_a_missing_price():
     priced = cf._price_origin(part, "bought_in", None, 2.35, 2.35, None, False,
                               row_text="[AI ESTIMATE - INDICATIVE, NOT A QUOTE]")
     assert priced["firmness"] == cf.INDICATIVE_MARKET
+
+
+# D-277: every class-coded table row no record stands for becomes a line of its own.
+
+def test_class_coded_rows_without_records_each_become_a_line():
+    import document_builder as db
+    rows = [
+        {"part_number": "P/P", "description": "LED POWER DRIVER, 3m AC CABLE, UK 3-PIN PLUG",
+         "quantity": 1, "bom_parent": "12567-02-GA"},
+        {"part_number": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 1230mm",
+         "quantity": 2, "bom_parent": "12567-02-GA"},
+        {"part_number": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 300mm",
+         "quantity": 2, "bom_parent": "12567-02-GA"},
+        {"part_number": "FIXING", "description": "M6 WASHER", "quantity": 4,
+         "bom_parent": "12567-02-GA"},
+        {"part_number": "//", "description": "PUCK ANTENNA", "quantity": 1},
+        {"part_number": "12567-02-01M", "description": "FASCIA PANEL", "quantity": 1},
+        {"part_number": "FIXING49", "description": "M6 THIN SHEET NUTSERT", "quantity": 4},
+    ]
+    parts = [{"part_number": "P/P-LED-POWER-DRIVER-3M", "description": "LED POWER DRIVER"},
+             {"part_number": "FIXING49", "description": "M6 THIN SHEET NUTSERT"}]
+    new = db.bought_in_rows_without_records(rows, parts)
+    got = {r["part_number"]: r for r in new}
+    descs = {r["description"] for r in new}
+    assert {"P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM",
+            "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-300MM"} <= set(got)
+    assert "M6 WASHER" in descs                       # the lone FIXING row is a line too
+    assert "FASCIA PANEL" not in descs and "M6 THIN SHEET NUTSERT" not in descs
+    assert "LED POWER DRIVER, 3m AC CABLE, UK 3-PIN PLUG" not in descs   # already a record
+    tape = got["P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM"]
+    assert tape["quantity"] == 2 and tape["bom_parent"] == "12567-02-GA"
+    assert tape["printed_code"] == "P/P" and "bought_in" in tape["page_roles"]
