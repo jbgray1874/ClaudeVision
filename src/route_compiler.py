@@ -3631,24 +3631,6 @@ def _pick_metadata(
     return value, winner.source, conflict
 
 
-_GUESSABLE_JOINS = {"welding", "spot_welding", "spotweld", "resistance_welding",
-                    "dress_welds"}
-
-
-def _weld_is_only_guessed(claims: Sequence["OperationClaim"]) -> bool:
-    """True when a weld (or the dressing that follows one) rests on nothing but inference.
-
-    Inference means the extract marked the route inferred, or it was derived from such a
-    weld. A drawing note, a symbol reader, a SolidWorks weld feature or a person each break it.
-    """
-    claims = [c for c in (claims or [])]
-    if not claims or claims[0].operation not in _GUESSABLE_JOINS:
-        return False
-    if any(str(getattr(c, "evidence", "") or "").strip() for c in claims):
-        return False
-    return all(str(c.source or "").strip().lower() == "inference" for c in claims)
-
-
 def arbitrate_event(
     decision_id: str,
     claims: Sequence[OperationClaim],
@@ -3742,21 +3724,6 @@ def arbitrate_event(
     _quoted_it = [c for c in claims if str(getattr(c, "evidence", "") or "").strip()]
     _corroborated = bool(_read_it or _quoted_it)
 
-    # A WELD NOBODY DREW IS A QUESTION, NOT A CHARGE. 12614-01 (26 Sep): the only claim for
-    # welding the header case was the extract's own inference — "case shown as single
-    # fabricated unit on page 4" — with no weld note, symbol or quoted text anywhere, on a
-    # case held together by PEM studs, nutserts and screws. It charged 8 joints of weld and
-    # dress, £49 a unit at 132 off; the same case on 12312-01 was never welded. Where EVERY
-    # claim for a joining weld is inference and none quotes the drawing, the operation is
-    # UNVERIFIED: listed, with its reason, for a person — not priced (D-257).
-    if (status == REQUIRED and _weld_is_only_guessed(claims)):
-        status = UNVERIFIED
-        reason_override = ("welding inferred from how the drawing looks, with no weld note, "
-                           "symbol or quoted text — confirm whether this is welded; not "
-                           "charged until a person does")
-    else:
-        reason_override = ""
-
     # Multiplicity exists only for required work. Participant count is never a fallback.
     qty = metadata.get("qty_per_unit") if status == REQUIRED else None
     if status == REQUIRED and qty is None:
@@ -3767,7 +3734,7 @@ def arbitrate_event(
         participant for claim in claims for participant in claim.participants
     })
     operation = claims[0].operation
-    reason = reason_override or status_winner.reason
+    reason = status_winner.reason
     if conflicts:
         _fields = sorted({str(c.get("field") or "?") for c in conflicts})
         reason = (f"{reason or status_winner.status} — resolved over a disagreement on "
@@ -4126,12 +4093,8 @@ def compile_job_route(
                                 weld_claim.sequence + 1
                                 if weld_claim.sequence is not None else None
                             )
-                            # DRESSING FOLLOWS THE WELD'S STANDING: a guessed weld's
-                            # dressing is a question too (D-257).
-                            _dress_status = (UNVERIFIED if _weld_is_only_guessed(
-                                claims_by_event.get(weld_event_id) or []) else REQUIRED)
                             add_claim(dress_event_id, make_claim(
-                                "dress_welds", _dress_status, "override_rule",
+                                "dress_welds", REQUIRED, "override_rule",
                                 subject_id=weld_claim.target_id,
                                 target_id=weld_claim.target_id,
                                 scope=weld_claim.scope,

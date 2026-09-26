@@ -2151,6 +2151,40 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "with no glue; drop the glue rows where it is not bonded"),
             "owner": "estimator", "gbp_at_stake": None})
 
+    # ── A WELD THE ENGINE INFERRED IS PRICED, AND PUT TO A PERSON ────────────────
+    # 12614-01-GA (26 Sep): the header case was welded and dressed on the extract's own
+    # inference ("case shown as single fabricated unit") with no weld note or symbol — £48.98
+    # a unit. James Gray: "we've said it's inferred so it should be priced. We always aim to
+    # price everything. Our inference is always based on logic." So it stays on the sheet, and
+    # the estimator is asked, with the money it carries, rather than finding it in a column
+    # (D-258).
+    _shadow_d = (((source.get("estimate_summary") or {}).get("canonical_route_shadow") or {})
+                 .get("decisions") or []) if isinstance(source, Mapping) else []
+    _guessed: Dict[str, Mapping[str, Any]] = {}
+    for _d in _shadow_d:
+        if (isinstance(_d, Mapping) and _d.get("status") == "required"
+                and str(_d.get("operation") or "") in ("welding", "spot_welding")
+                and str(_d.get("source") or "").strip().lower() == "inference"
+                and not str(_d.get("evidence") or "").strip()):
+            _guessed.setdefault(str(_d.get("target_id") or ""), _d)
+    for _tgt, _d in _guessed.items():
+        _wrows = [r for r in (_workbook_rows(source) or [])
+                  if {str(o) for o in (r.get("engine_operations") or [])}
+                  & {"welding", "spot_welding", "dress_welds"}
+                  and _tgt.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
+        _w_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _wrows), 2)
+        _why = str(_d.get("reason") or "").strip()
+        decisions.append({
+            "part": _tgt, "kind": "manufacturing_decision",
+            "issue": f"Welding on {_tgt} is inferred, not drawn",
+            "assumption": (f"charged as welded and dressed"
+                           f"{f' (£{_w_gbp:,.2f} a unit)' if _w_gbp else ''}"
+                           f"{f' — {_why}' if _why else ''}; no weld note or symbol on "
+                           f"the drawing"),
+            "action": ("confirm it is welded; if it is assembled mechanically (studs, "
+                       "nutserts, screws), remove the Weld and Dress rows"),
+            "owner": "estimator", "gbp_at_stake": _w_gbp or None})
+
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were
     # costed at 2, reached once through the lighting assembly and once from the GA's table.
