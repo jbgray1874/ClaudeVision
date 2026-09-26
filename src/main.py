@@ -890,6 +890,11 @@ def main() -> None:
             )
             scan_label = drawing_path.name
 
+        # Everything main() does between the scan returning and the workbook opening —
+        # readers-that-ran, the learning engine, drawing-facts enrichment, the dual-path
+        # push into part_estimates, the manual-sheet parity — was unbracketed (D-279).
+        _time_stage("post_scan_enrichment", True)
+
         # ── WHICH READERS RAN, ON THE RECORD, BEFORE ANYTHING DESCRIBES THE JOB ─────────
         #
         # THE DEFECT THIS FIXES, in James's words: "why does it state SolidWorks model was
@@ -1193,6 +1198,7 @@ def main() -> None:
         # unreachable (e.g. share unavailable), so a network blip doesn't
         # stop the run.
         xlsx_path = None
+        _time_stage("post_scan_enrichment", False)
         _time_stage("populate_workbook", True)
         try:
             from wb_populate import populate_workbook

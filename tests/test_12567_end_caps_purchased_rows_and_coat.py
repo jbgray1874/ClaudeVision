@@ -407,3 +407,27 @@ def test_class_coded_rows_without_records_each_become_a_line():
     tape = got["P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM"]
     assert tape["quantity"] == 2 and tape["bom_parent"] == "12567-02-GA"
     assert tape["printed_code"] == "P/P" and "bought_in" in tape["page_roles"]
+
+
+# D-278: a plate ruling needs a sheet body behind it.  D-279: the timer merges nested brackets.
+
+def test_a_hand_that_takes_a_folded_bases_flat_is_not_a_plate():
+    parts = _hands()
+    parts[0]["textual_operations"] = ["laser_cutting", "folding"]
+    parts[0]["solidworks_bend_features"] = 3
+    # the hand's own model had no flat and no mass and read 12 x 409.5 x 88 as a plate
+    parts[1]["native_flat_solid"] = True
+    parts[1]["manufacturing_features"] = {"bend_count": 0, "bend_count_source": "solidworks_api"}
+    djm.stamp_mirror_notes(parts, _summary())
+    djm.apply_mirror_geometry(parts)
+    hand = parts[1]
+    assert not hand.get("native_flat_solid")
+    ops = (hand.get("textual_operations") or []) + (hand.get("inferred_operations") or [])
+    assert "folding" in ops
+    assert any("plate ruling lifted" in str(f) for f in hand.get("review_flags") or [])
+
+
+def test_nested_timing_brackets_count_their_seconds_once():
+    import run_timing as rt
+    assert abs(rt._union_seconds([(0.0, 10.0), (2.0, 5.0), (12.0, 13.0)]) - 11.0) < 1e-9
+    assert rt._union_seconds([]) == 0.0

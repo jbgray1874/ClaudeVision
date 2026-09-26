@@ -28,7 +28,25 @@ from typing import Dict, List, Optional, Tuple
 _open: Dict[str, float] = {}
 # (stage, seconds) in completion order.
 _done: List[Tuple[str, float]] = []
+# (began, finished) for every closed phase, so nested brackets can be merged.
+_spans: List[Tuple[float, float]] = []
 _run_started: Optional[float] = None
+
+
+def _union_seconds(spans: List[Tuple[float, float]]) -> float:
+    """Total seconds covered by at least one span — overlapping spans count once."""
+    total = 0.0
+    cur_start = cur_end = None
+    for began, finished in sorted(spans):
+        if cur_end is None or began > cur_end:
+            if cur_end is not None:
+                total += cur_end - cur_start
+            cur_start, cur_end = began, finished
+        elif finished > cur_end:
+            cur_end = finished
+    if cur_end is not None:
+        total += cur_end - cur_start
+    return total
 
 
 def reset() -> None:
@@ -36,6 +54,7 @@ def reset() -> None:
     global _run_started
     _open.clear()
     _done.clear()
+    _spans.clear()
     _run_started = time.time()
 
 
@@ -58,6 +77,7 @@ def mark(stage: str) -> None:
         began = _open.pop(name, None)
         if began is not None:
             _done.append((name, now - began))
+            _spans.append((began, now))
 
 
 def report() -> str:
@@ -82,7 +102,12 @@ def report() -> str:
                      f"STARTED AND NEVER FINISHED")
     if _run_started is not None:
         total = now - _run_started
-        measured = sum(s for _, s in _done)
+        # MEASURED IS THE UNION OF THE BRACKETS, NOT THEIR SUM. A coarse phase that
+        # contains a finer one ("pre_estimate_passes" around "solidworks_extract") would
+        # otherwise count the same seconds twice and push "unmeasured" below zero, so
+        # nested brackets were impossible and 2,557 s of 12567-01's 4,351 s stayed
+        # outside any phase (D-279). Spans are merged before they are summed.
+        measured = _union_seconds(_spans)
         lines.append(f"   [timing]   {'TOTAL (wall clock)':<{width}}  {total:8.1f}s")
         lines.append(f"   [timing]   {'unmeasured':<{width}}  {total - measured:8.1f}s  "
                      f"(outside any timed phase)")

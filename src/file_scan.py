@@ -2146,6 +2146,7 @@ def _finalize_scan_summary(
             print(f"   [recon-input] job_source_pdfs={len(_job_pdfs)} "
                   f"job_folder={str(job_folder)!r} scan_mode={summary.get('scan_mode')!r} "
                   f"pdf_path={str(pdf_path)!r}", flush=True)
+            run_timing.mark("start dual_path_bom_read")
             if _job_pdfs:
                 print(f"   [recon-input] using job_source_pdfs -> {_job_pdfs}", flush=True)
                 _dp = reconciled_bom_rows_for_job(pdfs=_job_pdfs)
@@ -2157,6 +2158,7 @@ def _finalize_scan_summary(
             else:
                 _fp_src = summary.get("full_path") or summary.get("source_file")
                 _dp = reconciled_bom_rows_for_job(pdfs=[_fp_src]) if _fp_src else {"rows": []}
+            run_timing.mark("done dual_path_bom_read")
             print(f"   [recon-input] _dp keys={sorted((_dp or {}).keys())} "
                   f"pdf_paths={len((_dp or {}).get('pdf_paths') or [])} "
                   f"a_count={(_dp or {}).get('a_count')} b_count={(_dp or {}).get('b_count')}", flush=True)
@@ -2258,6 +2260,13 @@ def _finalize_scan_summary(
         summary = augment_summary_with_dxf(summary, dxf_paths, reestimate=False)
         _debug("done augment_summary_with_dxf")
 
+    # THE STRETCH NOBODY HAD TIMED. Everything from here to estimate_document — the
+    # normalisers, the dual-path BOM read, the SolidWorks extract, the LLM extract, the
+    # graph compile, the mirror and detail-page passes — ran outside every bracket, and
+    # on 12567-01 that stretch was most of 2,557 unmeasured seconds in a 4,351 s run.
+    # Bracketed coarsely here and finely inside (run_timing merges nested spans), so the
+    # table names the step and not only the gap (D-279).
+    run_timing.mark("start pre_estimate_passes")
     # ── Pre-estimate normalisation ────────────────────────────────────────────
     # Must run BEFORE estimate_document so BOUGHT_IN materials price at £0,
     # and boilerplate-sourced operations are stripped before routing is costed.
@@ -2665,9 +2674,11 @@ def _finalize_scan_summary(
             _job_codes = {_norm_code(str(p.get("part_number") or ""))
                           for p in (_pre_estimate_parts or [])
                           if isinstance(p, dict) and p.get("part_number")} - {""}
+            run_timing.mark("start solidworks_extract")
             _sw_job = native_extract_for_job(folder=_sw_folder, json_path=_sw_json,
                                              run=_sw_run, job_codes=_job_codes) \
                 if (_sw_folder or _sw_json) else None
+            run_timing.mark("done solidworks_extract")
             if not (_sw_folder or _sw_json):
                 _sw_why = ("no job folder and no SDI_SW_EXTRACT_JSON — nowhere to look for "
                            "an extract")
@@ -2798,7 +2809,9 @@ def _finalize_scan_summary(
                     _sw_job = None
                     _sw_why = f"extract refused as belonging to another job: {_why}"
             if _sw_job and _sw_job.found:
+                run_timing.mark("start apply_solidworks_extract")
                 _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
+                run_timing.mark("done apply_solidworks_extract")
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
                 # Keep the normalised extract on the summary so the estimator can audit the
                 # modelled source data behind every native-sourced number.
@@ -2892,7 +2905,9 @@ def _finalize_scan_summary(
         try:
             from llm_full_extract import extract_full_job
             from source_connectors.llm_full_job import apply_full_job_to_pre_estimate, overlay_drawing_facts
+            run_timing.mark("start llm_full_extract")
             _job = extract_full_job(str(pdf_path))
+            run_timing.mark("done llm_full_extract")
             if _job.get("found"):
                 # Overlay the DETERMINISTIC drawing_facts onto the LLM job: printed title-block
                 # values (per-part finish/thickness) fill the LLM's nulls, and the weld spec is
@@ -3041,6 +3056,7 @@ def _finalize_scan_summary(
     except Exception as _e:
         print(f"   [inference] skipped: {_e}", flush=True)
 
+    run_timing.mark("done pre_estimate_passes")
     _debug("start estimate_document")
     # ── THE QUANTITY THE JOB IS COSTED AT, DECIDED ONCE, HERE ────────────────────────
     #
@@ -3472,8 +3488,10 @@ def _finalize_scan_summary(
             _msg = f"no SolidWorks extract was applied to this job — {_sw_why or 'reason not recorded'}"
         else:
             from source_connectors.solidworks import apply_native_hierarchy_to_parts
+            run_timing.mark("start apply_solidworks_hierarchy")
             _hier = apply_native_hierarchy_to_parts(
                 summary["manufacturing_writeup"]["parts"], _sw_job_late)
+            run_timing.mark("done apply_solidworks_hierarchy")
             for _h in _hier:
                 print(f"   [hierarchy] {_h['part_number']} holds "
                       f"{', '.join(_h['children'])} (from the SolidWorks model)", flush=True)
@@ -3630,7 +3648,9 @@ def _finalize_scan_summary(
         if _n_iso:
             print(f"   [detail-geometry] {_n_iso} part(s) had dimension text dropped that was "
                   f"read off pages they are not bound to", flush=True)
+        run_timing.mark("start detail_page_geometry")
         _n_dg = apply_detail_page_geometry(_parts_dg, summary)
+        run_timing.mark("done detail_page_geometry")
         if _n_dg:
             print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
                   f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)

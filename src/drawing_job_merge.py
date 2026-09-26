@@ -2634,13 +2634,42 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # folding OPERATION was not, so the brake never saw it (D-270). A mirrored flat with
         # the base's bend lines is folded exactly as the base is — that is what a handed pair
         # is. Copied only where this hand states no folding of its own, inferred and flagged.
-        if "folding" in _ops(base) and "folding" not in _ops(part):
+        def _base_bends() -> int:
+            for _k in ("bend_count_dxf", "solidworks_bend_features", "drawing_bend_callouts"):
+                try:
+                    if int(base.get(_k) or 0) > 0:
+                        return int(base.get(_k) or 0)
+                except (TypeError, ValueError):
+                    continue
+            return 0
+
+        if ("folding" in _ops(base) or _base_bends()) and "folding" not in _ops(part):
             _inf_f = list(part.get("inferred_operations") or [])
             _inf_f.append("folding")
             part["inferred_operations"] = _inf_f
             part.setdefault("review_flags", []).append(
                 f"{part.get('part_number')} folds as {base.get('part_number')} does — the same "
                 f"flat carries the same bend lines, so the fold is taken from that hand")
+        # A HAND THAT TAKES A FOLDED BASE'S FLAT IS NOT A PLATE. 12567-05-02M's own model had
+        # no flat pattern and no mass, and reported a "thickness" of 12 mm — the depth of the
+        # folded envelope — so 12 x 409.5 x 88 read as one thickness thick, the connector
+        # ruled it a plate (native_flat_solid) and removed the fold, and the costing gate
+        # removed it again after this pass had put it back. The base's measured flat and its
+        # bends outrank an envelope read off a model with no sheet body: the ruling is lifted
+        # here, with the reason on the record (D-278).
+        if part.get("native_flat_solid") and ("folding" in _ops(base) or _base_bends()):
+            part.pop("native_flat_solid", None)
+            _mf = part.get("manufacturing_features")
+            if isinstance(_mf, dict) and not _mf.get("bend_count"):
+                _mf.pop("bend_count", None)
+                _mf.pop("bend_count_source", None)
+            if "folding" not in _ops(part):
+                part["inferred_operations"] = list(part.get("inferred_operations") or []) + ["folding"]
+            part.setdefault("review_flags", []).append(
+                f"plate ruling lifted on {part.get('part_number')}: its own model reported no "
+                f"flat pattern and read one thickness thick, but it takes the measured flat of "
+                f"{base.get('part_number')}, which folds ({_base_bends() or 'bends stated'}) — "
+                f"the same flat is not a plate in one hand")
 
         # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
         # was listed on a kit page tagged as bought-in, so it carried that role; it was then
