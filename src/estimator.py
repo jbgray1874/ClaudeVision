@@ -3584,7 +3584,24 @@ def _powder_consumable_estimate(
     elif bends > 0:
         bend_extra_m2 = bends * (strip_mm / 1000.0) * min(L_m, W_m) * 2.0
     total_area_m2 = flat_area_m2 + bend_extra_m2
+    return {
+        **_powder_kg_and_money(part, total_area_m2, quantity),
+        "flat_area_m2": round(flat_area_m2, 6),
+        "bend_extra_coated_m2": round(bend_extra_m2, 6),
+        "coated_faces_multiplier": faces_m,
+        "coated_faces_reason": faces_reason,
+        "bend_lines_used": bends,
+    }
 
+
+def _powder_kg_and_money(part: Dict[str, Any], total_area_m2: float,
+                         quantity: int) -> Dict[str, Any]:
+    """Powder kilos and money for a coated area — the workbook's AC/AD arithmetic, once.
+
+    Shared by the blank-based consumable and the members'-area consumable an assembly
+    coated as one thing carries (stamp_members_coated_area), so the two cannot drift.
+    """
+    policy = getattr(config, "POWDER_COSTING_POLICY", {}) or {}
     # Workbook AC/AD: kg_per_unit = total_area_m2 / coverage_m2_per_kg
     coverage = float(policy.get("coverage_m2_per_kg", 6.0))   # workbook = 6.0
     kg_raw = total_area_m2 / coverage if coverage > 0 else 0.0
@@ -3601,12 +3618,7 @@ def _powder_consumable_estimate(
     return {
         "workbook_formula": "AD = (1/AC) × qty = area_m2×2/6 per unit",
         "coverage_m2_per_kg": coverage,
-        "flat_area_m2": round(flat_area_m2, 6),
-        "bend_extra_coated_m2": round(bend_extra_m2, 6),
         "coated_area_m2": round(total_area_m2, 6),
-        "coated_faces_multiplier": faces_m,
-        "coated_faces_reason": faces_reason,
-        "bend_lines_used": bends,
         "kg_powder_per_unit": round(kg_per_unit, 6),
         "powder_material_gbp_per_kg": price_per_kg,
         "powder_price_tier": price_tier,
@@ -4632,7 +4644,13 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "unit_material_cost_gbp": 0.0,
             "cost_per_part_gbp": 0.0,
             "extended_sheet_material_cost_gbp": 0.0,
-            "powder_consumable": None,
+            # THE COAT IS THE PARENT'S EVEN THOUGH THE SHEET IS NOT. A parent coated as one
+            # thing over its members' blanks (stamp_members_coated_area) carries the powder
+            # material for that area here, so the POWDER line and the booth time both see
+            # it — the sheet material stays with the children.
+            "powder_consumable": (_powder_consumable_from_area(
+                part, float(part.get("_powder_members_coated_m2") or 0.0), quantity)
+                if _safe_float(part.get("_powder_members_coated_m2")) else None),
             "extended_material_cost_gbp": 0.0,
             "stock_estimate": {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None},
             "cost_method": "weldment_parent_material_in_children",
@@ -7008,6 +7026,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     _pc_roles = {str(r).lower() for r in (part.get("page_roles") or [])}
     _pc_bought = ("bought_in" in _pc_roles or bool(part.get("bought_in"))
                   or str(part.get("normalized_material") or "").upper() == "BOUGHT_IN")
+    # ONE ANSWER TO "IS THIS PURCHASED". Three spellings were read here and the policy's own
+    # predicate was not, so a magnet (MAGNET21) and a P/P LED driver — purchased by their
+    # codes, with no finish text of their own — were booked into the powder booth beside
+    # the case they fit into (12567-02-GA, D-263).
+    if not _pc_bought:
+        try:
+            from bought_in_policy import is_bought_in as _pc_is_bi
+            _pc_bought = bool(_pc_is_bi(part))
+        except Exception:                                            # noqa: BLE001
+            pass
     _pc_parent = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly"))
     _pc_own_evidence = bool(part.get("surface_finishes")) or any(
         "coat" in str(o).lower() or "powder" in str(o).lower()
@@ -9890,6 +9918,103 @@ def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def stamp_members_coated_area(parts: Any) -> int:
+    """An assembly coated as one thing is coated over the area of what it is made of.
+
+    12567-02-101 HEADER CASE FABRICATION: its own sheet says POWDER COATED, its members'
+    sheets say nothing of their own, so the coat was — rightly — claimed on the assembly. An
+    assembly has no blank, so its coated area was zero, the booth time floored, the powder
+    line carried 0.2 m2 for a case whose fascia alone is 1.4 m2, and the review list asked a
+    person to rule on "the scope". The scope is on the drawings already: the members carry no
+    coat of their own, so they are coated as the assembly, and the assembly's area is the sum
+    of their blanks (both faces, as the workbook's own AB column counts them), each at its
+    count per assembly (D-266).
+
+    Members: the record's own children and every part that names it as owner. Counted only a
+    member that is cut (not purchased), has a blank, and claims no coat of its own — one that
+    does is coated before assembly and is already charged on its own line. Stamped as
+    `_powder_members_coated_m2` for estimate_material to price and estimate_process_times to
+    time; a person can still overrule the scope on the sheet. Returns assemblies stamped.
+    """
+    if not isinstance(parts, list):
+        return 0
+    try:
+        from bought_in_policy import is_bought_in as _mbi
+    except Exception:                                                # noqa: BLE001
+        def _mbi(_p):                                                # type: ignore[misc]
+            return False
+    _by_pn: Dict[str, Dict[str, Any]] = {}
+    for _p in parts:
+        if isinstance(_p, dict) and _p.get("part_number"):
+            _by_pn.setdefault(str(_p["part_number"]).strip().upper(), _p)
+    _owned: Dict[str, List[Dict[str, Any]]] = {}
+    for _p in parts:
+        if isinstance(_p, dict) and _p.get("owning_assembly"):
+            _owned.setdefault(str(_p["owning_assembly"]).strip().upper(), []).append(_p)
+    _faces = float((getattr(config, "POWDER_COSTING_POLICY", {}) or {}).get(
+        "coated_faces_multiplier", 2.0) or 2.0)
+    stamped = 0
+    for _asm in parts:
+        if not isinstance(_asm, dict):
+            continue
+        _apn = str(_asm.get("part_number") or "").strip().upper()
+        if not _apn or "powder_coating" not in _part_ops(_asm):
+            continue
+        _members: List[Dict[str, Any]] = []
+        _seen: set = set()
+        for _k in list(_asm.get("assembly_children") or []) + [
+                m.get("part_number") for m in _owned.get(_apn, [])]:
+            _m = _by_pn.get(str(_k or "").strip().upper())
+            if _m is None or _m is _asm or id(_m) in _seen:
+                continue
+            _seen.add(id(_m))
+            _members.append(_m)
+        if not _members:
+            continue
+        _asm_qty = _safe_float(_asm.get("quantity")) or 1.0
+        _area = 0.0
+        _counted: List[str] = []
+        for _m in _members:
+            if _mbi(_m) or "powder_coating" in _part_ops(_m):
+                continue
+            _g = _m.get("normalized_geometry") or {}
+            _L = _safe_float(_g.get("blank_length_mm")) or _safe_float(_m.get("blank_length_mm"))
+            _W = _safe_float(_g.get("blank_width_mm")) or _safe_float(_m.get("blank_width_mm"))
+            if not _L or not _W:
+                continue
+            _per = max(1.0, (_safe_float(_m.get("quantity")) or 1.0) / _asm_qty)
+            _area += (_L / 1000.0) * (_W / 1000.0) * _faces * _per
+            _counted.append(f"{_m.get('part_number')} x{_per:g}")
+        if _area <= 0:
+            continue
+        _asm["_powder_members_coated_m2"] = round(_area, 6)
+        _asm["_powder_members"] = _counted
+        _asm.setdefault("review_flags", []).append(
+            f"powder on this assembly is charged over the sum of its members' blanks, "
+            f"{_area:.3f} m2 both faces ({', '.join(_counted)}) — their sheets carry no coat "
+            f"of their own, so they are coated as the assembly; override the area on the "
+            f"sheet if the shop coats them before assembly")
+        stamped += 1
+    return stamped
+
+
+def _powder_consumable_from_area(part: Dict[str, Any], area_m2: float,
+                                 quantity: int) -> Dict[str, Any]:
+    """The powder MATERIAL for a coated area the record does not derive from a blank of its
+    own — an assembly coated over its members' blanks. Same arithmetic and keys as the
+    blank-based consumable, so every reader of `powder_consumable` sees one shape."""
+    policy = getattr(config, "POWDER_COSTING_POLICY", {}) or {}
+    if not policy.get("enabled", True) or area_m2 <= 0:
+        return {}
+    return {
+        **_powder_kg_and_money(part, area_m2, quantity),
+        "flat_area_m2": round(area_m2, 6),
+        "bend_extra_coated_m2": 0.0,
+        "coated_area_source": "sum_of_members_blanks",
+        "coated_members": list(part.get("_powder_members") or []),
+    }
+
+
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     if summary is not None:
@@ -10639,6 +10764,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if isinstance(_ap, dict) and _ap.get("assembly_children"):
             _cm = [_mat_by_pn.get(str(k).strip().upper(), "") for k in _ap["assembly_children"]]
             _ap["child_materials"] = [m for m in _cm if m]
+    stamp_members_coated_area(parts)
     # AN ASSEMBLY WITH NO RECORD OF ITS OWN IS STILL BONDED. 12633-00-GA: the wine lifter and
     # choc holder exist only as graph nodes minted from the SolidWorks tree, so no rule on an
     # assembly RECORD ever ran for them and their panels were costed with no joining. Their

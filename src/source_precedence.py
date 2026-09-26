@@ -930,7 +930,15 @@ def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,
     _cur = value_of(part, field)
     if _cur is MISSING or _same_value(_cur, new_value):
         return None
-    if field_rank(new_source, field) >= _DECISION_RANK:
+    # A DECISION IS NOT OUTVOTED BY READERS — IN THIS DIRECTION TOO. corroboration_overrules
+    # already exempts a HELD decision or production rule from a quorum of readings; the
+    # defence did not exempt an ARRIVING one. So on 12567-02-09M the DXF, the model and an
+    # inference all read the drawn 0.9 mm, the shop's confirmed 1.0 mm substitution arrived,
+    # and this refused it with "'1.0' from production_substitution was NOT applied" — while
+    # the sheet, correctly, costed the part at 1 mm. Readers answer what was drawn; a rule
+    # answers what is bought, and however many agree about the drawing they are not
+    # evidence against it (D-267).
+    if str(new_source or "") in _NOT_A_READING or field_rank(new_source, field) >= _DECISION_RANK:
         return None
     holding = set(support_for(part, field, _cur))
     holding.discard("")

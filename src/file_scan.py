@@ -3556,6 +3556,17 @@ def _finalize_scan_summary(
 
     try:
         from drawing_job_merge import apply_mirror_geometry, settle_handed_pairs
+        # A HAND THE SHEET NAMES, NOT THE CODE. Stamped before the mirror pass so a part
+        # whose drawing says "symmetrically opposite — refer to drawing X" is filled from X
+        # exactly as a "-H" or "MIR" code would be (D-265).
+        try:
+            from drawing_job_merge import stamp_mirror_notes
+            _noted = stamp_mirror_notes(summary["manufacturing_writeup"]["parts"], summary)
+            if _noted:
+                print(f"   [mirror] {_noted} part(s) named as the opposite hand of another "
+                      f"drawing by a note on their own sheet", flush=True)
+        except Exception as _mn_err:                                 # noqa: BLE001
+            print(f"   [mirror] sheet-note pass skipped: {_mn_err}", flush=True)
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
         try:
             from drawing_job_merge import propose_missing_cuts, stamp_drawing_bend_callouts

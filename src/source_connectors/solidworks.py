@@ -2228,7 +2228,23 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                             f"MINIMUM, not a measurement")
 
         # ── THICKNESS ────────────────────────────────────────────────────────────
-        if _plausible_thk(nat.thickness_mm):
+        # A GAUGE NEEDS A SHEET BODY BEHIND IT. On 12567-05-02M the model gave no flat
+        # pattern and no mass — nothing that could be costed — and still published a
+        # "thickness" of 12 mm, which is the depth of the folded end cap (its 10 mm
+        # returns plus the sheet), not a gauge. Submitted at model rank it would have
+        # outranked the 1.5 mm the hand it mirrors was measured at. A cut-list thickness
+        # is a sheet-metal reading; with no sheet-metal body reported the figure is kept
+        # on the record as a note and not offered as the gauge (D-265).
+        _no_sheet_body = (not (nat.flat_length_mm or nat.flat_width_mm)
+                          and not (nat.mass_kg and nat.mass_kg > 0))
+        if _plausible_thk(nat.thickness_mm) and _no_sheet_body:
+            flags.append(
+                f"the model reports {float(nat.thickness_mm):g}mm as thickness for a part with "
+                f"no flat pattern and no mass — not a sheet-metal cut-list reading, so it is "
+                f"recorded and NOT used as the gauge; the gauge comes from the drawing or the "
+                f"hand this part mirrors")
+            out["rejected_values"] = out.get("rejected_values", 0) + 1
+        elif _plausible_thk(nat.thickness_mm):
             thk = float(nat.thickness_mm)
             cur_thk = _num(part.get("normalized_thickness_mm"))
             if not cur_thk or abs(cur_thk - thk) <= 0.05:

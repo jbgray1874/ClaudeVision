@@ -132,11 +132,26 @@ _CATEGORY_CODES = {"FIXING", "FIXINGS", "FIXINGTBC", "STDPART", "HARDWARE"}
 
 
 def _identity(code: Any) -> str:
-    """A code that names one article. "FIXING", "STD PART", "-", "TBC" name a category or
-    nothing — the minter's own rule — so rows carrying them are told apart by their words."""
+    """A code that names one article. "FIXING", "STD PART", "P/P", "-", "TBC" name a category
+    or nothing — the minter's own rule — so rows carrying them are told apart by their words.
+
+    THE CATEGORY LIST IS THE SHARED ONE. This function kept a private set of five words, and
+    "P/P" — SDI's shorthand for a purchased part with no code of its own — was not in it. On
+    12567-02-GA twelve rows print P/P (a driver, three grommets, two Velcro strips, two EPDM
+    tapes, four cables). Read as an identity, every P/P row on the vision reader's table
+    matched every P/P row on the deterministic one: the grommets' quantity landed on the JST
+    lead, and _read_elsewhere then found each remaining A-row "already read" under the same
+    code, so the grommets, the Velcro and the tapes left the bill without a word (D-262).
+    """
     try:
         from part_identity import is_placeholder_identity
         if is_placeholder_identity(code):
+            return ""
+    except Exception:                                                 # pragma: no cover
+        pass
+    try:
+        from part_code_conventions import is_category_not_a_code
+        if is_category_not_a_code(code):
             return ""
     except Exception:                                                 # pragma: no cover
         pass
