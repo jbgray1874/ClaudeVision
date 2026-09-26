@@ -2629,6 +2629,18 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 f"flat as {base.get('part_number')}, so it takes {', '.join(dict.fromkeys(_base_cut))} "
                 f"from that hand. Its other operations are its own — confirm any the two hands "
                 f"do not share")
+        # AND THE SAME FLAT FOLDS THE SAME WAY. 12567-05-02M took 05-01M's blank, cut length
+        # and three bends, and then had no Fold row: the bend COUNT was mirrored and the
+        # folding OPERATION was not, so the brake never saw it (D-270). A mirrored flat with
+        # the base's bend lines is folded exactly as the base is — that is what a handed pair
+        # is. Copied only where this hand states no folding of its own, inferred and flagged.
+        if "folding" in _ops(base) and "folding" not in _ops(part):
+            _inf_f = list(part.get("inferred_operations") or [])
+            _inf_f.append("folding")
+            part["inferred_operations"] = _inf_f
+            part.setdefault("review_flags", []).append(
+                f"{part.get('part_number')} folds as {base.get('part_number')} does — the same "
+                f"flat carries the same bend lines, so the fold is taken from that hand")
 
         # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
         # was listed on a kit page tagged as bought-in, so it carried that role; it was then

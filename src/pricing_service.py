@@ -299,10 +299,20 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     # a drawing nobody has seen yet is judged the same way. The parent heuristics below
     # stay as a second net for records that arrive without either.
     try:
-        from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence
+        from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence, is_bought_in
         _ops = {str(o).strip().lower() for o in
                 ((part.get("textual_operations") or []) + (part.get("inferred_operations") or []))}
-        if has_fabrication_evidence(part) or (_ops & FABRICATION_OPS):
+        if has_fabrication_evidence(part):
+            return False
+        # AN OPERATION READ ONTO A PURCHASED ITEM IS A MIS-READ, NOT A MAKE. MAGNET21 sat on
+        # the side header's GA sheet and took its "POWDER COATED" and a fold from the page
+        # text; the P/P LED driver was inferred a coat the same way. Both are bought by their
+        # codes (bought_in_policy), the estimator strips those operations at costing — but
+        # pricing runs first, and this test read the not-yet-stripped operations and refused
+        # the market rung, so two purchased lines reached the book at £0 with "nothing holds a
+        # rate" (D-271). Identity decides: where the policy says we buy it, an operation the
+        # page lent it is not evidence that we make it.
+        if (_ops & FABRICATION_OPS) and not is_bought_in(part):
             return False
     except ImportError:
         pass

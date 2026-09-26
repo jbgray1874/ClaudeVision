@@ -115,8 +115,21 @@ _DESC_NOISE = {"THE", "AND", "WITH", "FOR", "TYPE", "EACH", "OFF", "SDI", "FIXIN
 
 
 def _desc_words(row: Dict[str, Any]) -> set:
-    return {w for w in re.findall(r"[A-Z]{3,}", str(row.get("description") or "").upper())
-            if w not in _DESC_NOISE}
+    """The words that name an article: whole alphabetic tokens of three letters or more.
+
+    A SUPPLIER REFERENCE IS NOT A WORD. The letter-run regex this used pulled "RSB" out of
+    "[G10-RSB350-12-00C]" and nothing out of the vision reader's "IG10-RS8350-12-00C", so the
+    same grommet row read two ways failed the exact-words test and was costed twice, at x3
+    each (12567-02-GA, D-268). A token that carries a digit is a size, a length or a
+    reference — sizes are compared by the thread rule, the rest is not identity.
+    """
+    out = set()
+    for tok in re.split(r"[^A-Z0-9]+", str(row.get("description") or "").upper()):
+        if not tok or any(ch.isdigit() for ch in tok):
+            continue
+        if len(tok) >= 3 and tok not in _DESC_NOISE:
+            out.add(tok)
+    return out
 
 
 def _is_mirror(code: Any) -> bool:
