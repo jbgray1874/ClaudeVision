@@ -238,3 +238,67 @@ def test_readers_agreeing_on_the_drawn_gauge_do_not_refuse_the_shop_rule():
     assert sp.apply_field(part, "normalized_thickness_mm", 1.0, "production_substitution")
     assert part["normalized_thickness_mm"] == 1.0
     assert not [f for f in part.get("review_flags") or [] if "NOT applied" in str(f)]
+
+
+# ── 16:48 rerun (build 90a045e): four more ─────────────────────────────────────────────────
+# D-268 the grommet row read two ways ("[G10-RSB350-12-00C]" / "IG10-RS8350-12-00C") became two
+#       lines at x3 each — a supplier reference is not a word.
+# D-269 "DIGITAL LED GCMP HEADER" in every title block flipped the steel case assemblies to LED:
+#       02-101 tagged bought-in, 03-101 lost its coat and weld.
+# D-270 05-02M took the base's blank and bends and had no Fold row — the operation was not mirrored.
+# D-271 MAGNET21 and the P/P driver, bought by their codes, were refused the market rung because
+#       operations lent by the page were still on the record when pricing ran.
+
+def test_a_supplier_reference_is_not_a_word():
+    a = [_row("12", "P/P", "SEMI BLIND RUBBER GROMMET [G10-RSB350-12-00C]", 3)]
+    b = [_row("12", "P/P", "SEMI BLIND RUBBER GROMMET IG10-RS8350-12-00C", 3)]
+    rows, _ = mb.reconcile_page({"rows": a}, {"rows": b}, "12567-02-GA")
+    assert len(rows) == 1 and int(rows[0]["quantity"]) == 3
+    # the words still tell two washers apart
+    assert mb._desc_words({"description": "M6 WASHER"}) != mb._desc_words({"description": "M6 STAR WASHER"})
+
+
+def test_the_project_title_does_not_flip_a_steel_assembly_to_led():
+    import document_builder as db
+    title = ("DIGITAL LED GCMP HEADER  SIDE HEADER FRAME ASM  12567-03-101  MATERIAL:  COLOUR:  "
+             "SURFACE FINISH:  RAL5005 SIGNAL BLUE  MILD STEEL (CR4)  POWDER COATED - 30% GLOSS  "
+             "Copt Oak, Loughborough LE12 9YE")
+    summary = {"pages": [{"page_number": 1, "text_preview": title}]}
+    frame = {"part_number": "12567-03-101", "description": "SIDE HEADER FRAME ASM",
+             "materials": ["MILD STEEL"], "normalized_material": "MILD_STEEL", "pages": [1],
+             "page_roles": ["assembly"], "textual_operations": ["welding", "powder_coating"],
+             "is_sub_assembly": True, "geometry_rollup": {}}
+    diffuser = {"part_number": "12567-03-08", "description": "DIFFUSER",
+                "materials": ["MILD STEEL"], "material_inherited_from": "document_level",
+                "pages": [1], "page_roles": ["detail"], "textual_operations": ["powder_coating"],
+                "overall_length_mm": 1330.0, "overall_width_mm": 16.0, "geometry_rollup": {}}
+    db._apply_post_build_fixes([frame, diffuser], summary)
+    assert "powder_coating" in (frame.get("textual_operations") or [])
+    assert "bought_in" not in (frame.get("page_roles") or [])
+    assert "non_metal_material_corrected" not in (frame.get("review_flags") or [])
+    # a part whose own words name a non-metal, on a steel it only inherited, still flips
+    assert "bought_in" in (diffuser.get("page_roles") or [])
+    assert "powder_coating" not in (diffuser.get("textual_operations") or [])
+
+
+def test_the_named_hand_folds_as_the_base_does():
+    parts = _hands()
+    parts[0]["textual_operations"] = ["laser_cutting", "folding"]
+    djm.stamp_mirror_notes(parts, _summary())
+    djm.apply_mirror_geometry(parts)
+    ops = (parts[1].get("textual_operations") or []) + (parts[1].get("inferred_operations") or [])
+    assert "folding" in ops and "laser_cutting" in ops
+
+
+def test_an_operation_the_page_lent_a_purchased_item_does_not_refuse_its_market_price():
+    import pricing_service as ps
+    magnet = {"part_number": "MAGNET21", "description": "NEODYMIUM BAR MAGNET 50x10x1.50mm",
+              "normalized_material": "MILD_STEEL", "textual_operations": ["folding", "powder_coating"]}
+    assert ps.is_something_you_can_buy(magnet)
+    driver = {"part_number": "P/P-LED-POWER-DRIVER-3M", "description": "LED POWER DRIVER",
+              "inferred_operations": ["powder_coating"]}
+    assert ps.is_something_you_can_buy(driver)
+    # a part we cut, with the same operations, is still not something you can buy
+    assert not ps.is_something_you_can_buy({"part_number": "12567-03-06M", "description": "HOOK",
+                                            "normalized_material": "MILD_STEEL",
+                                            "textual_operations": ["folding"]})

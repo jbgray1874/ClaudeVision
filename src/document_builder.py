@@ -1895,11 +1895,23 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             pn_upper = str(part.get("part_number") or "").upper()
             extra_text = f"{desc_upper} {pn_upper}"
 
-            is_non_metal = (
-                any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
-                or any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
-                or any(kw in extra_text for kw in _NON_METAL_KEYWORDS)
-            )
+            # THE PAGE'S WORDS FLIP ONLY A MATERIAL THE PART DID NOT STATE FOR ITSELF. This
+            # scanned the whole sheet for non-metal words, and on 12567 every sheet carries
+            # the project title "DIGITAL LED GCMP HEADER": nineteen mild-steel parts were
+            # flipped to LED. The DXF-backed ones were rescued below; the two case
+            # assemblies (02-101, 03-101 — "MILD STEEL (CR4)", "POWDER COATED" in their own
+            # title blocks) were not, lost welding and powder from their routes and were
+            # tagged bought-in, so the side header frame reached the book uncoated and the
+            # end header case was called a purchase (D-269). A material the part carries as
+            # its own reading — not one inherited from the document — is the part's
+            # statement; only the part's own words (its MATERIAL field, its description, its
+            # code) may overrule it. An inherited material has no such standing and the page
+            # scan still applies to it, which is what catches a bought-in on a steel GA.
+            _own_words_hit = (any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
+                              or any(kw in extra_text for kw in _NON_METAL_KEYWORDS))
+            _page_hit = any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
+            _material_is_its_own = bool(mat_upper_joined) and not part.get("material_inherited_from")
+            is_non_metal = _own_words_hit or (_page_hit and not _material_is_its_own)
             # The MATERIAL: field is authoritative. Steel fab drawings routinely
             # mention non-metal terms incidentally — vinyl-logo application notes
             # ("WITH OR WITHOUT VINYL - CHECK ORDER"), LED bend-tabs / foam tape on
