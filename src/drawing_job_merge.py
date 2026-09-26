@@ -2075,23 +2075,48 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
         if counts and max(counts):
             part["drawing_bend_callouts"] = max(counts)
             n += 1
-            # A DXF ZERO THAT THE DRAWING AND THE MODEL CONTRADICT IS LIFTED. 12614-01-14M:
-            # the flat's bend layer was empty, the DXF pass recorded "folding ruled out", and
-            # the route kept the fold off although the sheet prints DOWN 40.6° / 49.4° and the
-            # model has two bend features. The ruling is replaced by a note, not deleted
-            # silently (D-259).
-            try:
-                _features = int(part.get("solidworks_bend_features") or 0)
-            except (TypeError, ValueError):
-                _features = 0
-            _ruled = (part.get("operations_ruled_out") or {})
-            if (_features >= part["drawing_bend_callouts"] and "folding" in _ruled
-                    and "0 bend" in str(_ruled.get("folding"))):
-                _ruled.pop("folding", None)
+    # A HAND WITH NO SHEET OF ITS OWN BENDS LIKE THE HAND IT MIRRORS. 12614-01-06M-H: one
+    # DXF and one sheet were issued for the pair, so the mirror carried the base's short
+    # DXF count (6) but not its callouts (11) or model features (12), and would have been
+    # charged 6 folds against the base's 11. Same flat, same bends (D-260). Filled only where
+    # the hand has nothing of its own; a hand with its own sheet or model keeps its readings.
+    from part_code_conventions import mirror_base
+    _by_own = {_own_number_key(p.get("part_number")): p for p in (parts or [])
+               if isinstance(p, dict)}
+    for part in parts or []:
+        if not isinstance(part, dict):
+            continue
+        _bpn = mirror_base(str(part.get("part_number") or ""))
+        _base = _by_own.get(_own_number_key(_bpn)) if _bpn else None
+        if _base is None or _base is part:
+            continue
+        for _k in ("drawing_bend_callouts", "solidworks_bend_features"):
+            if not part.get(_k) and _base.get(_k):
+                _apply_field(part, _k, _base[_k], "mirror_of_measured",
+                             note=f"mirrored from {_base.get('part_number')}")
                 part.setdefault("review_flags", []).append(
-                    f"folding reinstated: the DXF's bend layer was empty, but the drawing "
-                    f"prints {part['drawing_bend_callouts']} bend callout(s) and the model has "
-                    f"{_features} bend feature(s) — the export was short, the part folds")
+                    f"{_k.replace('_', ' ')} {_base[_k]} taken from {_base.get('part_number')}, "
+                    f"the hand this part mirrors — no sheet or model reading of its own")
+    for part in parts or []:
+        if not isinstance(part, dict) or not part.get("drawing_bend_callouts"):
+            continue
+        # A DXF ZERO THAT THE DRAWING AND THE MODEL CONTRADICT IS LIFTED. 12614-01-14M:
+        # the flat's bend layer was empty, the DXF pass recorded "folding ruled out", and
+        # the route kept the fold off although the sheet prints DOWN 40.6° / 49.4° and the
+        # model has two bend features. The ruling is replaced by a note, not deleted
+        # silently (D-259).
+        try:
+            _features = int(part.get("solidworks_bend_features") or 0)
+        except (TypeError, ValueError):
+            _features = 0
+        _ruled = (part.get("operations_ruled_out") or {})
+        if (_features >= part["drawing_bend_callouts"] and "folding" in _ruled
+                and "0 bend" in str(_ruled.get("folding"))):
+            _ruled.pop("folding", None)
+            part.setdefault("review_flags", []).append(
+                f"folding reinstated: the DXF's bend layer was empty, but the drawing "
+                f"prints {part['drawing_bend_callouts']} bend callout(s) and the model has "
+                f"{_features} bend feature(s) — the export was short, the part folds")
     return n
 
 

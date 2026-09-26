@@ -172,3 +172,48 @@ def test_a_dxf_zero_ruling_stands_without_the_model():
     djm.stamp_drawing_bend_callouts([part], {"pages": [
         {"page_number": 1, "pdfplumber_text": "DOWN 90° R 1"}]})
     assert "folding" in part["operations_ruled_out"]
+
+
+# ── D-260: a mirrored hand bends like the hand it mirrors ──────────────────────────────
+
+def test_a_handed_part_with_no_sheet_takes_the_bases_callouts_and_features():
+    import drawing_job_merge as djm
+    base = {"part_number": "12614-01-06M", "pages": [10], "solidworks_bend_features": 12}
+    hand = {"part_number": "12614-01-06M-H", "pages": []}
+    djm.stamp_drawing_bend_callouts([base, hand], {"pages": [
+        {"page_number": 10, "pdfplumber_text": "DOWN 90° R 1 " * 11}]})
+    assert base["drawing_bend_callouts"] == 11
+    assert hand["drawing_bend_callouts"] == 11 and hand["solidworks_bend_features"] == 12
+    r = fc.press_brake_folds(dict(hand, bend_count_dxf=6))
+    assert r["count"] == 11
+
+
+def test_a_hand_with_its_own_sheet_keeps_its_own_count():
+    import drawing_job_merge as djm
+    base = {"part_number": "X-01M", "pages": [1]}
+    hand = {"part_number": "X-01M-H", "pages": [2]}
+    djm.stamp_drawing_bend_callouts([base, hand], {"pages": [
+        {"page_number": 1, "pdfplumber_text": "DOWN 90° R 1 " * 4},
+        {"page_number": 2, "pdfplumber_text": "DOWN 90° R 1 " * 3}]})
+    assert hand["drawing_bend_callouts"] == 3
+
+
+# ── D-261: the book says one thing about a part's folds ───────────────────────────────
+
+def test_the_resolvers_verdict_replaces_the_merge_time_disagreement():
+    import estimator
+    part = {"part_number": "12614-01-01M", "description": "FASCIA PANEL",
+            "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 1.2,
+            "geometry_source": "dxf", "flat_pattern_detected": True,
+            "normalized_geometry": {"blank_length_mm": 1379.2, "blank_width_mm": 471.6},
+            "manufacturing_features": {"bend_count": 6, "bend_count_source": "dxf"},
+            "bend_count_dxf": 6, "drawing_bend_callouts": 10, "solidworks_bend_features": 10,
+            "textual_operations": ["laser_cutting", "folding"], "quantity": 1,
+            "review_flags": ["BEND COUNT DISAGREES: DXF BENDLINES layer shows 6, the SOLIDWORKS "
+                             "bend count shows 10. The DXF is what the press brake folds from, "
+                             "so 6 is used -- confirm the fold count."]}
+    estimator.estimate_part(part, job_quantity=1)
+    flags = [str(f) for f in part.get("review_flags") or []]
+    assert not any(f.startswith("BEND COUNT DISAGREES") for f in flags)
+    charged = [f for f in flags if "fold(s) charged, counted by" in f]
+    assert charged and charged[0].startswith("10 fold(s) charged") and "callouts" in charged[0]
