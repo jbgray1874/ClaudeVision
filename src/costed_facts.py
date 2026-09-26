@@ -2182,7 +2182,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
                            f"{f' — {_why}' if _why else ''}; no weld note or symbol on "
                            f"the drawing"),
             "action": ("confirm it is welded; if it is assembled mechanically (studs, "
-                       "nutserts, screws), remove the Weld and Dress rows"),
+                       "nutserts, screws), replace the Weld and Dress rows with the "
+                       "mechanical joining labour, rather than only removing them"),
             "owner": "estimator", "gbp_at_stake": _w_gbp or None})
 
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
