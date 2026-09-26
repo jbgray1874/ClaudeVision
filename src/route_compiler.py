@@ -2505,15 +2505,53 @@ def build_part_graph(
             print(f"   [graph] {identity}: rolled up to {_rolled:g} per unit, the model "
                   f"counts {_total:g} — CHECK", flush=True)
 
+    def _carries_only_hardware(identity: str, record: Mapping[str, Any]) -> bool:
+        """A measured part whose every child is something we BUY is a part carrying
+        hardware, not an assembly.
+
+        12567-05-01M END CAP: a 409.5 x 88 x 1.5 mm flat with its own DXF, three bends in the
+        model, and a two-row parts list on its own detail sheet — "M6x20mm THREADED PEM
+        STUD x2". The BOM edge made it a parent, the parent made it an assembly, and an
+        assembly has "no independently measured fabricated leaf": its laser, its folds and
+        its sheet-steel row were all ruled off, and the part reached the book as a heading
+        with a stud under it (D-264). SDI draws inserts on the sheet of the part they go
+        into; that is what a nutsert or a PEM stud IS. So a node keeps its leaf kind when it
+        has fabrication evidence of its own and nothing under it but purchased hardware —
+        the insertion event charges fitting the hardware, and the part is still cut and
+        folded. One child we CUT, and it is an assembly as before.
+        """
+        kids = children.get(identity) or {}
+        if not kids:
+            return False
+        try:
+            from bought_in_policy import has_fabrication_evidence, is_bought_in
+        except Exception:                                            # noqa: BLE001
+            return False
+        if not has_fabrication_evidence(dict(record)):
+            return False
+        for kid in kids:
+            krec = dict(records.get(kid) or {})
+            krec.setdefault("part_number", kid)
+            if not (_bought_in_record(krec) or str(kid).upper().startswith("BI-")
+                    or is_bought_in(krec)):
+                return False
+        return True
+
     nodes: List[PartNode] = []
     for identity in sorted(identities):
         record = records.get(identity) or {}
+        _hardware_carrier = identity != top_id and _carries_only_hardware(identity, record)
         is_assembly = bool(
-            identity in children
-            or identity == top_id
-            or record.get("is_sub_assembly")
-            or record.get("is_assembly_parent")
+            identity == top_id
+            or (not _hardware_carrier and (
+                identity in children
+                or record.get("is_sub_assembly")
+                or record.get("is_assembly_parent")))
         )
+        if _hardware_carrier:
+            _hw = ", ".join(sorted(children.get(identity) or {}))
+            print(f"   [graph] {identity} carries hardware ({_hw}) on its own sheet — a cut "
+                  f"part with inserts, not an assembly; its fabrication stands", flush=True)
         type_text = " ".join(str(record.get(key) or "") for key in (
             "type", "part_type", "source_type", "normalized_material",
         )).upper()
@@ -2718,6 +2756,19 @@ def apply_canonical_evidence_to_parts(
             continue
         part["canonical_part_number"] = identity
         part["canonical_kind"] = node.kind
+        if node.kind == "leaf" and node.children and (
+                part.get("is_sub_assembly") or part.get("is_assembly_parent")):
+            # THE GRAPH SAID LEAF AND THE RECORD STILL SAID PARENT. A part carrying hardware
+            # (see _carries_only_hardware) was stamped is_sub_assembly by the BOM edge that
+            # hung its studs under it, and strip_leaf_operations reads that stamp: the
+            # laser and the fold the graph had just kept would be stripped from the record
+            # one pass later. The graph's kind is the one answer; the record follows it.
+            part["is_sub_assembly"] = False
+            part["is_assembly_parent"] = False
+            part.setdefault("review_flags", []).append(
+                "carries hardware on its own sheet (" + ", ".join(
+                    e.part_number for e in node.children) + ") — a cut part with inserts, "
+                "not an assembly; its material and fabrication are its own")
         if node.kind == "assembly":
             part["is_sub_assembly"] = True
             part["is_assembly_parent"] = True

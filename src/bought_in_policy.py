@@ -170,6 +170,25 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
             return f"read from a bought-in-only source ({tok})"
     if _upper(part.get("part_number")).startswith(_BOUGHT_IN_PREFIXES):
         return "the part number is a bought-in code family"
+    # THE PRINTED CODE IS A PURCHASE CLASS. SDI prints "P/P" (or a bare "FIXING") in the code
+    # column of a line it buys, and part_identity gives each such row an identity of
+    # "<class>-<its words>" so the articles stay apart. The class word is the drawing saying
+    # "we buy this" — and this module did not read it. 12567-02-GA's LED driver, printed P/P,
+    # inherited the GA's MILD STEEL, was handed an 80 x 40 x 1.5 blank by the sibling borrow,
+    # nested on the Sheet Steel block, lasered and powder coated (D-263).
+    _pn = _upper(part.get("part_number"))
+    _head = re.split(r"[-\s]", _pn, 1)[0] if _pn else ""
+    if _head and part_code_conventions.is_category_not_a_code(_head):
+        return f"the printed code is a purchase class word ({_head}), not a part we cut"
+    # A CATALOGUE FAMILY CODE: a word and a number and nothing else. FIXING49, THUM620 and
+    # MAGNET21 are SDI's own purchasing codes for standard articles — a family name and a
+    # sequence number — and nothing SDI cuts is numbered that way: a drawing number opens with
+    # the job number and carries hyphenated segments (part_code_conventions). The families
+    # this module listed by name (FIXING, THUM) are the two that had bitten; MAGNET21 was the
+    # third, and was given a 400 x 300 blank, a place in a fold row and a powder coat. The
+    # shape is the rule, not the list. Measured geometry of the part's own still outranks it.
+    if _pn and re.fullmatch(r"[A-Z]{3,}\d{1,6}", _pn) and not has_fabrication_evidence(part):
+        return "a catalogue family code (a word and a number, no drawing segments), not a drawing number"
     # SDI'S OWN SUFFIX, AVAILABLE FROM THE FIRST STAGE — which is the whole point of it
     # being here. The same letter is already read this way at costing:
     # estimator._is_special_bought_in_item calls "-X" a "Special / bought-in FINISHING item"

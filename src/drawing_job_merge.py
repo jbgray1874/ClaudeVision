@@ -1666,7 +1666,9 @@ def handed_pairs(parts: List[Dict[str, Any]]):
     for part in parts:
         if not isinstance(part, dict):
             continue
-        base_pn = mirror_base(str(part.get("part_number") or ""))
+        # The code's own marker, else the sheet's note (stamp_mirror_notes): both say the
+        # same thing, and the guards below treat them the same.
+        base_pn = _mirror_base_of(part)
         if not base_pn:
             continue
         base = by_key.get(_own_number_key(base_pn))
@@ -2018,6 +2020,94 @@ def _has_measured_flat(part: Dict[str, Any]) -> bool:
 
 _BEND_CALLOUT = re.compile(r"\b(?:UP|DOWN)\s*\d{2,3}(?:\.\d+)?\s*°", re.I)
 
+# THE SHEET THAT SAYS "I AM THE OTHER HAND OF THAT ONE". 12567-05-02M END CAP - HANDED prints
+# no dimensions of its own: "THIS PART SYMMETRICALLY OPPOSITE TO HANDED VERSION - REFER TO
+# DRAWING 12567-05-01M FOR ALL DETAILS". The code carries no MIR / HANDED / -H marker, so the
+# naming-convention mirror rule (part_code_conventions.mirror_base) never saw a pair, the part
+# had no flat, and it went to the catalogue by its description and came back a 25p "end cap"
+# at 12 mm (D-265). Two statements on one sheet make the pair: an opposite-hand phrase, and a
+# reference to another drawing in the job.
+_OPPOSITE_HAND_NOTE = re.compile(
+    r"\b(?:SYMMETRICAL(?:LY)?\s+OPPOSITE|OPPOSITE\s+HAND|OTHER\s+HAND|HANDED\s+VERSION"
+    r"|MIRROR(?:ED)?\s+(?:IMAGE|VERSION|OF|PART|HAND))\b", re.I)
+_REFER_TO_DRAWING = re.compile(
+    r"REFER\s+TO\s+(?:DRAWING|DWG|DRG)\.?\s*(?:NO\.?\s*)?([0-9]{3,}[0-9A-Z]*(?:-[0-9A-Z]+)+)",
+    re.I)
+
+
+def _mirror_base_of(part: Mapping[str, Any]) -> str:
+    """What this part is the other hand OF: the code's own marker first, else the sheet's note."""
+    from part_code_conventions import mirror_base
+    return (mirror_base(str(part.get("part_number") or ""))
+            or str(part.get("mirror_of") or "").strip())
+
+
+def stamp_mirror_notes(parts: List[Dict[str, Any]], summary: Any) -> int:
+    """Stamp `mirror_of` on a part whose own sheet says it is the opposite hand of another
+    drawing in the job. Returns parts stamped.
+
+    Only a part with no measured flat of its own, only from a page that is not another
+    part's parts list, and only where the referenced drawing is a part this job holds — the
+    same three guards apply_mirror_geometry keeps for a hand named by its code. A GA note
+    that says "refer to drawing X for nutsert positions" names no hand and stamps nothing.
+    """
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    if not pages or not isinstance(parts, list):
+        return 0
+    try:
+        from part_index import _bom_table_pages
+        bom_pages, owned = _bom_table_pages(summary)
+    except Exception:                                                # noqa: BLE001
+        bom_pages, owned = set(), {}
+    by_own = {_own_number_key(p.get("part_number")): p for p in parts
+              if isinstance(p, dict) and p.get("part_number")}
+    text_by_page: Dict[Any, str] = {}
+    _docs: Dict[str, Any] = {}
+    for pg in pages:
+        if not isinstance(pg, dict):
+            continue
+        layers = [str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text",
+                                                 "pypdf_text", "text")]
+        layers.append(_mupdf_page_text(pg, _docs))
+        text_by_page[pg.get("page_number")] = "\n".join(t for t in layers if t)
+    for _doc in _docs.values():
+        try:
+            _doc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    n = 0
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("mirror_of") or _has_measured_flat(part):
+            continue
+        for p in (part.get("pages") or []):
+            if not isinstance(p, int):
+                continue
+            if p in bom_pages and p not in (owned.get(pn) or set()):
+                continue
+            text = text_by_page.get(p) or ""
+            if not text or not _OPPOSITE_HAND_NOTE.search(text):
+                continue
+            for m in _REFER_TO_DRAWING.finditer(text):
+                ref = m.group(1).upper()
+                if _own_number_key(ref) == _own_number_key(pn):
+                    continue
+                base = by_own.get(_own_number_key(ref))
+                if base is None or base is part:
+                    continue
+                part["mirror_of"] = str(base.get("part_number"))   # precedence: direct-write ok — the sheet's own statement of what this part is the hand of, not a measured field
+                part.setdefault("review_flags", []).append(
+                    f"the sheet says this part is the opposite hand of {base.get('part_number')} "
+                    f"(\"refer to drawing {ref} for all details\") — its geometry, gauge and bends "
+                    f"are taken from that hand")
+                n += 1
+                break
+            if part.get("mirror_of"):
+                break
+    return n
+
 
 def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
     """This summary page's text as PyMuPDF reads it (rotated text included), or ''."""
@@ -2080,13 +2170,12 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
     # DXF count (6) but not its callouts (11) or model features (12), and would have been
     # charged 6 folds against the base's 11. Same flat, same bends (D-260). Filled only where
     # the hand has nothing of its own; a hand with its own sheet or model keeps its readings.
-    from part_code_conventions import mirror_base
     _by_own = {_own_number_key(p.get("part_number")): p for p in (parts or [])
                if isinstance(p, dict)}
     for part in parts or []:
         if not isinstance(part, dict):
             continue
-        _bpn = mirror_base(str(part.get("part_number") or ""))
+        _bpn = _mirror_base_of(part)
         _base = _by_own.get(_own_number_key(_bpn)) if _bpn else None
         if _base is None or _base is part:
             continue
@@ -2273,7 +2362,9 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for part in parts:
         if not isinstance(part, dict):
             continue
-        base_pn = mirror_base(str(part.get("part_number") or ""))
+        # The code's own marker, else the sheet's note (stamp_mirror_notes): both say the
+        # same thing, and the guards below treat them the same.
+        base_pn = _mirror_base_of(part)
         if not base_pn:
             continue
         base = by_key.get(_own_number_key(base_pn))
