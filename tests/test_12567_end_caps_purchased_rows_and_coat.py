@@ -302,3 +302,61 @@ def test_an_operation_the_page_lent_a_purchased_item_does_not_refuse_its_market_
     assert not ps.is_something_you_can_buy({"part_number": "12567-03-06M", "description": "HOOK",
                                             "normalized_material": "MILD_STEEL",
                                             "textual_operations": ["folding"]})
+
+
+# ── after the 16:48 book, four more ─────────────────────────────────────────────────────────
+# D-272 02-10M's DXF measured 1477 x 346 against a model flat of 225.5 x 38.35 and was kept.
+# D-273 the POWDER line, appended last, spilled to BOM Overflow with no price.
+# D-274 every cascaded side-header line read "no reason recorded" beside its own trail.
+# D-275 the handed cap took the base's flat and none of its studs: 2 charged where the kit takes 4.
+
+def test_a_dxf_many_times_the_model_flat_is_extents_not_the_part():
+    import geometry_arbitration as ga
+    v = ga.arbitrate_flat(1477.31, 345.98, 225.5, 38.35)
+    assert v["winner"] == ga.NATIVE and v.get("dxf_is_extents") and not v["unreconciled"]
+    # a border a little wider than the part is still the DXF's to keep, flagged
+    v2 = ga.arbitrate_flat(250.0, 45.0, 225.5, 38.35)
+    assert v2["winner"] == ga.DXF and v2["unreconciled"]
+
+
+def test_the_powder_line_stays_on_the_sheet_when_the_block_overflows():
+    import wb_populate as wp
+    parts = [{"part_number": f"FIXING{i}"} for i in range(6)]
+    parts.append({"part_number": "POWDER", "_consumable_qty_unknown": True,
+                  "_price_explicitly_withheld": True})
+    kept = wp.pin_lines_that_price_themselves(parts, 5)
+    assert [p["part_number"] for p in kept[:4]] == ["FIXING0", "FIXING1", "FIXING2", "POWDER"]
+    assert [p["part_number"] for p in kept[4:]] == ["FIXING3", "FIXING4", "FIXING5"]
+    assert wp.pin_lines_that_price_themselves(parts[:3], 5) == parts[:3]
+
+
+def test_a_cascaded_quantity_is_explained_by_its_trail():
+    import bom_and_route_extract as bre
+    note = bre.quantity_difference_note(["12567-01-GA x1 -> 12567-03-GA x2 (BOM) -> 12567-03-101 x1"])
+    assert "multiplied down the assembly tree" in note and "no reason" not in note
+    assert "no reason recorded" in bre.quantity_difference_note([])
+
+
+def test_the_named_hand_carries_the_bases_hardware():
+    parts = [
+        {"part_number": "12567-05-GA", "description": "END CAPS"},
+        {"part_number": "12567-05-01M", "description": "END CAP", "flat_pattern_detected": True,
+         "geometry_source": "dxf", "normalized_material": "MILD_STEEL", "quantity": 1},
+        {"part_number": "12567-05-02M", "description": "END CAP - HANDED", "quantity": 1,
+         "mirror_of": "12567-05-01M", "normalized_material": "MILD_STEEL",
+         "normalized_geometry": {"blank_length_mm": 409.5, "blank_width_mm": 88.0,
+                                 "geometry_source": "mirror_of_measured",
+                                 "mirrored_from": "12567-05-01M"}},
+        {"part_number": "BI-PEMSTUD", "description": "M6x20mm THREADED PEM STUD",
+         "is_bought_in": True, "quantity": 2},
+    ]
+    extract = {"top_assembly": {"part_number": "12567-05-GA"},
+               "assemblies": [
+                   {"part_number": "12567-05-GA", "children": [
+                       {"part_number": "12567-05-01M", "qty": 1}, {"part_number": "12567-05-02M", "qty": 1}]},
+                   {"part_number": "12567-05-01M", "children": [{"part_number": "BI-PEMSTUD", "qty": 2}]}]}
+    g = rc.build_part_graph(parts, extract)
+    nodes = {n.part_number: n for n in g["nodes"]}
+    assert {e.part_number: e.qty for e in nodes["12567-05-02M"].children} == {"BI-PEMSTUD": 2.0}
+    assert nodes["12567-05-02M"].kind == "leaf" and nodes["12567-05-01M"].kind == "leaf"
+    assert abs(g["quantities"]["BI-PEMSTUD"] - 4.0) < 1e-9
