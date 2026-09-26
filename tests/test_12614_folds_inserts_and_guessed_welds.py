@@ -4,8 +4,9 @@ D-255  the fascia's DXF bend layer carried 6 bends where its sheet prints 10 cal
        model has 10; the lock plate's DXF carried none against 2 and 2. Two statements that
        agree outrank one export that falls short. The model alone still never does.
 D-256  two M5 thin-sheet nutserts had no insertion while the PEM studs beside them did.
-D-257  the header case was charged 8 joints of weld and dress (£48.98 a unit) on the
-       extract's inference alone. A guessed weld is a question, not a charge.
+D-258  the header case was charged 8 joints of weld and dress (£48.98 a unit) on the
+       extract's inference alone. It stays charged — inference is priced — and the review
+       list asks whether it is welded, with the money it carries.
 """
 from __future__ import annotations
 
@@ -74,16 +75,43 @@ def test_the_nutserts_are_fitted_alongside_the_pem_studs():
     assert ins and any("FIXING48" in (d.get("participants") or []) for d in ins)
 
 
-def test_a_guessed_weld_is_listed_not_charged():
+def test_an_inferred_weld_is_charged():
     ds = _compile([{"operation": "welding", "scope": "assembly", "inferred": True,
                     "part_numbers": ["P1", "P2"],
                     "notes": "case shown as single fabricated unit on page 4"}])
-    welds = _by_op(ds, "welding")
-    assert welds and all(d.get("status") == "unverified" for d in welds)
-    assert all(d.get("status") != "required" for d in _by_op(ds, "dress_welds"))
-
-
-def test_a_weld_the_drawing_states_is_still_charged():
-    ds = _compile([{"operation": "welding", "scope": "assembly", "inferred": True,
-                    "part_numbers": ["P1", "P2"], "evidence": "WELD AND DRESS"}])
     assert any(d.get("status") == "required" for d in _by_op(ds, "welding"))
+
+
+def test_an_inferred_weld_is_put_to_the_estimator_with_its_money():
+    import costed_facts as cf
+    source = {
+        "estimate_summary": {
+            "canonical_route_shadow": {"decisions": [
+                {"operation": "welding", "status": "required", "source": "inference",
+                 "target_id": "12614-01-101", "evidence": "",
+                 "reason": "case shown as single fabricated unit on page 4"}]},
+            "final_estimate": {"labour_rows": [
+                {"operation": "Weld (CO2)", "total_value_gbp": 33.58, "workbook_row": 112},
+                {"operation": "Dress Welds", "total_value_gbp": 15.41, "workbook_row": 113}]},
+            "workbook_labour": {"rows": [
+                {"workbook_row": 112, "engine_operations": ["welding"],
+                 "part_numbers": ["12614-01-101"]},
+                {"workbook_row": 113, "engine_operations": ["dress_welds"],
+                 "part_numbers": ["12614-01-101"]}]},
+        },
+        "manufacturing_writeup": {"parts": []},
+    }
+    job = cf.costed_job(source)
+    hits = [d for d in job["decisions_required"] if "inferred, not drawn" in str(d.get("issue"))]
+    assert len(hits) == 1
+    assert hits[0]["gbp_at_stake"] == 48.99 or abs(hits[0]["gbp_at_stake"] - 48.99) < 0.01
+
+
+def test_a_weld_the_drawing_states_is_not_asked():
+    import costed_facts as cf
+    source = {"estimate_summary": {"canonical_route_shadow": {"decisions": [
+        {"operation": "welding", "status": "required", "source": "inference",
+         "target_id": "A", "evidence": "WELD AND DRESS"}]}},
+        "manufacturing_writeup": {"parts": []}}
+    assert not [d for d in cf.costed_job(source)["decisions_required"]
+                if "inferred, not drawn" in str(d.get("issue"))]
