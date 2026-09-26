@@ -44,8 +44,9 @@ DRAWING_NOTE = "drawing_fold_note"
 MODEL_FEATURES = "solidworks_bend_features"
 DASHED_PROXY = "inferred_dashed_lines"
 NO_EVIDENCE = "no_bend_evidence"
+CALLOUTS_AND_MODEL = "drawing_callouts_agreeing_with_model"
 
-_MEASURED = {FLAT_PATTERN, MODEL_FEATURES}
+_MEASURED = {FLAT_PATTERN, MODEL_FEATURES, CALLOUTS_AND_MODEL}
 
 _LABEL = {
     FLAT_PATTERN: "the flat pattern's own bend lines",
@@ -53,6 +54,7 @@ _LABEL = {
     MODEL_FEATURES: "the SolidWorks bend features",
     DASHED_PROXY: "dashed lines read off a drawing view",
     NO_EVIDENCE: "nothing on this part",
+    CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model agrees with",
 }
 
 
@@ -126,6 +128,19 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
         if value is not None:
             count, source = int(value), name
             break
+
+    # TWO STATEMENTS THAT AGREE OUTRANK ONE EXPORT THAT FALLS SHORT. 12614-01 (26 Sep): the
+    # fascia's DXF BENDLINES layer carried 6 bends where its sheet prints 10 UP/DOWN callouts
+    # and the model has 10; the lock plate's DXF carried none where the sheet prints two
+    # (DOWN 40.6°, DOWN 49.4°) and the model has two. A bend layer exported short is a
+    # partial export, not a flatter part. The model alone never overrides the flat pattern
+    # (401912-02: three CAD features, one fold); the drawing office's own callouts agreeing
+    # with it does (D-255).
+    _callouts = _int(part.get("drawing_bend_callouts")) if isinstance(part, dict) else None
+    _model = solidworks_bend_features(part)
+    if (source == FLAT_PATTERN and _callouts and _model and _callouts == _model
+            and _callouts > count):
+        count, source = _callouts, CALLOUTS_AND_MODEL
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is
     # a sentence an estimator should read: on 401912-02 the model carried three bend features

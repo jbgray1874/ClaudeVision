@@ -10280,8 +10280,11 @@ def test_canonical_workbook_groups_price_decisions_not_raw_route_words():
         "routes": [
             {"operation": "laser_cutting", "sequence": 10, "scope": "part",
              "part_numbers": ["P1", "P2"], "inferred": True},
+            # A STATED weld (the drawing's own note). D-257 makes a weld resting on inference
+            # alone a question rather than a charge; this test is about how a charged
+            # assembly weld is grouped, so the weld it groups is one the drawing states.
             {"operation": "welding", "sequence": 30, "scope": "assembly",
-             "part_numbers": ["P1", "P2"], "inferred": True},
+             "part_numbers": ["P1", "P2"], "evidence": "WELD ALL ROUND"},
         ],
     }
     _estimates = [
