@@ -6951,16 +6951,32 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         # THE MODEL'S NUMBER, WHERE IT DIFFERS FROM THE CHARGE. Never silently: on 401912-02
         # the model carried three bend features and the flat pattern one, and the only way a
         # reader could have known is if somebody opened both files.
+        _fr: Dict[str, Any] = {}
         try:
             from fold_count import press_brake_folds as _pf_flag      # noqa: PLC0415
-            _fd = _pf_flag(part).get("disagreement")
+            _fr = _pf_flag(part) or {}
+            _fd = _fr.get("disagreement")
             if _fd:
                 part.setdefault("review_flags", []).append(_fd)
         except Exception:                                             # noqa: BLE001
             pass
+        # ONE SENTENCE ABOUT THE FOLDS, AND IT IS THE RESOLVER'S. 12614-01 (26 Sep): the fascia
+        # charged 10 from the drawing's callouts, while the same record still printed the
+        # merge-time "BEND COUNT DISAGREES … so 6 is used" and "10 fold(s) charged, counted by
+        # dxf" — the label of a source that had just been overruled (the 401912-02 lesson,
+        # again). Where the resolver decided, its verdict replaces the earlier sentence and
+        # names its own source (D-261).
+        if _fr.get("count"):
+            part["review_flags"] = [
+                f for f in (part.get("review_flags") or [])
+                if not str(f).startswith("BEND COUNT DISAGREES")]
         _bsrc = str((part.get("manufacturing_features") or {}).get(
             "bend_count_source") or "").strip()
-        if _bsrc.lower() in _MEASURED_BEND_SOURCES:
+        if _fr.get("count") and _fr.get("measured"):
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged, counted by {_fr.get('source_label')} — "
+                f"measured, not inferred.")
+        elif _bsrc.lower() in _MEASURED_BEND_SOURCES:
             part.setdefault("review_flags", []).append(
                 f"{bends:g} fold(s) charged, counted by {_bsrc} — measured, not inferred.")
         else:
