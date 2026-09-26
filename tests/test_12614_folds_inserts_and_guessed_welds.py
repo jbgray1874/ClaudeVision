@@ -172,3 +172,27 @@ def test_a_dxf_zero_ruling_stands_without_the_model():
     djm.stamp_drawing_bend_callouts([part], {"pages": [
         {"page_number": 1, "pdfplumber_text": "DOWN 90° R 1"}]})
     assert "folding" in part["operations_ruled_out"]
+
+
+# ── D-260: a mirrored hand bends like the hand it mirrors ──────────────────────────────
+
+def test_a_handed_part_with_no_sheet_takes_the_bases_callouts_and_features():
+    import drawing_job_merge as djm
+    base = {"part_number": "12614-01-06M", "pages": [10], "solidworks_bend_features": 12}
+    hand = {"part_number": "12614-01-06M-H", "pages": []}
+    djm.stamp_drawing_bend_callouts([base, hand], {"pages": [
+        {"page_number": 10, "pdfplumber_text": "DOWN 90° R 1 " * 11}]})
+    assert base["drawing_bend_callouts"] == 11
+    assert hand["drawing_bend_callouts"] == 11 and hand["solidworks_bend_features"] == 12
+    r = fc.press_brake_folds(dict(hand, bend_count_dxf=6))
+    assert r["count"] == 11
+
+
+def test_a_hand_with_its_own_sheet_keeps_its_own_count():
+    import drawing_job_merge as djm
+    base = {"part_number": "X-01M", "pages": [1]}
+    hand = {"part_number": "X-01M-H", "pages": [2]}
+    djm.stamp_drawing_bend_callouts([base, hand], {"pages": [
+        {"page_number": 1, "pdfplumber_text": "DOWN 90° R 1 " * 4},
+        {"page_number": 2, "pdfplumber_text": "DOWN 90° R 1 " * 3}]})
+    assert hand["drawing_bend_callouts"] == 3
