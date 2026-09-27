@@ -101,6 +101,11 @@ _OURS = {
     "removed_identity_on_the_sheet",
     "priced_identity_outside_published_graph",
     "two_roots_price_the_same_members",
+    # An item the product reaches that the bill neither charges nor questions (D-300) is the
+    # engine losing a row; a reached node with no code and no record (D-305) is the engine
+    # carrying a model name beside a line it already holds.
+    "reached_bom_item_unaccounted",
+    "reached_node_without_a_code_or_record",
     # A RECORD THAT DOES NOT SAY WHETHER IT CARRIES THE MONEY. Would a perfect engine raise
     # it? No: declaring what a record contains costs nothing and needs no drawing, no
     # supplier and no estimator. Twenty-three archived 7332-01 summaries each looked like the
