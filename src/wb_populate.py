@@ -621,6 +621,23 @@ def _bom_line_price_traced(_pe: Dict[str, Any]) -> Tuple[Optional[float], List[s
                   f"{_me.get('unit_material_cost_gbp')!r} / cost_per_part_gbp="
                   f"{_me.get('cost_per_part_gbp')!r} -> {_p!r}")
     else:
+        # A PRICE THE ENGINE APPLIED IS THE PRICE OF THIS LINE. The mirror of the refusal
+        # below: estimator stamps applied_to_total True when a bought-in's resolved unit cost
+        # reached the total, and this chain never read that figure — it read a top-level
+        # unit_cost_gbp estimate_part does not write, then the material block, then unit
+        # total less labour, which is the buy plus the fitting uplift less the handling
+        # already booked: £0.97 for a £0.35 magnet, and nothing at all for a pressed insert
+        # cheaper than its handling, which then read on the sheet as a price the engine had
+        # refused (D-293). One rule for both directions: the stamp says whether the buy
+        # reached the total, and where it did, the buy is the line.
+        _sc_blk = ((_pe.get("cost_breakdown") or {}).get("system_cost")
+                   if isinstance(_pe.get("cost_breakdown"), dict) else None)
+        if isinstance(_sc_blk, dict) and _sc_blk.get("applied_to_total") is True:
+            _sc_price = _safe(_sc_blk.get("unit_cost_gbp"))
+            if _sc_price is not None and _sc_price > 0:
+                _t.append(f"cost_breakdown.system_cost.unit_cost_gbp={_sc_price!r} "
+                          f"applied_to_total=True -> taken (the buy price the estimator applied)")
+                return _sc_price, _t
         # A PRICE THE ENGINE FOUND AND DECIDED NOT TO APPLY IS NOT A PRICE FOR THIS LINE.
         #
         # estimator stamps  applied_to_total = bought_in_candidate and system_unit_cost is

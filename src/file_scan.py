@@ -268,31 +268,69 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)
 
     # EVERY ROW THE TABLE READER SAW, NOT ONLY THE FASTENERS. The loop above is the fastener
-    # vocabulary; a row only this reader saw that is not a fastener — 12567-02-GA's two EPDM
-    # tape lengths, printed "P/P" — was skipped here and had no other road to a record: the
-    # writeup's minter (D-277) never saw it, so it reached the graph as an edge with no record,
-    # sat on BOMs & Routes at x2 and had no line on the Estimate (D-290). The same minter
-    # runs here over the rows the loop left, so one rule names every table row. A row whose
-    # article an existing record already describes is not minted twice.
+    # vocabulary; a row that is not a fastener was skipped here. The writeup's minter
+    # (document_builder.bought_in_rows_without_records, D-277) does see these rows — the
+    # reconciled rows ARE document_analysis.bom_rows — and on 12567 it refused the two EPDM
+    # tape lengths because their split identities were longer than its identifier cap
+    # (fixed in the minter, D-290). This pass is the safety net for a row that reaches the
+    # table reader after the writeup ran: the same minter, so one rule names every table
+    # row, and a row whose article an existing record already describes is not minted
+    # twice — its occurrence is noted on that record instead, as the fastener loop does.
     try:
         from document_builder import bought_in_rows_without_records as _mint_rows
         from part_identity import _article_words as _aw
-        _held_articles = {tuple(_aw(_p.get("description"))) for _p in _parts_recon
-                          if isinstance(_p, dict) and _p.get("description")}
-        _other = [{"part_number": _dp_code(_r),
-                   "description": str(_r.get("description") or ""),
-                   "quantity": _dp_qty(_r) or 1,
-                   "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "")}
-                  for _r in rows if not _is_fastener_row(_r)]
-        for _rec in _mint_rows(_other, _parts_recon):
-            if tuple(_aw(_rec.get("description"))) in _held_articles:
+        _held: Dict[tuple, Dict[str, Any]] = {}
+        for _p in _parts_recon:
+            if isinstance(_p, dict) and _p.get("description"):
+                _held.setdefault(tuple(_aw(_p.get("description"))), _p)
+        _other = []
+        for _r in rows:
+            if _is_fastener_row(_r):
                 continue
-            _rec.setdefault("textual_operations", ["handling"])
+            _q0 = _dp_qty(_r)
+            _other.append({"part_number": _dp_code(_r),
+                           "printed_code": _r.get("printed_code"),
+                           "description": str(_r.get("description") or ""),
+                           "quantity": _q0 if _q0 is not None else 1,
+                           "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "")})
+        def _same_article_held(_w):
+            """The record already describing this article, or None. Exact words first; then
+            one description's article words inside the other's ("JST Y SPLITTER" and "JST Y
+            SPLITTER 3 WAY" are one article; HOOK and LOOP Velcro are not, nor are two tape
+            lengths). The fastener loop's thread-aware test is NOT used here: it reads two
+            lengths of one tape as one item, which is right for a screw and wrong for a tape."""
+            if _w in _held:
+                return _held[_w]
+            _ws = set(_w)
+            if _ws:
+                for _hw, _hp in _held.items():
+                    _hs = set(_hw)
+                    if _hs and (_ws <= _hs or _hs <= _ws):
+                        return _hp
+            return None
+
+        _minted = {tuple(_aw(_r.get("description"))): _r for _r in _mint_rows(_other, _parts_recon)}
+        for _o in _other:
+            _w = tuple(_aw(_o.get("description")))
+            _rec = _minted.get(_w)
+            _already = _same_article_held(_w)
+            if _rec is None or _already is not None:
+                # Held already — by identity (the minter skipped it) or by article. This
+                # table's occurrence is still a fact about the record.
+                _tgt = _already or next(
+                    (_p for _p in _parts_recon if isinstance(_p, dict)
+                     and _p_code(_p) == str(_o.get("part_number") or "").strip().upper()), None)
+                if _tgt is not None:
+                    _note_parent(_tgt, _o, _o.get("quantity"))
+                continue
+            if not _rec.get("textual_operations"):
+                _rec["textual_operations"] = ["handling"]      # fitting a purchased part is bench time
             _rec.setdefault("review_flags", []).append(
                 f"Added from dual-path BOM table read (a row only the table reader saw), "
-                f"qty {_rec.get('quantity')} - price via waterfall, estimator to verify")
+                f"qty {_rec.get('quantity')} - costed by the estimator once the table is "
+                f"reconciled; estimator to verify")
             _parts_recon.append(_rec)
-            _held_articles.add(tuple(_aw(_rec.get("description"))))
+            _held[_w] = _rec
             _added += 1
             print(f"   [recon-row] ADD {_rec['part_number']} '{_rec.get('description')}' "
                   f"qty {_rec.get('quantity')}", flush=True)
@@ -4204,6 +4242,21 @@ def _finalize_scan_summary(
                   f"dp_row_descs={_fast_diag}", flush=True)
             _u, _a = _reconcile_dualpath_into_part_estimates(summary, _dp_after)
             print(f"   [dual-path recon] part_estimates: {_u} qty-corrected, {_a} added from BOM table read", flush=True)
+            # A RECORD ADDED HERE IS COSTED HERE. estimate_document ran before this pass, so a
+            # record the reconcile appends had never been through estimate_part: no price
+            # chain, no system_cost stamp, no fitting rule — BI-SCREW and BI-PEMSTUD reached
+            # 12567's sheet as "no catalogue, price file or quote we can query holds this item"
+            # without a query ever being made (D-296). The same routine every other part had.
+            if _a:
+                try:
+                    from estimator import cost_uncosted_bought_in_records as _cost_late
+                    _n_costed = _cost_late(summary)
+                    print(f"   [dual-path recon] {_n_costed} added record(s) costed through "
+                          f"estimate_part", flush=True)
+                except Exception as _late_exc:                       # noqa: BLE001
+                    print(f"   [dual-path recon] added records NOT costed "
+                          f"({type(_late_exc).__name__}: {_late_exc}) — they reach the sheet "
+                          f"unpriced", flush=True)
         except NameError:
             print("   [dual-path recon:diag] _dp is NOT DEFINED at reconcile point (dual-path reader did not run this path)", flush=True)
         except Exception as _dpr2_err:

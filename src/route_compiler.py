@@ -641,7 +641,20 @@ def _bought_in_record(record: Mapping[str, Any]) -> bool:
         or str(record.get("material_family") or "").strip().lower() == "bought_in"
     )
     if not _stated:
-        return False
+        # THE MAKE/BUY AUTHORITY, NOT ONLY A TRANSCRIBED FLAG. bought_in_policy decides by
+        # identity — a purchase-class code, a catalogue family code, a minted BI- code — and
+        # every costing gate asks it (D-263, D-289). This one read flags and roles only, so
+        # MAGNET21, a family code with no flag on its record, compiled as a LEAF: the sheet's
+        # leaf branch reads material only, and its £0.35 catalogue price was unreachable by
+        # construction, whatever the estimator had applied (D-294). Same override below: a
+        # measured flat of its own still means we cut it.
+        try:
+            from bought_in_policy import is_bought_in as _policy
+            _stated = bool(_policy(dict(record)))
+        except Exception:                                            # noqa: BLE001
+            _stated = False
+        if not _stated:
+            return False
     try:
         from bought_in_policy import has_fabrication_evidence
     except Exception:                                                # noqa: BLE001
@@ -2612,8 +2625,14 @@ def build_part_graph(
         type_text = " ".join(str(record.get(key) or "") for key in (
             "type", "part_type", "source_type", "normalized_material",
         )).upper()
+        # A NODE WITH NO RECORD STILL HAS AN IDENTITY TO JUDGE. The two EPDM rows reached the
+        # graph as edges with nothing behind them and compiled as leaves; the workbook's mint
+        # for "an explicit bought-in BOM line with no pricing record" runs only for a
+        # bought_in node, so the safety net for exactly that case never saw them (D-294).
+        _rec_for_policy = dict(record)
+        _rec_for_policy.setdefault("part_number", identity)
         is_bought_in = bool(
-            _bought_in_record(record)
+            _bought_in_record(_rec_for_policy)
             or "BOUGHT" in type_text
             or identity.startswith("BI-")
         )

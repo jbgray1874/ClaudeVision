@@ -2533,6 +2533,13 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                             "review_required": anchor.get("review_required",
                                                          anchor.get("review_flag", False)),
                             "review_reason": anchor.get("review_reason"),
+                            # WILL IT COME BACK THE SAME NEXT RUN. The market rung answers
+                            # that (generated_price_cache, via pricing_service), and this
+                            # hand-built candidate dropped it, so a figure the cache holds
+                            # still stamped as unrepeatable and was kept off the price column
+                            # — D-281 had lifted the mark only for the legacy resolver's
+                            # candidates (D-295). Carried as the service gave it.
+                            "price_is_reproducible": anchor.get("price_is_reproducible"),
                             # The anchor already knows what it is — a UDEF row, a historical
                             # quote line, or a web/AI estimate. Dropping that here is what
                             # left an LLM price indistinguishable from a catalogue hit by the
@@ -8449,6 +8456,20 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         extended_total_raw = unit_total_raw * quantity
         costing_basis = "system_cost_per_part"
         _bought_in_fitting_gbp = round(_fitting_cost, 4)
+        # THE MATERIAL BLOCK CARRIES THE PRICE ITS STAMP NAMES. A bought-in charged at its buy
+        # price wrote that figure to cost_breakdown.system_cost only; the material block kept
+        # whatever the geometry path had left in it — nothing, or a priced fallback envelope —
+        # while its price_source was relabelled with the buy's stamp below. The workbook's
+        # BOM column then back-derived the line as unit total less labour: the buy plus the
+        # fitting uplift less the handling already booked, £0.97 for a £0.35 magnet, and
+        # nothing at all for a pressed insert cheaper than its handling (D-293). The buy is
+        # the material of a purchased line, so it is written where the material is read, as
+        # the standard-commodity branch above already does; the fitting stays labour.
+        _buy_unit = round(float(system_unit_cost), 4)
+        material["unit_material_cost_gbp"] = _buy_unit
+        material["cost_per_part_gbp"] = _buy_unit
+        material["extended_material_cost_gbp"] = round(_buy_unit * quantity, 4)
+        material["cost_method"] = "bought_in_unit_price"
     else:
         # Material Price Break LOOKUP — workbook col J formula (rows 11-25):
         # J = LOOKUP($D$6, 'Material Price Break'!$D$4:$N$4, price_row)
@@ -9917,8 +9938,18 @@ def _bought_in_candidate_for(part: Dict[str, Any], no_ops_except_handling: bool,
     if part.get("special_finish_item"):
         cand = True
     try:
+        from bought_in_policy import bought_in_conflict as _conflict
         from bought_in_policy import is_bought_in as _authority
-        if _authority(part):
+        # NOT A PARENT, AND NOT A CONFLICT. A parent's money is its children's: an assembly
+        # wearing a transcribed bought_in role must not take a catalogue hit for its code on
+        # top of its costed members — GUARD 1 used to refuse it by accident, through the
+        # envelope every assembly carries. And where identity says buy while a measured flat
+        # of its own says cut, bought_in_policy's contract is "flagged, not resolved"; the
+        # figure stays in the NOT APPLIED note for a person and the money follows the old
+        # test (the review of D-289).
+        _is_parent = bool(part.get("assembly_children") or part.get("is_assembly_parent")
+                          or part.get("is_sub_assembly"))
+        if _authority(part) and not _is_parent and not _conflict(part):
             cand = True
     except Exception:                                                # noqa: BLE001
         pass
@@ -9936,11 +9967,18 @@ def _reword_folds_the_route_rules_off(route_graph: Any, *part_lists: Any) -> int
     Returns the number of flags reworded.
     """
     _off: Dict[str, str] = {}
+    # A NEGATIVE DECISION, NOT THE ABSENCE OF ONE. route_compiler keeps UNVERIFIED apart
+    # from ruled_out / not_applicable — "not a decision; the absence of one" — and a fold the
+    # route could not verify may still be in the labour block. Only a ruling rewrites the flag.
+    try:
+        from route_compiler import NEGATIVE_STATUSES as _negative
+    except Exception:                                                # noqa: BLE001
+        _negative = frozenset({"ruled_out", "not_applicable"})
     for _d in ((route_graph or {}).get("decisions") or []) if isinstance(route_graph, dict) else []:
         _d = _d if isinstance(_d, dict) else dict(getattr(_d, "__dict__", {}) or {})
         if str(_d.get("operation") or "").strip().lower() != "folding":
             continue
-        if str(_d.get("status") or "").strip().lower() == "required":
+        if str(_d.get("status") or "").strip().lower() not in _negative:
             continue
         _tid = str(_d.get("target_id") or "").strip().upper()
         if _tid:
@@ -10121,6 +10159,66 @@ def _powder_consumable_from_area(part: Dict[str, Any], area_m2: float,
         # its own line and still count the rest (D-283).
         "coated_members_m2": dict(part.get("_powder_members_m2") or {}),
     }
+
+
+def _job_order_quantity(summary: Optional[Dict[str, Any]]) -> int:
+    """The order quantity setup is amortised over — one derivation for every part costed.
+
+    file_scan stamps assumed_job_quantity (DEFAULT_JOB_QUANTITY when the enquiry states none);
+    estimate_document read it inline, and a record costed after estimate_document had no way
+    to ask the same question. Shared so a late-costed record and an early one agree."""
+    _q = None
+    if summary is not None:
+        _q = summary.get("assumed_job_quantity") or summary.get("quantity")
+    return max(1, int(_q or getattr(config, "DEFAULT_JOB_QUANTITY", 180)))
+
+
+def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
+    """Run estimate_part over records appended to part_estimates after estimate_document.
+
+    THE ROWS THE TABLE READER ADDS WERE NEVER COSTED. file_scan's dual-path reconcile runs
+    after estimate_document and appends a raw record for a BOM row no record stood for — a
+    minted fastener, a class-coded article only that reader saw. Nothing costed those records:
+    no price chain, no system_cost stamp, no fitting rule. The workbook's last resort for a
+    record with no price asks only the config commodity table, so BI-SCREW and BI-PEMSTUD
+    reached 12567's sheet as "no catalogue, price file or quote we can query holds this item"
+    when nothing had queried anything (D-296). A record is a record whenever it arrives; it is
+    costed by the routine every other part had, in place, keeping what the reconcile knew
+    about it (its parents, its flags, its printed code). Returns records costed.
+    """
+    if not isinstance(summary, dict):
+        return 0
+    _es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else None
+    _pes = _es.get("part_estimates") if _es is not None else summary.get("part_estimates")
+    if not isinstance(_pes, list):
+        return 0
+    _q = _job_order_quantity(summary)
+    _keep = ("bom_parent", "bom_parents", "printed_code", "is_bought_in", "page_roles",
+             "source", "owning_assembly")
+    _n = 0
+    for _i, _rec in enumerate(list(_pes)):
+        if not isinstance(_rec, dict) or _rec.get("cost_breakdown") is not None:
+            continue
+        if not _rec.get("part_number"):
+            continue
+        try:
+            _pe = estimate_part(dict(_rec), job_quantity=_q)
+        except Exception as _exc:                                    # noqa: BLE001
+            _rec.setdefault("review_flags", []).append(
+                f"NOT COSTED: estimate_part failed on this late-added record "
+                f"({type(_exc).__name__}: {_exc}) — estimator to price")
+            continue
+        if not isinstance(_pe, dict):
+            continue
+        for _k in _keep:
+            if _rec.get(_k) not in (None, "", [], {}) and _pe.get(_k) in (None, "", [], {}):
+                _pe[_k] = _rec[_k]
+        _flags = [str(f) for f in (_rec.get("review_flags") or [])]
+        _pe["review_flags"] = _flags + [f for f in (_pe.get("review_flags") or [])
+                                        if str(f) not in _flags]
+        _pes[_i] = _pe
+        _n += 1
+    return _n
 
 
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -10839,10 +10937,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
     # captured (summary['assumed_job_quantity']; file_scan stamps
     # DEFAULT_JOB_QUANTITY when the enquiry doesn't state one). Passed into every
     # part so machine setup is spread over the order — as the manual estimate does.
-    _order_qty = None
-    if summary is not None:
-        _order_qty = summary.get("assumed_job_quantity") or summary.get("quantity")
-    _order_qty = max(1, int(_order_qty or getattr(config, "DEFAULT_JOB_QUANTITY", 180)))
+    _order_qty = _job_order_quantity(summary)
     if debug:
         print(f"[DEBUG] estimate_document order_qty for setup amortisation = {_order_qty}")
 

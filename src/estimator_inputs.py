@@ -194,8 +194,35 @@ def input_note_for_line(part: Mapping[str, Any]) -> Dict[str, str]:
             _undrawn = _no_detail(part)
         except Exception:                                    # noqa: BLE001
             _undrawn = False
-        _why = ("this part is not a bought-in and its detail drawing is not in the pack"
-                if _undrawn else "the engine did not classify this part as a bought-in")
+        # THE REASON IS READ OFF THE RECORD, NOT ASSUMED FROM THE STATE. applied_to_total
+        # False with a figure present used to have one cause, the estimator's classification.
+        # It now also results from the sheet writing nothing on a line the engine DID
+        # classify bought-in (wb_populate.reconcile_price_stamp_with_sheet records why on the
+        # stamp), and from the graph compiling the part as one we cut. Each sends the
+        # estimator to a different place, and the 13:14 12567 book printed the
+        # classification sentence on nine lines it was true of and would have printed it on
+        # lines it was not (D-297). The classification wording is kept only where the
+        # make/buy authority actually says the part is not bought.
+        _sc_src = (((part.get("cost_breakdown") or {}).get("system_cost") or {})
+                   .get("source") or {}) if isinstance(part.get("cost_breakdown"), dict) else {}
+        _withheld_why = str((_sc_src or {}).get("withheld_reason") or "").strip()
+        try:
+            from bought_in_policy import is_bought_in as _policy_says_buy
+            _is_buy = bool(_policy_says_buy(dict(part)))
+        except Exception:                                    # noqa: BLE001
+            _is_buy = False
+        if _withheld_why:
+            _why = _withheld_why
+        elif _undrawn and not _is_buy:
+            _why = "this part is not a bought-in and its detail drawing is not in the pack"
+        elif str(part.get("_canonical_kind") or "").strip().lower() == "leaf":
+            _why = ("the route compiled this part as one we cut, so a buy price does not "
+                    "price its line")
+        elif _is_buy:
+            _why = ("the engine classified it as bought-in and still wrote no price for it — "
+                    "an engine fault to trace, not a rate to look up")
+        else:
+            _why = "the engine did not classify this part as a bought-in"
         return {"kind": PLACEHOLDER_UNPRICED,
                 "note": (f"NOT YET PRICED — but {_where}{_code} gives £{_declined['gbp']:.2f} "
                          f"each. NOT APPLIED: {_why}, so the engine will not total it. "

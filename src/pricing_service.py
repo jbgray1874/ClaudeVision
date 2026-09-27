@@ -94,6 +94,29 @@ def _article_words(text: str) -> set:
     return out
 
 
+# Words that say what a purchased thing is MADE OF, not what it is. Dropped from a purchase's
+# search of the category table (config.PURCHASE_SEARCH_MATERIAL_ADJECTIVES overrides).
+_PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
+    "STEEL", "MILD", "STAINLESS", "ALUMINIUM", "ALUMINUM", "PLASTIC", "ACRYLIC", "TIMBER",
+    "METAL", "NYLON", "BRASS", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "MDF", "PLY",
+    "PLYWOOD", "PVC", "POLYCARBONATE", "PERSPEX", "RUBBER",
+)
+
+# Category words that name a STOCK FORM — a material bought by the sheet, board or length —
+# and so can never be the price of a component (config.STOCK_FORM_CATEGORY_WORDS overrides).
+_STOCK_FORM_CATEGORY_WORDS = (
+    "SHEET", "SHEETS", "PLATE", "BOARD", "BOARDS", "SECTION", "SECTIONS", "BAR", "TUBE",
+    "ROD", "MDF", "PLY", "PLYWOOD", "EXTRUSION", "EXTRUSIONS", "ANGLE", "CHANNEL", "MESH",
+)
+
+
+def _names_stock_form(category: Any) -> bool:
+    """Does this catalogue category name a material bought as stock rather than a component?"""
+    _words = {str(w).upper() for w in (getattr(config, "STOCK_FORM_CATEGORY_WORDS", None)
+                                       or _STOCK_FORM_CATEGORY_WORDS)}
+    return any(tok in _words for tok in re.split(r"[^A-Z0-9]+", str(category or "").upper()))
+
+
 def prices_this_article(description: str, result: Dict[str, Any]) -> bool:
     """Does a researched answer price the article the line describes?
 
@@ -1349,15 +1372,30 @@ class PricingService:
         # find CASTORS and a driver finds nothing here and moves on. A made part's material is
         # the right key for it and is unchanged.
         try:
+            from bought_in_policy import has_fabrication_evidence as _measured
             from bought_in_policy import is_bought_in as _bought
             _is_purchase = bool(_bought(part))
+            # The service's own word heuristic (NUT, PIN, SPRING, WHEEL...) must not turn a
+            # made part with a measured flat into a purchase and lose it its material row.
+            if not _is_purchase and self._is_bought_in_heuristic(part) and not _measured(part):
+                _is_purchase = True
         except Exception:                                        # noqa: BLE001
-            _is_purchase = False
-        _is_purchase = _is_purchase or bool(self._is_bought_in_heuristic(part))
+            _is_purchase = bool(self._is_bought_in_heuristic(part))
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
         if _is_purchase:
-            searches = sorted(_article_words(desc), key=len, reverse=True)
+            # THE WORDS THAT NAME THE THING, NOT THE STUFF IT IS MADE OF. Asked by every word,
+            # "PLASTIC END CAP" found PLASTIC SHEET and "STEEL BACKED MAGNET" found MILD STEEL
+            # SHEET through the material adjective — the very match this rung was reworked to
+            # stop, one word further along (review of D-288). Material adjectives are dropped
+            # from a purchase's search, and a row it does hit is refused below where the
+            # category names stock. Longest word first, ties alphabetical, so the order is the
+            # same on every run.
+            _adjectives = {str(w).upper() for w in (
+                getattr(config, "PURCHASE_SEARCH_MATERIAL_ADJECTIVES", None)
+                or _PURCHASE_SEARCH_MATERIAL_ADJECTIVES)}
+            searches = sorted((w for w in _article_words(desc) if w not in _adjectives),
+                              key=lambda w: (-len(w), w))
         else:
             searches = [s for s in (material_hint or desc,) if s]
         if not searches:
@@ -1379,6 +1417,12 @@ class PricingService:
             except Exception:
                 return None
             if row and row[2] is not None:
+                # A PURCHASED COMPONENT IS NEVER PRICED FROM STOCK. The table keeps sheet and
+                # board categories beside component ones; a row whose category names a stock
+                # form is a material's price, whatever word led to it. Keep looking.
+                if _is_purchase and _names_stock_form(row[1]):
+                    row = None
+                    continue
                 break
         if not row or row[2] is None:
             return None
