@@ -704,29 +704,44 @@ def test_a_steel_sheet_listing_does_not_price_an_led_driver():
 
 # D-288: the driver's £0.80 came from the MATERIALS catalogue, asked with its inherited steel.
 
-def _steel_row_service():
+def _category_table_service():
+    """The table as the portal describes it: categories, sheet materials beside components."""
     import pricing_service as ps
     svc = ps.PricingService(conn=object())
     asked = []
+    rows = {"MILD_STEEL": ("https://metals4u.co.uk/mild-steel-sheet", "MILD STEEL", 0.80, 1),
+            "MILD STEEL": ("https://metals4u.co.uk/mild-steel-sheet", "MILD STEEL", 0.80, 1),
+            "CASTOR": ("https://tente.co.uk/castors", "CASTORS", 6.40, 3)}
 
     def _fetch(sql, params):
         asked.append(list(params))
-        return ("https://metals4u.co.uk/mild-steel-sheet", "MILD STEEL", 0.80, 1)
+        return rows.get(str(params[0]).upper())
     svc._fetch_one_with_retry = _fetch
     return svc, asked
 
 
-def test_a_purchased_component_is_not_priced_from_the_materials_catalogue():
-    svc, asked = _steel_row_service()
+def test_a_purchased_component_is_never_looked_up_by_its_material():
+    svc, asked = _category_table_service()
     driver = {"part_number": "P/P-LED-DRIVER-24V", "description": "LED DRIVER 24V 60W",
               "is_bought_in": True, "page_roles": ["bought_in"],
               "normalized_material": "MILD_STEEL", "material_inherited_from": "document_level"}
     assert svc._get_supplier_catalog(driver) is None
-    assert asked == [], "the materials catalogue was not even asked about a driver"
+    assert asked, "the category table is still asked, by what the part is"
+    assert all(p != ["MILD_STEEL"] for p in asked), asked
+    assert ["DRIVER"] in asked
+
+
+def test_a_purchased_castor_still_finds_its_category():
+    svc, asked = _category_table_service()
+    castor = {"part_number": "P/P-CASTOR", "description": "CASTOR 50MM SWIVEL",
+              "is_bought_in": True, "normalized_material": "MILD_STEEL",
+              "material_inherited_from": "document_level"}
+    got = svc._get_supplier_catalog(castor)
+    assert got and got["unit_price_gbp"] == 6.40 and got["material_hint"] == "CASTORS"
 
 
 def test_a_made_part_still_takes_the_materials_catalogue_rung():
-    svc, asked = _steel_row_service()
+    svc, asked = _category_table_service()
     bracket = {"part_number": "12567-02-04M", "description": "BRACKET",
                "normalized_material": "MILD_STEEL", "flat_pattern_detected": True,
                "geometry_source": "dxf", "dxf_measured_outline": True}
