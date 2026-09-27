@@ -1339,28 +1339,30 @@ class PricingService:
         }
 
     def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
-        # A PURCHASED COMPONENT IS NOT A STOCK MATERIAL. This table is a materials catalogue
-        # keyed on a material hint, and it is asked with the part's material first. 12567's
-        # LED driver carried MILD STEEL inherited from the title block, so this rung answered
-        # £0.80 from a mild-steel-sheet listing — selected before the researched rung, where
-        # the article check runs, so nothing compared a driver with a sheet (D-288). A line we
-        # buy is priced by the purchasing rungs above or researched as a purchase below; the
-        # materials catalogue has nothing to say about it.
+        # A PURCHASED COMPONENT IS LOOKED UP BY WHAT IT IS, NEVER BY WHAT IT IS MADE OF. This
+        # table is keyed by category — sheet materials beside HARDWARE, CASTORS, LOCKS,
+        # FIXINGS — and it was asked with the part's MATERIAL first. 12567's LED driver
+        # carried MILD STEEL inherited from the title block, so this rung answered £0.80 from
+        # a mild-steel-sheet listing, selected before the researched rung where the article
+        # check runs, so nothing compared a driver with a sheet (D-288). A line we buy is now
+        # asked for by the words of its own description, longest first, so a castor can still
+        # find CASTORS and a driver finds nothing here and moves on. A made part's material is
+        # the right key for it and is unchanged.
         try:
             from bought_in_policy import is_bought_in as _bought
             _is_purchase = bool(_bought(part))
         except Exception:                                        # noqa: BLE001
             _is_purchase = False
-        if _is_purchase or self._is_bought_in_heuristic(part):
-            return None
+        _is_purchase = _is_purchase or bool(self._is_bought_in_heuristic(part))
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
-        search = material_hint or desc
-        if not search:
+        if _is_purchase:
+            searches = sorted(_article_words(desc), key=len, reverse=True)
+        else:
+            searches = [s for s in (material_hint or desc,) if s]
+        if not searches:
             return None
-        try:
-            row = self._fetch_one_with_retry(
-                """
+        _sql = """
                 SELECT TOP 1
                     catalog_url,
                     material_hint,
@@ -1369,11 +1371,15 @@ class PricingService:
                 FROM dbo.estimating_supplier_catalog_url
                 WHERE UPPER(material_hint) LIKE '%' + UPPER(LTRIM(RTRIM(?))) + '%'
                 ORDER BY sort_order ASC, unit_price_gbp ASC, catalog_url_id ASC
-                """,
-                [search],
-            )
-        except Exception:
-            return None
+                """
+        row = None
+        for search in searches:
+            try:
+                row = self._fetch_one_with_retry(_sql, [search])
+            except Exception:
+                return None
+            if row and row[2] is not None:
+                break
         if not row or row[2] is None:
             return None
         price = float(row[2] or 0.0)
