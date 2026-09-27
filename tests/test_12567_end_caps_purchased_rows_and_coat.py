@@ -584,7 +584,10 @@ def test_the_title_block_stamp_marks_the_coat_as_inherited():
         pass                     # the fixture is not a job; only the stamp is under test
     assert parts[0].get("finish_inherited_from") == "document_level"
     assert "powder_coating" in (parts[0].get("inferred_operations") or [])
-    assert not parts[1].get("finish_inherited_from")
+    assert not est._member_carries_its_own_coat(parts[0])
+    # 05-01M's own text carried the op; the document filled only its finish words, so the
+    # coat is still its own (D-286)
+    assert est._member_carries_its_own_coat(parts[1])
 
 
 def test_the_powder_sum_reads_a_flat_under_any_spelling_and_leaves_out_route_named_members():
@@ -630,6 +633,81 @@ def test_a_line_the_sheet_priced_keeps_its_claim():
                                              "source": _market_stamp()}}}
     assert wb.reconcile_price_stamp_with_sheet(pe, 4.2, {}) is False
     assert pe["cost_breakdown"]["system_cost"]["applied_to_total"] is True
+
+
+# D-286: the real record — RAW on its own sheet, a powder op from another reader, no marker.
+
+def test_a_raw_member_carrying_an_inherited_powder_op_gives_the_case_its_area():
+    """Tested against the 21:57 JSON by the reviewer: D-283 stamped 0.069 m² on 02-101 (the
+    channels) and skipped the fascia. The fascia says RAW, carries powder_coating already, and
+    has no finish_inherited_from — the marker is only written by the reader that ADDS the op."""
+    case = {"part_number": "12567-02-101", "quantity": 1,
+            "inferred_operations": ["powder_coating", "welding"],
+            "assembly_children": ["12567-02-01M", "12567-02-10M"]}
+    fascia = {"part_number": "12567-02-01M", "quantity": 1, "normalized_material": "MILD_STEEL",
+              "surface_finishes": ["RAW"], "inferred_operations": ["powder_coating"],
+              "normalized_geometry": {"bounding_box_flat_mm": {"length": 2000.0, "width": 355.0}}}
+    channel = {"part_number": "12567-02-10M", "quantity": 4, "normalized_material": "MILD_STEEL",
+               "inferred_operations": ["powder_coating"], "finish_inherited_from": "document_level",
+               "normalized_geometry": {"blank_length_mm": 225.5, "blank_width_mm": 38.35}}
+    assert est.stamp_members_coated_area([case, fascia, channel]) == 1
+    expected = 2.0 * 0.355 * 2 + 0.2255 * 0.03835 * 2 * 4
+    assert abs(case["_powder_members_coated_m2"] - expected) < 1e-6, case["_powder_members_coated_m2"]
+    assert case["_powder_members_m2"]["12567-02-01M"] > 1.4
+
+
+def test_the_members_own_sheet_is_the_judge():
+    raw = {"surface_finishes": ["RAW"], "inferred_operations": ["powder_coating"]}
+    pointer = {"surface_finishes": ["SEE ASSEMBLY DRAWING"], "textual_operations": ["powder_coating"]}
+    own = {"surface_finishes": ["POWDER COATED RAL 9005"], "inferred_operations": ["powder_coating"]}
+    own_text = {"textual_operations": ["powder_coating"]}
+    inherited = {"surface_finishes": ["POWDER COATED"], "inferred_operations": ["powder_coating"],
+                 "finish_inherited_from": "document_level"}
+    no_op = {"surface_finishes": ["POWDER COATED"]}
+    assert not est._member_carries_its_own_coat(raw)
+    assert not est._member_carries_its_own_coat(pointer), "a pointer states nothing about the part"
+    assert est._member_carries_its_own_coat(own)
+    assert est._member_carries_its_own_coat(own_text)
+    assert not est._member_carries_its_own_coat(inherited)
+    assert not est._member_carries_its_own_coat(no_op)
+    # the document filled the finish; the part's own text carried the op — its own coat
+    assert est._member_carries_its_own_coat({"surface_finishes": ["POWDER COATED"],
+                                             "textual_operations": ["powder_coating"],
+                                             "finish_inherited_from": "document_level"})
+
+
+def test_the_title_block_stamp_marks_the_finish_it_fills_as_inherited_too():
+    summary = {"document_analysis": {"title_block": {"surface_finishes": ["POWDER COATED"]}}}
+    # already carries the op from another reader, states no finish of its own
+    part = {"part_number": "12567-02-01M", "normalized_material": "MILD_STEEL", "quantity": 1,
+            "inferred_operations": ["powder_coating"]}
+    try:
+        est.estimate_document([part], summary)
+    except Exception:                                                # noqa: BLE001
+        pass
+    assert part.get("surface_finishes") == ["POWDER COATED"]
+    assert part.get("finish_inherited_from") == "document_level"
+    assert not est._member_carries_its_own_coat(part)
+
+
+# D-287: a researched answer about a different article is not a price for this line.
+
+def test_a_steel_sheet_listing_does_not_price_an_led_driver():
+    import pricing_service as ps
+    steel = {"found": True, "price_gbp": 0.80, "source_type": "web_search",
+             "supplier_name": "Mild Steel Sheet 1.5mm CR4 — cut to size | Metals4U"}
+    assert not ps.prices_this_article("LED DRIVER 24V 60W CONSTANT VOLTAGE", steel)
+    driver = {"found": True, "price_gbp": 14.20, "source_type": "llm_market_estimate",
+              "item_priced": "24V 60W constant-voltage LED driver, one unit"}
+    assert ps.prices_this_article("LED DRIVER 24V 60W CONSTANT VOLTAGE", driver)
+
+
+def test_an_answer_that_names_nothing_is_not_refused_here():
+    import pricing_service as ps
+    assert ps.prices_this_article("MAGNET 21MM", {"found": True, "price_gbp": 0.35})
+    assert ps.prices_this_article("", {"item_priced": "anything"})
+    # plurals and compounds still count as the same article
+    assert ps.prices_this_article("BINDING SCREW M4", {"item_priced": "M4 x 12 binding screws, one screw"})
 
 
 def test_a_fabricated_leaf_at_nought_is_not_touched():

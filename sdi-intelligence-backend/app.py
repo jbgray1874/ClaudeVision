@@ -311,7 +311,11 @@ def list_files(path: str = Query(...), x_sdi_key: str | None = Header(default=No
     if folder is None:
         raise HTTPException(status_code=403, detail="Path is outside the allowed roots")
     if not folder.is_dir():
-        raise HTTPException(status_code=404, detail="Folder not found")
+        # SAY WHICH THING IS MISSING. "Folder not found" was the whole message when the VPN
+        # was down and the share root itself could not be reached; the folder was there.
+        from share_reach import folder_missing_detail
+        raise HTTPException(status_code=404,
+                            detail=folder_missing_detail(str(folder), config.FILE_ROOTS))
     items = []
     try:
         for entry in sorted(os.scandir(folder), key=lambda e: (not e.is_dir(), e.name.lower())):
