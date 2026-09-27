@@ -280,9 +280,19 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     # cut. Only the blank claim is absent, and only the blank claim gates the allowance. The
     # two used to share dxf_measured_outline, so withdrawing the blank claim would otherwise
     # take the part's fabrication evidence with it and make something we cut look purchased.
+    #
+    # THE OPPOSITE HAND OF A MEASURED FLAT IS MEASURED TOO — and that clause used to sit
+    # last, below this exit, so a hand whose own DXF matched and measured nothing was ruled
+    # unmeasured before the mirrored flat it carries was ever looked at (D-280). The mirror
+    # copies only from a base measured at DXF or model rank; it is read first.
+    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                           dict) else {}
+    _mirrored = (str(_ng.get("geometry_source") or "").lower() == "mirror_of_measured"
+                 and bool(_ng.get("mirrored_from")))
     if (part.get("dxf_measured_outline") is False
             and not part.get("dxf_measured_cut_length")
-            and not part.get("native_flat_pattern")):
+            and not part.get("native_flat_pattern")
+            and not _mirrored):
         return False
     if part.get("flat_pattern_detected") or part.get("native_flat_pattern"):
         return True
@@ -302,10 +312,7 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     # is a measured flat one step removed. 11650-06's Mirror11650-03-02M was nested, lasered
     # and folded from the plain arm's flat, and still classified bought-in from the kit page
     # it was listed on — so every tab called a part the sheet cuts a catalogue component.
-    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
-                                                           dict) else {}
-    return (str(_ng.get("geometry_source") or "").lower() == "mirror_of_measured"
-            and bool(_ng.get("mirrored_from")))
+    return _mirrored
 
 
 def looks_fabricated_for_identity(part: Dict[str, Any]) -> bool:

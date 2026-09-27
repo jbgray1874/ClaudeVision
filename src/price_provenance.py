@@ -642,8 +642,18 @@ def stamp_is_reproducible(block: Dict[str, Any]) -> bool:
         return True
     for key in ("selected", "result", "price", "detail"):
         inner = block.get(key)
-        if isinstance(inner, dict) and inner.get("price_is_reproducible") is True:
+        if not isinstance(inner, dict):
+            continue
+        if inner.get("price_is_reproducible") is True:
             return True
+        # THE RESOLVER FILES WHAT IT DOES NOT NAME UNDER METADATA. price_sources builds a
+        # candidate from the connector's row and keeps every field it has no slot for in
+        # `metadata` — including this one. Stamps written before the estimator lifted it
+        # (D-281) carry the verdict there, and a stored job must still read as it was.
+        for _sub in ("metadata", "evidence"):
+            _m = inner.get(_sub)
+            if isinstance(_m, dict) and _m.get("price_is_reproducible") is True:
+                return True
     return False
 
 
