@@ -10194,7 +10194,26 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
         return 0
     _q = _job_order_quantity(summary)
     _keep = ("bom_parent", "bom_parents", "printed_code", "is_bought_in", "page_roles",
-             "source", "owning_assembly")
+             "source", "owning_assembly", "supplied_by_third_party")
+    # THE DRAWING'S SCOPE APPLIES TO A LATE RECORD TOO. estimate_document asks
+    # third_party_supply which lines another party supplies before it costs anything; this
+    # pass costed the records the reconcile added afterwards and never asked. 12567-01's
+    # 15:33 book: the GA says the Pixel display, router and antenna are supplied by others.
+    # The router, a record in time, stayed at £0; the display and antenna, minted late,
+    # were researched and charged at £750 and £18.50 — about £883 on the unit (D-302).
+    _late = [r for r in _pes if isinstance(r, dict) and r.get("cost_breakdown") is None
+             and r.get("part_number")]
+    if _late:
+        try:
+            from third_party_supply import mark_third_party_supplied
+            _tp = mark_third_party_supplied(_late, summary)
+            if _tp:
+                summary.setdefault("third_party_supplied", [])
+                if isinstance(summary["third_party_supplied"], list):
+                    summary["third_party_supplied"].extend(_tp)
+        except Exception as _tp_exc:                                 # noqa: BLE001
+            print(f"   [scope] third-party supply note not read for late records "
+                  f"({_tp_exc})", flush=True)
     _n = 0
     for _i, _rec in enumerate(list(_pes)):
         if not isinstance(_rec, dict) or _rec.get("cost_breakdown") is not None:
