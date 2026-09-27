@@ -1897,9 +1897,21 @@ def costed_job(source: Any) -> Dict[str, Any]:
         v = line.get("charged_ext_gbp")
         return _num(v) if v is not None else _num(line.get("engine_ext_gbp"))
 
+    # AN ASSEMBLY OFF THE SHEET IS NOT IN THE UNIT. 12567-01's 17:45 report put £412.09 on
+    # market figures to replace, £31 of it the AI's own figures for the two end-header
+    # lighting assemblies (02-301, 03-301). Neither is a line on the Estimate sheet — the
+    # tapes, diffusers and driver beneath them are — so the unit never contained that £31
+    # and nobody needs to replace it. Once the sheet is read back, an assembly with no row
+    # on it has nothing in the total to verify (D-306).
+    def _in_unit(line: Dict[str, Any]) -> bool:
+        return not (calculated and line.get("kind") == "assembly"
+                    and line.get("charged_ext_gbp") is None)
+
     unpriced = [l for l in lines if l["price_origin"]["firmness"] == UNPRICED]
-    house = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_HOUSE]
-    market = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_MARKET]
+    house = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_HOUSE
+             and _in_unit(l)]
+    market = [l for l in lines if l["price_origin"]["firmness"] == INDICATIVE_MARKET
+              and _in_unit(l)]
     gaps = {
         "unpriced": [l["part_number"] for l in unpriced],
         "unpriced_owners": {l["part_number"]: l["price_origin"]["owner"] for l in unpriced},
