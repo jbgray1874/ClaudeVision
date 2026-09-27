@@ -758,6 +758,79 @@ def test_an_answer_that_names_nothing_is_not_refused_here():
     assert ps.prices_this_article("BINDING SCREW M4", {"item_priced": "M4 x 12 binding screws, one screw"})
 
 
+# D-289: the 13:14 book — eleven prices found and "NOT APPLIED: the engine did not classify
+# this part as a bought-in".
+
+def test_the_make_buy_authority_makes_a_found_price_reach_the_total():
+    magnet = {"part_number": "MAGNET21", "description": "NEODYMIUM BAR MAGNET 50x10x1.50mm",
+              "geometry_inferred": True, "is_bought_in": True, "page_roles": ["bought_in"]}
+    assert est._bought_in_candidate_for(magnet, True, magnet["description"]) is True
+    pp = {"part_number": "P/P-JST-Y-SPLITTER", "description": "JST Y Splitter",
+          "printed_code": "P/P", "geometry_inferred": True, "is_bought_in": True}
+    assert est._bought_in_candidate_for(pp, False, pp["description"]) is True
+    # GUARD 1 still refuses a made part the engine gave provisional geometry
+    bracket = {"part_number": "12567-02-04M", "description": "MOUNTING FOOT",
+               "geometry_inferred": True, "normalized_material": "MILD_STEEL"}
+    assert est._bought_in_candidate_for(bracket, False, bracket["description"]) is False
+
+
+# D-290: a table row only the deterministic reader saw, and not a fastener, gets a record.
+
+def test_a_non_fastener_row_only_the_table_reader_saw_reaches_the_estimate():
+    import file_scan as fs
+    held = {"part_number": "P/P-JST-Y-SPLITTER", "description": "JST Y Splitter", "quantity": 3,
+            "page_roles": ["bought_in"]}
+    summary = {"estimate_summary": {"part_estimates": [held]}}
+    dp = {"rows": [
+        {"part_code": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 1230mm",
+         "qty": 2, "bom_parent": "12567-02-GA"},
+        {"part_code": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 300mm",
+         "qty": 2, "bom_parent": "12567-02-GA"},
+        {"part_code": "P/P", "description": "JST Y Splitter", "qty": 3, "bom_parent": "12567-02-GA"},
+    ]}
+    updated, added = fs._reconcile_dualpath_into_part_estimates(summary, dp)
+    pes = summary["estimate_summary"]["part_estimates"]
+    pns = [p["part_number"] for p in pes]
+    assert added == 2, (added, pns)
+    assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM" in pns
+    assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-300MM" in pns
+    assert pns.count("P/P-JST-Y-SPLITTER") == 1, "the article already held is not minted twice"
+    epdm = next(p for p in pes if p["part_number"].endswith("1230MM"))
+    assert epdm.get("quantity") == 2 and epdm.get("is_bought_in") and epdm.get("bom_parent") == "12567-02-GA"
+
+
+# D-291: the envelope sentence goes when the mirrored flat lands.
+
+def test_the_fallback_envelope_flag_is_withdrawn_when_the_hand_takes_the_flat():
+    parts = _hands()
+    parts[1].setdefault("review_flags", []).append(
+        "12567-05-02M: page 35 is its detail sheet but its blank could not be taken from it — "
+        "UNRESOLVED; the size used is a fallback envelope")
+    djm.stamp_mirror_notes(parts, _summary())
+    djm.apply_mirror_geometry(parts)
+    assert not any("fallback envelope" in str(f) for f in parts[1].get("review_flags") or [])
+    assert parts[1]["normalized_geometry"]["geometry_source"] == "mirror_of_measured"
+
+
+# D-292: a fold the route rules off an assembly does not read as "charged" on it.
+
+def test_a_fold_the_route_rules_off_is_not_reported_as_charged():
+    graph = {"decisions": [
+        {"operation": "folding", "status": "not_applicable", "target_id": "12567-02-101",
+         "reason": "assembly parent has no independently measured fabricated leaf"},
+        {"operation": "folding", "status": "required", "target_id": "12567-02-01M"}]}
+    case = {"part_number": "12567-02-101", "review_flags": [
+        "99 fold(s) charged, and NOTHING THAT CAN SEE THE PART COUNTED THEM — the count came "
+        "from inferred_dashed_lines. Confirm the count."]}
+    leaf = {"part_number": "12567-02-01M", "review_flags": [
+        "24 fold(s) charged, counted by the drawing's bend callouts — measured, not inferred."]}
+    n = est._reword_folds_the_route_rules_off(graph, [case, leaf])
+    assert n == 1
+    assert case["review_flags"][0].startswith("99 fold(s) counted on this line and NOT charged")
+    assert "no independently measured fabricated leaf" in case["review_flags"][0]
+    assert leaf["review_flags"][0].startswith("24 fold(s) charged")
+
+
 def test_a_fabricated_leaf_at_nought_is_not_touched():
     """Its material is in the Sheet Steel block; the £0 BOM cell is by design and its stamps
     already say the bought-in figure was not applied."""

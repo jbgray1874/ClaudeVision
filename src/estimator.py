@@ -8393,57 +8393,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # item, and where nothing prices it the estimator gets one action instead of a zero that
     # sums as free.
 
-    bought_in_keywords = (
-        "BOUGHT IN",
-        "BOUGHT-IN",
-        "PURCHASED",
-        "OFF THE SHELF",
-        "CATALOGUE",
-        "CATALOG",
-        "HARDWARE",
-        "CASTOR",
-        "CASTER",
-        "TENTE",
-        "STEM",
-        "BUSH",
-        "FIXING",
-        "SCREW",
-        "WOOD SCREW",
-        "WOODSCREW",
-        "KNURLED",
-        "UPC STICKER",
-        "STICKER",
-        "VINYL",
-        "PALLET",
-        "LENS COVER",
-        "UPC",
-        "HINGE",
-        "HAFELE",
-        "FINGER PULL",
-        "HANDLE",
-        "DOWEL",
-        "T-NUT",
-        "PEM STUD",
-        "THREADED INSERT",
-        "WOODEN DOWEL",
-        "MOUNTING PLATE",
-    )
-    bought_in_candidate = (no_ops_except_handling and not part.get("flat_pattern_detected")) or any(
-        k in desc_blob for k in bought_in_keywords
-    )
-
-    # GUARD 1 — A part the inference engine is provisionally costing is an SDI
-    # FABRICATED part, not a catalogue buy. Routing it through the system-cost
-    # (catalogue) match produces wild fuzzy-match prices (e.g. "BRACKET" -> £13k).
-    if part.get("geometry_inferred"):
-        bought_in_candidate = False
-
-    # A special finishing item (tiles/mosaic/graphic/vinyl, -X suffix) is bought in, not
-    # fabricated — even when the engine gave it provisional geometry. Price it via the
-    # bought-in path (UDEF match, or left flagged/unpriced if nothing matches). Overrides
-    # GUARD 1; the plausibility cap (GUARD 2) below still applies.
-    if part.get("special_finish_item"):
-        bought_in_candidate = True
+    bought_in_candidate = _bought_in_candidate_for(part, no_ops_except_handling, desc_blob)
 
     # GUARD 2 — Plausibility cap on the matched system cost. A genuine bought-in
     # fitting (castor, hinge, screw, Hafele part) is cheap. A four/five-figure hit
@@ -9930,6 +9880,96 @@ def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+_BOUGHT_IN_KEYWORDS = (
+    "BOUGHT IN", "BOUGHT-IN", "PURCHASED", "OFF THE SHELF", "CATALOGUE", "CATALOG",
+    "HARDWARE", "CASTOR", "CASTER", "TENTE", "STEM", "BUSH", "FIXING", "SCREW",
+    "WOOD SCREW", "WOODSCREW", "KNURLED", "UPC STICKER", "STICKER", "VINYL", "PALLET",
+    "LENS COVER", "UPC", "HINGE", "HAFELE", "FINGER PULL", "HANDLE", "DOWEL", "T-NUT",
+    "PEM STUD", "THREADED INSERT", "WOODEN DOWEL", "MOUNTING PLATE",
+)
+
+
+def _bought_in_candidate_for(part: Dict[str, Any], no_ops_except_handling: bool,
+                             desc_blob: str) -> bool:
+    """Is this line one whose resolved unit price reaches the total as a purchase?
+
+    THE PRICE WAS FOUND AND THE LINE STAYED £0. 12567's 13:14 book: MAGNET21 had a UDEF
+    row at £0.35, eight P/P lines had market figures, and every one read "NOT APPLIED: the
+    engine did not classify this part as a bought-in, so the engine will not total it". The
+    classification here was a keyword list and an operations test, with GUARD 1 refusing any
+    part carrying inferred geometry — which every bought-in row given a fallback envelope
+    does. bought_in_policy had ruled all eleven bought-in (a purchase-class code, a family
+    code, a minted BI- code) and nothing here asked it (D-289).
+
+    The make/buy authority's verdict is final here as it is everywhere else; the keyword and
+    operations tests remain for lines it has no opinion on. GUARD 2 (the plausibility cap)
+    still applies after this, so a wild catalogue match is refused as before.
+    """
+    cand = (no_ops_except_handling and not part.get("flat_pattern_detected")) or any(
+        k in desc_blob for k in _BOUGHT_IN_KEYWORDS)
+    # GUARD 1 — A part the inference engine is provisionally costing is an SDI FABRICATED
+    # part, not a catalogue buy. Routing it through the system-cost (catalogue) match
+    # produces wild fuzzy-match prices (e.g. "BRACKET" -> £13k).
+    if part.get("geometry_inferred"):
+        cand = False
+    # A special finishing item (tiles/mosaic/graphic/vinyl, -X suffix) is bought in, not
+    # fabricated — even when the engine gave it provisional geometry. Overrides GUARD 1.
+    if part.get("special_finish_item"):
+        cand = True
+    try:
+        from bought_in_policy import is_bought_in as _authority
+        if _authority(part):
+            cand = True
+    except Exception:                                                # noqa: BLE001
+        pass
+    return cand
+
+
+def _reword_folds_the_route_rules_off(route_graph: Any, *part_lists: Any) -> int:
+    """A fold the route rules off a line does not read as "charged" on that line.
+
+    12567-02-101's flag said "99 fold(s) charged, and NOTHING THAT CAN SEE THE PART COUNTED
+    THEM" while the Fold rows on the sheet named only its members and the route had ruled
+    folding off the assembly ("assembly parent has no independently measured fabricated
+    leaf"). The flag is written per part before the route exists; the route decides after.
+    Where its decision is anything but required, the flag says what happened (D-292).
+    Returns the number of flags reworded.
+    """
+    _off: Dict[str, str] = {}
+    for _d in ((route_graph or {}).get("decisions") or []) if isinstance(route_graph, dict) else []:
+        _d = _d if isinstance(_d, dict) else dict(getattr(_d, "__dict__", {}) or {})
+        if str(_d.get("operation") or "").strip().lower() != "folding":
+            continue
+        if str(_d.get("status") or "").strip().lower() == "required":
+            continue
+        _tid = str(_d.get("target_id") or "").strip().upper()
+        if _tid:
+            _off[_tid] = str(_d.get("reason") or _d.get("status") or "ruled off by the route")
+    if not _off:
+        return 0
+    _n = 0
+    _rx = re.compile(r"^(\d+(?:\.\d+)?) fold\(s\) charged")
+    for _lst in part_lists:
+        for _p in (_lst or []):
+            if not isinstance(_p, dict):
+                continue
+            _pn = str(_p.get("part_number") or "").strip().upper()
+            if _pn not in _off or not _p.get("review_flags"):
+                continue
+            _new = []
+            for _f in _p["review_flags"]:
+                _s = str(_f)
+                _m = _rx.match(_s)
+                if _m:
+                    _s = (f"{_m.group(1)} fold(s) counted on this line and NOT charged — the "
+                          f"route rules folding off it: {_off[_pn]}. "
+                          + _s[_m.end():].lstrip(" ,—-"))
+                    _n += 1
+                _new.append(_s)
+            _p["review_flags"] = _new
+    return _n
+
+
 def _member_carries_its_own_coat(member: Dict[str, Any]) -> bool:
     """Is this member coated on its own line, so its area must not be counted on the case?
 
@@ -11109,6 +11149,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         )
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)
+        _reword_folds_the_route_rules_off(_route_graph, parts, part_estimates)
     except Exception as route_error:
         # A shadow diagnostic must never turn an executable estimate into a fallback sheet.
         # The failure is stamped for review and will become blocking before cutover.
