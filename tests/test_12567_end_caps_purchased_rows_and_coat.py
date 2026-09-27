@@ -431,3 +431,111 @@ def test_nested_timing_brackets_count_their_seconds_once():
     import run_timing as rt
     assert abs(rt._union_seconds([(0.0, 10.0), (2.0, 5.0), (12.0, 13.0)]) - 11.0) < 1e-9
     assert rt._union_seconds([]) == 0.0
+
+
+# D-280: a hand given its base's studs is asked for evidence its own record cannot show.
+
+def test_a_hand_with_no_evidence_of_its_own_keeps_its_bases_leaf_kind():
+    """21:57 book: 05-02M's own model had no sheet body (an envelope, not a flat) and its own
+    DXF matched nothing measurable, so it showed no fabrication evidence of its own. Given the
+    studs (D-275) it became an assembly and lost its laser, fold and sheet row."""
+    parts = [
+        {"part_number": "12567-05-GA", "description": "END CAPS"},
+        {"part_number": "12567-05-01M", "description": "END CAP", "flat_pattern_detected": True,
+         "geometry_source": "dxf", "dxf_measured_outline": True,
+         "normalized_material": "MILD_STEEL", "quantity": 1},
+        {"part_number": "12567-05-02M", "description": "END CAP - HANDED", "quantity": 1,
+         "mirror_of": "12567-05-01M", "normalized_material": "MILD_STEEL",
+         "dxf_measured_outline": False, "native_flat_solid": True,
+         "normalized_geometry": {"blank_length_mm": 409.5, "blank_width_mm": 88.0,
+                                 "geometry_source": "solidworks_api"}},
+        {"part_number": "BI-PEMSTUD", "description": "M6x20mm THREADED PEM STUD",
+         "is_bought_in": True, "quantity": 2},
+    ]
+    extract = {"top_assembly": {"part_number": "12567-05-GA"},
+               "assemblies": [
+                   {"part_number": "12567-05-GA", "children": [
+                       {"part_number": "12567-05-01M", "qty": 1}, {"part_number": "12567-05-02M", "qty": 1}]},
+                   {"part_number": "12567-05-01M", "children": [{"part_number": "BI-PEMSTUD", "qty": 2}]}]}
+    g = rc.build_part_graph(parts, extract)
+    nodes = {n.part_number: n for n in g["nodes"]}
+    assert {e.part_number for e in nodes["12567-05-02M"].children} == {"BI-PEMSTUD"}
+    assert nodes["12567-05-02M"].kind == "leaf", "the hand is the cut part its base is"
+    assert nodes["12567-05-01M"].kind == "leaf"
+
+
+def test_a_matched_but_unread_dxf_does_not_unmeasure_a_mirrored_flat():
+    hand = {"part_number": "12567-05-02M", "dxf_source_file": "12567-05-02M.DXF",
+            "dxf_measured_outline": False,
+            "normalized_geometry": {"blank_length_mm": 409.5, "blank_width_mm": 88.0,
+                                    "geometry_source": "mirror_of_measured",
+                                    "mirrored_from": "12567-05-01M"}}
+    assert bip.has_fabrication_evidence(hand)
+    # and the exit it used to take still holds where nothing was mirrored
+    assert not bip.has_fabrication_evidence({"part_number": "BI-KNOB",
+                                             "dxf_measured_outline": False})
+
+
+# D-281: the market figure's reproducibility verdict never reached the stamp the sheet reads.
+
+def _market_stamp():
+    """The shape the pricing chain actually produces: price_sources files the connector row's
+    extra fields under the candidate's `metadata`, and the estimator copies that candidate in
+    as `selected`."""
+    result = {"selected": {"source": "web", "kind": "part_system_cost", "price": 4.2,
+                           "currency": "GBP", "unit": "each", "confidence": 0.4,
+                           "evidence": {"pricing_mode": "web_ai_llm_estimate"},
+                           "metadata": {"pricing_mode": "web_ai_llm_estimate",
+                                        "price_is_reproducible": True,
+                                        "supplier_name": "xAI Grok LLM - INDICATIVE"}},
+              "candidates": [], "audit_trail": []}
+    return est._build_price_source_metadata(result, fallback_source="web", applied=True)
+
+
+def test_a_cached_market_figure_reads_as_reproducible_on_the_stamp():
+    import price_provenance as pp
+    stamp = _market_stamp()
+    assert pp.stamp_source_class(stamp) == "ai_estimate"
+    assert pp.stamp_is_reproducible(stamp) is True
+    # a stored job written before the verdict was lifted still reads as it was
+    old = dict(stamp)
+    old.pop("price_is_reproducible", None)
+    assert pp.stamp_is_reproducible(old) is True
+
+
+def test_a_cached_market_figure_prices_the_line_tagged_indicative():
+    import wb_populate as wb
+    pe = {"part_number": "MAGNET21", "description": "MAGNET",
+          "cost_breakdown": {"system_cost": {"unit_cost_gbp": 4.2, "applied_to_total": True,
+                                             "source": _market_stamp()}}}
+    assert wb._price_is_reproducible(pe) is True
+    pe["_price_is_reproducible"] = True
+    line = wb.bom_line_pricing(pe, True, 4.2)
+    assert line["withheld_gbp"] is None, "a figure that holds still prices the line"
+    assert not pe.get("_price_explicitly_withheld")
+    label, unrepeatable = wb._price_origin(pe)
+    assert "INDICATIVE" in label and unrepeatable is False
+
+
+# D-282: the POWDER line's area sum read blanks, and a coated assembly has none.
+
+def test_a_case_coated_over_its_members_reaches_the_powder_area_sum():
+    import wb_populate as wb
+    case = {"part_number": "12567-02-101", "quantity": 1, "normalized_material": "MILD_STEEL",
+            "material_estimate": {"cost_method": "weldment_parent_material_in_children",
+                                  "powder_consumable": {"coated_area_m2": 1.4,
+                                                        "coated_area_source": "sum_of_members_blanks"}}}
+    panel = {"part_number": "12567-02-01M", "quantity": 1, "normalized_material": "MILD_STEEL",
+             "material_estimate": {"stock_form": "sheet", "blank_length_mm": 1000.0,
+                                   "blank_width_mm": 500.0}}
+    coated = wb.route_coated_membership({"12567-02-101"})
+    assert abs(wb.coated_sheet_area_m2([case, panel], coated) - 1.4) < 1e-9, (
+        "the case's members' area is the case's area; the panel is not on the route and is "
+        "not counted a second time")
+
+
+def test_a_case_with_no_members_area_still_contributes_nothing():
+    import wb_populate as wb
+    case = {"part_number": "12567-03-101", "quantity": 1,
+            "material_estimate": {"cost_method": "weldment_parent_material_in_children"}}
+    assert wb.coated_sheet_area_m2([case], lambda p: True) == 0.0

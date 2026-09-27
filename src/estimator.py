@@ -808,6 +808,17 @@ def _build_price_source_metadata(
     if _source_class == "ai_estimate" and src_type == "external":
         src_type = "web_ai_fallback"      # never let a generated price read as a catalogue hit
 
+    # WILL THIS FIGURE COME BACK THE SAME NEXT RUN. The generated-price cache answers that
+    # for a market estimate, pricing_service carries the answer on the candidate, and the
+    # resolver files every candidate field it does not name under `metadata` — where
+    # price_provenance.stamp_is_reproducible never looked. So every cached market figure
+    # reached the workbook reading "unrepeatable" and was kept off the price column: eleven
+    # £0 bought-in lines on 12567 with the figures sitting in their flags (D-281). Lifted to
+    # the stamp itself, from wherever the candidate carried it; absent where nothing said.
+    _repro = next((_v for _v in (selected.get("price_is_reproducible"),
+                                 metadata.get("price_is_reproducible"),
+                                 evidence.get("price_is_reproducible"))
+                   if _v is not None), None)
     return {
         # The marker consumers find priced lines by. Nothing downstream should have to know
         # WHERE in a part a price is stored — a block added to a new part shape is then
@@ -815,6 +826,7 @@ def _build_price_source_metadata(
         "schema": price_provenance.PRICE_SOURCE_SCHEMA,
         "source_class": _source_class,
         "reproducible": _source_class != "ai_estimate",
+        **({"price_is_reproducible": bool(_repro)} if _repro is not None else {}),
         "pricing_mode": _pricing_mode,
         # WHAT KIND OF PRICE, AND MAY WE STAND BEHIND IT. Two different questions: a public
         # list price repeats perfectly and is still not a quote we have committed to. The

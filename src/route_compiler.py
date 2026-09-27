@@ -1762,6 +1762,13 @@ def build_part_graph(
         from part_code_conventions import mirror_base as _mirror_base_code
     except Exception:                                                # noqa: BLE001
         _mirror_base_code = None
+    # WHICH HAND TOOK WHOSE HARDWARE. The hardware-carrier rule below asks the hand for
+    # fabrication evidence of its own, and the hand it was written for had none it could
+    # show: 12567-05-02M's model has no sheet body, so its own reading is an envelope, and
+    # the mirror's flat lost to it on rank. Given the studs, it became an assembly and lost
+    # its laser, its fold and its sheet row (D-280). The base's evidence is the hand's — the
+    # same flat — so the rule can ask the base where the hand cannot answer.
+    _hand_hardware_base: Dict[str, str] = {}
     for _hid, _hrec in list(raw.items()):
         if not isinstance(_hrec, Mapping) or _hid in children:
             continue
@@ -1786,6 +1793,7 @@ def build_part_graph(
         for _c, _q in _bkids.items():
             children.setdefault(_hid, {})[_c] = _q
             parents.setdefault(_c, set()).add(_hid)
+        _hand_hardware_base[_hid] = _bid
         print(f"   [graph] {_hid} is the other hand of {_bid} and carries its hardware too: "
               + ", ".join(f"{_c} x{_q:g}" for _c, _q in sorted(_bkids.items())), flush=True)
 
@@ -2567,7 +2575,17 @@ def build_part_graph(
         except Exception:                                            # noqa: BLE001
             return False
         if not has_fabrication_evidence(dict(record)):
-            return False
+            # THE HAND'S EVIDENCE IS ITS BASE'S. Where the hardware under this node was
+            # copied from the hand it mirrors (D-275), the two are one flat, and the base
+            # was measured or the mirror would not have named it. A hand whose own record
+            # cannot show that — an envelope from a model with no sheet body, a matched
+            # DXF that measured nothing — is still the cut part its base is (D-280).
+            _bid = _hand_hardware_base.get(identity)
+            if not (_bid and has_fabrication_evidence(dict(records.get(_bid) or {}))):
+                return False
+            print(f"   [graph] {identity} shows no fabrication evidence of its own; it is the "
+                  f"other hand of {_bid}, which does, so the same flat stands for both",
+                  flush=True)
         for kid in kids:
             krec = dict(records.get(kid) or {})
             krec.setdefault("part_number", kid)

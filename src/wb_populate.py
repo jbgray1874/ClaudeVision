@@ -1719,6 +1719,22 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
             continue   # acrylic is not powder coated — contributes zero coated area
         if not says_coated(_sp):
             continue   # the route decided this part does not go through the booth
+        # AN ASSEMBLY COATED AS ONE THING HAS NO BLANK, AND STILL HAS AN AREA. 12567-02-101
+        # HEADER CASE: the coat is claimed on the case, its members' sheets carry none of
+        # their own, so the route names the case and not the panels. This sum read blanks —
+        # the case has none, and its panels are not on the route — so the POWDER line held
+        # 0.2669 m2 for a job whose case alone is over a square metre both faces (D-282).
+        # stamp_members_coated_area already summed the members' blanks, both faces, at their
+        # count per case, onto the case's own powder consumable; that is the case's area.
+        _pcons = _sme.get("powder_consumable") if isinstance(_sme.get("powder_consumable"),
+                                                             dict) else {}
+        if _pcons.get("coated_area_source") == "sum_of_members_blanks":
+            _ma = _safe(_pcons.get("coated_area_m2"))
+            if _ma and _ma > 0:
+                total += float(_ma) * float(_safe(_sp.get("quantity"), 1) or 1)
+                if _sq_pn:
+                    _seen_squash.add(_sq_pn)
+                continue
         if _no_material_was_costed(_sp):
             continue   # you cannot coat what you did not buy material for
         _sdesc = str(_sp.get("part_description") or _sp.get("description")
