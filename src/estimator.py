@@ -9930,6 +9930,33 @@ def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
         return None
 
 
+def _member_carries_its_own_coat(member: Dict[str, Any]) -> bool:
+    """Is this member coated on its own line, so its area must not be counted on the case?
+
+    The member's OWN stated finish decides. RAW (or any stated non-powder finish) says the
+    part is not coated on its own — a powder op on it came from the assembly or the document.
+    A pointer ("SEE ASSEMBLY") states nothing about the part. A stated powder finish of its
+    own is a coat of its own. With no finish stated, an op the part's own text carried counts;
+    an op inherited from the document does not (D-286).
+    """
+    if not isinstance(member, dict) or "powder_coating" not in _part_ops(member):
+        return False
+    try:
+        from finish_rules import stated_finish, finish_is_powder, _is_pointer
+    except Exception:                                                # noqa: BLE001
+        return True
+    # A finish the document filled in is the document's words, not this sheet's.
+    _fin = "" if member.get("finish_inherited_from") else stated_finish(member)
+    if _fin and _is_pointer(_fin):
+        # "SEE ASSEMBLY DRAWING": the part is coated as the assembly. Counted through the
+        # case here; if the compiler resolves the pointer into a row of the member's own,
+        # the POWDER sum leaves it out of the case's share (coated_sheet_area_m2).
+        return False
+    if _fin:
+        return finish_is_powder(_fin)
+    return "powder_coating" in [str(o) for o in (member.get("textual_operations") or [])]
+
+
 def stamp_members_coated_area(parts: Any) -> int:
     """An assembly coated as one thing is coated over the area of what it is made of.
 
@@ -10002,7 +10029,15 @@ def stamp_members_coated_area(parts: Any) -> int:
             # from the document's finish — so every one read as "coated on its own line" and
             # the case's area summed to nothing (D-283). Only a coat the member's own sheet
             # states puts it in the booth on its own.
-            if "powder_coating" in _part_ops(_m) and not _m.get("finish_inherited_from"):
+            #
+            # AND THE MEMBER'S OWN SHEET IS THE JUDGE, NOT THE OP. Tested against the 21:57
+            # record, D-283 still skipped the fascia and the large panels: their sheets say RAW,
+            # they carried powder_coating from another reader, and the inherited marker is only
+            # written by the reader that adds the op. A part whose own finish is RAW, or points
+            # to the assembly, or is silent, is coated AS the case — its op is the case's coat
+            # arriving by another road (D-286). Only a stated powder finish of its own, or the
+            # op read from its own text with no finish inherited, is a coat on its own line.
+            if _member_carries_its_own_coat(_m):
                 continue
             # THROUGH THE SHARED RESOLVER. The measured members of that case hold their flat
             # under normalized_geometry.bounding_box_flat_mm; reading two spellings found none.
@@ -10653,7 +10688,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                     # of them (D-283). A coat the part's own sheet states is never marked.
                     _p.setdefault("finish_inherited_from", "document_level")
                 if not _p.get("surface_finishes"):
+                    # THE FINISH TOO, NOT ONLY THE OP. A member that already carried the op
+                    # from another reader and stated no finish of its own took the
+                    # document's words here and then read as stating them itself (D-286).
                     _p["surface_finishes"] = list(_finishes)
+                    _p.setdefault("finish_inherited_from", "document_level")
             if debug:
                 print(f"[DEBUG] {_coat_op} stamped onto metal parts from title-block finish {_finishes}")
     started = time.time()

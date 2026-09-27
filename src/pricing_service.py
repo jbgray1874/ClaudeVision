@@ -80,6 +80,44 @@ def answers_a_purchase(result: Dict[str, Any]) -> bool:
     return not any(t.upper() in blob for t in terms)
 
 
+_ARTICLE_NOISE = {"THE", "AND", "FOR", "WITH", "PER", "EACH", "SET", "PACK", "UNIT", "ONE",
+                  "PRICE", "PRICED", "LISTING", "ALSO", "LISTED", "PART", "ITEM", "FROM",
+                  "INTO", "THAT", "THIS", "CODE", "TYPE", "ASSY", "ASSEMBLY", "STD", "P/P"}
+
+
+def _article_words(text: str) -> set:
+    """The words that say WHAT a thing is: letters, three or more, not a joining word."""
+    out = set()
+    for tok in re.split(r"[^A-Z0-9]+", str(text or "").upper()):
+        if len(tok) >= 3 and any(c.isalpha() for c in tok) and tok not in _ARTICLE_NOISE:
+            out.add(tok)
+    return out
+
+
+def prices_this_article(description: str, result: Dict[str, Any]) -> bool:
+    """Does a researched answer price the article the line describes?
+
+    12567-01, 27 Sep 2026: the LED driver's £0.80 came from a MILD STEEL SHEET listing — the
+    search matched on the pack's material and the figure would have priced a driver as a piece
+    of sheet, tagged indicative and on the sheet. The answer says what it priced (a scraped
+    listing's title, or the model's own item_priced) and the line says what it is; where the
+    two share no word that names a thing, the answer is about something else (D-287).
+
+    Judged only where the answer NAMES what it priced. An answer that names nothing cannot be
+    checked here and is not refused on that account — the item_priced field exists so that a
+    wrong match is at least visible; this rule acts where it is readable.
+    """
+    _named = " ".join(str(result.get(k) or "") for k in ("item_priced", "supplier_name"))
+    _answer = _article_words(_named)
+    _asked = _article_words(description)
+    if not _answer or not _asked:
+        return True
+    if _answer & _asked:
+        return True
+    # A word of one inside a word of the other ("DRIVER" in "DRIVERS", "SCREW" in "SCREWS").
+    return any(a in b or b in a for a in _asked for b in _answer if len(a) >= 4 and len(b) >= 4)
+
+
 def standard_commodity_price(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """A stable, reproducible provisional for a generically-named standard bought-in — a
     PALLET, a perforated-panel clip — from config.STANDARD_COMMODITY_PRICE_GBP, keyed on the
@@ -1585,6 +1623,18 @@ class PricingService:
                   f"{part.get('part_number') or _spec.get('description')} refused: asked as a "
                   f"purchase, answered as a made part ({_ai_indicative_supplier(result)}, "
                   f"£{float(result['price_gbp']):.2f}) — estimator to price", flush=True)
+            return None
+        if not prices_this_article(str(_spec.get("description") or part.get("description") or ""),
+                                   result):
+            _named = str(result.get("item_priced") or result.get("supplier_name") or "")[:80]
+            print(f"   [pricing] researched price for "
+                  f"{part.get('part_number') or _spec.get('description')} refused: the answer "
+                  f"priced '{_named}' (£{float(result['price_gbp']):.2f}), which is not this "
+                  f"article — estimator to price", flush=True)
+            part.setdefault("review_flags", []).append(
+                f"NOT PRICED — a researched figure of £{float(result['price_gbp']):.2f} was for "
+                f"'{_named}', not for {part.get('description') or part.get('part_number')}; "
+                f"refused rather than put on the sheet. Enter a catalogue or supplier rate.")
             return None
         capped_conf = min(float(result.get("confidence") or 0.45), conf_cap)
         return {
