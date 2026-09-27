@@ -2466,6 +2466,20 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
     for _i, row in enumerate(_rows):
         _article = _article_ids.get(_i) or ""
         pn = _article or str(row.get("part_number") or "").strip()
+        # A ROW SPLIT UPSTREAM ALREADY CARRIES ITS PER-ARTICLE IDENTITY. file_scan applies
+        # part_identity.split_category_code_rows to the reconciled rows IN PLACE before this
+        # pass sees them, so a class-coded row arrives here as part_number "P/P-<slug>" with
+        # printed_code "P/P". category_code_identities recognises a CODE that is a category;
+        # a split identity is not one, so those rows fell through to the identifier rules
+        # below, and _is_valid_part_identifier refuses anything over 40 characters — a cap
+        # written for junk codes, not for articles under a class word. 12567-02-GA's two EPDM
+        # tape lengths, at 45 and 46 characters, were the only P/P rows refused and the only
+        # two with no line on the Estimate (D-290). The printed class word says what the row
+        # is; the identity the split gave it is the article.
+        _printed = str(row.get("printed_code") or "").strip()
+        if (not _article and _printed and pn and is_category_not_a_code(_printed)
+                and pn.upper() != _printed.upper()):
+            _article = pn
         dsc = str(row.get("description") or "").strip()
         qty = row.get("quantity") or 1
         if not _article and is_category_not_a_code(pn):
@@ -2495,7 +2509,7 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
         rec["materials"] = []
         rec["source"] = "non_sdi_bom_row"
         if _article:
-            rec["printed_code"] = str(row.get("part_number") or "").strip()
+            rec["printed_code"] = _printed or str(row.get("part_number") or "").strip()
             rec["is_bought_in"] = True
         # WHICH TABLE LISTED IT, so the graph can hang it where the drawing says.
         _bp = str(row.get("bom_parent") or row.get("source_pdf") or "").strip()

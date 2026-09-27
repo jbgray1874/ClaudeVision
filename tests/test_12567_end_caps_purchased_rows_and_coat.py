@@ -740,6 +740,48 @@ def test_a_purchased_castor_still_finds_its_category():
     assert got and got["unit_price_gbp"] == 6.40 and got["material_hint"] == "CASTORS"
 
 
+def _substring_table_service():
+    """The category table as LIKE '%word%' actually behaves: a word matches any category that
+    contains it, so PLASTIC finds PLASTIC SHEET and STEEL finds MILD STEEL SHEET."""
+    import pricing_service as ps
+    svc = ps.PricingService(conn=object())
+    table = [("https://x/plastic", "PLASTIC SHEET", 45.0, 1),
+             ("https://x/steel", "MILD STEEL SHEET", 0.80, 1),
+             ("https://x/mdf", "MDF", 22.0, 2),
+             ("https://x/sections", "METAL SECTIONS", 18.0, 2),
+             ("https://x/castors", "CASTORS", 6.40, 3)]
+    asked = []
+
+    def _fetch(sql, params):
+        asked.append(str(params[0]).upper())
+        for row in table:
+            if str(params[0]).upper() in row[1]:
+                return row
+        return None
+    svc._fetch_one_with_retry = _fetch
+    return svc, asked
+
+
+def test_a_material_word_in_a_purchase_description_does_not_price_it_from_stock():
+    svc, asked = _substring_table_service()
+    for desc in ("PLASTIC END CAP 40X40", "STEEL BACKED MAGNET 20MM", "MDF EDGE TRIM 2M",
+                 "STAINLESS STEEL HOOK", "METAL SHELF SUPPORT"):
+        part = {"part_number": "P/P-X", "description": desc, "is_bought_in": True,
+                "page_roles": ["bought_in"]}
+        assert svc._get_supplier_catalog(part) is None, (desc, asked)
+    assert "STEEL" not in asked and "PLASTIC" not in asked, asked
+    castor = {"part_number": "P/P-CASTOR", "description": "CASTOR 50MM SWIVEL", "is_bought_in": True}
+    assert svc._get_supplier_catalog(castor)["material_hint"] == "CASTORS"
+
+
+def test_a_minted_late_record_carries_bench_time_like_the_fastener_adds():
+    import file_scan as fs
+    summary = {"estimate_summary": {"part_estimates": []}}
+    fs._reconcile_dualpath_into_part_estimates(summary, {"rows": _rows_as_the_table_reader_flattens_them()})
+    for p in summary["estimate_summary"]["part_estimates"]:
+        assert p.get("textual_operations") == ["handling"], p.get("part_number")
+
+
 def test_a_made_part_still_takes_the_materials_catalogue_rung():
     svc, asked = _category_table_service()
     bracket = {"part_number": "12567-02-04M", "description": "BRACKET",
@@ -776,18 +818,45 @@ def test_the_make_buy_authority_makes_a_found_price_reach_the_total():
 
 # D-290: a table row only the deterministic reader saw, and not a fastener, gets a record.
 
+def _rows_as_the_table_reader_flattens_them():
+    """The production row shape (bom_pipeline's flatten), SPLIT IN PLACE as file_scan does
+    before the writeup and the reconcile see them: part_number is the per-article identity
+    and printed_code the class word the drawing printed. A fixture with unsplit "P/P" rows
+    and keys the flatten never emits passed while the real rows were refused."""
+    from part_identity import split_category_code_rows
+    rows = [
+        {"part_number": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 1230mm",
+         "quantity": 2, "source_pdf": "12567-02-GA", "bom_parent": "12567-02-GA", "bom_source": "A_ONLY"},
+        {"part_number": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 300mm",
+         "quantity": 2, "source_pdf": "12567-02-GA", "bom_parent": "12567-02-GA", "bom_source": "A_ONLY"},
+        {"part_number": "P/P", "description": "JST Y Splitter",
+         "quantity": 3, "source_pdf": "12567-02-GA", "bom_parent": "12567-02-GA", "bom_source": "BOTH"},
+    ]
+    split_category_code_rows(rows)
+    assert rows[0]["part_number"] == "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM"
+    assert rows[0]["printed_code"] == "P/P" and len(rows[0]["part_number"]) > 40
+    return rows
+
+
+def test_the_minter_honours_a_row_split_upstream():
+    """The real fault (D-290 restated): the writeup's minter saw the EPDM rows and refused
+    their 45- and 46-character split identities on the identifier cap."""
+    import document_builder as db
+    out = db.bought_in_rows_without_records(_rows_as_the_table_reader_flattens_them(), [])
+    pns = {r["part_number"]: r for r in out}
+    assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM" in pns
+    assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-300MM" in pns
+    epdm = pns["P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM"]
+    assert epdm["quantity"] == 2 and epdm["is_bought_in"] and epdm["printed_code"] == "P/P"
+    assert epdm["bom_parent"] == "12567-02-GA"
+
+
 def test_a_non_fastener_row_only_the_table_reader_saw_reaches_the_estimate():
     import file_scan as fs
     held = {"part_number": "P/P-JST-Y-SPLITTER", "description": "JST Y Splitter", "quantity": 3,
             "page_roles": ["bought_in"]}
     summary = {"estimate_summary": {"part_estimates": [held]}}
-    dp = {"rows": [
-        {"part_code": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 1230mm",
-         "qty": 2, "bom_parent": "12567-02-GA"},
-        {"part_code": "P/P", "description": "10x3mm EPDM CLOSED CELL TAPE, LENGTH: 300mm",
-         "qty": 2, "bom_parent": "12567-02-GA"},
-        {"part_code": "P/P", "description": "JST Y Splitter", "qty": 3, "bom_parent": "12567-02-GA"},
-    ]}
+    dp = {"rows": _rows_as_the_table_reader_flattens_them()}
     updated, added = fs._reconcile_dualpath_into_part_estimates(summary, dp)
     pes = summary["estimate_summary"]["part_estimates"]
     pns = [p["part_number"] for p in pes]
@@ -795,8 +864,11 @@ def test_a_non_fastener_row_only_the_table_reader_saw_reaches_the_estimate():
     assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-1230MM" in pns
     assert "P/P-10X3MM-EPDM-CLOSED-CELL-TAPE-LENGTH-300MM" in pns
     assert pns.count("P/P-JST-Y-SPLITTER") == 1, "the article already held is not minted twice"
+    assert any(e.get("parent") == "12567-02-GA" for e in held.get("bom_parents") or []), (
+        "the held article's occurrence on this table is noted, as the fastener loop does")
     epdm = next(p for p in pes if p["part_number"].endswith("1230MM"))
     assert epdm.get("quantity") == 2 and epdm.get("is_bought_in") and epdm.get("bom_parent") == "12567-02-GA"
+    assert epdm.get("printed_code") == "P/P"
 
 
 # D-291: the envelope sentence goes when the mirrored flat lands.
