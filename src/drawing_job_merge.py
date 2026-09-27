@@ -2525,6 +2525,15 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 # where the base carried none.
                 if base_ng.get("geometry_confidence") is not None:
                     _ng["geometry_confidence"] = base_ng["geometry_confidence"]
+                # A MEASURED FLAT HAS LANDED, SO THE ENVELOPE IS NO LONGER THE SIZE USED. The
+                # detail-page pass runs first and, finding no printed overall on the hand's
+                # sheet, wrote "UNRESOLVED; the size used is a fallback envelope". 12567-05-02M
+                # then took 05-01M's 409.5 x 88 and was nested on it, with that sentence
+                # still beside it on the report (D-291). A flag about a size that is not used
+                # is withdrawn by the pass that replaced the size.
+                part["review_flags"] = [
+                    f for f in (part.get("review_flags") or [])
+                    if "the size used is a fallback envelope" not in str(f)]
             _ng["mirrored_from"] = base.get("part_number")
             part["normalized_geometry"] = _ng
         # THROUGH THE RESOLVER, NOT AROUND IT. These are written under a COMPUTED key, so

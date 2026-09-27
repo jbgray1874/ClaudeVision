@@ -267,6 +267,39 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         _added += 1
         print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)
 
+    # EVERY ROW THE TABLE READER SAW, NOT ONLY THE FASTENERS. The loop above is the fastener
+    # vocabulary; a row only this reader saw that is not a fastener — 12567-02-GA's two EPDM
+    # tape lengths, printed "P/P" — was skipped here and had no other road to a record: the
+    # writeup's minter (D-277) never saw it, so it reached the graph as an edge with no record,
+    # sat on BOMs & Routes at x2 and had no line on the Estimate (D-290). The same minter
+    # runs here over the rows the loop left, so one rule names every table row. A row whose
+    # article an existing record already describes is not minted twice.
+    try:
+        from document_builder import bought_in_rows_without_records as _mint_rows
+        from part_identity import _article_words as _aw
+        _held_articles = {tuple(_aw(_p.get("description"))) for _p in _parts_recon
+                          if isinstance(_p, dict) and _p.get("description")}
+        _other = [{"part_number": _dp_code(_r),
+                   "description": str(_r.get("description") or ""),
+                   "quantity": _dp_qty(_r) or 1,
+                   "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "")}
+                  for _r in rows if not _is_fastener_row(_r)]
+        for _rec in _mint_rows(_other, _parts_recon):
+            if tuple(_aw(_rec.get("description"))) in _held_articles:
+                continue
+            _rec.setdefault("textual_operations", ["handling"])
+            _rec.setdefault("review_flags", []).append(
+                f"Added from dual-path BOM table read (a row only the table reader saw), "
+                f"qty {_rec.get('quantity')} - price via waterfall, estimator to verify")
+            _parts_recon.append(_rec)
+            _held_articles.add(tuple(_aw(_rec.get("description"))))
+            _added += 1
+            print(f"   [recon-row] ADD {_rec['part_number']} '{_rec.get('description')}' "
+                  f"qty {_rec.get('quantity')}", flush=True)
+    except Exception as _mint_exc:                                   # noqa: BLE001
+        print(f"   [recon-row] non-fastener rows not minted ({type(_mint_exc).__name__}: "
+              f"{_mint_exc})", flush=True)
+
     if _es_recon.get("part_estimates") is not None:
         _es_recon["part_estimates"] = _parts_recon
     elif isinstance(summary.get("estimate_summary"), dict) and \
