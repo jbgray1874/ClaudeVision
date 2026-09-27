@@ -229,3 +229,24 @@ def test_the_classification_sentence_survives_only_where_the_authority_agrees():
                      page_roles=["detail"])
     note = input_note_for_line(part)["note"]
     assert "did not classify this part as a bought-in" in note
+
+
+# ── D-302: a late record honours the drawing's "supplied by others" note ──────────────────
+
+def test_a_late_record_the_drawing_says_another_party_supplies_is_not_costed(monkeypatch):
+    """15:33 book: the display and antenna, minted after estimate_document, were researched
+    and charged while the router — same note, a record in time — stayed at £0."""
+    display = {"part_number": 'BLUEFIN 49.1" LCD DISPLAY, 20-0129-0365',
+               "description": 'BLUEFIN 49.1" LCD DISPLAY, 20-0129-0365', "quantity": 1,
+               "page_roles": ["bought_in"], "is_bought_in": True}
+    summary = {"assumed_job_quantity": 163,
+               "pages": [{"pdfplumber_text": "NOTE 3. DISPLAY, ROUTER AND ANTENNA SUPPLIED AND "
+                                             "FITTED BY PIXEL INSPIRATION UK."}],
+               "estimate_summary": {"part_estimates": [display]}}
+    monkeypatch.setattr(est, "_resolve_part_system_cost",
+                        lambda p: (_ for _ in ()).throw(AssertionError("must not be priced")))
+    assert est.cost_uncosted_bought_in_records(summary) == 1
+    pe = summary["estimate_summary"]["part_estimates"][0]
+    assert pe.get("supplied_by_third_party")
+    assert (pe.get("unit_total_cost_gbp") or 0) == 0
+    assert summary["third_party_supplied"][0]["item"]
