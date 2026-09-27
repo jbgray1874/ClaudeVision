@@ -129,3 +129,27 @@ def test_a_job_with_no_money_anywhere_has_no_bill_to_reconcile():
 def test_the_check_is_registered():
     """A check that exists and is not in CHECKS is indistinguishable from one that passes."""
     assert inv.check_every_reached_bom_item_is_accounted_for in inv.CHECKS
+
+
+def test_raw_records_beside_costed_ones_do_not_hide_the_money():
+    """17:45 book: the check read summary['parts'] — raw records, no money — and called 37
+    charged items unaccounted (D-305)."""
+    panel_raw = {"part_number": "12567-02-01M", "quantity": 1}
+    panel_costed = {"part_number": "12567-02-01M", "quantity": 1,
+                    "material_estimate": {"extended_material_cost_gbp": 17.22}}
+    s = _summary([GA, SUB, PANEL], [panel_costed])
+    s["parts"] = [panel_raw]
+    assert inv.check_every_reached_bom_item_is_accounted_for(s) == []
+
+
+def test_a_model_name_or_placeholder_node_is_a_warning_not_a_block():
+    sub = dict(SUB)
+    sub["children"] = SUB["children"] + [{"part_number": "//", "qty": 1.0},
+                                         {"part_number": "12567-02 TAGRA 24V DRIVER", "qty": 1.0}]
+    nodes = [GA, sub, TAPE, PANEL, _node("//", "leaf"), _node("12567-02 TAGRA 24V DRIVER", "leaf")]
+    tape_rec = {"part_number": TAPE["part_number"], "quantity": 2,
+                "cost_breakdown": {"system_cost": {"unit_cost_gbp": 3.25, "applied_to_total": True}}}
+    out = inv.check_every_reached_bom_item_is_accounted_for(
+        _summary(nodes, [_charged("12567-02-01M"), tape_rec]))
+    assert [v["code"] for v in out] == ["reached_node_without_a_code_or_record"]
+    assert out[0]["severity"] == inv.WARNING
