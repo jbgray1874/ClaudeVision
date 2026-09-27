@@ -3916,7 +3916,13 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
     def _squash(v: Any) -> str:
         return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
 
-    records = [p for p in _parts(summary) if isinstance(p, dict)]
+    # THE COSTED RECORDS, NOT THE RAW ONES. _parts() answers geometry questions and returns
+    # summary["parts"] first — records with no money on them — so the first run of this check
+    # (the 17:45 12567 book) called 37 items unaccounted, the fabricated panels the sheet
+    # plainly charges among them (D-305). Money lives on estimate_summary.part_estimates.
+    _es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    records = [p for p in ((_es.get("part_estimates") if isinstance(_es.get("part_estimates"), list)
+                            else summary.get("part_estimates")) or []) if isinstance(p, dict)]
     by_ident: Dict[str, Dict[str, Any]] = {}
     for rec in records:
         pn = str(rec.get("part_number") or "").strip().upper()
@@ -3968,7 +3974,22 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
 
     _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT", "POWDER",
                    "BOM-OVERFLOW"}
+    try:
+        from part_identity import is_placeholder_identity as _placeholder
+    except Exception:                                                # noqa: BLE001
+        def _placeholder(_v):                                        # type: ignore[misc]
+            return not re.search(r"[A-Z0-9]", str(_v or "").upper())
+
+    def _names_a_code(ident: str) -> bool:
+        """A BOM code, not a model file stem or a code-column placeholder. "//" is the
+        drawing saying 'no code'; "12567-02 TAGRA 24V 100W ... DRIVER" and "JST
+        SPLITTER^12567-02-301" are SolidWorks component names for items the BOM already
+        carries under their own codes."""
+        return bool(ident) and not _placeholder(ident) and "^" not in ident \
+            and not re.search(r"\s", ident)
+
     unaccounted: List[str] = []
+    uncoded: List[str] = []
     for ident in sorted(reached):
         node = nodes.get(ident) or {}
         if str(node.get("kind") or "") not in ("leaf", "bought_in"):
@@ -3982,13 +4003,22 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
                 if rec is not None:
                     break
         if rec is None:
-            unaccounted.append(ident)
+            (unaccounted if _names_a_code(ident) else uncoded).append(ident)
             continue
         if not _money(rec) and not _asked_or_ruled(rec):
             unaccounted.append(ident)
+    out: List[Dict[str, Any]] = []
+    if uncoded:
+        out.append(_violation(
+            "reached_node_without_a_code_or_record", WARNING,
+            f"{len(uncoded)} reached node(s) carry no BOM code and no costed record: "
+            f"{', '.join(uncoded[:6])}{f' (+{len(uncoded) - 6} more)' if len(uncoded) > 6 else ''}. "
+            f"Usually a model component name or a code-column placeholder standing beside a "
+            f"line the BOM carries under its own code; confirm nothing on the drawing is missing.",
+            identities=uncoded))
     if not unaccounted:
-        return []
-    return [_violation(
+        return out
+    return out + [_violation(
         "reached_bom_item_unaccounted", BLOCKING,
         f"{len(unaccounted)} item(s) the product reaches carry no charge, no free-issue "
         f"ruling and no open question: {', '.join(unaccounted[:6])}"
