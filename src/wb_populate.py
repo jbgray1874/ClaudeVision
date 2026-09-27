@@ -3168,6 +3168,118 @@ def _is_tube(pe: Dict[str, Any]) -> bool:
 
 
 
+def fill_missing_block_totals(ws, cm, flags=None) -> Dict[str, List[int]]:
+    """A block row with no line-total formula is filled from the block's first row.
+
+    The widened template of 27 Sep 2026 carried the BOM's Total Value formula
+    =(J*K)*(100%+L) on rows 11-31 and 62-80 and NOT on 32-61. A bought-in written to one of
+    those thirty rows shows its price and quantity and adds nothing to Total Material Cost —
+    the one error on a sheet that nobody catches, because the row looks priced (D-304).
+    Every block's column M is a per-row formula; where a row inside a block has none and the
+    block's first row has one, the first row's formula is translated to it (openpyxl's own
+    Translator, so references move exactly as Excel's fill-down would) and the fill is
+    flagged so the template can be corrected. A row holding a value, not a formula, is left
+    alone. Returns {block: [rows filled]}.
+    """
+    filled: Dict[str, List[int]] = {}
+    try:
+        from openpyxl.formula.translate import Translator
+    except Exception:                                                # noqa: BLE001
+        return filled
+    for key in ("bom", "tube", "steel", "other_sheet", "labour"):
+        blk = cm.get(key)
+        if not isinstance(blk, dict):
+            continue
+        fr, lr = int(blk["first_row"]), int(blk["last_row"])
+        src = ws.cell(fr, 13).value
+        if not (isinstance(src, str) and src.startswith("=")):
+            continue
+        for r in range(fr + 1, lr + 1):
+            cell = ws.cell(r, 13)
+            if cell.value in (None, ""):
+                try:
+                    cell.value = Translator(src, origin=f"M{fr}").translate_formula(f"M{r}")
+                    filled.setdefault(key, []).append(r)
+                except Exception:                                    # noqa: BLE001
+                    continue
+    for key, rows in filled.items():
+        _flag(f"TEMPLATE: {key} rows {rows[0]}..{rows[-1]} ({len(rows)} rows) had no line-total "
+              f"formula in column M, so a line written there would add nothing to the total. "
+              f"Filled from row {cm[key]['first_row']} for this book — fill the formula down "
+              f"in the blank template.", flags if isinstance(flags, list) else [])
+    return filled
+
+
+def derive_cellmap_from_template(ws, cm, flags=None) -> Dict[str, Any]:
+    """Read every block's rows from the template itself, and update the map in place.
+
+    THE TEMPLATE IS THE SOURCE OF TRUTH FOR ITS OWN LAYOUT, SO READ IT. The block rows were
+    constants, widened by hand in step with the template once (BOM 15 -> 40 rows, July), and
+    the guard below refused to run the moment the two disagreed. On 27 Sep 2026 the BOM block
+    was widened again in Excel so a big kit's bought-ins fit on the sheet, and every run
+    would have stopped with "Update CELL_MAP" until someone edited code (D-303).
+
+    Excel re-points the Total Material Cost formula whenever rows are inserted, so it always
+    names the four material blocks in order — BOM, Wire, Sheet Steel, Other Sheet Material —
+    as SUM(M<first>:M<last>) spans. Each span is accepted only where the section label the
+    engine expects sits in its place (the BOM's own header row above it; "Wire", "Sheet
+    Steel", "Other Sheet Material" two rows above the others), so a formula somebody edited
+    by hand cannot move a write. The labour block runs from the row under "Operation" in the
+    Labour section to the row above "Total Labour Cost". The powder rate and total cells sit
+    in AF on Other Sheet Material's label and header rows. Anything not found keeps its
+    constant, and the guard below still refuses a map the template contradicts. Returns
+    {block: (old, new)} for what moved.
+    """
+    import re as _re
+    moved: Dict[str, Any] = {}
+    try:
+        rows_c = {}
+        for r in range(1, min(ws.max_row, 600) + 1):
+            v = ws.cell(r, 3).value
+            if isinstance(v, str) and v.strip():
+                rows_c[r] = v.strip().lower()
+        total_row = next((r for r, v in rows_c.items() if v.startswith("total material cost")), None)
+        if total_row is None:
+            return moved
+        f = next((c.value for c in ws[total_row]
+                  if isinstance(c.value, str) and "SUM(" in c.value), None)
+        spans = sorted((int(a), int(b)) for a, b in
+                       _re.findall(r"SUM\(M(\d+):M(\d+)\)", str(f or "")))
+        if len(spans) != 4:
+            return moved
+        expect = (("bom", 1, "bill of materials"), ("tube", 2, "wire"),
+                  ("steel", 2, "sheet steel"), ("other_sheet", 2, "other sheet material"))
+        found: Dict[str, Tuple[int, int]] = {}
+        for (key, above, label), (fr, lr) in zip(expect, spans):
+            if not rows_c.get(fr - above, "").startswith(label):
+                return moved                   # the formula and the labels disagree: keep the map
+            found[key] = (fr, lr)
+        lab = next((r for r, v in sorted(rows_c.items())
+                    if r > found["other_sheet"][1] and v == "labour"), None)
+        op_row = next((r for r, v in sorted(rows_c.items())
+                       if lab and r > lab and v == "operation"), None)
+        lab_total = next((r for r, v in sorted(rows_c.items())
+                          if op_row and r > op_row and v.startswith("total labour cost")), None)
+        if op_row and lab_total and lab_total - 1 > op_row:
+            found["labour"] = (op_row + 1, lab_total - 1)
+        for key, (fr, lr) in found.items():
+            blk = cm.get(key)
+            if isinstance(blk, dict) and (blk.get("first_row"), blk.get("last_row")) != (fr, lr):
+                moved[key] = ((blk.get("first_row"), blk.get("last_row")), (fr, lr))
+                blk["first_row"], blk["last_row"] = fr, lr
+        _pw_label = found["other_sheet"][0] - 2
+        cm["powder"] = {"rate_cell": f"AF{_pw_label}", "total_cell": f"AF{_pw_label + 1}"}
+        if moved:
+            _flag("template layout read from the template itself: "
+                  + "; ".join(f"{k} rows {o[0]}..{o[1]} -> {n[0]}..{n[1]}"
+                              for k, (o, n) in moved.items())
+                  + " (Total Material Cost formula and section labels agree)",
+                  flags if isinstance(flags, list) else [])
+    except Exception:                                                # noqa: BLE001
+        return moved
+    return moved
+
+
 def _verify_template_matches_cellmap(ws, cm, flags=None):
     """The template is the single source of truth for its own layout.
 
@@ -4363,14 +4475,16 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         print(f"   [wb_populate] no '{cm['estimate_sheet']}' sheet in template.")
         return None
     ws = wb[cm["estimate_sheet"]]
+    derive_cellmap_from_template(ws, cm, flags)
     _verify_template_matches_cellmap(ws, cm, flags)
+    fill_missing_block_totals(ws, cm, flags)
 
     # Powder £/kg — write the code-controlled rate into the sheet (cell AF82),
     # overwriting the template's static default. AF83 (=AD82*AF82) then computes
     # powder material cost at the correct rate. Source: config.POWDER_COST_PER_KG.
     if _POWDER_COST_PER_KG is not None:
         try:
-            ws["AF82"] = float(_POWDER_COST_PER_KG)
+            ws[cm.get("powder", {}).get("rate_cell", "AF82")] = float(_POWDER_COST_PER_KG)
         except Exception:
             pass
 
@@ -4777,7 +4891,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # material blocks. Powder is now a BOM row inside SUM(M11:M50), so leaving AF83 alive
     # would charge it TWICE.
     try:
-        ws["AF83"] = 0
+        ws[cm.get("powder", {}).get("total_cell", "AF83")] = 0
     except Exception:
         pass
 
