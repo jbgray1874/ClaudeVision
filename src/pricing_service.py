@@ -1339,6 +1339,20 @@ class PricingService:
         }
 
     def _get_supplier_catalog(self, part: Dict[str, Any]) -> Dict[str, Any] | None:
+        # A PURCHASED COMPONENT IS NOT A STOCK MATERIAL. This table is a materials catalogue
+        # keyed on a material hint, and it is asked with the part's material first. 12567's
+        # LED driver carried MILD STEEL inherited from the title block, so this rung answered
+        # £0.80 from a mild-steel-sheet listing — selected before the researched rung, where
+        # the article check runs, so nothing compared a driver with a sheet (D-288). A line we
+        # buy is priced by the purchasing rungs above or researched as a purchase below; the
+        # materials catalogue has nothing to say about it.
+        try:
+            from bought_in_policy import is_bought_in as _bought
+            _is_purchase = bool(_bought(part))
+        except Exception:                                        # noqa: BLE001
+            _is_purchase = False
+        if _is_purchase or self._is_bought_in_heuristic(part):
+            return None
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
         search = material_hint or desc

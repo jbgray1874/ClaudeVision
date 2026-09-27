@@ -702,6 +702,39 @@ def test_a_steel_sheet_listing_does_not_price_an_led_driver():
     assert ps.prices_this_article("LED DRIVER 24V 60W CONSTANT VOLTAGE", driver)
 
 
+# D-288: the driver's £0.80 came from the MATERIALS catalogue, asked with its inherited steel.
+
+def _steel_row_service():
+    import pricing_service as ps
+    svc = ps.PricingService(conn=object())
+    asked = []
+
+    def _fetch(sql, params):
+        asked.append(list(params))
+        return ("https://metals4u.co.uk/mild-steel-sheet", "MILD STEEL", 0.80, 1)
+    svc._fetch_one_with_retry = _fetch
+    return svc, asked
+
+
+def test_a_purchased_component_is_not_priced_from_the_materials_catalogue():
+    svc, asked = _steel_row_service()
+    driver = {"part_number": "P/P-LED-DRIVER-24V", "description": "LED DRIVER 24V 60W",
+              "is_bought_in": True, "page_roles": ["bought_in"],
+              "normalized_material": "MILD_STEEL", "material_inherited_from": "document_level"}
+    assert svc._get_supplier_catalog(driver) is None
+    assert asked == [], "the materials catalogue was not even asked about a driver"
+
+
+def test_a_made_part_still_takes_the_materials_catalogue_rung():
+    svc, asked = _steel_row_service()
+    bracket = {"part_number": "12567-02-04M", "description": "BRACKET",
+               "normalized_material": "MILD_STEEL", "flat_pattern_detected": True,
+               "geometry_source": "dxf", "dxf_measured_outline": True}
+    got = svc._get_supplier_catalog(bracket)
+    assert got and got["source"] == "estimating_supplier_catalog_url" and got["unit_price_gbp"] == 0.80
+    assert asked and asked[0] == ["MILD_STEEL"]
+
+
 def test_an_answer_that_names_nothing_is_not_refused_here():
     import pricing_service as ps
     assert ps.prices_this_article("MAGNET 21MM", {"found": True, "price_gbp": 0.35})
