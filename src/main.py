@@ -929,11 +929,13 @@ def main() -> None:
                   f"the job report will describe the run from the flag alone.", flush=True)
 
         # SDI Intelligence — Learning Engine
+        _time_stage("learning_engine", True)
         try:
             from learning_engine import get_engine
             summary = get_engine().post_scan(summary)
         except Exception:
             pass
+        _time_stage("learning_engine", False)
 
         # Explicit order quantity (--order-qty), onto the fields the JOB-LEVEL additions read.
         #
@@ -984,6 +986,10 @@ def main() -> None:
         # Computed AFTER the scan, then folded into BOTH the bay estimate AND the canonical
         # estimate_summary (workbook_equivalent_pricing / cost_breakdown / document total). The
         # saved JSON is then RE-WRITTEN, so the spreadsheet, JSON and parity report all agree.
+        # The 15:33 12567 run put 32.6 minutes in post_scan_enrichment and the bracket could
+        # not say where inside. These name the steps that can each hold a database, a share
+        # or a re-serialisation of the whole job (D-299).
+        _time_stage("job_level_pricing_and_rewrite", True)
         _assembly_cost = 0.0
         _bought_in_total = 0.0
         _es = summary.get("estimate_summary", {}) or {}
@@ -1108,6 +1114,7 @@ def main() -> None:
             except Exception as _exc_rc:
                 print(f"  (totals reconciliation skipped: {_exc_rc})")
 
+        _time_stage("job_level_pricing_and_rewrite", False)
         print(f"Page count: {summary['page_count']}")
         print("Detected labels:", ", ".join(summary["detected_labels"]) or "None")
         print("Part numbers:", ", ".join(summary["pattern_summary"]["part_numbers"]) or "None")
@@ -1182,6 +1189,7 @@ def main() -> None:
             print(f"\nEstimated document total: {total}")
 
         if getattr(args, "generate_ai_spreadsheet", False):
+            _time_stage("ai_spreadsheet", True)
             try:
                 tpl = Path(args.ai_spreadsheet_template) if args.ai_spreadsheet_template else None
                 out_xlsx = Path(args.ai_spreadsheet_out) if args.ai_spreadsheet_out else None
@@ -1189,6 +1197,7 @@ def main() -> None:
                 print(f"\nAI estimating spreadsheet: {ai_path.resolve()}")
             except Exception as exc:
                 print(f"\nAI estimating spreadsheet failed: {exc}", flush=True)
+            _time_stage("ai_spreadsheet", False)
 
         # Auto-generate clean BOM/Routes/Summary xlsx on every scan
         # ── AI Estimate Sheet (wb_populate — primary output) ──────────────

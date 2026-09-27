@@ -23,7 +23,7 @@ outputs to each other, so a drawing nobody has seen yet is held to the same stan
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 # The one place that decides what a price source IS. Shared with the estimator and the
 # pricing service so a writer and a checker cannot reach different verdicts about the same
@@ -3842,6 +3842,163 @@ def check_the_sheet_carries_only_the_graphs_identities(summary: Any) -> List[Dic
     return out
 
 
+def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """Every BOM item the product reaches is charged, explicitly free-issued, or an open
+    question a person can see. An item that is none of the three has fallen off the bill
+    in silence, and silence is the one state the estimate must not contain.
+
+    12567-01's 13:14 book: the two EPDM tape lengths were on BOMs & Routes at x2, on the
+    provenance tab as leaves, and reached from the product through the end header's own
+    table — and had no line on the Estimate, no place on the missing-price list, and no
+    ruling anywhere. The identity seal could not see them (it asks whether every priced row
+    is in the graph, never whether every graph item is on the bill), and every price check
+    starts from a record, which is exactly what these rows did not have. This is the
+    converse of the seal: bill ⊆ graph there, reached graph ⊆ accounted-for here.
+
+    What counts as accounted for, deliberately in this order:
+      * MONEY — any cost the record carries (unit or extended total, material, labour, or a
+        bought-in price whose stamp says it reached the total). A fabricated leaf costed in
+        the Sheet Steel block carries its material money even where its BOM cell is £0.
+      * A RULING — a free-issue or nil-by-design classification, or a cross-reference row
+        whose money is charged on another line.
+      * AN OPEN QUESTION — a withheld price, a declined price the settle list offers, a
+        placeholder the estimator is asked to fill, or a NOT PRICED / UNPRICED flag. A £0
+        the sheet ASKS ABOUT is the system working; a £0 nobody mentions is the defect.
+
+    Assemblies are accounted for by their members. VIRTUAL_ SolidWorks stand-ins, the
+    commercial class lines and the overflow consolidation row are shapes the graph or the
+    sheet mints for its own bookkeeping, not BOM items. A job where nothing carries money
+    yet — a graph-only fixture, a run that died before costing — returns nothing: this gate
+    reconciles a bill, and there is no bill to reconcile."""
+    if not isinstance(summary, dict):
+        return []
+    payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               if isinstance(summary.get("estimate_summary"), dict) else None) \
+        or summary.get("canonical_route_shadow") or {}
+    if not isinstance(payload, dict):
+        return []
+
+    def _nd(n: Any) -> Dict[str, Any]:
+        if isinstance(n, dict):
+            return n
+        try:
+            import dataclasses as _dc
+            return _dc.asdict(n) if _dc.is_dataclass(n) else {}
+        except Exception:                                            # noqa: BLE001
+            return {}
+
+    nodes = {}
+    for raw_node in (payload.get("nodes") or []):
+        node = _nd(raw_node)
+        ident = str(node.get("part_number") or "").strip().upper()
+        if ident:
+            nodes[ident] = node
+    roots = [str(r).strip().upper() for r in
+             ([payload.get("product_root")] if payload.get("product_root") else [])
+             + ([payload.get("top_assembly")] if payload.get("top_assembly") else [])
+             + list(payload.get("top_assemblies") or []) if str(r).strip()]
+    roots = [r for r in dict.fromkeys(roots) if r in nodes]
+    if not nodes or not roots:
+        return []
+
+    reached: Set[str] = set()
+    frontier = list(roots)
+    while frontier:
+        ident = frontier.pop()
+        if ident in reached:
+            continue
+        reached.add(ident)
+        for edge in (nodes.get(ident, {}).get("children") or []):
+            child = str(_nd(edge).get("part_number") or "").strip().upper()
+            if child and child not in reached:
+                frontier.append(child)
+
+    def _squash(v: Any) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+    records = [p for p in _parts(summary) if isinstance(p, dict)]
+    by_ident: Dict[str, Dict[str, Any]] = {}
+    for rec in records:
+        pn = str(rec.get("part_number") or "").strip().upper()
+        if pn:
+            by_ident.setdefault(pn, rec)
+            by_ident.setdefault(_squash(pn), rec)
+
+    def _money(rec: Dict[str, Any]) -> bool:
+        me = rec.get("material_estimate") if isinstance(rec.get("material_estimate"), dict) else {}
+        le = rec.get("labour_estimate") if isinstance(rec.get("labour_estimate"), dict) else {}
+        sc = ((rec.get("cost_breakdown") or {}).get("system_cost")
+              if isinstance(rec.get("cost_breakdown"), dict) else None) or {}
+        for v in (rec.get("unit_total_cost_gbp"), rec.get("extended_total_cost_gbp"),
+                  me.get("extended_material_cost_gbp"), me.get("unit_material_cost_gbp"),
+                  le.get("total_labour_cost_gbp"),
+                  sc.get("unit_cost_gbp") if sc.get("applied_to_total") else None):
+            n = _num(v)
+            if n and n > 0:
+                return True
+        return False
+
+    _ASKED_RE = re.compile(r"NOT\s+(YET\s+)?PRICED|UNPRICED|ESTIMATOR TO PRICE|"
+                           r"FREE[\s-]?ISSUE|NOT COSTED", re.IGNORECASE)
+
+    def _asked_or_ruled(rec: Dict[str, Any]) -> bool:
+        if rec.get("_price_explicitly_withheld") or rec.get("_bom_cross_reference"):
+            return True
+        flags = " ".join(str(f) for f in (rec.get("review_flags") or []))
+        if _ASKED_RE.search(flags) or _ASKED_RE.search(str(rec.get("description") or "")):
+            return True
+        try:
+            import costed_facts as _cf
+            if _cf.is_placeholder_price(rec):
+                return True
+        except Exception:                                            # noqa: BLE001
+            pass
+        try:
+            import price_provenance as _pp
+            if _pp.declined_whole_part_price(rec):
+                return True
+        except Exception:                                            # noqa: BLE001
+            pass
+        return False
+
+    # No bill yet, nothing to reconcile — a graph-only fixture or a run that died before
+    # costing must not read as a job whose every item fell off the bill.
+    if not any(_money(rec) for rec in records):
+        return []
+
+    _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT", "POWDER",
+                   "BOM-OVERFLOW"}
+    unaccounted: List[str] = []
+    for ident in sorted(reached):
+        node = nodes.get(ident) or {}
+        if str(node.get("kind") or "") not in ("leaf", "bought_in"):
+            continue
+        if ident.startswith("VIRTUAL_") or ident in _COMMERCIAL:
+            continue
+        rec = by_ident.get(ident) or by_ident.get(_squash(ident))
+        if rec is None:
+            for alias in ((node.get("evidence") or {}).get("raw_aliases") or []):
+                rec = by_ident.get(str(alias).strip().upper())
+                if rec is not None:
+                    break
+        if rec is None:
+            unaccounted.append(ident)
+            continue
+        if not _money(rec) and not _asked_or_ruled(rec):
+            unaccounted.append(ident)
+    if not unaccounted:
+        return []
+    return [_violation(
+        "reached_bom_item_unaccounted", BLOCKING,
+        f"{len(unaccounted)} item(s) the product reaches carry no charge, no free-issue "
+        f"ruling and no open question: {', '.join(unaccounted[:6])}"
+        f"{f' (+{len(unaccounted) - 6} more)' if len(unaccounted) > 6 else ''}. Either a "
+        f"record was never made for the row, or its price was lost after it was found. "
+        f"Money missing in silence understates the unit by exactly what nobody can see — "
+        f"trace the row from BOMs & Routes to the Estimate before release.",
+        identities=unaccounted)]
+
+
 def check_two_roots_do_not_price_the_same_members(summary: Any) -> List[Dict[str, Any]]:
     """TWO TREES OVER ONE SET OF PARTS IS ONE PRODUCT COUNTED TWICE. The 10:57 7332
     replay priced GA -> 101 -> five frame parts AND GA2 -> 102 -> the same five parts:
@@ -3907,6 +4064,7 @@ def check_two_roots_do_not_price_the_same_members(summary: Any) -> List[Dict[str
 CHECKS = (
     check_the_identity_gate_actually_ran,
     check_the_sheet_carries_only_the_graphs_identities,
+    check_every_reached_bom_item_is_accounted_for,
     check_two_roots_do_not_price_the_same_members,
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,

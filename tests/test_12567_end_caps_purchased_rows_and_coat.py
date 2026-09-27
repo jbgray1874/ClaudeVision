@@ -800,6 +800,39 @@ def test_an_answer_that_names_nothing_is_not_refused_here():
     assert ps.prices_this_article("BINDING SCREW M4", {"item_priced": "M4 x 12 binding screws, one screw"})
 
 
+# D-298: the sheet keeps the lines carrying the money; the cheapest spill.
+
+def test_the_overflow_spills_the_cheapest_lines_not_the_latest():
+    """15:33 book: the £750 display and £18.50 antenna arrived last, spilled, and sat inside
+    one consolidated £778.19 row while 3p fixings held their own rows on the sheet."""
+    import wb_populate as wb
+    fixings = [{"part_number": f"FIXING{i}", "quantity": 4, "unit_cost_gbp": 0.03,
+                "cost_breakdown": {"system_cost": {"unit_cost_gbp": 0.03,
+                                                   "applied_to_total": True}}}
+               for i in range(6)]
+    display = {"part_number": "BI-DISPLAY", "quantity": 1,
+               "cost_breakdown": {"system_cost": {"unit_cost_gbp": 750.0,
+                                                  "applied_to_total": True}}}
+    antenna = {"part_number": "BI-ANTENNA", "quantity": 1,
+               "cost_breakdown": {"system_cost": {"unit_cost_gbp": 18.5,
+                                                  "applied_to_total": True}}}
+    powder = {"part_number": "POWDER", "quantity": 1, "_consumable_qty_unknown": True}
+    parts = fixings + [display, antenna, powder]      # the money arrives last
+    kept = wb.pin_lines_that_price_themselves(parts, n_rows=5)[:4]
+    kept_pns = [p["part_number"] for p in kept]
+    assert "BI-DISPLAY" in kept_pns and "BI-ANTENNA" in kept_pns, kept_pns
+    assert "POWDER" in kept_pns, "a line that prices itself on the sheet is still pinned"
+    spilled = wb.pin_lines_that_price_themselves(parts, n_rows=5)[4:]
+    assert all(p["part_number"].startswith("FIXING") for p in spilled)
+
+
+def test_a_job_that_fits_keeps_its_order():
+    import wb_populate as wb
+    parts = [{"part_number": "A", "unit_cost_gbp": 1.0},
+             {"part_number": "B", "unit_cost_gbp": 99.0}]
+    assert [p["part_number"] for p in wb.pin_lines_that_price_themselves(parts, 5)] == ["A", "B"]
+
+
 # D-289: the 13:14 book — eleven prices found and "NOT APPLIED: the engine did not classify
 # this part as a bought-in".
 
