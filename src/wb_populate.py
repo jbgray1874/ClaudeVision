@@ -563,7 +563,19 @@ def pin_lines_that_price_themselves(bom_parts: List[Dict[str, Any]], n_rows: int
     about it. Appended last, it was the first thing to spill, and on 12567-01's 16:48 book
     the powder reached the overflow sheet with no price and its money left the total
     (D-273). A cross-reference row ("priced on line N") is the same shape of line. Those
-    stay on the sheet; plain bought-ins spill first. Order among the rest is unchanged.
+    stay on the sheet; plain bought-ins spill.
+
+    AND THE MONEY STAYS WHERE AN ESTIMATOR READS. Which plain lines spilled used to be
+    arrival order, and on 12567-01's 15:33 book the two dearest lines on the whole bill —
+    the customer's 49-inch display at a researched £750 and its antenna, both recovered
+    late by the table reader — arrived last, spilled, and sat inside one consolidated
+    £778.19 row while 3p fixings held their own rows on the sheet. Every consolidated
+    figure is still in the total, but Tim reads the sheet, and the sheet showed him the
+    fixings and hid the display. So the spill takes the CHEAPEST lines first: the rows the
+    sheet keeps are the rows carrying the money, at any template size. Equal-value lines
+    keep their arrival order (the sort is stable), and unpriced lines rank as carrying
+    nothing — an unpriced line's place is the overflow sheet, where it is itemised in full,
+    not a row that reads as free beside priced ones (D-298).
     """
     if len(bom_parts) <= n_rows:
         return list(bom_parts)
@@ -572,8 +584,12 @@ def pin_lines_that_price_themselves(bom_parts: List[Dict[str, Any]], n_rows: int
         return bool(p.get("_consumable_qty_unknown") or p.get("_bom_cross_reference")
                     or p.get("_bom_overflow_consolidated"))
 
+    def _money(p: Dict[str, Any]) -> float:
+        _u = _bom_line_price(p)
+        return (float(_u) * float(_safe(p.get("quantity"), 1) or 1)) if _u is not None else 0.0
+
     pinned = [p for p in bom_parts if _stays(p)]
-    rest = [p for p in bom_parts if not _stays(p)]
+    rest = sorted((p for p in bom_parts if not _stays(p)), key=_money, reverse=True)
     head = max(0, n_rows - 1 - len(pinned))
     return rest[:head] + pinned + rest[head:]
 

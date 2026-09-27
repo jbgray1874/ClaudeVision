@@ -4226,6 +4226,7 @@ def _finalize_scan_summary(
     # BI-PEMSTUD) land on the FINAL list the sheet reads. The earlier inline copy ran
     # before part_estimates existed and silently no-op'd (STATUS doc S3.3).
     if _dual_path_enabled():
+        run_timing.mark("start dual_path_reconcile_and_recost")
         try:
             _dp_after = _dp  # defined above when the dual path ran; NameError-guarded
             # DIAGNOSTIC (temporary): show the runtime inputs so a silent no-op is explainable.
@@ -4261,12 +4262,14 @@ def _finalize_scan_summary(
             print("   [dual-path recon:diag] _dp is NOT DEFINED at reconcile point (dual-path reader did not run this path)", flush=True)
         except Exception as _dpr2_err:
             print(f"   [dual-path recon:diag] reconcile errored: {type(_dpr2_err).__name__}: {_dpr2_err}", flush=True)
+        run_timing.mark("done dual_path_reconcile_and_recost")
 
     # ── THE OTHER TIMING BOUNDARY ─────────────────────────────────────────────────────
     # The dual-path table reader adds bought-ins AFTER the route was compiled, which is how
     # 11350's wing nuts and PEM studs reached the Estimate tab and the reports while the
     # canonical BOM had never heard of them. Two BOM authorities, and the one an estimator
     # reads was the one outside the graph. Recompile from the final population.
+    run_timing.mark("start recompile_canonical_route")
     try:
         from route_compiler import refresh_canonical_route_after_reconciliation
         _canon_final = refresh_canonical_route_after_reconciliation(summary)
@@ -4275,6 +4278,7 @@ def _finalize_scan_summary(
     except Exception as _canon_refresh_err:
         print(f"   [canonical-part-graph] post-reconcile refresh failed: "
               f"{type(_canon_refresh_err).__name__}: {_canon_refresh_err}", flush=True)
+    run_timing.mark("done recompile_canonical_route")
 
     try:
         import bay_rollup
