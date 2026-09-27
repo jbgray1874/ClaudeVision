@@ -69,9 +69,14 @@ def make_client(responses=None, **kw):
 
 
 def person(inventry_id="INV-1", first="John", surname="Smith",
-           email="john.smith@wearesdi.com", person_id="BH-1", activity="OUT"):
+           email="john.smith@wearesdi.com", person_id="BH-1", activity="OUT",
+           location=""):
+    """Shaped like a real GetPersonnel record - LastActivity, not
+    LastActivityType, which is what the field-information PDF wrongly implied."""
     return {"ID": inventry_id, "FirstName": first, "Surname": surname,
-            "EmailAddress": email, "PersonID": person_id, "LastActivityType": activity}
+            "EmailAddress": email, "PersonID": person_id,
+            "LastActivity": activity, "LastActivityDate": "2026-09-21T07:45:00.000",
+            "LastEventLocation": location, "MemberOfStaff": True}
 
 
 # ─────────────────────────────── the client ───────────────────────────────
@@ -91,23 +96,55 @@ def test_post_sends_form_encoded_not_json():
     client.sign_in("INV-1", when="2026-09-21T07:45:00Z")
     call = session.calls[0]
     assert call["method"] == "POST"
+    assert call["url"].endswith("/PartnerAPI/AddPersonnelAction")
     assert isinstance(call["data"], dict)          # requests form-encodes a dict
-    assert call["data"]["EventType"] == cfg.INVENTRY_EVENT_TYPE_IN
+    assert call["data"]["PersonnelID"] == "INV-1"
+    assert call["data"]["ActionType"] == cfg.INVENTRY_EVENT_TYPE_IN
 
 
-def test_sign_in_formats_datetime_for_sql_server():
+def test_sign_in_uses_the_documented_datetime_format():
     client, session = make_client([StubResponse({"response": "OK"})])
     client.sign_in("INV-1", when="2026-09-21T07:45:00Z")
-    # SQL Server datetime, no timezone suffix.
-    assert session.calls[0]["data"]["EventDateTime"] == "2026-09-21 07:45:00"
+    # Their own examples: "T" separator, no timezone.
+    assert session.calls[0]["data"]["ActionDateTime"] == "2026-09-21T07:45:00"
 
 
 def test_empty_values_are_dropped_from_post_bodies():
+    """ActionDateTime and ActionLocation are optional; blanks are not sent."""
     client, session = make_client([StubResponse({"response": "OK"})])
-    client.sign_in("INV-1", location_id="", reason="")
+    client.sign_in("INV-1", location="")
     data = session.calls[0]["data"]
-    assert "Reason" not in data
-    assert "ID" in data
+    assert "ActionDateTime" not in data
+    assert "ActionLocation" not in data
+    assert data["PersonnelID"] == "INV-1"
+
+
+def test_sign_out_marks_our_own_writes_with_the_location():
+    """Our marker in ActionLocation is what makes safe sign-out possible."""
+    client, session = make_client([StubResponse({"response": "OK"})])
+    client.sign_out("INV-1", when="2026-09-21T17:00:00Z")
+    data = session.calls[0]["data"]
+    assert data["ActionType"] == cfg.INVENTRY_EVENT_TYPE_OUT
+    assert data["ActionLocation"] == cfg.INVENTRY_ACTION_LOCATION
+
+
+def test_personnel_request_hits_the_real_endpoint():
+    client, session = make_client([StubResponse([person()])])
+    client.get_personnel()
+    assert session.calls[0]["url"].endswith("/PartnerAPI/GetPersonnel/")
+    assert session.calls[0]["params"] == {"IncludeNonStaff": "false"}
+
+
+def test_check_auth_uses_the_cheap_endpoint():
+    client, session = make_client([StubResponse({"response": "OK"})])
+    client.check_auth()
+    assert session.calls[0]["url"].endswith("/PartnerAPI/CheckAuth")
+
+
+def test_latest_actions_passes_the_collection_id():
+    client, session = make_client([StubResponse([])])
+    client.get_latest_actions(last_collection_id=42)
+    assert session.calls[0]["params"] == {"LastCollectionId": 42}
 
 
 def test_add_personnel_stores_our_id_in_person_id():
@@ -115,8 +152,9 @@ def test_add_personnel_stores_our_id_in_person_id():
     client, session = make_client([StubResponse({"response": "OK", "ID": "INV-9"})])
     client.add_personnel("Jane", "Doe", email="jane@wearesdi.com", person_id="BH-UUID-123")
     data = session.calls[0]["data"]
+    assert session.calls[0]["url"].endswith("/PartnerAPI/AddPersonnel")
     assert data["PersonID"] == "BH-UUID-123"
-    assert data["MemberOfStaff"] == "1"
+    assert data["MemberOfStaff"] == "True"
 
 
 def test_missing_configuration_is_reported_clearly():
@@ -132,7 +170,7 @@ def test_bad_credentials_do_not_retry():
     assert len(session.calls) == 1
 
 
-def test_404_explains_that_paths_are_unconfirmed():
+def test_404_names_the_path_setting_to_check():
     client, _ = make_client([StubResponse(status_code=404, text="not found")])
     with pytest.raises(api.InVentryAPIError, match="INVENTRY_PATH"):
         client.get_personnel()
@@ -165,7 +203,7 @@ def test_get_rate_limiter_allows_the_documented_burst():
 
 
 @pytest.mark.parametrize("payload,expected", [
-    ([{"ID": "1", "FirstName": "A"}], 1),
+    ([{"ID": "1", "FirstName": "A"}], 1),          # the real shape: a bare list
     ({"personnel": [{"ID": "1"}, {"ID": "2"}]}, 2),
     ({"data": [{"ID": "1"}]}, 1),
     ({"ID": "1", "FirstName": "A"}, 1),
@@ -176,11 +214,21 @@ def test_personnel_list_is_found_in_several_response_shapes(payload, expected):
     assert len(client.get_personnel()) == expected
 
 
-def test_on_site_detection_uses_last_activity_type():
+def test_on_site_detection_uses_the_live_last_activity_field():
     assert api.is_on_site(person(activity="IN")) is True
     assert api.is_on_site(person(activity="in")) is True
     assert api.is_on_site(person(activity="OUT")) is False
     assert api.is_on_site(person(activity="")) is False
+    # Real records carry null for anyone with no history.
+    assert api.is_on_site({"ID": "X", "LastActivity": None}) is False
+
+
+def test_our_own_sign_ins_are_recognisable_by_location():
+    mine = person(activity="IN", location=cfg.INVENTRY_ACTION_LOCATION)
+    reception = person(activity="IN", location="CONSOLE")
+    assert api.signed_in_by_us(mine) is True
+    assert api.signed_in_by_us(reception) is False
+    assert api.signed_in_by_us(person(activity="IN", location="1")) is False
 
 
 def test_fields_are_read_case_insensitively():
@@ -308,7 +356,7 @@ def test_ambiguous_name_is_not_matched(snapshot):
 
 
 def test_sign_out_is_disabled_by_default(snapshot):
-    """InVentry cannot tell our sign-ins from terminal ones, so we do not undo them."""
+    """Sign-ins go live first; sign-out is an explicit decision."""
     snapshot([clocked_in()])
     fake = FakeAPI([person(person_id="BH-1", activity="IN"),
                     person(inventry_id="INV-2", person_id="BH-2", activity="IN")])
@@ -320,11 +368,12 @@ def test_sign_out_is_disabled_by_default(snapshot):
 
 
 def test_sign_out_when_enabled_only_touches_people_we_manage(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
     snapshot([clocked_in()])
     fake = FakeAPI([
-        person(person_id="BH-1", activity="IN"),                                  # still here
-        person(inventry_id="INV-2", person_id="BH-2", activity="IN"),             # left
-        person(inventry_id="INV-3", person_id="", activity="IN"),                 # visitor
+        person(person_id="BH-1", activity="IN", location=ours),                    # still here
+        person(inventry_id="INV-2", person_id="BH-2", activity="IN", location=ours),  # left
+        person(inventry_id="INV-3", person_id="", activity="IN", location=ours),   # visitor
     ])
 
     push.run_push(apply=True, client=fake, enable_sign_out=True)
@@ -332,11 +381,28 @@ def test_sign_out_when_enabled_only_touches_people_we_manage(snapshot):
     assert fake.signed_out == ["INV-2"]
 
 
+def test_a_reception_sign_in_is_never_undone(snapshot):
+    """LastEventLocation says the sign-in came from the console, not from us."""
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="IN", location=cfg.INVENTRY_ACTION_LOCATION),
+        person(inventry_id="INV-2", person_id="BH-2", activity="IN", location="CONSOLE"),
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == []
+    assert result["skipped_not_ours"] == 1
+    assert any("reception" in w for w in result["warnings"])
+
+
 def test_mass_sign_out_is_capped(snapshot, monkeypatch):
     monkeypatch.setattr(cfg, "INVENTRY_MAX_SIGN_OUTS_PER_RUN", 2)
+    ours = cfg.INVENTRY_ACTION_LOCATION
     snapshot([clocked_in()])
-    people = [person(person_id="BH-1", activity="IN")] + [
-        person(inventry_id=f"INV-{i}", person_id=f"BH-{i}", activity="IN") for i in range(2, 8)
+    people = [person(person_id="BH-1", activity="IN", location=ours)] + [
+        person(inventry_id=f"INV-{i}", person_id=f"BH-{i}", activity="IN", location=ours)
+        for i in range(2, 8)
     ]
     fake = FakeAPI(people)
 

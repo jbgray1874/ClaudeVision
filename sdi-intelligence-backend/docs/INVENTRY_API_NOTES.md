@@ -116,40 +116,86 @@ not something we are inventing.
 - **Shared with other partners — dummy data only.** Never push real staff data
   there; it would be a personal-data disclosure to unknown third parties.
 
-## The one thing still missing
+## The endpoints (from the Postman collection, 25 Sep 2026)
 
-**The endpoint paths.** They live in the Postman collection, which Charlotte
-mentions attaching but which did not arrive with the three PDFs. Every path is
-therefore a setting (`INVENTRY_PATH_*`) with a placeholder default, and the
-client raises a clear error on a 404 saying exactly that.
+All under `https://<host>:4816/PartnerAPI/`. **Port 4816.**
 
-Applying the collection is a `.env` change, not a code change. Ask Charlotte to
-re-send it, or export the request URLs from Postman.
+| | Endpoint | Notes |
+|---|---|---|
+| GET | `CheckAuth` | Credentials test, cheapest possible call |
+| GET | `GetPersonnel/?IncludeNonStaff=true` | The personnel list. Returns a **bare JSON array** |
+| GET | `GetLatestPersonnelActions?LastCollectionId=N` | Incremental sign-in/out feed |
+| GET | `GetSystemTime` | Their clock — useful for spotting skew against ours |
+| GET | `GetDepartments` / `GetScanCodes` / `GetVisitors` / `GetExpectedVisitors` | |
+| POST | `AddPersonnel` | Create a person |
+| POST | `AddPersonnelAction` | **Sign in / sign out** |
+| POST | `AddPersonnelScanCode` | |
 
-## Settings this maps to
+### AddPersonnelAction — the presence call
 
-```
-INVENTRY_API_BASE_URL=https://<touchscreen-or-vm-host>
-INVENTRY_API_KEY=<from the console>
-INVENTRY_PARTNER_SECRET=<from InVentry Ltd>
-INVENTRY_API_CA_BUNDLE=<path to exported cert>   # or INVENTRY_API_VERIFY=false
-INVENTRY_PATH_PERSONNEL=/...                     # from the Postman collection
-INVENTRY_PATH_SIGN_IN=/...
-INVENTRY_PATH_SIGN_OUT=/...
-INVENTRY_ENABLE_SIGN_OUT=false                   # see below
-```
+Form-encoded, per their own example:
 
-## Why sign-out starts disabled
+| Field | Required | Example |
+|---|---|---|
+| `PersonnelID` | yes | `9aa8a5b6-8569-4bd6-bd5c-0097fd7203bd` (InVentry's `ID`) |
+| `ActionType` | yes | `IN` or `OUT` |
+| `ActionDateTime` | optional | `1983-07-08T00:00:00` — **"T" separator, no timezone** |
+| `ActionLocation` | optional | see below |
 
-There is no settable field recording **which system** signed someone in, so we
-cannot distinguish our own sign-ins from someone signing in at the reception
-touchscreen. A sign-out driven by "BrightHR has no clocking for this person"
-could therefore override a real human sign-in and remove someone from the
-evacuation list who is in the building.
+POST responses look like `{"response":"OK","message":"OK"}`, and `AddPersonnel`
+adds `"ID"` for the new record.
 
-Sign-ins carry no equivalent risk. So sign-ins go live first; sign-outs are
-enabled deliberately, once matching is proven correct, and are capped per run by
-`INVENTRY_MAX_SIGN_OUTS_PER_RUN`.
+## ⚠ The collection contradicts the field-information PDF
 
-Worth asking InVentry whether any field distinguishes the source of a sign-in —
-if one exists, sign-out becomes materially safer.
+The live JSON is authoritative, and it differs in ways that break code written
+from the PDF alone:
+
+| Field PDF says | What the API actually returns |
+|---|---|
+| `LastActivityType` | **`LastActivity`** — values `"IN"`, `"OUT"` or `null` |
+| `LastActivityDateTime` | **`LastActivityDate`** — e.g. `2020-12-22T18:08:46.307`, or `0001-01-01T00:00:00` for never |
+| `LastActivityLocation` | **`LastEventLocation`** |
+| `Postcode` | `PostCode` |
+| `VehicleReg` | `CarReg` |
+
+`PersonID` in real data is a short external key (e.g. `"1932"` on a site that
+syncs from Arbor), confirming it is the external-system field. InVentry confirmed
+it **should be unique per person**. Note that on a site using AD integration
+they populate it with the PID from AD — so check ours is free before writing to
+it.
+
+## Sign-out, and the field that makes it safe
+
+InVentry confirmed (25 Sep) that **`LastEventLocation` records where a sign-in
+came from** — the main touchscreen, a Quickscan, the Anywhere app, and so on,
+named per site. Real values in their sample data include `"CONSOLE"` and a
+location id. If a sign-out came from a rule, such as their automatic sign-out,
+a reason is recorded against it.
+
+So we send `ActionLocation=BRIGHTHR SYNC` (`INVENTRY_ACTION_LOCATION`) with our
+own writes, and InVentry reflects it back as `LastEventLocation`. With
+`INVENTRY_ONLY_SIGN_OUT_OUR_OWN` on — the default — **only people whose last
+event carries our marker are ever signed out**, so a sign-in made at reception
+is never undone by the sync.
+
+Sign-out is still off by default (`INVENTRY_ENABLE_SIGN_OUT=false`) for one
+remaining unknown: whether InVentry accepts free text in `ActionLocation` or
+requires an existing location. Turn it on once `/api/hr/inventry/check` shows
+`on_site_signed_in_by_us` counting our sign-ins correctly on the live system.
+Sign-outs are also capped per run by `INVENTRY_MAX_SIGN_OUTS_PER_RUN`.
+
+## Other answers from InVentry, 25 Sep
+
+- **Partner type:** use **"End User Development"** when creating the API key.
+  Charlotte noted that as this is our own system it "wouldn't require the
+  Partner API" in the partner sense — the same endpoints, keyed as an end-user
+  developer.
+- **Host:** the **main touchscreen**, unless we run our own VM for the InVentry
+  software. Their support team can connect and confirm which.
+- **Certificate:** exportable from the **V4 folder on the main unit**; support
+  can supply it if that fails.
+- **Load:** their Development QA team reviewed our example traffic (~190 staff,
+  bursts of 50–100 sign-ins) and expect no issues.
+- **ANPR:** a separate console setting, and their ANPR material is about
+  visitors and barriers (and needs a Bi3 licence). Not needed for staff
+  presence — `AddPersonnelAction` is a plain Partner API call.

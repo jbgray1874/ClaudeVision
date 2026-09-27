@@ -70,58 +70,67 @@ HR_MAX_DROP_PCT = float(_opt("HR_MAX_DROP_PCT", "30"))  # flag if active drops >
 HR_OUTPUT_DIR = _opt("HR_OUTPUT_DIR", r"K:\IT\HRSystemsOutput")
 
 # ── InVentry Partner API (the supported integration route) ───────────────
-# Confirmed from InVentry's Partner API documentation, Sep 2026:
-#   * Auth: apikey + partnersecret, both in request HEADERS.
-#     - apikey        created in the InVentry console: Setup & Options ->
-#                     (bottom) Partner API -> toggle ON -> Add API Key ->
-#                     choose the partner (e.g. "End User Developer") -> copy.
-#     - partnersecret issued by InVentry Ltd; same for all their on-premises
-#                     installs. Request it from InVentry if not held.
-#   * The API is ON-PREMISES ONLY and not reachable externally. It usually runs
-#     on the main reception sign-in touchscreen. SDI-APP01 is on the network, so
-#     it can reach it directly; nothing cloud-hosted could.
-#   * Certificates are locally issued and SELF-SIGNED - see INVENTRY_API_VERIFY.
-#   * Rate limit: 20 GET calls/minute (429 on exceed). POST is exempt.
-#   * POST bodies are x-www-form-urlencoded, NOT JSON.
-INVENTRY_API_BASE_URL = _opt("INVENTRY_API_BASE_URL")          # e.g. https://<touchscreen-host>
+# Confirmed against InVentry's Partner API documentation AND their Postman
+# collection (received 16 and 25 Sep 2026). The collection is authoritative -
+# several field names in the field-information PDF differ from the live JSON.
+#
+#   Base      https://<host>:4816/PartnerAPI/
+#   Host      the main reception touchscreen, unless the site runs its own VM
+#             for the InVentry software. InVentry support can confirm which.
+#   Auth      apikey + partnersecret, both as request HEADERS.
+#             apikey: InVentry console -> Setup & Options -> Partner API ->
+#             Add API Key -> partner "End User Development" (confirmed by
+#             InVentry as the right option for a customer's own integration).
+#   Certs     self-signed; exportable from the V4 folder on the main unit.
+#   Limits    20 GET/minute (429 on exceed). POST is exempt.
+INVENTRY_API_BASE_URL = _opt("INVENTRY_API_BASE_URL")          # e.g. https://10.0.0.50:4816
 INVENTRY_API_KEY = _opt("INVENTRY_API_KEY")
 INVENTRY_PARTNER_SECRET = _opt("INVENTRY_PARTNER_SECRET")
 INVENTRY_API_TIMEOUT = int(_opt("INVENTRY_API_TIMEOUT", "30"))
 
-# TLS verification. Their certificate is self-signed, so plain verification
-# fails. Preferred: export the certificate and point INVENTRY_API_CA_BUNDLE at
-# it, which keeps verification on. Otherwise set INVENTRY_API_VERIFY=false,
-# which trusts any certificate on that host - acceptable only because this is a
-# LAN-local call to a known machine.
+# TLS verification. The certificate is self-signed, so plain verification
+# fails. Preferred: export it from the V4 folder on the InVentry unit and point
+# INVENTRY_API_CA_BUNDLE at it, which keeps verification on. Otherwise set
+# INVENTRY_API_VERIFY=false, which trusts any certificate on that host -
+# acceptable only because this is a LAN call to a known machine.
 INVENTRY_API_CA_BUNDLE = _opt("INVENTRY_API_CA_BUNDLE")
 INVENTRY_API_VERIFY = _opt("INVENTRY_API_VERIFY", "false").lower() not in ("false", "0", "no", "off")
 
-# Endpoint paths. UNCONFIRMED - the exact routes live in InVentry's Postman
-# collection, which we do not have yet. They are config precisely so that
-# collection can be applied without touching code.
-INVENTRY_PATH_PERSONNEL = _opt("INVENTRY_PATH_PERSONNEL", "/api/partner/personnel")
-INVENTRY_PATH_PERSONNEL_ADD = _opt("INVENTRY_PATH_PERSONNEL_ADD", "/api/partner/personnel/add")
-INVENTRY_PATH_PERSONNEL_UPDATE = _opt("INVENTRY_PATH_PERSONNEL_UPDATE", "/api/partner/personnel/update")
-INVENTRY_PATH_SIGN_IN = _opt("INVENTRY_PATH_SIGN_IN", "/api/partner/signin")
-INVENTRY_PATH_SIGN_OUT = _opt("INVENTRY_PATH_SIGN_OUT", "/api/partner/signout")
+# Endpoint paths, from the Postman collection.
+INVENTRY_PATH_CHECK_AUTH = _opt("INVENTRY_PATH_CHECK_AUTH", "/PartnerAPI/CheckAuth")
+INVENTRY_PATH_PERSONNEL = _opt("INVENTRY_PATH_PERSONNEL", "/PartnerAPI/GetPersonnel/")
+INVENTRY_PATH_PERSONNEL_ADD = _opt("INVENTRY_PATH_PERSONNEL_ADD", "/PartnerAPI/AddPersonnel")
+INVENTRY_PATH_PERSONNEL_ACTION = _opt("INVENTRY_PATH_PERSONNEL_ACTION", "/PartnerAPI/AddPersonnelAction")
+INVENTRY_PATH_LATEST_ACTIONS = _opt("INVENTRY_PATH_LATEST_ACTIONS", "/PartnerAPI/GetLatestPersonnelActions")
+INVENTRY_PATH_SYSTEM_TIME = _opt("INVENTRY_PATH_SYSTEM_TIME", "/PartnerAPI/GetSystemTime")
 
-# Event type values written to the events table (EventType is varchar(10)).
+# GetPersonnel returns staff only unless asked otherwise.
+INVENTRY_INCLUDE_NON_STAFF = _opt("INVENTRY_INCLUDE_NON_STAFF", "false").lower() in ("true", "1", "yes", "on")
+
+# ActionType values for AddPersonnelAction. The live data shows LastActivity
+# holding exactly "IN" or "OUT".
 INVENTRY_EVENT_TYPE_IN = _opt("INVENTRY_EVENT_TYPE_IN", "IN")
 INVENTRY_EVENT_TYPE_OUT = _opt("INVENTRY_EVENT_TYPE_OUT", "OUT")
 
-# LastActivityType values InVentry reports for a person who is currently on
-# site. Read-only on their side; used to work out who is already signed in.
+# LastActivity values meaning "currently on site".
 INVENTRY_ACTIVITY_IN_VALUES = [
-    v.strip().upper() for v in _opt("INVENTRY_ACTIVITY_IN_VALUES", "IN,SIGNIN,SIGNED IN").split(",") if v.strip()
+    v.strip().upper() for v in _opt("INVENTRY_ACTIVITY_IN_VALUES", "IN").split(",") if v.strip()
 ]
 
-# Location recorded against sign-in events (LocID is settable).
-INVENTRY_LOCATION_ID = _opt("INVENTRY_LOCATION_ID")
+# ActionLocation sent with our sign-in events. InVentry reports it back as
+# LastEventLocation, alongside values like "CONSOLE" or a location id for
+# sign-ins made at a touchscreen or the Anywhere app - so a distinctive value
+# here is how we recognise our own writes later, which is what makes automatic
+# sign-out safe. Unverified: InVentry may require an existing location rather
+# than free text. Leave blank to send none.
+INVENTRY_ACTION_LOCATION = _opt("INVENTRY_ACTION_LOCATION", "BRIGHTHR SYNC")
 
 # Sign people OUT of InVentry when BrightHR no longer shows them clocked in?
-# Off by default: signing someone out of the fire roll wrongly is the dangerous
-# direction, so enable only once sign-ins are proven correct.
+# Off by default. With INVENTRY_ONLY_SIGN_OUT_OUR_OWN left on, only people
+# whose last event came from INVENTRY_ACTION_LOCATION are ever signed out, so a
+# sign-in made at reception is never undone by us.
 INVENTRY_ENABLE_SIGN_OUT = _opt("INVENTRY_ENABLE_SIGN_OUT", "false").lower() in ("true", "1", "yes", "on")
+INVENTRY_ONLY_SIGN_OUT_OUR_OWN = _opt("INVENTRY_ONLY_SIGN_OUT_OUR_OWN", "true").lower() not in ("false", "0", "no", "off")
 
 # Cap on sign-outs in a single push, as a backstop against a bad on-site list
 # emptying InVentry's register. Exceeding it suppresses the sign-outs.

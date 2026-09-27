@@ -21,13 +21,18 @@ What happens on each run:
 
   Dry run unless apply=True: everything is planned and logged, nothing is sent.
 
-Why sign-out is off by default (INVENTRY_ENABLE_SIGN_OUT):
-  InVentry has no settable field recording which system signed someone in, so we
-  cannot tell our own sign-ins from someone signing in at the reception
-  touchscreen. Signing a person out of the fire roll because BrightHR has no
-  clocking for them could therefore override a real, human sign-in. Sign-ins are
-  safe in a way sign-outs are not, so sign-ins go live first and sign-outs are
-  enabled deliberately, once the matching is proven.
+Sign-out (INVENTRY_ENABLE_SIGN_OUT, still off by default):
+  InVentry records where each person's last event came from and reports it as
+  LastEventLocation - "CONSOLE", a touchscreen location id, and so on. We send
+  INVENTRY_ACTION_LOCATION with our own sign-ins, so we can recognise them
+  later. With INVENTRY_ONLY_SIGN_OUT_OUR_OWN on (the default) only people whose
+  last event carries our marker are ever signed out, so a sign-in made at
+  reception is never undone by this sync.
+
+  That makes sign-out materially safer than it was, but it stays off until the
+  marker is confirmed to round-trip on the live system: InVentry may require
+  ActionLocation to be an existing location rather than free text. Check
+  /api/hr/inventry/check, which reports how many on-site records carry it.
 
 Runnable two ways:
   * On demand via the backend  POST /api/hr/blip/push
@@ -203,6 +208,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
     # ── plan sign-outs ──
     to_sign_out = []
     if enable_sign_out:
+        only_our_own = cfg.INVENTRY_ONLY_SIGN_OUT_OUR_OWN
         for ident, record in inventry_on_site.items():
             if ident in should_be_on_site:
                 continue
@@ -210,8 +216,20 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
                 # Not a person we manage: a visitor, contractor or someone
                 # InVentry knows and we do not. Never ours to sign out.
                 continue
+            if only_our_own and not api.signed_in_by_us(record):
+                # Their last event came from reception, the Anywhere app or a
+                # rule - a human decision, or InVentry's own. Not ours to undo.
+                summary["skipped_not_ours"] = summary.get("skipped_not_ours", 0) + 1
+                continue
             label = f"{api._field(record,'FirstName')} {api._field(record,'Surname')}".strip()
             to_sign_out.append((ident, label))
+
+        if summary.get("skipped_not_ours"):
+            summary["warnings"].append(
+                f"{summary['skipped_not_ours']} person(s) left signed in: their last event "
+                f"was not ours (LastEventLocation != {cfg.INVENTRY_ACTION_LOCATION!r}), so "
+                f"signing them out could undo a sign-in made at reception."
+            )
 
         if len(to_sign_out) > cfg.INVENTRY_MAX_SIGN_OUTS_PER_RUN and not force:
             summary["warnings"].append(
@@ -261,7 +279,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         )
     if summary["failures"]:
         summary["status"] = "partial"
-    if not enable_sign_out and len(inventry_on_site) and not apply:
+    if not enable_sign_out and len(inventry_on_site):
         summary["warnings"].append(
             "Sign-out is disabled (INVENTRY_ENABLE_SIGN_OUT), so people who have left will "
             "stay on InVentry's register until signed out at the terminal."

@@ -123,10 +123,15 @@ of this document, was wrong. The facts the code relies on are recorded in
 sides. `hr_blip_inventry.py` (the CSV writer) is kept as the source-loading
 layer and in case a file-based import is ever wanted.
 
-**Still outstanding: the endpoint paths.** They are in InVentry's Postman
-collection, which has not arrived. Every path is a setting (`INVENTRY_PATH_*`)
-with a placeholder default, and the client turns a 404 into a message saying so.
-Applying the collection is a `.env` change, not a code change.
+**Endpoints confirmed** from InVentry's Postman collection (25 Sep 2026), all
+under `https://<host>:4816/PartnerAPI/` — note the port. Sign-in and sign-out
+are one call, `AddPersonnelAction`, taking `PersonnelID`, `ActionType` (`IN` /
+`OUT`) and optionally `ActionDateTime` and `ActionLocation`.
+
+Watch out: the collection contradicts the field-information PDF, and the live
+JSON wins. Presence is `LastActivity` (`"IN"` / `"OUT"` / `null`), not
+`LastActivityType`; the timestamp is `LastActivityDate`; the location is
+`LastEventLocation`. Details in `docs/INVENTRY_API_NOTES.md`.
 
 Check connectivity without writing anything:
 
@@ -136,16 +141,18 @@ POST /api/hr/blip/push             # dry run: plans and logs, writes nothing
 POST /api/hr/blip/push?apply=true  # live
 ```
 
-### Sign-out starts disabled
+### Sign-out, and the field that makes it safe
 
-InVentry has no settable field recording which system signed a person in, so we
-cannot tell our sign-ins from someone signing in at the reception touchscreen.
-A sign-out driven by "BrightHR has no clocking for them" could therefore
-override a real human sign-in and drop someone off the evacuation list.
+InVentry confirmed that `LastEventLocation` records **where** a sign-in came
+from — the main touchscreen, a Quickscan, the Anywhere app. So we tag our own
+writes with `ActionLocation=BRIGHTHR SYNC`, and with
+`INVENTRY_ONLY_SIGN_OUT_OUR_OWN` on (the default) only people carrying that
+marker are ever signed out. A sign-in made at reception is never undone here.
 
-Sign-ins carry no such risk, so they go live first. `INVENTRY_ENABLE_SIGN_OUT`
-turns sign-outs on deliberately once matching is proven, and
-`INVENTRY_MAX_SIGN_OUTS_PER_RUN` caps them.
+Sign-out stays off (`INVENTRY_ENABLE_SIGN_OUT=false`) until
+`/api/hr/inventry/check` shows `on_site_signed_in_by_us` counting our sign-ins
+on the live system — InVentry may require `ActionLocation` to be an existing
+location rather than free text. `INVENTRY_MAX_SIGN_OUTS_PER_RUN` caps them.
 
 ### Presence guards (different from the roster guards)
 

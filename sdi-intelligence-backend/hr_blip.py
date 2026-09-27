@@ -154,7 +154,7 @@ def _write_output_file(on_site: list, summary: dict):
 
 
 def _looks_like_mapped_drive(path: str) -> bool:
-    """True for 'K:\...' style paths, false for UNC ('\\server\share')."""
+    r"""True for a drive-letter path like K:\..., false for a UNC \\server\share."""
     return len(path) > 1 and path[1] == ":" and path[0].isalpha()
 
 

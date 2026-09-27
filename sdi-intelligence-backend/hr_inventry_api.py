@@ -30,11 +30,26 @@ What the documentation establishes:
   * Sandbox   162.13.119.241, self-signed, keys issued by InVentry. Multiple
               partners share it - DUMMY DATA ONLY.
 
-Endpoint PATHS are not in these documents; they are in the Postman collection,
-which we do not yet have. Every path is therefore config (INVENTRY_PATH_*), so
-applying that collection is a settings change rather than a code change. Until
-the paths are confirmed, calls will 404 - which is why the push defaults to a
-dry run.
+Endpoints, from InVentry's Postman collection (received 25 Sep 2026), all under
+https://<host>:4816/PartnerAPI/ :
+
+  GET   CheckAuth                                  credentials test
+  GET   GetPersonnel/?IncludeNonStaff=true         the personnel list
+  GET   GetLatestPersonnelActions?LastCollectionId= incremental action feed
+  GET   GetSystemTime | GetDepartments | GetScanCodes | GetVisitors
+  POST  AddPersonnel                               create a person
+  POST  AddPersonnelAction                         SIGN IN / SIGN OUT
+  POST  AddPersonnelScanCode
+
+The collection is authoritative where it disagrees with the field-information
+PDF, and it does disagree in ways that matter. The live personnel JSON uses
+LastActivity (values "IN", "OUT" or null) and LastActivityDate - not
+LastActivityType / LastActivityDateTime - plus LastEventLocation, PostCode and
+CarReg. Datetimes come back as 2020-12-22T18:08:46.307 and the AddPersonnel
+example sends 1983-07-08T00:00:00, so a "T" separator and no timezone.
+
+Sign-in and sign-out are one call, AddPersonnelAction, taking PersonnelID,
+ActionType ("IN"/"OUT"), and optionally ActionDateTime and ActionLocation.
 """
 import datetime
 import threading
@@ -84,8 +99,9 @@ def _utc_now():
 def format_datetime(value) -> str:
     """Format a timestamp for InVentry's datetime fields.
 
-    Their fields are SQL Server datetime, so send a plain local-style string
-    without a timezone suffix rather than an ISO string ending in Z.
+    Their own examples use 1983-07-08T00:00:00 and their responses
+    2020-12-22T18:08:46.307: a "T" separator and no timezone. Anything with a
+    trailing Z or an offset is converted to naive UTC first.
     """
     if value is None:
         value = _utc_now()
@@ -97,7 +113,7 @@ def format_datetime(value) -> str:
             return value if isinstance(value, str) else str(value)
     if value.tzinfo is not None:
         value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
-    return value.strftime("%Y-%m-%d %H:%M:%S")
+    return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class InVentryAPI:
@@ -219,67 +235,79 @@ class InVentryAPI:
 
     # ── personnel ────────────────────────────────────────────────────────
 
-    def get_personnel(self):
-        """All personnel records InVentry holds."""
-        payload = self.get(cfg.INVENTRY_PATH_PERSONNEL)
-        return _as_records(payload)
+    def check_auth(self):
+        """Credentials test. GET CheckAuth - cheapest possible call."""
+        return self.get(cfg.INVENTRY_PATH_CHECK_AUTH)
+
+    def get_personnel(self, include_non_staff=None):
+        """All personnel records. Returns a bare JSON list."""
+        if include_non_staff is None:
+            include_non_staff = cfg.INVENTRY_INCLUDE_NON_STAFF
+        params = {"IncludeNonStaff": "true" if include_non_staff else "false"}
+        return _as_records(self.get(cfg.INVENTRY_PATH_PERSONNEL, params=params))
+
+    def get_latest_actions(self, last_collection_id=0):
+        """Sign-in/out actions since a collection id - the incremental feed."""
+        return _as_records(self.get(cfg.INVENTRY_PATH_LATEST_ACTIONS,
+                                    params={"LastCollectionId": last_collection_id}))
+
+    def get_system_time(self):
+        """InVentry's own clock, for spotting clock skew against ours."""
+        return self.get(cfg.INVENTRY_PATH_SYSTEM_TIME)
 
     def add_personnel(self, first_name, surname, email="", person_id="",
                       member_of_staff=True, extra=None):
-        """Create a person. person_id is stored in InVentry's PersonID field.
+        """Create a person. person_id goes in PersonID, for our own key.
 
-        Returns the response dict; per the documentation it includes the ID of
-        the newly created record.
+        The response carries the new record's ID.
         """
         data = {
             "FirstName": first_name,
             "Surname": surname,
             "EmailAddress": email,
             "PersonID": person_id,
-            "MemberOfStaff": "1" if member_of_staff else "0",
+            "MemberOfStaff": "True" if member_of_staff else "False",
+            "EnableRecord": "True",
         }
         data.update(extra or {})
         return self.post(cfg.INVENTRY_PATH_PERSONNEL_ADD, data)
 
-    def update_personnel(self, inventry_id, **fields):
-        data = {"ID": inventry_id}
-        data.update(fields)
-        return self.post(cfg.INVENTRY_PATH_PERSONNEL_UPDATE, data)
+    # ── presence: one call, AddPersonnelAction ───────────────────────────
 
-    # ── presence events ──────────────────────────────────────────────────
-
-    def sign_in(self, inventry_id, when=None, location_id=None, reason=""):
-        """Record an arrival for a person InVentry already knows."""
-        return self.post(cfg.INVENTRY_PATH_SIGN_IN, {
-            "ID": inventry_id,
-            "EventType": cfg.INVENTRY_EVENT_TYPE_IN,
-            "EventDateTime": format_datetime(when),
-            "LocID": location_id if location_id is not None else cfg.INVENTRY_LOCATION_ID,
-            "Reason": reason,
+    def add_action(self, personnel_id, action_type, when=None, location=None):
+        """Record a sign-in or sign-out against an InVentry person."""
+        return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION, {
+            "PersonnelID": personnel_id,
+            "ActionType": action_type,
+            "ActionDateTime": format_datetime(when) if when else "",
+            "ActionLocation": (cfg.INVENTRY_ACTION_LOCATION
+                               if location is None else location),
         })
 
-    def sign_out(self, inventry_id, when=None, location_id=None, reason=""):
-        """Record a departure."""
-        return self.post(cfg.INVENTRY_PATH_SIGN_OUT, {
-            "ID": inventry_id,
-            "EventType": cfg.INVENTRY_EVENT_TYPE_OUT,
-            "EventDateTime": format_datetime(when),
-            "LocID": location_id if location_id is not None else cfg.INVENTRY_LOCATION_ID,
-            "Reason": reason,
-        })
+    def sign_in(self, inventry_id, when=None, location=None, reason=""):
+        return self.add_action(inventry_id, cfg.INVENTRY_EVENT_TYPE_IN,
+                               when=when, location=location)
+
+    def sign_out(self, inventry_id, when=None, location=None, reason=""):
+        return self.add_action(inventry_id, cfg.INVENTRY_EVENT_TYPE_OUT,
+                               when=when, location=location)
 
     # ── convenience ──────────────────────────────────────────────────────
 
     def check(self):
         """Read-only connectivity check. Never writes."""
+        auth = self.check_auth()
         people = self.get_personnel()
         on_site = [p for p in people if is_on_site(p)]
+        ours = [p for p in on_site if signed_in_by_us(p)]
         return {
             "status": "ok",
             "base_url": self.base_url,
+            "auth": auth if auth else "CheckAuth OK",
             "tls_verification": self.verify if self.verify is not False else "OFF (self-signed)",
             "personnel": len(people),
             "on_site": len(on_site),
+            "on_site_signed_in_by_us": len(ours),
             "with_our_person_id": len([p for p in people if _field(p, "PersonID")]),
             "warnings": list(self.warnings),
         }
@@ -331,9 +359,31 @@ def _field(record, name, default=""):
 
 
 def is_on_site(record):
-    """Is this person currently signed in, per InVentry's own last activity?"""
-    activity = str(_field(record, "LastActivityType")).strip().upper()
+    """Is this person currently signed in, per InVentry's own last activity?
+
+    The live field is LastActivity, holding "IN", "OUT" or null - not
+    LastActivityType as the field-information PDF suggests.
+    """
+    activity = str(_field(record, "LastActivity")).strip().upper()
     return activity in [v.upper() for v in cfg.INVENTRY_ACTIVITY_IN_VALUES]
+
+
+def last_location(record):
+    """Where InVentry recorded the person's last event.
+
+    Real values seen include "CONSOLE" and a location id. Our own sign-ins
+    carry INVENTRY_ACTION_LOCATION, which is how we tell them apart from a
+    sign-in made at reception.
+    """
+    return str(_field(record, "LastEventLocation")).strip()
+
+
+def signed_in_by_us(record):
+    """True when the person's last event looks like one we wrote."""
+    marker = (cfg.INVENTRY_ACTION_LOCATION or "").strip()
+    if not marker:
+        return False
+    return last_location(record).upper() == marker.upper()
 
 
 def person_key(record):
