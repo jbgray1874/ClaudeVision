@@ -539,3 +539,104 @@ def test_a_case_with_no_members_area_still_contributes_nothing():
     case = {"part_number": "12567-03-101", "quantity": 1,
             "material_estimate": {"cost_method": "weldment_parent_material_in_children"}}
     assert wb.coated_sheet_area_m2([case], lambda p: True) == 0.0
+
+
+# D-283: the members took the coat from the title block and held their flats under another key.
+
+def test_a_member_whose_coat_came_from_the_title_block_still_gives_the_case_its_area():
+    case = {"part_number": "12567-02-101", "quantity": 1,
+            "inferred_operations": ["powder_coating", "welding"],
+            "assembly_children": ["12567-02-01M", "12567-02-10M"]}
+    parts = [case,
+             # the fascia: coat stamped from the document's finish, flat under bounding_box_flat_mm
+             {"part_number": "12567-02-01M", "quantity": 1, "normalized_material": "MILD_STEEL",
+              "inferred_operations": ["powder_coating"], "finish_inherited_from": "document_level",
+              "normalized_geometry": {"bounding_box_flat_mm": {"length": 1000.0, "width": 355.0}}},
+             # a channel: same inherited coat, flat spelled the other way
+             {"part_number": "12567-02-10M", "quantity": 4, "normalized_material": "MILD_STEEL",
+              "inferred_operations": ["powder_coating"], "finish_inherited_from": "document_level",
+              "normalized_geometry": {"blank_length_mm": 225.5, "blank_width_mm": 38.35}}]
+    assert est.stamp_members_coated_area(parts) == 1
+    expected = 1.0 * 0.355 * 2 + 0.2255 * 0.03835 * 2 * 4
+    assert abs(case["_powder_members_coated_m2"] - expected) < 1e-6
+    assert set(case["_powder_members_m2"]) == {"12567-02-01M", "12567-02-10M"}
+
+
+def test_a_member_whose_own_sheet_states_the_coat_is_still_left_out():
+    case = {"part_number": "A", "quantity": 1, "inferred_operations": ["powder_coating"],
+            "assembly_children": ["B"]}
+    own = {"part_number": "B", "quantity": 1, "textual_operations": ["powder_coating"],
+           "surface_finishes": ["POWDER COATED RAL 9005"],
+           "normalized_geometry": {"blank_length_mm": 1000.0, "blank_width_mm": 500.0}}
+    assert est.stamp_members_coated_area([case, own]) == 0
+
+
+def test_the_title_block_stamp_marks_the_coat_as_inherited():
+    """The estimator's document-level finish stamp is the writer of the inherited op, so it
+    is the writer of the mark; a part whose own text already carried the op is not marked."""
+    summary = {"document_analysis": {"title_block": {"surface_finishes": ["POWDER COATED"]}}}
+    parts = [{"part_number": "12567-02-01M", "normalized_material": "MILD_STEEL", "quantity": 1},
+             {"part_number": "12567-05-01M", "normalized_material": "MILD_STEEL", "quantity": 1,
+              "textual_operations": ["powder_coating"]}]
+    try:
+        est.estimate_document(parts, summary)
+    except Exception:                                                # noqa: BLE001
+        pass                     # the fixture is not a job; only the stamp is under test
+    assert parts[0].get("finish_inherited_from") == "document_level"
+    assert "powder_coating" in (parts[0].get("inferred_operations") or [])
+    assert not parts[1].get("finish_inherited_from")
+
+
+def test_the_powder_sum_reads_a_flat_under_any_spelling_and_leaves_out_route_named_members():
+    import wb_populate as wb
+    case = {"part_number": "12567-02-101", "quantity": 1, "normalized_material": "MILD_STEEL",
+            "material_estimate": {"cost_method": "weldment_parent_material_in_children",
+                                  "powder_consumable": {
+                                      "coated_area_m2": 0.71 + 0.2,
+                                      "coated_area_source": "sum_of_members_blanks",
+                                      "coated_members_m2": {"12567-02-01M": 0.71,
+                                                            "12567-02-10M": 0.2}}}}
+    channel = {"part_number": "12567-02-10M", "quantity": 4, "normalized_material": "MILD_STEEL",
+               "material_estimate": {"stock_form": "sheet"},
+               "normalized_geometry": {"bounding_box_flat_mm": {"length": 225.5, "width": 38.35}}}
+    coated = wb.route_coated_membership({"12567-02-101", "12567-02-10M"})
+    got = wb.coated_sheet_area_m2([case, channel], coated)
+    # the fascia through the case, the channel on its own line from its bounding-box flat
+    expected = 0.71 + 0.2255 * 0.03835 * 2 * 4
+    assert abs(got - expected) < 1e-6, got
+
+
+# D-284: the record says the price reached the total; the sheet wrote £0.
+
+def test_a_bought_in_the_sheet_leaves_at_nought_no_longer_claims_the_total():
+    import wb_populate as wb
+    import price_provenance as pp
+    pe = {"part_number": "P/P-JST-SPLITTER", "quantity": 3,
+          "cost_breakdown": {"system_cost": {"unit_cost_gbp": 1.15, "applied_to_total": True,
+                                             "source": _market_stamp()}}}
+    summary = {}
+    assert wb.reconcile_price_stamp_with_sheet(pe, None, summary) is True
+    sc = pe["cost_breakdown"]["system_cost"]
+    assert sc["applied_to_total"] is False
+    assert not pp.stamp_affects_total(sc["source"])
+    assert pp.applied_ai_prices(pe) == []
+    assert "P/P-JST-SPLITTER" in summary["withheld_price_lines"]
+
+
+def test_a_line_the_sheet_priced_keeps_its_claim():
+    import wb_populate as wb
+    pe = {"part_number": "MAGNET21", "quantity": 2,
+          "cost_breakdown": {"system_cost": {"unit_cost_gbp": 4.2, "applied_to_total": True,
+                                             "source": _market_stamp()}}}
+    assert wb.reconcile_price_stamp_with_sheet(pe, 4.2, {}) is False
+    assert pe["cost_breakdown"]["system_cost"]["applied_to_total"] is True
+
+
+def test_a_fabricated_leaf_at_nought_is_not_touched():
+    """Its material is in the Sheet Steel block; the £0 BOM cell is by design and its stamps
+    already say the bought-in figure was not applied."""
+    import wb_populate as wb
+    pe = {"part_number": "12567-02-01M", "_canonical_kind": "leaf",
+          "cost_breakdown": {"system_cost": {"unit_cost_gbp": 9.73, "applied_to_total": False,
+                                             "source": {"applied": True}}}}
+    assert wb.reconcile_price_stamp_with_sheet(pe, None, {}) is False

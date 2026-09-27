@@ -9986,21 +9986,39 @@ def stamp_members_coated_area(parts: Any) -> int:
         _asm_qty = _safe_float(_asm.get("quantity")) or 1.0
         _area = 0.0
         _counted: List[str] = []
+        _by_member: Dict[str, float] = {}
+        try:
+            from document_builder import flat_blank_mm as _flat_blank_mm
+        except Exception:                                            # noqa: BLE001
+            def _flat_blank_mm(_p):                                  # type: ignore[misc]
+                _g = _p.get("normalized_geometry") or {}
+                return (_safe_float(_g.get("blank_length_mm")) or _safe_float(_p.get("blank_length_mm")),
+                        _safe_float(_g.get("blank_width_mm")) or _safe_float(_p.get("blank_width_mm")))
         for _m in _members:
-            if _mbi(_m) or "powder_coating" in _part_ops(_m):
+            if _mbi(_m):
                 continue
-            _g = _m.get("normalized_geometry") or {}
-            _L = _safe_float(_g.get("blank_length_mm")) or _safe_float(_m.get("blank_length_mm"))
-            _W = _safe_float(_g.get("blank_width_mm")) or _safe_float(_m.get("blank_width_mm"))
+            # A COAT THE MEMBER TOOK FROM THE TITLE BLOCK IS THE CASE'S COAT, NOT ITS OWN.
+            # 12567-02-101's panels all carried powder_coating — stamped onto every metal part
+            # from the document's finish — so every one read as "coated on its own line" and
+            # the case's area summed to nothing (D-283). Only a coat the member's own sheet
+            # states puts it in the booth on its own.
+            if "powder_coating" in _part_ops(_m) and not _m.get("finish_inherited_from"):
+                continue
+            # THROUGH THE SHARED RESOLVER. The measured members of that case hold their flat
+            # under normalized_geometry.bounding_box_flat_mm; reading two spellings found none.
+            _L, _W = _flat_blank_mm(_m)
             if not _L or not _W:
                 continue
             _per = max(1.0, (_safe_float(_m.get("quantity")) or 1.0) / _asm_qty)
-            _area += (_L / 1000.0) * (_W / 1000.0) * _faces * _per
+            _m_area = (_L / 1000.0) * (_W / 1000.0) * _faces * _per
+            _area += _m_area
             _counted.append(f"{_m.get('part_number')} x{_per:g}")
+            _by_member[str(_m.get("part_number") or "").strip().upper()] = round(_m_area, 6)
         if _area <= 0:
             continue
         _asm["_powder_members_coated_m2"] = round(_area, 6)
         _asm["_powder_members"] = _counted
+        _asm["_powder_members_m2"] = _by_member
         _asm.setdefault("review_flags", []).append(
             f"powder on this assembly is charged over the sum of its members' blanks, "
             f"{_area:.3f} m2 both faces ({', '.join(_counted)}) — their sheets carry no coat "
@@ -10024,6 +10042,9 @@ def _powder_consumable_from_area(part: Dict[str, Any], area_m2: float,
         "bend_extra_coated_m2": 0.0,
         "coated_area_source": "sum_of_members_blanks",
         "coated_members": list(part.get("_powder_members") or []),
+        # Per member, so the POWDER line's sum can leave out a member the route charges on
+        # its own line and still count the rest (D-283).
+        "coated_members_m2": dict(part.get("_powder_members_m2") or {}),
     }
 
 
@@ -10625,6 +10646,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _existing = list(_p.get("textual_operations") or []) + list(_p.get("inferred_operations") or [])
                 if _coat_op not in _existing:
                     record_operation(_p, _coat_op, "drawing_deterministic")
+                    # INHERITED FROM THE DOCUMENT, NOT READ FROM THIS PART — the same
+                    # distinction material_inherited_from draws. The members of a case coated
+                    # as one thing took the coat from the title block here, and then read as
+                    # "coated on their own line" to the area roll-up, which skipped every one
+                    # of them (D-283). A coat the part's own sheet states is never marked.
+                    _p.setdefault("finish_inherited_from", "document_level")
                 if not _p.get("surface_finishes"):
                     _p["surface_finishes"] = list(_finishes)
             if debug:

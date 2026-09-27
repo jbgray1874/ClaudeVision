@@ -805,6 +805,53 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
+def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
+                                     summary: Optional[Dict[str, Any]] = None) -> bool:
+    """When the sheet writes no price on a bought-in line, its record says so too.
+
+    ONE FACT, TWO WRITERS. estimator stamps system_cost.applied_to_total = True the moment a
+    bought-in price is resolved; the workbook decides, several branches later, what the cell
+    actually carries. Where the two part company — a figure found and then not written — the
+    record went on reading as money in the total. The 21:57 12567 book showed both halves on
+    one screen: eleven settle rows "held at £0, no stake", and a consistency check saying
+    those same lines reached the total as AI prices (D-284).
+
+    Only a bought-in unit price the record claims REACHED the total is reconciled, and only
+    when the cell is empty or nought. A fabricated leaf's £0 line is priced in the Sheet Steel
+    block and its stamps say so already; an assembly's £0 is its children's. Returns True when
+    a stamp was changed.
+    """
+    if not isinstance(pe, dict):
+        return False
+    try:
+        _p = float(price) if price is not None else 0.0
+    except (TypeError, ValueError):
+        _p = 0.0
+    if _p > 0:
+        return False
+    _sc = ((pe.get("cost_breakdown") or {}).get("system_cost")
+           if isinstance(pe.get("cost_breakdown"), dict) else None)
+    if not isinstance(_sc, dict) or not _sc.get("applied_to_total"):
+        return False
+    if not (_safe(_sc.get("unit_cost_gbp")) or 0) > 0:
+        return False
+    try:
+        import price_provenance as _pp
+        _changed = _pp.mark_withheld(
+            _sc, reason="the sheet wrote no price on this line; the figure the record "
+                        "holds did not reach the total")
+    except Exception:                                                # noqa: BLE001
+        _changed = 0
+    _sc["applied_to_total"] = False
+    _sc["sheet_price_gbp"] = _p
+    _code = str(pe.get("part_number") or "").strip().upper()
+    if _code and isinstance(summary, dict):
+        _wl = summary.setdefault("withheld_price_lines", [])
+        if _code not in _wl:
+            _wl.append(_code)
+    return True
+
+
 def route_operations_by_part(summary: Dict[str, Any]) -> Dict[str, List[str]]:
     """part number -> the operations on its RAW record.
 
@@ -1730,6 +1777,13 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
                                                              dict) else {}
         if _pcons.get("coated_area_source") == "sum_of_members_blanks":
             _ma = _safe(_pcons.get("coated_area_m2"))
+            # A MEMBER THE ROUTE CHARGES ON ITS OWN LINE COUNTS THERE, NOT HERE TOO. Where
+            # the case carries its members one by one, leave out any the route names (that
+            # member's own blank is added when the loop reaches it) and count the rest.
+            _per_member = _pcons.get("coated_members_m2")
+            if isinstance(_per_member, dict) and _per_member:
+                _ma = sum(float(_safe(v) or 0.0) for k, v in _per_member.items()
+                          if not says_coated({"part_number": str(k)}))
             if _ma and _ma > 0:
                 total += float(_ma) * float(_safe(_sp.get("quantity"), 1) or 1)
                 if _sq_pn:
@@ -1741,9 +1795,19 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
                      or _sme.get("description") or "").upper()
         if "TUBE" in _sdesc:
             continue
-        _sng = _sp.get("normalized_geometry") or {}
-        _sl = _safe(_sme.get("blank_length_mm") or _sng.get("blank_length_mm"))
-        _sw = _safe(_sme.get("blank_width_mm") or _sng.get("blank_width_mm"))
+        _sl = _safe(_sme.get("blank_length_mm"))
+        _sw = _safe(_sme.get("blank_width_mm"))
+        if not (_sl and _sw):
+            # THROUGH THE SHARED RESOLVER, NOT ONE SPELLING. A measured flat can sit under
+            # normalized_geometry.bounding_box_flat_mm or developed_*; reading blank_* alone
+            # left a coated part with a measured flat out of the booth's area (D-283).
+            try:
+                from document_builder import flat_blank_mm as _fbm
+                _sl, _sw = _fbm(_sp)
+            except Exception:                                        # noqa: BLE001
+                _sng = _sp.get("normalized_geometry") or {}
+                _sl = _safe(_sng.get("blank_length_mm"))
+                _sw = _safe(_sng.get("blank_width_mm"))
         _sq = _safe(_sp.get("quantity"), 1) or 1
         if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
             continue
@@ -5061,6 +5125,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
             # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
             price = _bom_line_price(pe)
+        # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
+        # line carries; a record that still says its bought-in price reached the total when
+        # the cell is empty is one fact with two writers, and the consistency check reported
+        # exactly that on the 21:57 book: eleven £0 lines "reached the total as AI prices".
+        reconcile_price_stamp_with_sheet(pe, price, summary)
         ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
