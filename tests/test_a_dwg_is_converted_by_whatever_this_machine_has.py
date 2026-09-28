@@ -411,6 +411,47 @@ def test_the_skipped_rows_share_the_shape_of_every_other_row(tmp_path):
         assert set(rec) >= {"dwg", "converted", "dxf", "reason"}, rec
 
 
+def test_a_general_arrangement_with_the_role_glued_on_is_never_opened_either(tmp_path):
+    """12645's only DWG is "12645-01GA V2.DWG" — the body's general arrangement, with the role
+    glued to the sheet number. The whole-word marker did not see it, so the 18:09 run opened it
+    on the seat: with no SolidWorks running the attach failed, and the log told the reader to
+    open SolidWorks for a file that was never worth opening. The model extract needs no such
+    thing — the analyser starts its own instance — so the instruction sent somebody to fix a
+    machine that was fine."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    calls = []
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=lambda d, x: calls.append(d) or True)
+    assert calls == [], "a general arrangement was opened on a CAD seat for nothing"
+    assert out["skipped_general_arrangement"] == ["12645-01GA V2.DWG"]
+    assert not out["reason"], "a deliberate skip is being reported as a conversion failure"
+
+
+def test_the_skip_names_the_pdf_of_the_same_sheet_when_there_is_one(tmp_path):
+    """"The same content as the PDF of this sheet, which was read" was said for every GA,
+    whether or not a PDF of it was in the folder. Now it names the one it found — and only a
+    PDF of the SAME sheet, by the engine's one resolver, not any PDF in the pack."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "12645-01GA V2_REVA.PDF").write_bytes(b"%PDF")
+    (tmp_path / "12645-02GA_REVA.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    rec = out["files"][0]
+    assert "12645-01GA V2_REVA.PDF" in rec["reason"] and "which is read" in rec["reason"]
+    assert "12645-02GA" not in rec["reason"]
+
+
+def test_the_skip_says_when_no_pdf_of_the_sheet_is_in_the_folder(tmp_path):
+    """The conclusion is the same — a GA converted to DXF is viewports and text that nothing
+    reads as a parts list — but if the sheet was never read at all, the fix is to ask for the
+    PDF, not to chase a converter, and the reader deserves to be told which."""
+    (tmp_path / "12552-00-GA_Infinity Drawer_Rev C.DWG").write_bytes(b"dwg")
+    (tmp_path / "12552-01_2MM MS_REVA.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    rec = out["files"][0]
+    assert "No PDF of this sheet" in rec["reason"] and "ask for the PDF" in rec["reason"]
+    assert "which is read" not in rec["reason"]
+    assert "general arrangement" in rec["reason"]
+
+
 def test_the_ga_still_appears_in_found(tmp_path):
     """It was in the folder. A file that vanishes from the inventory because the engine chose
     not to open it is the opposite of what this module is for."""

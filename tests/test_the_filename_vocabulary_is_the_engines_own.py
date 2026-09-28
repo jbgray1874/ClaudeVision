@@ -112,10 +112,26 @@ def test_the_explicit_patterns_still_win_where_they_disambiguate():
     ("AC0706-02_BOOTS_GA-REVG.DWG", "general_arrangement"),
     ("11650-04-SA01_ASSEMBLY.DWG", "general_arrangement"),
     ("11650-04_SHOP ELEVATION.DWG", "general_arrangement"),
+    ("12645-01GA V2.DWG", "general_arrangement"),        # the role glued to the sheet number
+    ("12645-02ASSY_REVA.DWG", "general_arrangement"),
     ("scan 17.DWG", "unknown"),
 ])
 def test_a_dwg_is_classed_by_what_the_drawing_office_called_it(name, expect):
     assert cad_inputs.dwg_class(name) == expect
+
+
+def test_a_glued_role_is_read_by_the_identity_rule_not_a_second_copy():
+    """"12645-01GA V2.DWG" is the body's general arrangement, and the whole-word marker cannot
+    see a GA glued to a digit. The 18:09 run of 12645 opened it on the seat for nothing — the
+    call the skip exists to prevent — and, with no SolidWorks running, told the reader to open
+    one. product_identity already reads that spelling (D-311); cad_inputs asks it rather than
+    carrying a second regex that would drift from the first."""
+    import inspect
+    from product_identity import drawing_of_file
+    assert drawing_of_file("12645-01GA V2.DWG")["is_assembly"]
+    assert cad_inputs.dwg_class("12645-01GA V2.DWG") == "general_arrangement"
+    assert "(GA|ASSY)$" not in inspect.getsource(cad_inputs), \
+        "the glued-role rule has been copied into cad_inputs"
 
 
 def test_a_general_arrangement_is_not_read_as_a_flat_because_it_names_a_material():

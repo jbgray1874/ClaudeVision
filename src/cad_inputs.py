@@ -159,6 +159,15 @@ def dwg_class(path: Any) -> str:
         stem = Path(path).stem.upper().replace("_", " ").replace("-", " ")
         if _GA_RE.search(stem):
             return "general_arrangement"
+        # THE ROLE GLUED TO THE SHEET NUMBER. "12645-01GA V2.DWG" is the general arrangement
+        # of the shelter's body, and the whole-word marker above cannot see it: "GA" is
+        # preceded by a digit. So the one DWG in that pack was opened on the seat for nothing
+        # — the exact call the skip below exists to prevent — and with no SolidWorks running
+        # it failed with an instruction to open one. product_identity already reads that
+        # spelling as an assembly (D-311); it is asked here rather than copied.
+        from product_identity import drawing_of_file
+        if drawing_of_file(Path(path).name).get("is_assembly"):
+            return "general_arrangement"
         from drawing_job_merge import material_from_dxf_filename, thickness_mm_from_dxf_filename
         p = Path(path)
         if material_from_dxf_filename(p) and thickness_mm_from_dxf_filename(p) is not None:
@@ -496,6 +505,48 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
             pass
 
 
+def pdf_of_the_same_sheet(dwg: Path, folder: Path) -> Optional[str]:
+    """The name of a PDF in `folder` whose drawing number names the same sheet as this DWG,
+    or None. Spellings are compared by the engine's one resolver (`names_the_product`), so
+    "12645-01GA V2.DWG" finds "12645-01GA V2_REVA.PDF" the way the portal and the roll-up
+    would. Never raises."""
+    try:
+        from product_identity import drawing_of_file, names_the_product
+        mine = (drawing_of_file(Path(dwg).name) or {}).get("number")
+        if not mine:
+            return None
+        for pdf in sorted(Path(folder).rglob("*")):
+            if not pdf.is_file() or pdf.suffix.lower() != ".pdf" or _is_noise(pdf):
+                continue
+            theirs = (drawing_of_file(pdf.name) or {}).get("number")
+            if theirs and names_the_product(mine, theirs):
+                return pdf.name
+    except Exception:                                      # noqa: BLE001
+        return None
+    return None
+
+
+def _skipped_ga_reason(dwg: Path, folder: Path) -> str:
+    """Why a general arrangement was not opened — with the PDF named when there is one.
+
+    This said "the same content as the PDF of this sheet, which was read" for every GA,
+    whether or not a PDF of it was in the folder: an inference printed as an observation. The
+    conclusion is the same either way — a GA converted to DXF is viewports and text, and
+    nothing here reads that as a parts list — but the reader deserves to know whether the
+    sheet was read at all, because if it was not, the fix is to ask for the PDF, not to
+    chase a converter.
+    """
+    twin = pdf_of_the_same_sheet(dwg, folder)
+    if twin:
+        return (f"not attempted — a general arrangement, not a flat pattern. The same content "
+                f"as the PDF of this sheet ({twin}), which is read. Converting it adds nothing "
+                f"and costs a CAD seat the model extract needs.")
+    return ("not attempted — a general arrangement, not a flat pattern. No PDF of this sheet is "
+            "in the folder; converted to DXF it would be viewports and text, which nothing here "
+            "reads as a parts list, so converting it adds nothing and costs a CAD seat the "
+            "model extract needs. If its table matters, ask for the PDF.")
+
+
 def convert_dwgs(
     folder: Path,
     out_dir: Optional[Path] = None,
@@ -556,9 +607,7 @@ def convert_dwgs(
         # for half the rows, which is exactly what the first version of this did.
         result["files"].extend(
             {"dwg": p.name, "backend": "", "converted": False, "dxf": None,
-             "reason": "not attempted — a general arrangement, not a flat pattern. The same "
-                       "content as the PDF of this sheet, which was read. Converting it adds "
-                       "nothing and costs a CAD seat the model extract needs."}
+             "reason": _skipped_ga_reason(p, folder)}
             for p in _skipped_ga)
     if not dwgs:
         return result
