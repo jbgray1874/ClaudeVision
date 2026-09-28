@@ -104,5 +104,27 @@ an exit code.
 
 ## 8. Repository
 
-PR **#1** — `claude/hr-inventory-handover-vnjqw7` → `main`. Open, not merged.
 73 tests, no network or credentials required: `python -m pytest tests -q`.
+
+`main` is static at `2730c0d`. **`main-2026` is the live trunk**, and this work
+is already on it: a parallel session ported the Partner API client, the on-site
+push, the Blip loader, the `/api/hr` routes and the 73 tests across as `5b47cce`,
+then merged the app portal in as `b1b3977`, restoring the InVentry button.
+
+Consequences:
+
+* PR **#1** (`claude/hr-inventory-handover-vnjqw7` → `main`) is **redundant**.
+  Merging it would fork the work onto a dormant branch. Recommend closing it.
+* `sdi-intelligence-backend/deploy/` does **not** exist on `main-2026` — the
+  four `.ps1` scripts postdate the port. They still need lifting across, either
+  by copying the files or by a small PR into `main-2026`.
+
+## 9. Next work stream — after the presence sync is bedded in
+
+Named on 28 Sep, not yet scoped:
+
+| # | Item |
+|---|---|
+| 9.1 | Estimating: PDF / PNG prompting |
+| 9.2 | Speed improvements |
+| 9.3 | Breaking the job down into smaller units |
