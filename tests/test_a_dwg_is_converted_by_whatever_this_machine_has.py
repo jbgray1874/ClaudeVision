@@ -481,6 +481,23 @@ def test_a_ga_whose_number_the_engine_cannot_read_claims_nothing_about_the_folde
     assert "ask for the PDF" not in rec["reason"]
 
 
+def test_a_parts_print_named_with_its_stock_is_not_the_gas_sheet(tmp_path):
+    """"12645-01" names "12645-01GA" by the engine's one identity rule (D-311), so a part print
+    filed "12645-01_2MM MS_REVA.PDF" keys to the GA's sheet — and was named as "the same
+    content". A name that carries the stock it is cut from is a part's flat by the same triage
+    that classed the DWG, and a GA does not have the same content as a part."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "12645-01_2MM MS_REVA.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    reason = out["files"][0]["reason"]
+    assert "2MM MS" not in reason and "No PDF of this sheet" in reason
+    # A role-less spelling of the same sheet is still the sheet.
+    (tmp_path / "12645-01_REVB.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    reason = out["files"][0]["reason"]
+    assert "12645-01_REVB.PDF" in reason and "2MM MS" not in reason
+
+
 def test_a_pdf_in_a_subfolder_is_not_this_jobs_pdf(tmp_path):
     """file_scan groups a job's PDFs by their own parent folder, so a PDF under Superseded\\
     belongs to another folder-job, or to none. Naming it as "the PDF of this sheet" would name

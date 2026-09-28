@@ -546,7 +546,13 @@ def pdfs_of_the_same_sheet(dwg: Path, folder: Path) -> Tuple[str, List[str]]:
             if not pdf.is_file() or pdf.suffix.lower() != ".pdf" or _is_noise(pdf):
                 continue
             theirs = (drawing_of_file(pdf.name) or {}).get("number")
-            if theirs and names_the_product(mine, theirs):
+            # A PART'S PRINT IS NOT THE GA'S SHEET. "12645-01" names "12645-01GA" (D-311), so
+            # a print filed "12645-01_2MM MS_REVA.PDF" keys to this sheet — but a name that
+            # carries the stock it is cut from is a part's flat by the one triage rule above,
+            # and a GA does not have "the same content" as that. The rule that classed the
+            # DWG classes the candidate; a role-less spelling ("11650-06_REVB") is still the
+            # sheet, because nothing in its name says otherwise.
+            if theirs and names_the_product(mine, theirs) and dwg_class(pdf.name) != "flat":
                 found.append(pdf.name)
         return ("found" if found else "none"), found
     except Exception:                                      # noqa: BLE001
