@@ -388,3 +388,72 @@ endpoint paths — the only thing now blocking a live run.
 | 9. PersonID query/uniqueness | Whether we can filter server-side or must pull all personnel each run |
 | 10. POST burst | `SYNC_INTERVAL_MINUTES` and whether to pace writes |
 | 11. Version/licence | Whether anything here is gated |
+
+---
+
+## Round 3 reply — Charlotte Fastenbauer, 25 Sep 2026
+
+Sent the Postman collection (the endpoint paths) and answered everything else:
+
+- Use the **"End User Development"** partner option, not a partner integration.
+- The API host is likely the **main touchscreen** unless we run our own VM;
+  their support team can connect and confirm.
+- The **certificate** is exportable from the **V4 folder on the main unit**.
+- **`LastEventLocation`** shows where a sign-in came from — main touchscreen,
+  Quickscan, Anywhere app — named per site. Sign-outs from a rule carry a
+  reason. *This is what makes automatic sign-out safe.*
+- **`PersonID` should be unique per person**; on an AD-integrated site they
+  populate it with the PID from AD.
+- Their **QA team reviewed our load** (~190 staff, bursts of 50–100) and expect
+  no issues.
+
+Everything is now built against this. See `docs/INVENTRY_API_NOTES.md`.
+
+## Round 4 — to send
+
+Only physical facts remain: console access, an admin login, the API host, and
+the certificate. Charlotte offered a support connection — this accepts it and
+asks for all four at once.
+
+> Hi Charlotte,
+>
+> Thank you — that answers everything, and the Postman collection was the
+> missing piece. The integration is built and running in dry run: it reads the
+> personnel list, matches our staff on `PersonID`, and posts sign-in events via
+> `AddPersonnelAction`. Your note about `LastEventLocation` was especially
+> useful — we now tag our own sign-ins with a distinctive location, so we can
+> never sign out someone who signed in at reception and is still in the
+> building.
+>
+> Yes please to the support connection. There are four things we need, and I
+> think one visit would cover all of them:
+>
+> 1. **The InVentry Console.** I don't have it installed, and I don't believe
+>    anyone here does. Could support install it — or provide the installer — and
+>    set me up with an admin login? I need it to enable the Partner API and
+>    create the key.
+>
+> 2. **The API host.** Which machine serves the API for our site, the main
+>    touchscreen or a VM, so we have the address for `https://<host>:4816`.
+>
+> 3. **The certificate** from the V4 folder on the main unit, so we can verify
+>    TLS properly rather than turning the check off.
+>
+> 4. **The partner secret.** The Postman collection has an `apikey` and a
+>    `partnersecret` pre-filled on the AddPersonnelAction request, and your
+>    overview says the partner secret is the same across on-premises
+>    installations. Could you confirm whether that value is the one we should
+>    use, or issue ours separately?
+>
+> One small technical question while I have you: does **`ActionLocation` accept
+> free text**, or must it match an existing location on our system? We're
+> sending a distinctive value so we can recognise our own sign-ins later — if it
+> has to be a real location, we'll create one for it.
+>
+> We're ready to go live as soon as we have the key and the host, so any day
+> this week works and I'm happy to be on the call when support connect.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+> james.gray@wearesdi.com · 07585 816501
