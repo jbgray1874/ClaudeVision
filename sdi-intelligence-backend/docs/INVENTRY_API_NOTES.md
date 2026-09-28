@@ -238,3 +238,41 @@ INVENTRY_PARTNER_SECRET=<from InVentry, or the value in the Postman collection>
 INVENTRY_API_CA_BUNDLE=<the certificate exported from the V4 folder>
 INVENTRY_ENABLE_SIGN_OUT=false          # until the location marker is proven
 ```
+
+### The certificate (captured 28 Sep 2026)
+
+Pulled off the TLS handshake rather than the V4 folder, since the share
+credentials in the 2025 engineer email no longer work:
+
+```
+Subject : CN=InVentry-PC, O=InVentry-PC, L=Leeds, S=West Yorkshire, C=UK
+Issuer  : CN=InVentry-PC, O=InVentry-PC, L=Leeds, S=West Yorkshire, C=UK
+Expires : 30/04/2034
+```
+
+Self-signed by itself, as their documentation says, and long-lived. Saved to
+`C:\SDIIntelligence\inventry.pem`.
+
+**The name matters.** The certificate is issued to `InVentry-PC`, not to
+`10.0.0.241`. Trusting the certificate alone is not enough: TLS also checks the
+hostname, so `https://10.0.0.241:4816` fails verification even with the right
+CA bundle. Three options:
+
+1. **Hosts entry, then use the name** — full verification, and in keeping with
+   `SDI-Intelligence-HostsEntry.ps1`, which this project already uses for the
+   same reason:
+   ```
+   10.0.0.241   InVentry-PC
+   ```
+   then `INVENTRY_API_BASE_URL=https://InVentry-PC:4816` and
+   `INVENTRY_API_CA_BUNDLE=C:\SDIIntelligence\inventry.pem`.
+   Note OpenSSL only falls back to CN when the certificate has no
+   subjectAltName, so check for a SAN before relying on this.
+2. **Use the name if DNS already resolves it** — same thing without the hosts
+   file. Test with `Test-NetConnection InVentry-PC -Port 4816`.
+3. **`INVENTRY_API_VERIFY=false`** — no verification. Defensible for a LAN call
+   to a fixed address on our own network, and the client logs a warning every
+   run so it never becomes invisible. Reversible at any time.
+
+To capture the certificate again, or after an InVentry upgrade replaces it, see
+`tools/get_inventry_cert.ps1`.
