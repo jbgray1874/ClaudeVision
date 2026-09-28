@@ -41,6 +41,15 @@ os.environ.setdefault("SDI_OFFLINE", "1")
 import build_stamp  # noqa: E402
 
 
+def _an_hour_before_the_newest_edit() -> float:
+    """An import time an hour before the newest engine file was written. Measured from the
+    FILES, not the clock: "an hour ago" only finds a newer file if somebody edited one in
+    the last hour, so the test failed on any checkout left alone that long."""
+    newest = max(p.stat().st_mtime for p in build_stamp._SRC.rglob("*.py")
+                 if "__pycache__" not in p.parts)
+    return newest - 3600
+
+
 # ── quiet when the process is running what is on the disk ────────────────────────────
 
 def test_a_fresh_process_says_nothing():
@@ -61,7 +70,7 @@ def test_the_stamp_still_answers_normally():
 def test_a_pull_after_import_is_detected(monkeypatch):
     """The 16:25 run in one assertion: the engine on disk is newer than the engine in
     memory."""
-    monkeypatch.setattr(build_stamp, "_IMPORTED_AT", time.time() - 3600)
+    monkeypatch.setattr(build_stamp, "_IMPORTED_AT", _an_hour_before_the_newest_edit())
     said = build_stamp.source_changed_since_import()
     assert said, "a pull an hour after import went unnoticed"
     assert ".py" in said
@@ -86,7 +95,7 @@ def test_it_says_how_long_ago_not_merely_that_it_happened():
 
 
 def test_the_warning_names_the_remedy(monkeypatch):
-    monkeypatch.setattr(build_stamp, "_IMPORTED_AT", time.time() - 3600)
+    monkeypatch.setattr(build_stamp, "_IMPORTED_AT", _an_hour_before_the_newest_edit())
     warn = build_stamp.stale_process_warning() or ""
     assert "STALE ENGINE" in warn
     assert "Stop the runner and start it again" in warn
@@ -118,7 +127,7 @@ def test_a_matching_head_raises_nothing(monkeypatch):
 def test_the_console_says_it_above_the_run_not_inside_it(capsys):
     _saved = build_stamp._IMPORTED_AT
     try:
-        build_stamp._IMPORTED_AT = time.time() - 3600
+        build_stamp._IMPORTED_AT = _an_hour_before_the_newest_edit()
         build_stamp.print_build_stamp()
     finally:
         build_stamp._IMPORTED_AT = _saved
