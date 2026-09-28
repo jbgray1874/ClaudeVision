@@ -56,7 +56,15 @@ def _unescape_js(text: str) -> str:
 
 
 def _portal_services():
-    """(id, name) in the order the portal lists them."""
+    """(id, name) in the order the portal lists them.
+
+    From services.json where the page loads its catalogue from there (the app portal reads
+    the same file); from the page's own SERVICES array where it still carries one."""
+    _json = _BACKEND / "services.json"
+    if "const SERVICES=[" not in _PORTAL and _json.exists():
+        import json
+        return [(s["id"], s["name"]) for s in
+                json.loads(_json.read_text(encoding="utf-8"))["services"]]
     out = []
     for m in re.finditer(r"\{id:'([a-z0-9-]+)',\s*name:'((?:[^'\\]|\\.)*)'", _PORTAL):
         name = _unescape_js(m.group(2)).replace("\\'", "'")

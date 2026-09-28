@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0f">
+<title>Voice CRM · SDI Intelligence</title>
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400; --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+    --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;
+       line-height:1.5;-webkit-font-smoothing:antialiased;min-height:100vh;overflow-wrap:anywhere;
+       background-image:radial-gradient(900px 500px at 88% -8%,rgba(255,212,0,.06),transparent 60%)}
+  a{color:var(--accent);text-decoration:none}
+  .top{position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);backdrop-filter:blur(12px);
+       border-bottom:1px solid var(--line);padding:calc(12px + var(--safe-t)) 16px 12px}
+  .back{display:flex;align-items:center;gap:7px;background:none;border:0;color:var(--ink-dim);
+        font-family:var(--body);font-size:14px;cursor:pointer;padding:2px}
+  .back svg{width:17px;height:17px}
+  .wrap{padding:18px 16px calc(32px + var(--safe-b));max-width:840px;margin:0 auto}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:25px;line-height:1.15;margin:8px 0 10px}
+  .sub{color:var(--ink-dim);font-size:14.5px}
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+        padding:4px 7px;border-radius:2px;border:1px solid transparent;white-space:nowrap}
+  .c-ok{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
+  .c-warn{background:rgba(255,157,66,.12);color:var(--warn);border-color:rgba(255,157,66,.3)}
+  .c-off{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+         padding:15px;margin-top:14px}
+  .panel h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+            text-transform:uppercase;font-weight:500;margin-bottom:10px}
+  .panel p{font-size:14px;color:var(--ink-dim)}
+  .panel.warn{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .rec{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+       padding:14px;margin-bottom:9px}
+  .rec .rh{display:flex;justify-content:space-between;gap:10px;align-items:baseline;
+           border-bottom:1px solid var(--line-soft);padding-bottom:9px;margin-bottom:9px}
+  .rec .pid{font-family:var(--mono);font-size:13px;color:var(--accent);font-weight:700}
+  .rec .when{font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+  .kv{display:grid;grid-template-columns:minmax(90px,34%) 1fr;gap:5px 12px;font-size:13.5px}
+  .kv dt{color:var(--ink-faint);font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;
+         text-transform:uppercase;padding-top:2px}
+  .kv dd{color:var(--ink)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;
+       border-radius:2px;color:var(--accent)}
+  ul{margin:8px 0 0 18px} li{margin:5px 0;font-size:13.5px;color:var(--ink-dim)}
+  .msg{color:var(--ink-faint);font-size:14px;padding:26px 2px;text-align:center}
+  .foot{margin-top:26px;padding-top:15px;border-top:1px solid var(--line-soft);
+        font-size:11px;color:var(--ink-faint);font-family:var(--mono)}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <button class="back" onclick="location.href='./#voice-crm'">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+    All apps
+  </button>
+</header>
+
+<div class="wrap">
+  <div class="kicker">SDI Intelligence app</div>
+  <h1>Voice-Activated CRM</h1>
+  <p class="sub">Sandbox project records, read live from SharePoint as the signed-in user.</p>
+  <div class="meta" id="badges"></div>
+  <div id="body"><div class="msg">Checking…</div></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+// Nothing on this screen is invented. If a record cannot be read, the screen
+// says why instead of showing a plausible-looking row. A confidently wrong
+// project status is worse than an honest gap.
+const $=id=>document.getElementById(id);
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+// SharePoint returns plenty of plumbing alongside the real columns.
+const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|FolderChildCount|AppAuthor|AppEditor|ComplianceAssetId|FileSystemObjectType|ServerRedirectedEmbedUrl)/i;
+const PID=['ProjectID','ProjectId','Project_x0020_ID','Title'];
+
+function badge(text,cls){ return '<span class="chip '+cls+'">'+esc(text)+'</span>'; }
+
+function panel(title,html,warn){
+  return '<div class="panel'+(warn?' warn':'')+'"><h4>'+esc(title)+'</h4>'+html+'</div>';
+}
+
+function explain(d){
+  const s=d.detail&&typeof d.detail==='object'?d.detail:{};
+  switch(d.state){
+    case 'not_configured':
+      return panel('Not connected yet',
+        '<p>The SharePoint sandbox List has not been pointed at this service. '
+        +'Set these in <code>.env</code> on the server and restart it:</p><ul>'
+        +(s.missing_settings||[]).map(k=>'<li><code>'+esc(k)+'</code></li>').join('')
+        +'</ul><p style="margin-top:10px">'
+        +'<code>SDI_VOICECRM_SITE</code> is the site in the form '
+        +'<code>hostname:/sites/SiteName</code>. <code>SDI_VOICECRM_LIST</code> is the '
+        +'List display name or its ID.</p>',true);
+    case 'sso_disabled':
+      return panel('Sign-in not configured',
+        '<p>These records are read as the signed-in person, so Entra SSO has to be '
+        +'working first. Until then this screen cannot show anything real.</p>',true);
+    case 'no_token':
+      return panel('No Microsoft Graph access',
+        '<p>'+esc(d.detail||'')+'</p><p style="margin-top:10px">Most often this means the '
+        +'app registration has not been granted a <code>Sites.*</code> delegated permission, '
+        +'or the scope was added after this session started. Sign out and back in after '
+        +'granting it.</p>',true);
+    case 'graph_error':
+      return panel('Microsoft Graph refused the request',
+        '<p><code>HTTP '+esc(d.status)+'</code></p><p style="margin-top:8px">'+esc(d.detail)+'</p>'
+        +'<p style="margin-top:10px">A 403 here usually means the account can sign in but has '
+        +'no rights on that site; a 404 usually means the site or List name is wrong.</p>',true);
+    case 'unreachable':
+      return panel('Could not reach Microsoft Graph','<p>'+esc(d.detail||'')+'</p>',true);
+    default:
+      return panel('Unexpected response','<p>'+esc(JSON.stringify(d).slice(0,400))+'</p>',true);
+  }
+}
+
+function record(r){
+  const f=r.fields||{};
+  const pidKey=PID.find(k=>f[k]!=null);
+  const keys=Object.keys(f).filter(k=>!HIDE.test(k)&&k!==pidKey);
+  return '<div class="rec"><div class="rh">'
+    +'<span class="pid">'+esc(pidKey?f[pidKey]:('Item '+r.id))+'</span>'
+    +'<span class="when">'+esc((r.modified||'').replace('T',' ').replace('Z','').slice(0,16))+'</span>'
+    +'</div><dl class="kv">'
+    + keys.map(k=>'<dt>'+esc(k.replace(/_x0020_/g,' '))+'</dt><dd>'+esc(fmt(f[k]))+'</dd>').join('')
+    +'</dl></div>';
+}
+
+function fmt(v){
+  if(v==null) return '—';
+  if(typeof v==='object') return v.Title||v.DisplayName||v.LookupValue||JSON.stringify(v).slice(0,120);
+  if(typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0,10);
+  return v;
+}
+
+async function main(){
+  let st={};
+  try{
+    const r=await fetch('../api/voicecrm/status',{cache:'no-store'});
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); return; }
+    st=await r.json();
+  }catch(e){
+    $('body').innerHTML=panel('Service unreachable','<p>'+esc(e.message)+'</p>',true); return;
+  }
+
+  $('badges').innerHTML =
+      badge(st.configured?'List configured':'List not configured', st.configured?'c-ok':'c-warn')
+    + badge(st.sso_enabled?'SSO on':'SSO off', st.sso_enabled?'c-ok':'c-warn')
+    + badge('Owner = '+(st.owner_filter||'—'),'c-off')
+    + badge('Read-only','c-off');
+
+  const r2=await fetch('../api/voicecrm/projects',{cache:'no-store'});
+  const d=await r2.json();
+
+  let h='';
+  if(d.state!=='ok'){
+    h=explain(d);
+  }else if(!d.items.length){
+    h=panel('No matching records',
+      '<p>The List was read successfully, but no record has <code>'+esc(st.owner_field)
+      +'</code> set to <b>'+esc(d.owner_filter)+'</b>.'
+      +(d.skipped_other_owner?' '+d.skipped_other_owner+' record(s) belong to other owners.':'')
+      +'</p><p style="margin-top:10px">If the records are there, the owner column\'s internal '
+      +'name probably differs — set <code>SDI_VOICECRM_OWNER_FIELD</code> to match.</p>');
+  }else{
+    h='<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';
+    if(d.skipped_other_owner)
+      h+='<p class="msg">'+d.skipped_other_owner+' record(s) hidden — owned by someone other than '
+        +esc(d.owner_filter)+'.</p>';
+  }
+
+  h+=panel('Why this is read-only',
+    '<p>Updating a record by voice needs the full loop from the agreed architecture: validate '
+    +'the change, read it back, take explicit confirmation, re-check the owner and the record '
+    +'version, then write and journal the outcome so a retry cannot repeat a saved change.</p>'
+    +'<p style="margin-top:10px">Until that exists and is approved, this screen reads and does '
+    +'not write. The live tracker is untouched either way.</p>');
+
+  $('body').innerHTML=h;
+  $('foot').textContent = d.state==='ok'
+    ? d.items.length+' record(s) · live from SharePoint'
+    : 'state: '+d.state;
+}
+main();
+</script>
+</body>
+</html>

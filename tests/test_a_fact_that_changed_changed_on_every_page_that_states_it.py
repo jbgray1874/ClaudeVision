@@ -43,6 +43,12 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]
 _PORTAL = (_ROOT / "sdi-intelligence-backend" / "sdi-intelligence-portal.html").read_text(
     encoding="utf-8")
+_SERVICES_JSON = (_ROOT / "sdi-intelligence-backend" / "services.json")
+# The AI Services catalogue moved out of the page into services.json (the app portal reads the
+# same file), so a service's detail page is checked where it now lives.
+_SERVICES = (__import__("json").loads(_SERVICES_JSON.read_text(encoding="utf-8"))["services"]
+             if _SERVICES_JSON.exists() else [])
+_SERVICES_TEXT = "\n".join(__import__("json").dumps(s, ensure_ascii=False) for s in _SERVICES)
 
 
 def _where(pattern: str) -> list:
@@ -50,7 +56,8 @@ def _where(pattern: str) -> list:
     page to open rather than which character offset to look at."""
     starts = [(m.start(), m.group(1)) for m in
               re.finditer(r'<section class="view[^"]*" id="([a-z0-9-]+)"', _PORTAL)]
-    script_at = _PORTAL.index("const SERVICES=[")
+    script_at = (_PORTAL.index("const SERVICES=[") if "const SERVICES=[" in _PORTAL
+                 else len(_PORTAL))
     out = []
     for m in re.finditer(pattern, _PORTAL, re.I):
         if m.start() >= script_at:
@@ -58,6 +65,8 @@ def _where(pattern: str) -> list:
         else:
             prior = [n for at, n in starts if at <= m.start()]
             out.append(f"#{prior[-1]}" if prior else "the page header")
+    for m in re.finditer(pattern, _SERVICES_TEXT, re.I):
+        out.append("services.json (a service detail page)")
     return out
 
 

@@ -5,6 +5,15 @@
 # PURPOSE: Adds sdi-intelligence.sdi.local -> 10.0.16.151 to the hosts file
 #          on every SDI PC so all users can reach the portal by friendly URL.
 #
+# 20 Sep 2026: retargeted from 10.0.16.151 to 10.0.0.5. The service moved and
+# this script did not follow, so every managed PC has been pointing the friendly
+# name at a host that does not answer (DestinationHostUnreachable). Editing this
+# file changes nothing by itself - it must be re-uploaded to Intune.
+#
+# This is a stopgap. A hosts entry on 300 devices is 300 things to keep in sync;
+# a DNS A record on the DC is one, and an HTTPS hostname removes the :8071 as
+# well. See APP_PORTAL_RUNBOOK.md.
+#
 # DEPLOY TO: All Devices
 # RUN AS:    SYSTEM
 # 64-BIT:    Yes
@@ -12,7 +21,7 @@
 # SAFE TO RE-RUN: yes - never creates duplicate entries
 # ==============================================================================
 
-$CorrectIP  = "10.0.16.151"
+$CorrectIP  = "10.0.0.5"
 $Hostname   = "sdi-intelligence.sdi.local"
 $HostsFile  = "C:\Windows\System32\drivers\etc\hosts"
 $NewLine    = "$CorrectIP`t$Hostname"

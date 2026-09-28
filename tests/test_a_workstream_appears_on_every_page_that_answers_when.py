@@ -33,6 +33,11 @@ import pytest
 _ROOT = Path(__file__).resolve().parents[1]
 _PORTAL = (_ROOT / "sdi-intelligence-backend" / "sdi-intelligence-portal.html").read_text(
     encoding="utf-8")
+_SERVICES_JSON = (_ROOT / "sdi-intelligence-backend" / "services.json")
+# The AI Services catalogue moved out of the page into services.json (the app portal reads the
+# same file), so a service's detail page is read where it now lives.
+_SERVICES = (__import__("json").loads(_SERVICES_JSON.read_text(encoding="utf-8"))["services"]
+             if _SERVICES_JSON.exists() else [])
 
 
 def _views() -> dict:
@@ -107,10 +112,14 @@ def test_the_first_go_live_in_the_programme_is_stated_on_each(page):
 def test_the_two_new_services_carry_their_dates_on_their_own_detail_page():
     """A service page reached from the sidebar has to answer "when" without sending somebody
     to a different page to find out. Both were published with prose and no schedule."""
-    script = _PORTAL[_PORTAL.index("const SERVICES=["):]
+    by_id = {s["id"]: s for s in _SERVICES}
     for sid in ("drawing-search", "client-briefing"):
-        at = script.index("{id:'" + sid + "'")
-        entry = script[at:script.index("\n\n", at)]
+        if sid in by_id:
+            entry = __import__("json").dumps(by_id[sid], ensure_ascii=False)
+        else:
+            script = _PORTAL[_PORTAL.index("const SERVICES=["):]
+            at = script.index("{id:'" + sid + "'")
+            entry = script[at:script.index("\n\n", at)]
         assert "Delivery plan" in entry, f"{sid} has no delivery-plan section"
         assert entry.count("<tr") >= 6, f"{sid}'s phase table has too few rows to be the plan"
         assert "Sep 26" in entry, f"{sid} names no dates"

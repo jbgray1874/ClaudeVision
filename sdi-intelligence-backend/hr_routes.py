@@ -14,9 +14,10 @@ Endpoints (all require header  X-SDI-Key: <SDI_API_KEY>):
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 
-import config            # backend config (for the shared API key)
+import config
+import auth              # Entra SSO — a signed-in person counts as authorised
 import hr_config as cfg
 import hr_pull
 import hr_load_inventry
@@ -24,27 +25,34 @@ import hr_load_inventry
 router = APIRouter(prefix="/api/hr", tags=["hr"])
 
 
-def _check_key(key):
+def _check_key(key, request=None):
+    """A signed-in person, or a machine presenting the shared key.
+
+    These endpoints write the InVentry CSV, so once the scheduled task has its
+    own identity, SDI_ALLOW_API_KEY=no closes the shared-key route.
+    """
+    if request is not None and auth.ENABLED and auth.current_user(request) is not None:
+        return
     if config.API_KEY and key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+        raise HTTPException(status_code=401, detail="Sign in, or present a valid X-SDI-Key")
 
 
 @router.post("/pull")
-def pull(x_sdi_key: str | None = Header(default=None)):
-    _check_key(x_sdi_key)
+def pull(request: Request, x_sdi_key: str | None = Header(default=None)):
+    _check_key(x_sdi_key, request)
     return hr_pull.run_pull()
 
 
 @router.post("/load")
-def load(x_sdi_key: str | None = Header(default=None)):
-    _check_key(x_sdi_key)
+def load(request: Request, x_sdi_key: str | None = Header(default=None)):
+    _check_key(x_sdi_key, request)
     return hr_load_inventry.run_load()
 
 
 @router.post("/sync")
-def sync(x_sdi_key: str | None = Header(default=None)):
+def sync(request: Request, x_sdi_key: str | None = Header(default=None)):
     """On demand: pull -> store -> load into InVentry. The COO button."""
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     pull_summary = hr_pull.run_pull()
     if pull_summary["status"] == "aborted":
         return {"pull": pull_summary,
@@ -54,8 +62,8 @@ def sync(x_sdi_key: str | None = Header(default=None)):
 
 
 @router.get("/status")
-def status(x_sdi_key: str | None = Header(default=None)):
-    _check_key(x_sdi_key)
+def status(request: Request, x_sdi_key: str | None = Header(default=None)):
+    _check_key(x_sdi_key, request)
     p = Path(cfg.HR_SNAPSHOT_DIR) / "hr_status.json"
     if not p.exists():
         return {"pull": None, "load": None}
@@ -69,16 +77,16 @@ def status(x_sdi_key: str | None = Header(default=None)):
 import hr_blip
 
 @router.post("/blip")
-def blip(x_sdi_key: str | None = Header(default=None)):
+def blip(request: Request, x_sdi_key: str | None = Header(default=None)):
     """Query current Blip clockings — who is on site right now."""
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     return hr_blip.run_blip()
 
 
 @router.get("/blip/latest")
-def blip_latest(x_sdi_key: str | None = Header(default=None)):
+def blip_latest(request: Request, x_sdi_key: str | None = Header(default=None)):
     """Return the latest Blip snapshot without re-querying BrightHR."""
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     p = Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json"
     if not p.exists():
         return {"on_site": [], "summary": None,
@@ -94,7 +102,7 @@ import hr_blip_inventry
 
 
 @router.post("/blip/load")
-def blip_load(force: bool = False, dry_run: bool = False, source: str = "latest",
+def blip_load(request: Request, force: bool = False, dry_run: bool = False, source: str = "latest",
               x_sdi_key: str | None = Header(default=None)):
     """Write the current on-site list to the InVentry watched folder.
 
@@ -103,15 +111,15 @@ def blip_load(force: bool = False, dry_run: bool = False, source: str = "latest"
     dry_run writes the CSV beside the snapshot instead of into the watched
     folder — use it until InVentry confirm the presence import.
     """
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     return hr_blip_inventry.run_blip_load(force=force, dry_run=dry_run, source=source)
 
 
 @router.post("/blip/sync")
-def blip_sync(force: bool = False, dry_run: bool = False, source: str = "latest",
+def blip_sync(request: Request, force: bool = False, dry_run: bool = False, source: str = "latest",
               x_sdi_key: str | None = Header(default=None)):
     """Query Blip then load the result into InVentry — the COO's one click."""
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     blip_summary = hr_blip.run_blip()
     if blip_summary.get("status") not in ("ok", "degraded"):
         return {"blip": blip_summary,
@@ -125,13 +133,13 @@ import hr_onsite_push
 
 
 @router.get("/inventry/check")
-def inventry_check(x_sdi_key: str | None = Header(default=None)):
+def inventry_check(request: Request, x_sdi_key: str | None = Header(default=None)):
     """Read-only check of the InVentry Partner API. Writes nothing.
 
     Confirms the base URL, credentials and TLS setup work, and reports how many
     personnel records already carry our PersonID.
     """
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     import hr_inventry_api
     try:
         return hr_inventry_api.InVentryAPI().check()
@@ -140,14 +148,14 @@ def inventry_check(x_sdi_key: str | None = Header(default=None)):
 
 
 @router.post("/blip/push")
-def blip_push(apply: bool = False, force: bool = False, source: str = "latest",
+def blip_push(request: Request, apply: bool = False, force: bool = False, source: str = "latest",
               x_sdi_key: str | None = Header(default=None)):
     """Push the current on-site list into InVentry via the Partner API.
 
     Defaults to a dry run: the plan is logged and returned, nothing is sent.
     Pass apply=true to write. source is as for /blip/load.
     """
-    _check_key(x_sdi_key)
+    _check_key(x_sdi_key, request)
     try:
         return hr_onsite_push.run_push(apply=apply, force=force, source=source)
     except RuntimeError as exc:

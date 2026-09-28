@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0d0d0f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SDI Intelligence">
+<title>SDI Intelligence</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0d0d0f; --surface:#17171b; --surface-2:#1d1d22;
+    --line:#2a2a31; --line-soft:#202026;
+    --ink:#f3f2ee; --ink-dim:#a3a3aa; --ink-faint:#6b6b73;
+    --accent:#ffd400;
+    --ok:#5fd08a; --warn:#ff9d42; --fail:#ff5d5d;
+    --r:4px;
+    --mono:'JetBrains Mono',ui-monospace,monospace;
+    --disp:'Archivo',sans-serif;
+    --body:'Hanken Grotesk',sans-serif;
+    --safe-t:env(safe-area-inset-top,0px);
+    --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{
+    background:var(--bg); color:var(--ink); font-family:var(--body);
+    font-size:15px; line-height:1.5; -webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(900px 500px at 88% -8%, rgba(255,212,0,.06), transparent 60%);
+    min-height:100vh; overflow-wrap:anywhere;
+  }
+  a{color:var(--accent);text-decoration:none}
+
+  /* ---------- Header ---------- */
+  .top{
+    position:sticky;top:0;z-index:20;background:rgba(13,13,15,.92);
+    backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+    padding:calc(12px + var(--safe-t)) 16px 12px;
+  }
+  .top > *{max-width:1180px;margin-left:auto;margin-right:auto}
+  .bar{display:flex;align-items:center;gap:12px}
+  .mark{width:32px;height:32px;background:var(--accent);border-radius:3px;display:grid;place-items:center;flex:none}
+  .mark b{font-family:var(--disp);font-weight:900;color:#000;font-size:19px;line-height:1;letter-spacing:-1px}
+  .t1{font-family:var(--disp);font-weight:800;letter-spacing:.11em;font-size:13px}
+  .t2{font-size:9.5px;color:var(--ink-faint);letter-spacing:.3em;text-transform:uppercase;margin-top:2px}
+  .back{
+    display:none;align-items:center;gap:7px;background:none;border:0;color:var(--ink-dim);
+    font-family:var(--body);font-size:14px;cursor:pointer;padding:6px 2px
+  }
+  .back svg{width:17px;height:17px}
+  body.detail .back{display:flex}
+  body.detail .brand{display:none}
+
+  .search{
+    margin-top:12px;width:100%;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--r);color:var(--ink);font-family:var(--body);font-size:15px;
+    padding:11px 13px;outline:none
+  }
+  .search:focus{border-color:var(--accent)}
+  .search::placeholder{color:var(--ink-faint)}
+  body.detail .search{display:none}
+
+  /* ---------- Layout ---------- */
+  .wrap{padding:18px 16px calc(28px + var(--safe-b));max-width:1180px;margin:0 auto}
+  .grp{
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+    text-transform:uppercase;margin:24px 0 10px
+  }
+  .grp:first-child{margin-top:4px}
+
+  /* One column on a phone; a grid once there is room. Category headings span
+     the full width so the grouping still reads on a laptop. */
+  #list{display:grid;grid-template-columns:1fr;gap:9px;align-content:start}
+  #list .grp{grid-column:1/-1}
+  @media (min-width:680px){ #list{grid-template-columns:1fr 1fr} }
+  @media (min-width:1040px){ #list{grid-template-columns:repeat(3,1fr)} }
+
+  .card{
+    display:flex;flex-direction:column;width:100%;text-align:left;background:var(--surface);
+    border:1px solid var(--line);border-radius:var(--r);padding:14px;cursor:pointer;
+    font-family:var(--body);color:var(--ink);transition:.14s
+  }
+  .card:hover{border-color:var(--ink-faint)}
+  .card:active{background:var(--surface-2);transform:scale(.995)}
+  .card .ch{display:flex;gap:9px;align-items:flex-start;justify-content:space-between}
+  .card .nm{font-weight:600;font-size:15px;line-height:1.3}
+  .card .ds{color:var(--ink-dim);font-size:13.5px;margin-top:6px}
+  /* Says what you cannot do from this device, rather than hiding the app. */
+  .req{font-family:var(--mono);font-size:10px;color:var(--warn);letter-spacing:.04em;
+       margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+
+  .chip{
+    font-family:var(--mono);font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;
+    padding:4px 7px;border-radius:2px;white-space:nowrap;flex:none;border:1px solid transparent
+  }
+  .c-done{background:rgba(95,208,138,.12);color:var(--ok);border-color:rgba(95,208,138,.3)}
+  .c-prog{background:rgba(255,212,0,.12);color:var(--accent);border-color:rgba(255,212,0,.3)}
+  .c-plan{background:rgba(163,163,170,.1);color:var(--ink-dim);border-color:var(--line)}
+
+  /* ---------- Detail ---------- */
+  #detail{display:none;max-width:720px}
+  body.detail #detail{display:block}
+  body.detail #list{display:none}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--accent);text-transform:uppercase}
+  h1{font-family:var(--disp);font-weight:800;font-size:25px;line-height:1.15;margin:8px 0 10px;letter-spacing:-.01em}
+  .sub{color:var(--ink-dim);font-size:14.5px}
+  .meta{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
+  .note{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-top:14px}
+  .note.warnbox{border-color:rgba(255,157,66,.35);background:rgba(255,157,66,.06)}
+  .note h4{
+    font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+    text-transform:uppercase;font-weight:500;margin-bottom:9px
+  }
+  .note p,.note div{font-size:14px;color:var(--ink-dim)}
+  .note b{color:var(--ink)}
+  .body-txt{font-size:14.5px;color:var(--ink-dim);margin-top:14px}
+  .body-txt b{color:var(--ink)}
+  ul{margin:6px 0 0 18px}
+  li{margin:4px 0;font-size:14px;color:var(--ink-dim)}
+  code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;border-radius:2px;color:var(--accent)}
+  .tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+  .tag{font-family:var(--mono);font-size:11px;background:var(--surface-2);border:1px solid var(--line);
+       color:var(--ink-dim);padding:4px 8px;border-radius:2px}
+  .btn{
+    display:inline-block;background:var(--accent);color:#000;font-weight:700;font-size:14px;
+    padding:11px 16px;border-radius:var(--r);margin-top:18px;border:0;font-family:var(--body)
+  }
+
+  .who{
+    display:none;margin-top:9px;font-family:var(--mono);font-size:10.5px;
+    color:var(--ink-faint);letter-spacing:.06em;align-items:center;gap:8px
+  }
+  .who.on{display:flex}
+  .who b{color:var(--ink-dim);font-weight:500}
+  .who a{color:var(--ink-faint);text-decoration:underline}
+  body.detail .who{display:none}
+
+  .msg{color:var(--ink-faint);font-size:14px;padding:26px 2px;text-align:center}
+  .banner{
+    background:rgba(255,157,66,.1);border:1px solid rgba(255,157,66,.3);color:var(--warn);
+    border-radius:var(--r);padding:10px 13px;font-size:13px;margin-bottom:14px
+  }
+  .foot{margin-top:30px;padding-top:16px;border-top:1px solid var(--line-soft);
+        font-size:11px;color:var(--ink-faint);font-family:var(--mono);letter-spacing:.05em}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="bar">
+    <button class="back" id="back" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
+      All apps
+    </button>
+    <div class="bar brand" style="gap:11px">
+      <div class="mark"><b>S</b></div>
+      <div>
+        <div class="t1">SDI INTELLIGENCE</div>
+        <div class="t2">App Portal</div>
+      </div>
+    </div>
+  </div>
+  <input class="search" id="q" type="search" placeholder="Search apps…" autocomplete="off">
+  <div class="who" id="who"></div>
+</header>
+
+<div class="wrap">
+  <div id="banner"></div>
+  <div id="list"><div class="msg">Loading…</div></div>
+  <div id="detail"></div>
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+// The catalogue is the same services.json the intranet portal renders from.
+// No API key lives in this page — access control belongs in front of the service.
+const ORDER=['Live & in-flight','Co-worker agents','Pipeline','Customer-facing','Internal tools','Meta'];
+let SERVICES=[], offline=false;
+
+const $=id=>document.getElementById(id);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function load(){
+  try{
+    // Never hang on "Loading…" — a stalled network falls through to the cache.
+    const ctl=new AbortController();
+    const timer=setTimeout(()=>ctl.abort(),8000);
+    let r;
+    try{ r=await fetch('../api/services?surface=app',{cache:'no-cache',signal:ctl.signal}); }
+    finally{ clearTimeout(timer); }
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/'); return; }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    SERVICES=d.services||[];
+    try{ localStorage.setItem('sdi.catalogue',JSON.stringify(SERVICES)); }catch(e){}
+  }catch(e){
+    let cached=null;
+    try{ cached=localStorage.getItem('sdi.catalogue'); }catch(e2){}
+    if(cached){ SERVICES=JSON.parse(cached); offline=true; }
+    else{ $('list').innerHTML='<div class="msg">Couldn\'t reach the SDI Intelligence service.<br>'
+        +'Check you\'re on the SDI network or VPN, then pull to refresh.</div>'; return; }
+  }
+  whoami();
+  if(offline) $('banner').innerHTML='<div class="banner">Offline — showing the last catalogue this device downloaded.</div>';
+  $('foot').textContent=SERVICES.length+' apps · '+(offline?'cached':'live');
+  renderList();
+  route();
+}
+
+function renderList(filter){
+  const f=(filter||'').trim().toLowerCase();
+  const hits=SERVICES.filter(s=>!f
+    || s.name.toLowerCase().includes(f)
+    || (s.desc||'').toLowerCase().includes(f)
+    || (s.tech||[]).join(' ').toLowerCase().includes(f)
+    || (s.status||'').toLowerCase().includes(f));
+  if(!hits.length){ $('list').innerHTML='<div class="msg">No apps match “'+esc(f)+'”.</div>'; return; }
+
+  const cats=[...new Set(hits.map(s=>s.category))]
+    .sort((a,b)=>(ORDER.indexOf(a)+1||99)-(ORDER.indexOf(b)+1||99));
+  let h='';
+  cats.forEach(cat=>{
+    h+='<div class="grp">'+esc(cat)+'</div>';
+    hits.filter(s=>s.category===cat).forEach(s=>{
+      h+='<button class="card" data-open="'+esc(s.id)+'">'
+        +'<div class="ch"><span class="nm">'+esc(s.name)+'</span>'
+        +'<span class="chip '+esc(s.cls||'c-plan')+'">'+esc(s.status||'')+'</span></div>'
+        +(s.desc?'<div class="ds">'+esc(s.desc)+'</div>':'')
+        +(s.requires?'<div class="req">'+esc(s.requires)+'</div>':'')
+        +'</button>';
+    });
+  });
+  $('list').innerHTML=h;
+}
+
+function renderDetail(s){
+  const list=a=>'<ul>'+a.map(x=>'<li>'+x+'</li>').join('')+'</ul>';
+  const tags=a=>'<div class="tags">'+a.map(t=>'<span class="tag">'+esc(t)+'</span>').join('')+'</div>';
+  let h='<div class="kicker">SDI Intelligence app</div><h1>'+esc(s.name)+'</h1>';
+  if(s.desc) h+='<p class="sub">'+esc(s.desc)+'</p>';
+  h+='<div class="meta"><span class="chip '+esc(s.cls||'c-plan')+'">'+esc(s.status||'')+'</span>'
+    +(s.phase?'<span class="chip c-plan">'+esc(s.phase)+'</span>':'')+'</div>';
+  if(s.requires) h+='<div class="note warnbox"><h4>On this device</h4><div>'+esc(s.requires)+'</div></div>';
+  if(s.detail)   h+='<div class="body-txt">'+s.detail+'</div>';
+  if(s.sections) s.sections.forEach(x=>{ h+='<div class="note"><h4>'+esc(x.title)+'</h4><div>'+x.body+'</div></div>'; });
+  if(s.inputs)   h+='<div class="note"><h4>Inputs</h4>'+list(s.inputs)+'</div>';
+  if(s.outputs)  h+='<div class="note"><h4>Outputs</h4>'+list(s.outputs)+'</div>';
+  if(s.tech)     h+='<div class="note"><h4>Built with</h4>'+tags(s.tech)+'</div>';
+  if(s.invoke)   h+='<div class="note"><h4>How to use it</h4><div>'+s.invoke+'</div></div>';
+  if(s.next)     h+='<div class="note"><h4>Next</h4><div>'+s.next+'</div></div>';
+  if(s.app_url)  h+='<a class="btn" href="'+esc(s.app_url)+'">Open '+esc(s.name.split(' · ')[0])+' →</a>';
+  if(s.link)     h+='<a class="btn" href="'+esc(s.link)+'" target="_blank" rel="noopener">'+esc(s.linkLabel||'Open ↗')+'</a>';
+  $('detail').innerHTML=h;
+}
+
+function open(id,skipHash){
+  const s=SERVICES.find(x=>x.id===id); if(!s) return;
+  renderDetail(s);
+  document.body.classList.add('detail');
+  window.scrollTo(0,0);
+  if(!skipHash) location.hash=id;
+}
+function close(){
+  document.body.classList.remove('detail');
+  if(location.hash) history.pushState('',document.title,location.pathname+location.search);
+}
+function route(){
+  const h=location.hash.replace('#','');
+  if(h && SERVICES.find(x=>x.id===h)) open(h,true); else document.body.classList.remove('detail');
+}
+
+$('list').addEventListener('click',e=>{
+  const b=e.target.closest('[data-open]'); if(b) open(b.dataset.open);
+});
+$('back').addEventListener('click',close);
+$('q').addEventListener('input',e=>renderList(e.target.value));
+window.addEventListener('hashchange',route);
+
+async function whoami(){
+  try{
+    const r=await fetch('../api/me',{cache:'no-store'});
+    if(!r.ok) return;
+    const m=await r.json();
+    if(!m.signed_in) return;
+    const el=$('who'); el.className='who on';
+    el.innerHTML = m.sso_enabled
+      ? '<b>'+esc(m.name)+'</b> · <a href="/auth/logout">sign out</a>'
+      : '<b>Not signed in</b> · SSO is not configured on this server';
+  }catch(e){}
+}
+
+load();
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+</script>
+</body>
+</html>

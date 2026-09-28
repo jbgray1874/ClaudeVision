@@ -135,3 +135,10 @@ cache/
 
 # Frozen-replay harness: accepted facts and frozen summaries are versioned evidence
 !tests/replay/**/*.json
+
+# ── SDI Intelligence app portal ──
+!sdi-intelligence-backend/services.json
+!sdi-intelligence-backend/appportal/*.png
+sdi-intelligence-backend/*.db
+sdi-intelligence-backend/*.db-wal
+sdi-intelligence-backend/*.db-shm
