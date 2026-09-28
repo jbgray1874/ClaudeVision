@@ -1277,6 +1277,77 @@ _FABRICATED_SHEET_STOCK_FORMS = frozenset({"sheet", "plate", "board", "stated_we
 _FABRICATED_LINEAR_STOCK_FORMS = frozenset({"wire", "bar"})
 
 
+def powder_bars_per_piece(long_mm: Any, rule: Optional[Mapping[str, Any]] = None) -> Optional[int]:
+    """Hanging bars one piece takes on the powder line, or None when it fits on one bar (the
+    size band governs) or the rule is off. config.POWDER_HANGING has the method and its source."""
+    if rule is None:
+        try:
+            import config as _cfg_ph
+            rule = getattr(_cfg_ph, "POWDER_HANGING", {}) or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    if not rule or not rule.get("enabled"):
+        return None
+    length = _safe(long_mm)
+    pitch = _safe(rule.get("bar_pitch_mm"))
+    if not length or not pitch or length <= 0 or pitch <= 0:
+        return None
+    span = (length + float(_safe(rule.get("clearance_mm")) or 0.0)) / pitch
+    if span <= 1.0:
+        return None
+    from math import ceil as _ceil_bars
+    whole = _ceil_bars(span - 1e-9) if str(rule.get("rounding")) == "up" else int(round(span))
+    return max(1, whole) + int(_safe(rule.get("spacing_bars")) or 0)
+
+
+def _part_long_length_mm(part: Mapping[str, Any]) -> Optional[float]:
+    """The longest dimension a coated part hangs by: its flat blank's longer side, or its cut
+    length for a linear part."""
+    me = part.get("material_estimate") or {}
+    ng = part.get("normalized_geometry") or {}
+    dims = [_safe(me.get(k) or ng.get(k)) for k in
+            ("blank_length_mm", "blank_width_mm", "length_mm", "cut_length_mm")]
+    dims = [d for d in dims if d and d > 0]
+    return max(dims) if dims else None
+
+
+def powder_hanging_throughput(parts: Sequence[Mapping[str, Any]],
+                              rule: Optional[Mapping[str, Any]] = None
+                              ) -> Optional[Tuple[float, str]]:
+    """(pieces an hour, the working) for a P.Coat row by hanging geometry, or None when no
+    part on it is longer than one bar.
+
+    Several parts on one row combine as the true rate: pieces over the bars they occupy
+    together, never an average of their separate rates."""
+    if rule is None:
+        try:
+            import config as _cfg_ph
+            rule = getattr(_cfg_ph, "POWDER_HANGING", {}) or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    line = _safe(rule.get("line_bars_per_hour"))
+    if not line or not parts:
+        return None
+    pieces, bars, shown, any_long = 0.0, 0.0, [], False
+    for p in parts:
+        q = float(_safe(p.get("quantity"), 1) or 1)
+        L = _part_long_length_mm(p)
+        b = powder_bars_per_piece(L, rule)
+        if b is not None:
+            any_long = True
+            shown.append(f"{p.get('part_number')} {L:g} mm -> {b} bars")
+        pieces += q
+        bars += q * (b if b is not None else 1)
+    if not any_long or bars <= 0:
+        return None
+    rate = float(line) * pieces / bars
+    working = (f"{'; '.join(shown)} on {rule.get('bar_pitch_mm'):g} mm bars "
+               f"(+{rule.get('clearance_mm'):g} mm, +{rule.get('spacing_bars')} spacing) — "
+               f"{line:g} bars/hr gives {rate:.0f} pieces/hr. Method stated by "
+               f"{rule.get('stated_by', 'estimating')}, {rule.get('stated_on', '')}.")
+    return rate, working
+
+
 def _largest_fabricated_part_area(parts):
     """(area_m2, part_number) of the biggest part we FABRICATE — the size proxy for throughput
     banding of Assemble/pack and P.Coat.
@@ -7064,6 +7135,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # the sheet made in a console line and nowhere an estimator reads.
             if _rate_basis != "unmeasured_default":
                 _rate_basis = "historical_unbanded"
+
+        # ── P.COAT BY HANGING GEOMETRY (Howard, 1176-02) ─────────────────────────────
+        # A part longer than one bar occupies several on the line; the size band cannot
+        # see that, so where one does the row's rate is the line's bars an hour over the
+        # bars its pieces take. config.POWDER_HANGING holds the method and who stated it.
+        if (wb_op or "") == "P.Coat":
+            _by_pn_ph = {str(p.get("part_number") or "").upper(): p
+                         for p in (_all_pes_pw or []) if isinstance(p, dict)}
+            _row_parts_ph = [_by_pn_ph[str(x).upper()] for x in (g.get("parts") or [])
+                             if str(x).upper() in _by_pn_ph]
+            _hang = powder_hanging_throughput(_row_parts_ph)
+            if _hang is not None:
+                default_tp = round(_hang[0], 1)
+                _rate_basis = "powder_hanging_geometry"
+                g["rate_working"] = _hang[1]
+                _flag(f"throughput for 'P.Coat' from hanging geometry: {_hang[1]}", flags)
 
         # Assembly, packing and welding time is NOT in the DXF. There is no geometry from
         # which to derive "how long does it take to pack this" — the engine's derived value

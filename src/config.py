@@ -4008,3 +4008,30 @@ THROUGHPUT_SIZE_BANDS = {
 }
 # m2 boundaries: A < 0.05 <= B < 0.15 <= C < 0.40 <= D
 THROUGHPUT_AREA_EDGES = (0.05, 0.15, 0.40)
+
+# P.COAT BY HANGING GEOMETRY — Howard Thurley (SDI estimating), 22 Sep 2026, on 1176-02:
+#   "Component has holes x 2 on long length – manual estimate factored these as where
+#    component would be hung on paint line, 420mm bar size (+15mm) component size as 860mm
+#    long length allowed 2.0476 Bars + Additional bar for spacing / movement of component so
+#    3 bars @ 106 per hour AI at 319 per hour."
+#
+# The line moves at a fixed number of hanging bars an hour. A part longer than one bar pitch
+# occupies several, plus one for spacing, so its pieces-an-hour is the line's bars-an-hour
+# divided by the bars it takes:
+#     bars per piece = round((long length + clearance) / bar pitch) + spacing bars
+#     1176-02:  round((845 + 15) / 420) + 1 = round(2.0476) + 1 = 3  ->  319 / 3 = 106 an hour
+# Applied only where a part is longer than one bar; a part that fits on one bar keeps the
+# size band above. The method, not a price: every figure is Howard's stated shop geometry.
+# OPEN WITH HOWARD: whether 2.0476 bars is taken as 2 (as his arithmetic implies) or rounded
+# up to 3 before the spacing bar. "rounding" makes that one setting.
+POWDER_HANGING = {
+    "enabled": True,
+    "line_bars_per_hour": 319,        # Tim's P/C line: the bars-an-hour the track carries
+    "bar_pitch_mm": 420.0,
+    "clearance_mm": 15.0,
+    "spacing_bars": 1,
+    "rounding": "nearest",            # "nearest" reproduces Howard's 3 bars; "up" is stricter
+    "stated_by": "Howard Thurley (SDI estimating)",
+    "stated_on": "22 Sep 2026",
+    "source_job": "1176-02",
+}
