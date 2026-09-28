@@ -52,3 +52,10 @@ def test_a_top_sheet_with_nothing_under_it_is_not_called_an_assembly():
 def test_existing_spellings_still_name_their_sheets():
     assert pi.names_the_product("11650-06", "11650-06-GA")
     assert not pi.names_the_product("11650-06", "11650-06-SA01")
+
+
+def test_the_sheet_number_names_its_glued_ga():
+    assert pi.names_the_product("12645-01", "12645-01GA")
+    assert pi.names_the_product("12645-01GA", "12645-01GA V2")
+    assert not pi.names_the_product("12645-01", "12645-01-01M")
+    assert pi.resolve_product("12645-01", FILES)["match"]["number"] == "12645-01GA"

@@ -44,7 +44,10 @@ _DRAWING_EXTENSIONS = (".pdf", ".dxf", ".dwg", ".sldasm", ".sldprt", ".slddrw", 
 def _key(text: Any) -> str:
     t = str(text or "").strip().upper()
     t = _REV_TAIL.sub("", t)
+    t = re.sub(r"(?:[ _]+V\d{1,2})+$", "", t)          # a version mark, as the BOM link drops it
     t = strip_assembly_role(t.strip())
+    # "12645-01GA": the role glued to the sheet number names the same sheet as "12645-01".
+    t = re.sub(r"(\d)(GA|ASSY)$", r"\1", t)
     return re.sub(r"[\s\-_]+", "", t)
 
 
