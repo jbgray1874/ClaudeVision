@@ -58,6 +58,10 @@ _FIELD_MAP = {
     "blank_width_mm": "blank_width_mm",
     "thickness_mm": "normalized_thickness_mm",
     "material": "normalized_material",
+    # THE FINISH IS A FACT THE DRAWING STATES, like the material. Added for the portal's
+    # pre-run material step (D-313): a person confirming "RAW" or "POWDER COATED" per part is
+    # answering the same kind of question as a gauge, and needs the same ranked, recorded path.
+    "finish": "normalized_finish",
     "quantity": "quantity",
     # LINEAR STOCK IS SIZED BY A LENGTH AND A DIAMETER, NOT BY A BLANK.
     #
@@ -560,10 +564,10 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
                 problems.append(f"{code_s}: '{key}' is not a field this understands "
                                 f"(accepted: {', '.join(sorted(_FIELD_MAP))}) — skipped")
                 continue
-            if key_l == "material":
+            if key_l in ("material", "finish"):
                 text = str(value).strip()
                 if not text:
-                    problems.append(f"{code_s}: material is empty — skipped")
+                    problems.append(f"{code_s}: {key_l} is empty — skipped")
                     continue
                 entry[key_l] = text
                 continue

@@ -49,6 +49,8 @@ param(
     # estimate. Following that import through gives the list below and nothing else -- plus
     # product_identity, which estimate_routes loads BY FILE PATH to check the Drawing Number
     # before a run. Left off this list, the server kept the old rule and refused 12645.
+    # material_confirmation is loaded the same way for the pre-run material step, and brings
+    # the material lexicon and the answers-file rules it checks against.
     #
     # The first version of this script sent all 990 tracked files, which would have put 183
     # test files, several hundred one-off src/_probe_*.py scripts, a prototype for a
@@ -66,6 +68,10 @@ param(
         "src/part_code_conventions.py",
         "src/part_identity.py",
         "src/product_identity.py",
+        "src/material_confirmation.py",
+        "src/estimator_confirmed.py",
+        "src/json_normaliser.py",
+        "src/source_precedence.py",
         "src/department_codes.py",
         "src/supplier_reference.py"
     ),

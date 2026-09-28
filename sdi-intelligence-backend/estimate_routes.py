@@ -80,6 +80,7 @@ _ENGINE_PYTHON = os.getenv(
 _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
 _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
+_MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -490,6 +491,11 @@ class EstimateRequest(BaseModel):
     # provisional estimate it looks exactly like a quotation for a figure nobody has stood
     # behind. Withheld unless asked for.
     email_quote: bool = False
+    # THE ESTIMATOR'S MATERIAL CONFIRMATION, from the pre-run step (D-313). None means the
+    # step was not used and the run is exactly as it was before it existed. The answers are
+    # checked against the pack BEFORE staging and written into the staged folder as the job's
+    # answers file — src/material_confirmation.build_answers, never a price.
+    material_answers: Optional[Dict[str, Any]] = None
 
 
 class RecipientsRequest(BaseModel):
@@ -1144,6 +1150,93 @@ def product_check(req: ProductCheckRequest, x_sdi_key: Optional[str] = Header(de
                 "message": f"The Drawing Number could not be checked ({type(exc).__name__})."}
 
 
+# ── THE PRE-RUN MATERIAL STEP (D-313) ──────────────────────────────────────────────────
+#
+# "PDF/PNG-only jobs often state materials the engine cannot resolve or that estimating wants
+# costed differently." The page shows what each part's sheet states — material, thickness,
+# finish, and where each came from — and the questions the wording raises ("The drawings say
+# 'PLAIN CARBON STEEL'. Cost it as Mild Steel?"). The estimator answers from controlled lists;
+# the answers become the job's answers file, which the engine already reads at its own ranks.
+def _material_module():
+    """src/material_confirmation, loaded by path like the product resolver. Pure python: the
+    checking and writing need no PDF library, so this runs on the service anywhere."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_material_confirmation",
+                                                  src / "material_confirmation.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+def _read_materials(paths: List[str]) -> Dict[str, Any]:
+    """What the pack states, read out of process with the ENGINE's python — the one with
+    PyMuPDF — exactly as printing does. A machine without the engine says so; it never
+    guesses a reading."""
+    import json as _json
+    import subprocess
+    resolved = []
+    for raw in paths or []:
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not resolved:
+        return {"status": "empty", "message": "Add the drawings first."}
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable",
+                "message": "the drawings can only be read on the machine that runs "
+                           "estimates (no engine python here)"}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _MATERIAL_CLI, "--read", *resolved, "--json"],
+                              capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "message": "reading the drawings took too long"}
+    if proc.returncode != 0:
+        return {"status": "unavailable",
+                "message": f"the reader failed: {(proc.stderr or proc.stdout)[-300:]}"}
+    try:
+        data = _json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"status": "unavailable", "message": "the reader returned nothing usable"}
+    return {"status": "ok", "reading": data.get("reading") or {},
+            "vocabulary": data.get("vocabulary") or {}}
+
+
+class MaterialReadRequest(BaseModel):
+    files: List[str] = []
+
+
+@router.post("/materials/read")
+def materials_read(req: MaterialReadRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Per part: what the sheets and DXF names state, the questions it raises, and the
+    dropdowns. Nothing is written."""
+    _check_key(x_sdi_key)
+    out = _read_materials(req.files)
+    if out.get("status") != "ok":
+        out["vocabulary"] = _material_module().vocabulary(None)
+    return out
+
+
+class MaterialCheckRequest(BaseModel):
+    drawing_number: str = ""
+    reading: Dict[str, Any] = {}
+    answers: Dict[str, Any] = {}
+
+
+@router.post("/materials/check")
+def materials_check(req: MaterialCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The answers as the run would take them, or the reasons they would be refused — so the
+    page can show a missing reason before Run. The Run itself checks again, against the pack."""
+    _check_key(x_sdi_key)
+    data, errors = _material_module().build_answers(req.reading or {}, req.answers or {},
+                                                    req.drawing_number or "")
+    return {"ok": not errors, "errors": errors, "parts": (data or {}).get("parts") or {}}
+
+
 @router.post("")
 def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
     _check_key(x_sdi_key)
@@ -1228,6 +1321,24 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             f"would replace the drawings that run is reading, so it is refused. Wait for it "
             f"to finish, or release it: POST /api/estimate/{dup.run_id}/abandon")
 
+    # THE MATERIAL CONFIRMATION IS CHECKED BEFORE STAGING, against the pack itself, read
+    # again here rather than taken back from the page: the reading decides which answers
+    # override a drawing and need a reason, and a reading that came back over HTTP could say
+    # anything. A refused answer costs the estimator nothing, because nothing has moved yet.
+    _material_file: Optional[Dict[str, Any]] = None
+    if req.material_answers:
+        _mread = _read_materials([str(s) for s in _sources])
+        if _mread.get("status") != "ok":
+            raise HTTPException(
+                503, "The material confirmation could not be checked against the drawings: "
+                     + str(_mread.get("message") or "the pack could not be read")
+                     + ". Run without it, or try again on the machine with the engine.")
+        _mfile, _merrs = _material_module().build_answers(
+            _mread["reading"], req.material_answers, drawing)
+        if _merrs:
+            raise HTTPException(400, "Material confirmation not accepted: " + "; ".join(_merrs))
+        _material_file = _mfile
+
     try:
         staged = staging.stage(_sources, client=client, drawing=drawing)
     except staging.StagingError as exc:
@@ -1239,6 +1350,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             502, f"The drawings could not be staged to {staging.staging_root()} "
                  f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
     folder = staged["folder"]
+    # Written AFTER staging, because staging clears the folder. With no confirmation this run,
+    # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
+    # a new job; a file somebody wrote by hand is left alone.
+    try:
+        _material_module().write_answers(folder, drawing, _material_file)
+    except OSError as exc:
+        if _material_file:
+            raise HTTPException(
+                502, f"The drawings were staged but the material confirmation could not be "
+                     f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
 
     job = _within_a_root(folder)
     if job is None:

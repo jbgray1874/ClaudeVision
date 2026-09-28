@@ -409,6 +409,40 @@
         </div>
       </div>
 
+      <!-- MATERIALS, CONFIRMED BEFORE THE RUN (D-313). What each part's sheet and DXF name
+           state, and the questions the wording raises. Answers are chosen from lists and
+           become this job's answers file; nothing here is ever a price. Optional: a run
+           without it is exactly as it always was. -->
+      <details id="matPanel" style="margin:10px 0 4px">
+        <summary style="cursor:pointer;font-weight:600">Materials — confirm before the run
+          <span class="sub" style="font-weight:400">(optional)</span></summary>
+        <div style="margin-top:8px">
+          <button type="button" id="matRead" class="btn-measure">Read materials from the drawings</button>
+          <span id="matStatus" class="sub" style="margin-left:8px" aria-live="polite"></span>
+          <div id="matBody" style="display:none;margin-top:10px">
+            <div id="matQuestions"></div>
+            <p class="hint" style="margin:10px 0 4px"><b>Job default</b> — used only where a
+              sheet states nothing. A part whose drawing states a material, thickness or finish
+              keeps it unless you change that part below.</p>
+            <div id="matDefault" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+            <div style="overflow-x:auto;margin-top:10px">
+              <table id="matTable" style="width:100%;border-collapse:collapse;font-size:12.5px"></table>
+            </div>
+            <div class="row2" style="margin-top:10px">
+              <div class="field">
+                <label for="matWho">Confirmed by</label>
+                <input id="matWho" type="text" autocomplete="off" placeholder="your name">
+              </div>
+              <div class="field">
+                <label style="font-weight:400;display:block;margin-top:22px">
+                  <input id="matUse" type="checkbox"> Use this confirmation for the run</label>
+              </div>
+            </div>
+            <div id="matCheck" class="sub" style="margin-top:6px" aria-live="polite"></div>
+          </div>
+        </div>
+      </details>
+
       <!-- WHO GETS THE FINISHED ESTIMATE.
            Pre-filled from the saved list so the common case is no typing, editable per run
            because one job in ten goes to somebody else, and EMPTY MEANS NOBODY so an engine
@@ -1167,6 +1201,123 @@ function renderProductCheck(){
   box.textContent = productCheck.message || "";
 }
 drawing.addEventListener("input", checkProduct);
+
+/* ── MATERIALS, CONFIRMED BEFORE THE RUN (D-313) ─────────────────────────
+   The service reads each part's title block and DXF name (out of process, with the
+   engine's own python) and returns what they state with where each came from. The
+   estimator answers from the lists the service sends; the service checks the answers
+   again against the pack at Run and writes them as the job's answers file.
+   Rules the service enforces, said here so the page never promises otherwise:
+     - the job default fills only what a sheet leaves unstated;
+     - changing what a drawing states needs a reason;
+     - "unknown" writes nothing; no price is ever accepted. */
+let matReading = null, matVocab = null, _matSeq = 0;
+function _matEsc(s){ return String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function _matLabel(field, v){
+  if(v === "" ) return "as drawn";
+  if(v === "unknown") return "unknown";
+  if(field === "material") return (matVocab.material_labels || {})[v] || v;
+  if(field === "thickness_mm") return v + " mm";
+  return v;
+}
+function _matSelect(field, id, blankLabel, selected){
+  const opts = (blankLabel ? [""] : []).concat(matVocab[field] || []);
+  return `<select id="${id}" data-field="${field}">` + opts.map(v => {
+    const val = String(v), lab = val === "" ? blankLabel : _matLabel(field, val);
+    return `<option value="${_matEsc(val)}"${String(selected) === val ? " selected" : ""}>${_matEsc(lab)}</option>`;
+  }).join("") + `</select>`;
+}
+async function readMaterials(){
+  const st = document.getElementById("matStatus");
+  if(!drawings.length){ st.textContent = "Add the drawings first."; return; }
+  const seq = ++_matSeq;
+  st.textContent = "Reading the title blocks and DXF names…";
+  try{
+    const r = await api("/api/estimate/materials/read", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({files: drawings.map(d => d.path)})});
+    const j = r.ok ? await r.json() : {status:"unavailable", message:(await r.text()).slice(0,200)};
+    if(seq !== _matSeq) return;
+    matVocab = j.vocabulary || {};
+    matReading = j.status === "ok" ? j.reading : null;
+    st.textContent = j.status === "ok"
+      ? `${(matReading.parts || []).length} part(s) read` +
+        ((matReading.unread || []).length ? ` · not read: ${matReading.unread.join(", ")}` : "")
+      : `Could not read the drawings: ${j.message || j.status}`;
+    renderMaterials();
+  }catch(e){ if(seq === _matSeq) st.textContent = "Could not read the drawings: " + e.message; }
+}
+function renderMaterials(){
+  const body = document.getElementById("matBody");
+  if(!matReading){ body.style.display = "none"; return; }
+  body.style.display = "";
+  const qs = matReading.questions || [];
+  document.getElementById("matQuestions").innerHTML = qs.length
+    ? qs.map((q, i) => `<div style="margin:6px 0"><b>${_matEsc(q.ask)}</b>
+         <span class="sub">(${q.parts.length} part${q.parts.length === 1 ? "" : "s"})</span><br>
+         ${_matSelect("material", "matQ" + i, "", q.engine_reads_as || "unknown")}</div>`).join("")
+    : `<p class="sub">No material wording needs a question.</p>`;
+  document.getElementById("matDefault").innerHTML =
+    ["material", "thickness_mm", "finish"].map(f =>
+      `<label class="sub">${f === "thickness_mm" ? "thickness" : f}<br>${_matSelect(f, "matDef_" + f, "", "unknown")}</label>`).join("");
+  const head = `<tr><th style="text-align:left">Part</th><th style="text-align:left">Drawing states</th>
+     <th>Material</th><th>Thickness</th><th>Finish</th><th style="text-align:left">Reason (if you change a drawing)</th></tr>`;
+  const rows = (matReading.parts || []).map((p, i) => {
+    const s = p.stated || {}, src = p.sources || {};
+    const said = [s.material_text || (s.material ? _matLabel("material", s.material) : ""),
+                  s.thickness_mm != null ? s.thickness_mm + " mm" : "", s.finish || ""]
+                 .filter(Boolean).join(" · ") || "—";
+    const tip = Object.entries(src).map(([k, v]) => `${k}: ${v}`).join("\n");
+    return `<tr data-part="${_matEsc(p.part)}" style="border-top:1px solid var(--line)">
+      <td>${_matEsc(p.part)}</td><td title="${_matEsc(tip)}">${_matEsc(said)}</td>
+      <td>${_matSelect("material", "matP" + i + "_m", "as drawn", "")}</td>
+      <td>${_matSelect("thickness_mm", "matP" + i + "_t", "as drawn", "")}</td>
+      <td>${_matSelect("finish", "matP" + i + "_f", "as drawn", "")}</td>
+      <td><input id="matP${i}_r" type="text" style="width:100%" placeholder="only when overriding"></td></tr>`;
+  }).join("");
+  document.getElementById("matTable").innerHTML = head + rows;
+  document.getElementById("matBody").querySelectorAll("select,input").forEach(el =>
+    el.addEventListener("change", checkMaterials));
+}
+function materialAnswers(){
+  if(!matReading) return null;
+  const val = id => { const el = document.getElementById(id); return el ? el.value : ""; };
+  const answers = {confirmed_by: (document.getElementById("matWho").value || "").trim(),
+                   default: {}, by_stated_material: {}, parts: {}};
+  ["material", "thickness_mm", "finish"].forEach(f => {
+    const v = val("matDef_" + f); if(v && v !== "unknown") answers.default[f] = v; });
+  (matReading.questions || []).forEach((q, i) => {
+    const v = val("matQ" + i); if(v && v !== "unknown") answers.by_stated_material[q.stated] = v; });
+  (matReading.parts || []).forEach((p, i) => {
+    const a = {};
+    [["material", "_m"], ["thickness_mm", "_t"], ["finish", "_f"]].forEach(([f, sfx]) => {
+      const v = val("matP" + i + sfx); if(v && v !== "unknown") a[f] = v; });
+    const r = (val("matP" + i + "_r") || "").trim();
+    if(Object.keys(a).length){ if(r) a.reason = r; answers.parts[p.part] = a; }
+  });
+  return answers;
+}
+let _matChkTimer = null;
+function checkMaterials(){
+  clearTimeout(_matChkTimer);
+  _matChkTimer = setTimeout(async () => {
+    const box = document.getElementById("matCheck");
+    if(!matReading){ box.textContent = ""; return; }
+    try{
+      const r = await api("/api/estimate/materials/check", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({drawing_number: safe(drawing.value), reading: matReading,
+                              answers: materialAnswers()})});
+      const j = await r.json();
+      box.style.color = j.ok ? "var(--ok)" : "var(--bad)";
+      box.textContent = j.ok
+        ? `${Object.keys(j.parts || {}).length} part(s) will carry a confirmation.`
+        : j.errors.join(" · ");
+    }catch(e){ box.textContent = ""; }
+  }, 300);
+}
+document.getElementById("matRead").addEventListener("click", readMaterials);
 
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
@@ -2289,7 +2440,10 @@ runBtn.onclick = async () => {
     // Sent as typed. The service parses and validates, and refuses the run on a typo BEFORE
     // anything is staged — one place that decides what an address is, not two.
     email_to: (document.getElementById("emailTo").value || "").trim(),
-    email_quote: document.getElementById("emailQuote").checked
+    email_quote: document.getElementById("emailQuote").checked,
+    // Only when the estimator ticked "Use this confirmation". Checked again by the service,
+    // against the drawings, before anything is staged.
+    material_answers: (document.getElementById("matUse") || {}).checked ? materialAnswers() : null
   };
   try{
     const r = await api("/api/estimate",{method:"POST",
