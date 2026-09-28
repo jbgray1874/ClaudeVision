@@ -35,14 +35,19 @@ def _graph():
                                declared_product="12645")
 
 
+def _top(names):
+    from product_identity import names_the_product
+    return [n for n in names if names_the_product("12645", n)]
+
+
 def test_the_top_sheet_is_one_of_the_jobs_drawings():
-    assert "12645-DRS EXTERNAL SHELTER V2" in rc.job_drawing_numbers(FILES)
+    assert len(_top(rc.job_drawing_numbers(FILES))) == 1
 
 
 def test_12645_heads_the_shelter_with_everything_under_it():
     g = _graph()
     root = g.get("product_root")
-    assert root == "12645-DRS EXTERNAL SHELTER V2"
+    assert root and _top([root]) == [root]
     assert set(g["children"].get(root) or []) == {"12645-01GA", "12645-02GA", "12645-03GA",
                                                   "ROLLER SHUTTER"}
     assert not (g.get("outside_product") or {})

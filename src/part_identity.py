@@ -87,6 +87,19 @@ def normalize_part_code(raw: Any) -> str:
         suffix = m.group(2).upper()
         base = m.group(1).upper()
         return f"{base}-GA{suffix}" if suffix else f"{base}-GA"
+    # A VERSION MARK IS NOT PART OF THE CODE (D-314). 12645's shelter sheet lists its body as
+    # "12645-01GA V2"; the body's own drawing is "12645-01GA". Joined up as "12645-01GAV2" it
+    # became a second part, priced by AI at £557 as a bought-in body on top of the body's own
+    # 32 fabricated lines. Dropped only when what remains is still a drawing number, and only
+    # where the mark is set apart by a space or underscore — "ABC-V2" is left as written.
+    _unversioned = re.sub(r"(?:[ _]+(?:V\d{1,2}|REV\.? ?[A-Z0-9]{1,2}))+$", "", s).strip()
+    if _unversioned != s:
+        try:
+            from part_code_conventions import looks_like_a_drawing_number as _lld
+        except Exception:                                        # noqa: BLE001
+            _lld = None
+        if _lld is not None and _lld(_unversioned.replace(" ", "")):
+            s = _unversioned
     s = s.replace(" ", "")
     s = re.sub(r"-+$", "", s)
     # STRIP TRAILING DESCRIPTION BLEED ("11650-04-01A-WALL" -> "11650-04-01A"), BUT ONLY WHEN

@@ -1348,6 +1348,43 @@ def powder_hanging_throughput(parts: Sequence[Mapping[str, Any]],
     return rate, working
 
 
+def steel_row_fits(length: Any, width: Any, sheet_l: Any, sheet_w: Any,
+                   material: Any = "MILD STEEL") -> bool:
+    """Does the Sheet Steel row nest at least one blank on this sheet? Asked of the ONE
+    nesting rule (costed_facts.nest_on_sheet), which is the template's own K formula."""
+    import costed_facts as _cf_nest
+    return _cf_nest.nest_on_sheet(material, length, width, sheet_l, sheet_w) is not None
+
+
+def steel_sheet_for_row(length: Any, width: Any, material: Any,
+                        template_sheet: Tuple[Any, Any]) -> Tuple[Optional[Tuple[float, float]], str]:
+    """(sheet to write, or None to leave the template's; why) for one Sheet Steel row.
+
+    12645's back panels, corners and columns are 2,912 to 2,975 mm flats. The row carried the
+    template's 2500 x 1250, its nest formula found no fit and left the cost blank — eight parts
+    at £0 steel while still lasered — although config.STANDARD_SHEET_SIZES_MM stocks 3000 x
+    1500 mild steel and the engine's own costing had already nested them on it. The row now
+    takes the smallest STOCKED sheet its own formula can nest the blank on; a row that fits
+    the template's sheet keeps it, so no existing book moves (D-314)."""
+    if steel_row_fits(length, width, *template_sheet, material=material):
+        return None, ""
+    try:
+        import config as _cfg_ss
+        table = getattr(_cfg_ss, "STANDARD_SHEET_SIZES_MM", {}) or {}
+    except Exception:                                                # noqa: BLE001
+        table = {}
+    key = str(material or "").replace("_", " ").strip().upper()
+    sizes = table.get(key) or table.get("MILD STEEL") or []
+    for sl, sw in sorted(sizes, key=lambda s: s[0] * s[1]):
+        if steel_row_fits(length, width, sl, sw, material=material):
+            return (float(sl), float(sw)), (f"{sl:g} x {sw:g} — the template's "
+                                            f"{float(template_sheet[0]):g} x "
+                                            f"{float(template_sheet[1]):g} cannot nest it")
+    largest = max(sizes, key=lambda s: s[0] * s[1]) if sizes else None
+    return None, ("longer or wider than every stocked sheet"
+                  + (f" (largest {largest[0]:g} x {largest[1]:g})" if largest else ""))
+
+
 def _largest_fabricated_part_area(parts):
     """(area_m2, part_number) of the biggest part we FABRICATE — the size proxy for throughput
     banding of Assemble/pack and P.Coat.
@@ -5765,6 +5802,28 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=s["col_length"], value=length)
         ws.cell(row=row, column=s["col_width"],  value=width)
         ws.cell(row=row, column=s["col_gauge"],  value=gauge)
+        # THE SHEET THE PART IS CUT FROM, WHERE THE TEMPLATE'S CANNOT NEST IT (D-314).
+        if length and width and s.get("col_sheet_l") and s.get("col_sheet_w"):
+            _tpl = (ws.cell(row=row, column=s["col_sheet_l"]).value or 2500,
+                    ws.cell(row=row, column=s["col_sheet_w"]).value or 1250)
+            _mat_ss = pe.get("normalized_material") or me.get("material") or "MILD STEEL"
+            _sheet, _why = steel_sheet_for_row(length, width, _mat_ss, _tpl)
+            if _sheet is not None:
+                ws.cell(row=row, column=s["col_sheet_l"], value=_sheet[0])
+                ws.cell(row=row, column=s["col_sheet_w"], value=_sheet[1])
+                _flag(f"steel {_pn_g}: {length:g} x {width:g} blank cut from a {_why}", flags)
+            elif _why:
+                _flag(f"steel {_pn_g}: {length:g} x {width:g} blank is {_why} — its steel "
+                      f"cannot be nested and the row charges no material. ESTIMATOR TO "
+                      f"DECIDE: plate, a split, or a sheet size we do not list", flags)
+                if not isinstance(pe.get("route_gap"), dict):
+                    pe["route_gap"] = {
+                        "issue": (f"{_pn_g} is a {length:g} x {width:g} mm flat, {_why}, "
+                                  f"so its steel is not charged"),
+                        "assumption": "no stocked sheet can be nested for it",
+                        "action": ("say how it is made: cut from plate or a larger sheet "
+                                   "(give the size), or split and joined"),
+                    }
         # Which row did this part land on? The template's own Laser Rate Calculator
         # computes a throughput on THIS row (col W = 3600/V). The labour block should
         # READ that, not substitute our own model — ours is ~4x slow on small parts.
