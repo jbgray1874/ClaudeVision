@@ -101,6 +101,14 @@ def _src_closure() -> set[str]:
 
     seen: set[str] = set()
     stack = ["llm_scan_price"]
+    # AND EVERY src MODULE THE BACKEND LOADS BY FILE PATH. estimate_routes loads
+    # product_identity with spec_from_file_location to check the Drawing Number; no import
+    # statement names it, so the closure above never reached it and the server kept a stale
+    # copy that refused 12645 (28 Sep 2026).
+    for _be in (_ROOT / "sdi-intelligence-backend").glob("*.py"):
+        stack.extend(re.findall(
+            r'spec_from_file_location\([^)]*?src"?\s*/\s*"([a-z_][a-z0-9_]*)\.py"',
+            _be.read_text(encoding="utf-8", errors="replace"), re.DOTALL))
     while stack:
         name = stack.pop()
         if name in seen or name not in modules:

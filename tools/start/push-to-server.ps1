@@ -41,12 +41,14 @@ param(
     #
     # SDI-APP01 serves the portal and QUEUES estimates. It does not run them: no SOLIDWORKS
     # seat, no Excel, no runner. So it needs the backend, the scripts that start and repair
-    # it -- and, from src, exactly SEVEN modules.
+    # it -- and, from src, the modules it loads.
     #
     # Those seven are not a guess. estimate_routes._scan_one does sys.path.insert on src and
     # imports llm_scan_price, because the fast LLM drawing read runs ON THE SERVICE on
     # purpose -- put it on the runner and a hundred scans would file in behind a forty-minute
-    # estimate. Following that import through gives the list below and nothing else.
+    # estimate. Following that import through gives the list below and nothing else -- plus
+    # product_identity, which estimate_routes loads BY FILE PATH to check the Drawing Number
+    # before a run. Left off this list, the server kept the old rule and refused 12645.
     #
     # The first version of this script sent all 990 tracked files, which would have put 183
     # test files, several hundred one-off src/_probe_*.py scripts, a prototype for a
@@ -63,6 +65,7 @@ param(
         "src/bought_in_recogniser.py",
         "src/part_code_conventions.py",
         "src/part_identity.py",
+        "src/product_identity.py",
         "src/department_codes.py",
         "src/supplier_reference.py"
     ),
