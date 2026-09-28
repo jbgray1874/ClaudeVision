@@ -194,3 +194,15 @@ def test_the_page_sends_answers_only_when_the_estimator_asks():
         encoding="utf-8")
     assert 'id="matUse"' in page
     assert "material_answers: (document.getElementById(\"matUse\") || {}).checked" in page
+
+
+def test_a_part_the_pack_does_not_show_is_refused():
+    data, errors = _build({"parts": {"Z-99M": {"material": "MILD_STEEL"}}})
+    assert data == {} and any("Z-99M" in e and "not a part read" in e for e in errors)
+
+
+def test_an_image_is_named_as_unread_not_skipped(tmp_path):
+    (tmp_path / "render.png").write_bytes(b"")
+    reading = mc.read_pack([tmp_path])
+    assert reading["parts"] == []
+    assert any("render.png" in u and "job default" in u for u in reading["unread"])

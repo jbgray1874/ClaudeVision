@@ -59,6 +59,10 @@ UNKNOWN = "unknown"
 WRITTEN_BY = "portal material confirmation"
 
 _FIELDS = ("material", "thickness_mm", "finish")
+# A render has no text layer and no title block to read, so nothing here can say what an image
+# states. Named in `unread` rather than silently skipped, so a PNG-only pack shows the estimator
+# that only the job default can apply to it.
+_IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 
 
 def _lexicon() -> Dict[str, str]:
@@ -203,6 +207,9 @@ def read_pack(paths: Iterable[Any]) -> Dict[str, Any]:
                 s["stated"].setdefault("material", d["material"])
                 s["stated"].setdefault("material_text", d["material_text"])
                 s["sources"].setdefault("material", d["source"])
+        elif suffix in _IMAGE_SUFFIXES:
+            unread.append(f"{f.name} (an image has no title block to read — only the job "
+                          f"default can apply to its parts)")
         elif suffix == ".pdf":
             try:
                 pages = read_pdf_pages(f)
@@ -345,7 +352,14 @@ def build_answers(reading: Mapping[str, Any], answers: Mapping[str, Any],
         part_ans = {}
 
     read_parts = {str(p["part"]).upper(): p for p in (reading.get("parts") or [])}
-    names = sorted(set(read_parts) | {str(k).strip().upper() for k in part_ans})
+    # A PART THE PACK DOES NOT SHOW IS NOT A PART THIS CHECK CAN VOUCH FOR. Treating an unread
+    # code as "the drawing states nothing" let any code through as a fill, unchecked against
+    # the drawings the run is about to cost — the one safeguard this step exists to give.
+    for _k in part_ans:
+        if str(_k).strip().upper() not in read_parts:
+            errors.append(f"{_k}: not a part read from this pack — only parts the drawings "
+                          f"show can be confirmed here; use the job default for the rest")
+    names = sorted(read_parts)
     out_parts: Dict[str, Dict[str, Any]] = {}
     for pn in names:
         rp = read_parts.get(pn) or {"stated": {}, "sources": {}}
