@@ -199,3 +199,42 @@ Sign-outs are also capped per run by `INVENTRY_MAX_SIGN_OUTS_PER_RUN`.
 - **ANPR:** a separate console setting, and their ANPR material is about
   visitors and barriers (and needs a Bi3 licence). Not needed for staff
   presence — `AddPersonnelAction` is a plain Partner API call.
+
+## Our site: where everything lives
+
+Confirmed from InVentry engineer Adam Stiff's setup instructions (9 May 2025,
+forwarded 28 Sep 2026):
+
+> "\\10.0.0.241\Inventry (this is the IP address the sign in system is fixed to)"
+
+| What | Where |
+|---|---|
+| InVentry system | **10.0.0.241**, a fixed address |
+| Partner API | `https://10.0.0.241:4816/PartnerAPI/` |
+| InVentry Console | `\\10.0.0.241\Inventry\V4\Console\` — the shortcut with the blue V |
+| Certificate | `\\10.0.0.241\Inventry\V4\` — the "V4 folder" InVentry refer to |
+
+Reaching the console means mapping that share with the InVentry share account
+(credentials are in Adam's email; they are **not** recorded here), then making a
+desktop shortcut to the console link. Logging into the console itself needs an
+InVentry admin account, which is a separate thing again.
+
+The sync service needs **none** of that: the API is a plain TCP call to
+10.0.0.241:4816 with the two headers. The file share matters only for
+installing the console and fetching the certificate.
+
+Quickest confirmation that the API is up, before touching anything else:
+
+```powershell
+Test-NetConnection -ComputerName 10.0.0.241 -Port 4816
+```
+
+### Settings this maps to
+
+```
+INVENTRY_API_BASE_URL=https://10.0.0.241:4816
+INVENTRY_API_KEY=<from the console>
+INVENTRY_PARTNER_SECRET=<from InVentry, or the value in the Postman collection>
+INVENTRY_API_CA_BUNDLE=<the certificate exported from the V4 folder>
+INVENTRY_ENABLE_SIGN_OUT=false          # until the location marker is proven
+```
