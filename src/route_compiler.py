@@ -1104,7 +1104,20 @@ def _code_spellings(value: Any) -> List[str]:
             out.append(alt)
     except Exception:
         pass
+    # A VERSION MARK IS NOT PART OF THE CODE. 12645's shelter sheet lists its body as
+    # "12645-01GA V2"; the body's own drawing is numbered "12645-01GA". Neither spelling above
+    # drops the " V2", so the body — 32 lines, 1.7 tonnes — would link to nothing and be set
+    # aside. The code without a trailing version mark (" V2", "_V3", " REV A") is offered LAST,
+    # and like the others it only counts where it names a drawing or part we already hold. A
+    # hyphenated "-V2" is left alone: that can be a real code segment.
+    if primary:
+        bare = _VERSION_MARK_RE.sub("", primary).strip()
+        if bare and bare != primary and bare not in out:
+            out.append(bare)
     return out
+
+
+_VERSION_MARK_RE = re.compile(r"(?:[ _]+(?:V\d{1,2}|REV\.? ?[A-Z0-9]{1,2}))+$")
 
 
 def _bom_stated_edges(

@@ -48,6 +48,24 @@ def _key(text: Any) -> str:
     return re.sub(r"[\s\-_]+", "", t)
 
 
+# A JOB NUMBER ON ITS OWN, and the word that starts a title after it. 12645's shelter sheet is
+# numbered in its title block "12645 - DRS EXTERNAL SHELTER V2" and its file is
+# "12645 - DRS External Shelter V2 REVA.PDF": the drawing number IS the job number, followed by
+# the product's name. Numbered sub-sheets ("12645-01GA") continue with a digit, a title with a
+# word of three or more letters — which is how the two are told apart.
+_BARE_JOB_NUMBER = re.compile(r"^\d{4,6}$")
+_TITLE_AFTER_NUMBER = re.compile(r"^\s*[-_\s]\s*([A-Z]{3,})\b", re.IGNORECASE)
+
+
+def _job_number_with_title(identity: Any) -> str:
+    """The bare job number when an identity is "<job number> <separator> <title words>", else ""."""
+    text = str(identity or "").strip()
+    m = re.match(r"^(\d{4,6})(.*)$", text)
+    if not m or not _TITLE_AFTER_NUMBER.match(m.group(2) or ""):
+        return ""
+    return m.group(1)
+
+
 def names_the_product(declared: Any, identity: Any) -> bool:
     """Does the Drawing Number the estimator typed name this drawing?
 
@@ -56,7 +74,14 @@ def names_the_product(declared: Any, identity: Any) -> bool:
     aside on both sides and the rest must match exactly, ignoring spaces and dashes. Nothing
     looser: "11650-06" must never name 11650-06-SA01, which is a part OF the product."""
     d, i = _key(declared), _key(identity)
-    return bool(d) and d == i
+    if bool(d) and d == i:
+        return True
+    # "12645" names the sheet whose number is "12645 - DRS EXTERNAL SHELTER V2" — the job
+    # number with the product's title after it — and never a numbered sub-sheet of the job.
+    ds = str(declared or "").strip()
+    if _BARE_JOB_NUMBER.match(ds):
+        return _job_number_with_title(identity) == ds
+    return False
 
 
 def drawing_of_file(name: Any) -> Dict[str, Any]:
@@ -69,18 +94,26 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
     stem = base[: len(base) - len(ext)] if ext else base
     parts = re.split(r"[\s_]+", stem.strip(), maxsplit=1)
     number = parts[0].strip() if parts else ""
+    top_sheet = False
     if not looks_like_a_drawing_number(number):
-        return {}
+        # A job's own top sheet is filed "<job number> - <title>" (12645's shelter). The bare
+        # number is accepted only with a title after it; a lone number is not a drawing.
+        if not (_BARE_JOB_NUMBER.match(number)
+                and _TITLE_AFTER_NUMBER.match(parts[1] if len(parts) > 1 else "")):
+            return {}
+        top_sheet = True
     rest = parts[1] if len(parts) > 1 else ""
     rev_m = _REV_IN_NAME.search(stem.upper())
     title = _REV_TAIL.sub("", rest).strip(" _-") if rest else ""
     is_assembly = (strip_assembly_role(number) != number
                    or ext in (".sldasm",)
                    or bool(re.search(r"(?:^|[\s_\-])(GA|ASSY|ASSEMBLY)(?:$|[\s_\-])",
-                                     stem.upper())))
+                                     stem.upper()))
+                   # "12645-01GA": the role glued to the sheet number, no separator.
+                   or bool(re.search(r"\d(GA|ASSY)$", number.upper())))
     return {"number": number, "title": title,
             "revision": rev_m.group(1) if rev_m else "",
-            "is_assembly": is_assembly, "file": base}
+            "is_assembly": is_assembly, "file": base, "top_sheet": top_sheet}
 
 
 def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
@@ -115,6 +148,13 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
         if d["is_assembly"] and strip_assembly_role(have["number"]) == have["number"] \
                 and strip_assembly_role(d["number"]) != d["number"]:
             have["number"] = d["number"]
+    # A job's top sheet is an assembly when the pack holds the job's numbered sheets under it:
+    # "12645 - DRS External Shelter" over 12645-01GA, -02GA and -03GA. Evidence from the pack,
+    # not from the name.
+    for d in drawings.values():
+        if d.get("top_sheet") and not d["is_assembly"]:
+            d["is_assembly"] = any(str(o["number"]).startswith(d["number"] + "-")
+                                   for o in drawings.values() if o is not d)
     if not drawings:
         return {"status": "unchecked", "declared": declared_s, "match": None,
                 "matches": [], "others": [],
