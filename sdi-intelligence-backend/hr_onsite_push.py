@@ -117,7 +117,7 @@ def _match(person, by_person_id, by_email, by_name):
 
 
 def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
-             client=None, enable_sign_out=None):
+             client=None, enable_sign_out=None, now=None):
     """Reconcile InVentry's on-site register against BrightHR."""
     if enable_sign_out is None:
         enable_sign_out = cfg.INVENTRY_ENABLE_SIGN_OUT
@@ -127,6 +127,10 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
     records, meta = source_loader._normalise(payload)
     age = source_loader._age_minutes(meta.get("timestamp"))
 
+    # Drop anyone whose clocking has been open so long they cannot be in the
+    # building - forgotten clock-outs, not presence.
+    records, forgotten = source_loader.split_stale_clockins(records, now=now)
+
     summary = {
         "timestamp": _now().isoformat(),
         "source": str(source_path),
@@ -134,6 +138,12 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         "source_status": meta.get("status"),
         "snapshot_age_minutes": round(age, 1) if age is not None else None,
         "brighthr_on_site": len(records),
+        "forgotten_clockouts": [
+            {"name": f"{r.get('first_name','')} {r.get('surname','')}".strip(),
+             "clocked_in": r.get("signed_in"),
+             "age_hours": r.get("clockin_age_hours")}
+            for r in forgotten
+        ],
         "inventry_on_site_before": None,
         "signed_in": [],
         "signed_out": [],
@@ -173,6 +183,16 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
             f"Zero staff on site and {meta['query_failures']} query failure(s) — "
             f"treating as a data problem rather than an empty building."
         )
+
+    if forgotten:
+        oldest = max(f.get("clockin_age_hours") or 0 for f in forgotten)
+        summary["warnings"].append(
+            f"{len(forgotten)} person(s) excluded: their BrightHR clocking has been open "
+            f"longer than BLIP_MAX_CLOCKIN_AGE_HOURS "
+            f"({cfg.BLIP_MAX_CLOCKIN_AGE_HOURS}h), the oldest by {oldest/24:.0f} days. They "
+            f"forgot to clock out and are not in the building. Worth chasing in BrightHR."
+        )
+        _log(f"  excluded {len(forgotten)} forgotten clock-out(s), oldest {oldest/24:.0f} days")
 
     client = client or api.InVentryAPI()
     summary["warnings"].extend(client.warnings)

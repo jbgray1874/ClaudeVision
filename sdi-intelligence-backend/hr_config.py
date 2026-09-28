@@ -135,3 +135,14 @@ INVENTRY_ONLY_SIGN_OUT_OUR_OWN = _opt("INVENTRY_ONLY_SIGN_OUT_OUR_OWN", "true").
 # Cap on sign-outs in a single push, as a backstop against a bad on-site list
 # emptying InVentry's register. Exceeding it suppresses the sign-outs.
 INVENTRY_MAX_SIGN_OUTS_PER_RUN = int(_opt("INVENTRY_MAX_SIGN_OUTS_PER_RUN", "25"))
+
+# A BrightHR point-in-time query returns anyone whose clocking is still open,
+# so someone who forgot to clock out stays "on site" indefinitely. Real data
+# from 28 Sep 2026: 15 of 104 had clock-ins over 2 days old, one of them 61
+# days. Those people are not in the building, and must not reach a fire roll.
+# Clock-ins older than this are treated as forgotten, and reported separately.
+# 0 disables the check.
+# 20h, not 16: the earliest shifts in the real data start at 04:33, and a 16h
+# window would flag one of those as forgotten by 21:00 the same day. 20h still
+# catches anything left open from a previous day.
+BLIP_MAX_CLOCKIN_AGE_HOURS = float(_opt("BLIP_MAX_CLOCKIN_AGE_HOURS", "20"))

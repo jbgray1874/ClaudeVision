@@ -170,6 +170,49 @@ def _normalise(payload: dict) -> tuple:
     )
 
 
+def split_stale_clockins(records, max_age_hours=None, now=None):
+    """Split on-site records into (present, forgotten).
+
+    BrightHR reports anyone with an open clocking, so a person who forgot to
+    clock out stays "on site" for weeks. They are not in the building, so they
+    must not reach InVentry's evacuation list - but they are worth reporting,
+    because each one is a payroll and H&S problem in BrightHR.
+    """
+    if max_age_hours is None:
+        max_age_hours = getattr(cfg, "BLIP_MAX_CLOCKIN_AGE_HOURS", 16)
+    if not max_age_hours:
+        return list(records), []
+
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    present, forgotten = [], []
+    for record in records:
+        when = _parse_dt(record.get("signed_in"))
+        if when is None:
+            # No clock-in time to judge by: keep them, since omitting someone
+            # who is present is the more dangerous mistake.
+            present.append(record)
+            continue
+        age_hours = (now - when).total_seconds() / 3600.0
+        if age_hours > max_age_hours:
+            record = dict(record, clockin_age_hours=round(age_hours, 1))
+            forgotten.append(record)
+        else:
+            present.append(record)
+    return present, forgotten
+
+
+def _parse_dt(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
+
+
 def _roster_email_index() -> dict:
     """Map normalised 'first surname' -> email from the roster snapshot.
 

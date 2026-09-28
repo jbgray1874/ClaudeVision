@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import hr_config as cfg  # noqa: E402
 import hr_inventry_api as api  # noqa: E402
+import hr_blip_inventry as source_loader  # noqa: E402
 import hr_onsite_push as push  # noqa: E402
 
 
@@ -291,7 +292,11 @@ def snapshot(tmp_path, monkeypatch):
 
 
 def clocked_in(bh_id="BH-1", first="John", surname="Smith",
-               email="john.smith@wearesdi.com", start="2026-09-21T07:45:00Z"):
+               email="john.smith@wearesdi.com", start=None):
+    """start defaults to an hour ago, so the forgotten-clock-out guard keeps it."""
+    if start is None:
+        start = (datetime.datetime.now(datetime.timezone.utc)
+                 - datetime.timedelta(hours=1)).isoformat().replace("+00:00", "Z")
     return {"id": bh_id, "first_name": first, "surname": surname,
             "email": email, "clocking": {"start": start}}
 
@@ -461,3 +466,66 @@ def test_individual_failure_is_partial_not_fatal(snapshot):
     assert fake.signed_in == ["INV-1"]
     assert result["status"] == "partial"
     assert result["failures"]
+
+
+# ─────────────────────── forgotten clock-outs ───────────────────────
+
+
+def test_forgotten_clockouts_are_excluded_from_presence(snapshot):
+    """Real data, 28 Sep 2026: 15 of 104 'on site' had clockings days old.
+
+    BrightHR reports any open clocking, so someone who forgot to clock out
+    stays on site indefinitely. They are not in the building and must never
+    reach the evacuation list.
+    """
+    snapshot([
+        clocked_in(bh_id="BH-1", start="2026-09-28T07:45:00Z"),                     # today
+        clocked_in(bh_id="BH-2", first="Joshua", surname="Briggs",
+                   email="joshua@wearesdi.com", start="2026-07-28T09:23:49Z"),      # 61 days
+    ])
+    fake = FakeAPI([person(person_id="BH-1"), person(inventry_id="INV-2", person_id="BH-2")])
+
+    result = push.run_push(apply=True, client=fake,
+                           now=datetime.datetime(2026, 9, 28, 9, 1, tzinfo=datetime.timezone.utc))
+
+    assert fake.signed_in == ["INV-1"]
+    assert result["brighthr_on_site"] == 1
+    assert [f["name"] for f in result["forgotten_clockouts"]] == ["Joshua Briggs"]
+    assert any("forgot to clock out" in w for w in result["warnings"])
+
+
+def test_a_long_shift_is_not_mistaken_for_a_forgotten_clock_out():
+    """The earliest real shifts start 04:33; still on site at 21:00 is 16.5h."""
+    records = [{"first_name": "Early", "surname": "Start",
+                "signed_in": "2026-09-28T04:33:00Z", "email": "", "brighthr_id": ""}]
+    now = datetime.datetime(2026, 9, 28, 21, 0, tzinfo=datetime.timezone.utc)
+
+    present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=20, now=now)
+
+    assert len(present) == 1 and forgotten == []
+
+
+def test_yesterdays_clocking_is_caught():
+    """04:33 yesterday, checked at 09:00 today = 28h - clearly forgotten."""
+    records = [{"first_name": "Left", "surname": "Yesterday",
+                "signed_in": "2026-09-27T04:33:00Z", "email": ""}]
+    now = datetime.datetime(2026, 9, 28, 9, 0, tzinfo=datetime.timezone.utc)
+
+    present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=20, now=now)
+
+    assert present == [] and len(forgotten) == 1
+    assert forgotten[0]["clockin_age_hours"] == 28.4
+
+
+def test_records_without_a_clock_in_time_are_kept():
+    """Omitting someone who is present is the more dangerous mistake."""
+    records = [{"first_name": "No", "surname": "Time", "signed_in": "", "email": ""}]
+    present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=20)
+    assert len(present) == 1 and forgotten == []
+
+
+def test_the_check_can_be_disabled():
+    records = [{"first_name": "Old", "surname": "Clocking",
+                "signed_in": "2026-07-28T09:23:49Z", "email": ""}]
+    present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=0)
+    assert len(present) == 1 and forgotten == []
