@@ -110,7 +110,10 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
     title = _REV_TAIL.sub("", rest).strip(" _-") if rest else ""
     is_assembly = (strip_assembly_role(number) != number
                    or ext in (".sldasm",)
-                   or bool(re.search(r"(?:^|[\s_\-])(GA|ASSY|ASSEMBLY)(?:$|[\s_\-])",
+                   # "GA2" is a job's second general arrangement (7332-01-GA2, 12392-01-GA5):
+                   # the numbered role is still the role. One digit; _key keeps GA and GA2
+                   # distinct products, which is a different question.
+                   or bool(re.search(r"(?:^|[\s_\-])(GA\d?|ASSY|ASSEMBLY)(?:$|[\s_\-])",
                                      stem.upper()))
                    # "12645-01GA": the role glued to the sheet number, no separator.
                    or bool(re.search(r"\d(GA|ASSY)$", number.upper())))

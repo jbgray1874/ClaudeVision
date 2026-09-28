@@ -90,6 +90,18 @@ def is_ignored_ga_dxf(path: Path) -> bool:
     for token in cfg.get("ignore_dxf_name_tokens", ["-GA-", "_GA_"]):
         if token.upper() in name:
             return True
+    # THE ROLE GLUED TO THE SHEET NUMBER. "12645-02GA_REVA.DXF" is the body's GA exported
+    # whole, and every rule above needs a separator before the GA, so it passed this gate as
+    # a flat-pattern source — the D-247 failure again, on a real 12645 name — while
+    # cad_inputs.dwg_class called the same name a general arrangement. product_identity reads
+    # that spelling (D-311); it is asked here rather than copied, so the DXF gate and the DWG
+    # triage cannot disagree about one file.
+    try:
+        from product_identity import drawing_of_file
+        if (drawing_of_file(path.name) or {}).get("is_assembly"):
+            return True
+    except Exception:                                      # noqa: BLE001
+        pass
     return False
 
 

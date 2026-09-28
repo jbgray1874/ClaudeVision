@@ -435,8 +435,21 @@ def test_the_skip_names_the_pdf_of_the_same_sheet_when_there_is_one(tmp_path):
     (tmp_path / "12645-02GA_REVA.PDF").write_bytes(b"%PDF")
     out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
     rec = out["files"][0]
-    assert "12645-01GA V2_REVA.PDF" in rec["reason"] and "which is read" in rec["reason"]
+    assert "12645-01GA V2_REVA.PDF" in rec["reason"] and "which is in the folder" in rec["reason"]
     assert "12645-02GA" not in rec["reason"]
+    # PRESENT, NOT "READ". Whether the PDF reader could open it is that reader's fact to
+    # state; this step only looked in the folder, and says only that.
+    assert "which was read" not in rec["reason"] and "which is read" not in rec["reason"]
+
+
+def test_two_revisions_of_the_sheet_are_both_named(tmp_path):
+    """Naming the alphabetically first match names the superseded revision, in the singular."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "12645-01GA V2_REVA.PDF").write_bytes(b"%PDF")
+    (tmp_path / "12645-01GA V2_REVB.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    reason = out["files"][0]["reason"]
+    assert "12645-01GA V2_REVA.PDF" in reason and "12645-01GA V2_REVB.PDF" in reason
 
 
 def test_the_skip_says_when_no_pdf_of_the_sheet_is_in_the_folder(tmp_path):
@@ -448,8 +461,87 @@ def test_the_skip_says_when_no_pdf_of_the_sheet_is_in_the_folder(tmp_path):
     out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
     rec = out["files"][0]
     assert "No PDF of this sheet" in rec["reason"] and "ask for the PDF" in rec["reason"]
-    assert "which is read" not in rec["reason"]
+    assert "which is in the folder" not in rec["reason"]
     assert "general arrangement" in rec["reason"]
+
+
+def test_a_ga_whose_number_the_engine_cannot_read_claims_nothing_about_the_folder(tmp_path):
+    """A reviewer's catch on the first wording: "AC0706-02" is not a drawing number the engine
+    reads, so no PDF could be matched — and the skip said "No PDF of this sheet is in the
+    folder" with the PDF sitting right there, then told the estimator to ask the customer for
+    it. Not knowing and knowing-there-is-none are different facts."""
+    (tmp_path / "AC0706-02_BOOTS_GA-REVG.DWG").write_bytes(b"dwg")
+    (tmp_path / "AC0706-02_BOOTS_GA-REVG.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    rec = out["files"][0]
+    assert "general arrangement" in rec["reason"]
+    assert "not matched to a PDF" in rec["reason"] and "no drawing number" in rec["reason"]
+    assert "No PDF of this sheet" not in rec["reason"]
+    assert "which is in the folder" not in rec["reason"]
+    assert "ask for the PDF" not in rec["reason"]
+
+
+def test_a_pdf_in_a_subfolder_is_not_this_jobs_pdf(tmp_path):
+    """file_scan groups a job's PDFs by their own parent folder, so a PDF under Superseded\\
+    belongs to another folder-job, or to none. Naming it as "the PDF of this sheet" would name
+    a file this run does not open — and, being the superseded version, the wrong one."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "Superseded").mkdir()
+    (tmp_path / "Superseded" / "12645-01GA V1_REVA.PDF").write_bytes(b"%PDF")
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=_writes_dxf)
+    reason = out["files"][0]["reason"]
+    assert "No PDF of this sheet" in reason and "V1_REVA" not in reason
+
+
+def test_a_folder_that_cannot_be_listed_is_not_reported_as_empty(tmp_path, monkeypatch):
+    """A share dropping mid-walk is a failure to look, not an observation that nothing was
+    there — and "No PDF … ask for the PDF" is the observation."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "12645-01GA V2_REVA.PDF").write_bytes(b"%PDF")
+
+    def _boom(self):
+        raise OSError(59, "An unexpected network error occurred")
+    monkeypatch.setattr(Path, "iterdir", _boom)
+    reason = cad_inputs._skipped_ga_reason(tmp_path / "12645-01GA V2.DWG", tmp_path)
+    assert "could not be searched" in reason
+    assert "No PDF of this sheet" not in reason and "ask for the PDF" not in reason
+
+
+def test_a_numbered_role_and_a_top_sheet_are_not_opened_either(tmp_path):
+    """"7332-01-GA2" is a job's second general arrangement, and "12645 - DRS External Shelter
+    V2" is the shelter's own top sheet. Neither carries the word GA the way the whole-word
+    marker wanted it, and both went to the seat."""
+    (tmp_path / "7332-01-GA2_revK.dwg").write_bytes(b"dwg")
+    (tmp_path / "12645 - DRS External Shelter V2.DWG").write_bytes(b"dwg")
+    calls = []
+    out = cad_inputs.convert_dwgs(tmp_path, solidworks=lambda d, x: calls.append(d) or True)
+    assert calls == []
+    assert sorted(out["skipped_general_arrangement"]) == \
+        ["12645 - DRS External Shelter V2.DWG", "7332-01-GA2_revK.dwg"]
+
+
+def test_the_folder_converter_converts_the_ga_anyway_so_its_dxf_is_discarded(tmp_path):
+    """ODA takes a wildcard, not a list: "*.DWG" converts every DWG in the folder, skip or no
+    skip. The GA's DXF then sat in converted_paths beside the flats — and with the glued
+    spelling the DXF gate let it through to the geometry reader. Its row also said "not
+    attempted", which it was not."""
+    (tmp_path / "12645-01GA V2.DWG").write_bytes(b"dwg")
+    (tmp_path / "12645-01-01M_2MM MS_REVA.DWG").write_bytes(b"dwg")
+
+    def fake_oda(cmd):
+        src, dst = Path(cmd[1]), Path(cmd[2])
+        for d in src.glob("*.DWG"):
+            (dst / (d.stem + ".dxf")).write_text("x", encoding="utf-8")
+        return 0
+
+    out = cad_inputs.convert_dwgs(tmp_path, runner=fake_oda, converter="X")
+    assert out["converted"] == ["12645-01-01M_2MM MS_REVA.dxf"]
+    assert all("12645-01GA" not in p for p in out["converted_paths"])
+    assert not (tmp_path / "_dxf_from_dwg" / "12645-01GA V2.dxf").exists()
+    rec = {f["dwg"]: f for f in out["files"]}["12645-01GA V2.DWG"]
+    assert rec["converted"] is False
+    assert "discarded" in rec["reason"] and "not attempted" not in rec["reason"]
+    assert not out["reason"], "every flat converted; the discarded GA is not a failure"
 
 
 def test_the_ga_still_appears_in_found(tmp_path):

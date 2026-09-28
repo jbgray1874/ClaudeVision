@@ -38,7 +38,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 SCHEMA = "cad_inputs.v1"
 
@@ -117,8 +117,10 @@ def inventory(folder: Path, *, converted: Optional[Sequence[Path]] = None) -> Di
 
 # A general-arrangement sheet says so in its name. Whole words, because "GA" inside a part
 # code is not a statement about the drawing.
-_GA_MARKERS = ("GA", "GENERAL ARRANGEMENT", "ASSY", "ASSEMBLY", "LAYOUT", "ELEVATION")
-_GA_RE = re.compile(r"(?<![A-Z0-9])(?:%s)(?![A-Z0-9])"
+_GA_MARKERS = ("GENERAL ARRANGEMENT", "ASSY", "ASSEMBLY", "LAYOUT", "ELEVATION")
+# "GA2" is a job's SECOND general arrangement (7332-01-GA2, 12392-01-GA5, 1448-GA1): a numbered
+# role is still the role. One digit only, so a code such as GA200 is not read as one.
+_GA_RE = re.compile(r"(?<![A-Z0-9])(?:GA\d?|%s)(?![A-Z0-9])"
                     % "|".join(m.replace(" ", r"\s+") for m in _GA_MARKERS))
 
 
@@ -166,12 +168,21 @@ def dwg_class(path: Any) -> str:
         # it failed with an instruction to open one. product_identity already reads that
         # spelling as an assembly (D-311); it is asked here rather than copied.
         from product_identity import drawing_of_file
-        if drawing_of_file(Path(path).name).get("is_assembly"):
+        d = drawing_of_file(Path(path).name) or {}
+        if d.get("is_assembly"):
             return "general_arrangement"
         from drawing_job_merge import material_from_dxf_filename, thickness_mm_from_dxf_filename
         p = Path(path)
         if material_from_dxf_filename(p) and thickness_mm_from_dxf_filename(p) is not None:
             return "flat"
+        # A JOB'S OWN TOP SHEET — "<job number> - <title>" (12645's shelter) — is the
+        # arrangement of the whole job (D-312 heads the graph with it). Name-only, nothing
+        # marks it an assembly: that takes the pack. But a DWG is only ever worth opening as a
+        # flat pattern, and a sheet named this way with no gauge and material in its name has
+        # not been named as one. Checked AFTER the flat test, so a top sheet that does carry
+        # the stock it is cut from is still a flat.
+        if d.get("top_sheet"):
+            return "general_arrangement"
     except Exception:
         return "unknown"
     return "unknown"
@@ -505,46 +516,73 @@ def _solidworks_dxf_export(dwg: Path, dxf: Path) -> bool:
             pass
 
 
-def pdf_of_the_same_sheet(dwg: Path, folder: Path) -> Optional[str]:
-    """The name of a PDF in `folder` whose drawing number names the same sheet as this DWG,
-    or None. Spellings are compared by the engine's one resolver (`names_the_product`), so
+def pdfs_of_the_same_sheet(dwg: Path, folder: Path) -> Tuple[str, List[str]]:
+    """The PDFs beside this DWG whose drawing number names the same sheet, as (status, names).
+
+    status is what was actually established, because the wording built on it must not say
+    more: "found" (the names), "none" (every PDF beside the DWG was looked at and none names
+    this sheet), "no_number" (the DWG's own name carries no drawing number the engine reads,
+    so nothing could be matched and NOTHING IS KNOWN about the folder), or "could_not_look"
+    (the folder could not be listed — a share dropping mid-walk is not an empty folder).
+
+    BESIDE, NOT BELOW. file_scan groups a job's PDFs by their own parent folder, so a PDF in
+    a subfolder belongs to another folder-job, or to none, and is never read as part of this
+    one. A recursive search here named "Superseded\\12645-01GA V1_REVA.PDF" as the PDF of the
+    sheet — a file this run does not open.
+
+    Spellings are compared by the engine's one resolver (`names_the_product`), so
     "12645-01GA V2.DWG" finds "12645-01GA V2_REVA.PDF" the way the portal and the roll-up
-    would. Never raises."""
+    would. Every match is returned, so two revisions of one sheet are both named.
+    """
+    dwg = Path(dwg)
+    where = dwg.parent if str(dwg.parent) not in ("", ".") else Path(folder)
     try:
         from product_identity import drawing_of_file, names_the_product
-        mine = (drawing_of_file(Path(dwg).name) or {}).get("number")
+        mine = (drawing_of_file(dwg.name) or {}).get("number")
         if not mine:
-            return None
-        for pdf in sorted(Path(folder).rglob("*")):
+            return "no_number", []
+        found: List[str] = []
+        for pdf in sorted(where.iterdir()):
             if not pdf.is_file() or pdf.suffix.lower() != ".pdf" or _is_noise(pdf):
                 continue
             theirs = (drawing_of_file(pdf.name) or {}).get("number")
             if theirs and names_the_product(mine, theirs):
-                return pdf.name
+                found.append(pdf.name)
+        return ("found" if found else "none"), found
     except Exception:                                      # noqa: BLE001
-        return None
-    return None
+        return "could_not_look", []
 
 
-def _skipped_ga_reason(dwg: Path, folder: Path) -> str:
-    """Why a general arrangement was not opened — with the PDF named when there is one.
+def _skipped_ga_reason(dwg: Path, folder: Path, how: str = "not attempted") -> str:
+    """Why a general arrangement was not used — saying only what was actually looked at.
 
     This said "the same content as the PDF of this sheet, which was read" for every GA,
     whether or not a PDF of it was in the folder: an inference printed as an observation. The
-    conclusion is the same either way — a GA converted to DXF is viewports and text, and
+    conclusion is the same in every case — a GA converted to DXF is viewports and text, and
     nothing here reads that as a parts list — but the reader deserves to know whether the
-    sheet was read at all, because if it was not, the fix is to ask for the PDF, not to
-    chase a converter.
+    sheet is there to be read at all, because if it is not, the fix is to ask for the PDF,
+    not to chase a converter. Four cases, and each claims no more than it knows.
+
+    `how` is what became of the DWG: "not attempted" on the seat, or converted by the folder
+    converter and discarded, which is not the same fact and is not written as if it were.
     """
-    twin = pdf_of_the_same_sheet(dwg, folder)
-    if twin:
-        return (f"not attempted — a general arrangement, not a flat pattern. The same content "
-                f"as the PDF of this sheet ({twin}), which is read. Converting it adds nothing "
-                f"and costs a CAD seat the model extract needs.")
-    return ("not attempted — a general arrangement, not a flat pattern. No PDF of this sheet is "
-            "in the folder; converted to DXF it would be viewports and text, which nothing here "
-            "reads as a parts list, so converting it adds nothing and costs a CAD seat the "
-            "model extract needs. If its table matters, ask for the PDF.")
+    status, twins = pdfs_of_the_same_sheet(dwg, folder)
+    head = f"{how} — a general arrangement, not a flat pattern."
+    dxf = ("Converted to DXF it would be viewports and text, which nothing here reads as a "
+           "parts list.")
+    tail = ("Converting it adds nothing and costs a CAD seat the model extract needs."
+            if how == "not attempted" else
+            "It contributes nothing to the estimate.")
+    if status == "found":
+        return (f"{head} The same content as the PDF of this sheet ({', '.join(twins)}), "
+                f"which is in the folder. {tail}")
+    if status == "no_number":
+        return (f"{head} Its name carries no drawing number this engine reads, so it was not "
+                f"matched to a PDF. {dxf} {tail}")
+    if status == "could_not_look":
+        return f"{head} The folder could not be searched for a PDF of this sheet. {dxf} {tail}"
+    return (f"{head} No PDF of this sheet is in the folder; {dxf[0].lower()}{dxf[1:]} {tail} "
+            f"If its table matters, ask for the PDF.")
 
 
 def convert_dwgs(
@@ -653,6 +691,28 @@ def convert_dwgs(
         return result
 
     produced = [p for p in sorted(out_dir.rglob("*.dxf")) if p.is_file()]
+    # THE FOLDER CONVERTER TAKES A WILDCARD, NOT A LIST. "*.DWG" converts every DWG in the
+    # folder, so a general arrangement the skip above set aside was converted anyway, its DXF
+    # sat in `converted_paths` beside the flats, and its row said "not attempted". With the
+    # hyphenated spelling the DXF gate downstream refused the file; with the glued one
+    # ("12645-01GA") it did not, and the body's GA sheet would have been offered to the
+    # geometry reader as a part's flat — the viewport-as-blank outcome dwg_class warns of.
+    # The GA's output is discarded here, and its row says that is what happened.
+    _ga_by_stem = {p.stem.upper(): p for p in _skipped_ga}
+    _ga_out = [p for p in produced if p.stem.upper() in _ga_by_stem]
+    produced = [p for p in produced if p.stem.upper() not in _ga_by_stem]
+    for p in _ga_out:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    if _ga_out:
+        _discarded = {p.stem.upper() for p in _ga_out}
+        for rec in result["files"]:
+            if rec.get("backend") == "" and Path(rec["dwg"]).stem.upper() in _discarded:
+                rec["reason"] = _skipped_ga_reason(
+                    _ga_by_stem[Path(rec["dwg"]).stem.upper()], folder,
+                    how="converted by the folder converter and discarded")
     result["backend"] = "oda"
     # ODA converts a FOLDER, so the per-file account is reconstructed by stem — the only
     # thing it tells us. A DWG with no DXF of its own name did not convert, whatever the

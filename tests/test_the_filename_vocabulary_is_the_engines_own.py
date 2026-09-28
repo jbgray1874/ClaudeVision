@@ -114,10 +114,32 @@ def test_the_explicit_patterns_still_win_where_they_disambiguate():
     ("11650-04_SHOP ELEVATION.DWG", "general_arrangement"),
     ("12645-01GA V2.DWG", "general_arrangement"),        # the role glued to the sheet number
     ("12645-02ASSY_REVA.DWG", "general_arrangement"),
+    ("7332-01-GA2_revK.dwg", "general_arrangement"),     # a job's second GA
+    ("12645 - DRS External Shelter V2.DWG", "general_arrangement"),   # the job's top sheet
+    ("12645 - Bracket 2MM MS.DWG", "flat"),               # a top sheet named as stock is a flat
+    ("11650-04-GA200_2MM MS.DWG", "flat"),                # GA200 is a code, not a numbered role
     ("scan 17.DWG", "unknown"),
 ])
 def test_a_dwg_is_classed_by_what_the_drawing_office_called_it(name, expect):
     assert cad_inputs.dwg_class(name) == expect
+
+
+def test_the_dxf_gate_reads_the_glued_role_the_same_way():
+    """The DXF-side gate (is_ignored_ga_dxf) kept its own regex, which needed a separator
+    before the GA — so "12645-02GA_REVA.DXF", a real file in the 12645 pack, passed discovery
+    as a flat-pattern source while dwg_class called the same name a general arrangement. Two
+    rules for one concept, already drifted. Both now ask product_identity."""
+    from pathlib import Path
+    from drawing_job_merge import is_flat_part_dxf, is_ignored_ga_dxf
+    for name in ("12645-02GA_REVA.DXF", "12645-01GA V2_REVA.DXF", "12645-03ASSY_REVA.DXF",
+                 "7332-01-GA2_revK.dxf"):
+        assert is_ignored_ga_dxf(Path(name)), name
+        assert not is_flat_part_dxf(Path(name)), name
+        assert cad_inputs.dwg_class(name[:-4] + ".DWG") == "general_arrangement"
+    # And the flats beside them are still flats.
+    for name in ("12645-01-01M-4MM MS_REVA.DXF", "12645-02-03M-9.5MM MS_REVA.DXF"):
+        assert not is_ignored_ga_dxf(Path(name)), name
+        assert is_flat_part_dxf(Path(name)), name
 
 
 def test_a_glued_role_is_read_by_the_identity_rule_not_a_second_copy():
@@ -181,6 +203,10 @@ def test_unread_general_arrangements_say_converting_them_adds_nothing():
     msg = _flag(["AC0706-02_BOOTS_GA-REVG.DWG", "AC0706-01_BOOTS_GA-REVG.DWG"])
     assert "would add nothing" in msg
     assert "FLAT PATTERNS" not in msg
+    # The flag knows the CLASS of the file, not the folder. It used to say the PDF of the
+    # sheet "is already read", which on a pack with no such PDF contradicted the [cad] line
+    # that had looked and said to ask for one.
+    assert "already read" not in msg
 
 
 def test_a_folder_with_both_leads_on_the_flats():

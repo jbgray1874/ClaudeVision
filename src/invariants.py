@@ -1196,9 +1196,13 @@ def check_every_cad_file_was_used(summary: Any) -> List[Dict[str, Any]]:
             _msg += (f", though none is named as a flat pattern: "
                      + "; ".join(f"{len(v)} {k.replace('_', ' ')}"
                                  for k, v in sorted(_classes.items()))
-                     + ". A general arrangement converts to the same content as the PDF of "
-                       "the same sheet, which is already read, so converting these would add "
-                       "nothing")
+                     # WHAT IS KNOWN HERE IS THE CLASS, NOT THE FOLDER. This said "the PDF of
+                     # the same sheet, which is already read" for every GA, and on a pack
+                     # with no such PDF it contradicted the [cad] line two lines above it,
+                     # which had looked and said to ask for one.
+                     + ". A general arrangement converts to viewports and text — the content "
+                       "of the PDF of that sheet, where the pack holds one — which nothing "
+                       "here reads as a parts list, so converting these would add nothing")
         # WHY THEY WERE NOT CONVERTED, IN THE SAME SENTENCE AS THE FACT THAT THEY WERE NOT.
         #
         # convert_dwgs already distinguishes the cases and writes one of them down: the
