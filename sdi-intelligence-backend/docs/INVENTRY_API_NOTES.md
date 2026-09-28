@@ -15,7 +15,7 @@ Two credentials, both sent as **request headers**:
 
 | Header | Where it comes from |
 |---|---|
-| `apikey` | The InVentry console: **Setup & Options → (scroll to bottom) Partner API → toggle ON → Add API Key → choose the partner → copy the key**. Admin rights needed. |
+| `apikey` | The InVentry Console — a **Windows desktop application**, not a web page, installed as part of the InVentry system (it lives on the main reception touchscreen; InVentry can install it on an admin PC). Needs an InVentry **admin** login. Path: **Setup & Options → left menu, System section (at the bottom) → Partner API → toggle "Enable partner API" ON → Add API key → Partner: "End User Development" → copy**. That toggle starts Off. |
 | `partnersecret` | Issued by **InVentry Ltd**. The same key across all their on-premises installations; it exists so one partner cannot impersonate another in their logs. |
 
 When adding the key, the **Partner** dropdown matters — the documentation's
