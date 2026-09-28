@@ -200,9 +200,11 @@ def test_every_route_that_delivers_a_file_is_covered():
         "app.py": app_src.count("FileResponse("),
         "estimate_routes.py": routes_src.count("FileResponse("),
     }
-    # app.py: /api/file (gated), plus the four static pages — the portal, the estimating
-    # page, the guide and the brand logo, none of which is a deliverable.
-    assert known_file_responses["app.py"] == 5, (
+    # app.py: /api/file (gated), plus the static pages — the portal, the estimating page,
+    # the guide and the brand logo — and, since the app portal landed (Entra SSO, 28 Sep
+    # 2026), /services.json and the /app/ page and its assets, each behind sign-in. None of
+    # them is a deliverable.
+    assert known_file_responses["app.py"] == 8, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
     # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation.

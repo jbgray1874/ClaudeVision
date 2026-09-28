@@ -39,9 +39,9 @@ def _app() -> str:
 
 
 @pytest.mark.parametrize("route,handler", [
-    ("/", "def home()"),
-    ("/estimating", "def estimating_page()"),
-    ("/guide", "def estimating_guide()"),
+    ("/", "def home("),
+    ("/estimating", "def estimating_page("),
+    ("/guide", "def estimating_guide("),
 ])
 def test_each_page_route_refuses_to_be_cached(route, handler):
     """Read per-handler rather than counting occurrences, so a header added to two routes and
