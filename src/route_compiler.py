@@ -1164,6 +1164,18 @@ def _bom_stated_edges(
         for spelling in spellings:
             if spelling in known:
                 return spelling
+        # A top sheet's title block and its file name may word the title differently
+        # ("12645 - DRS EXTERNAL SHELTER V2" and "12645 - DRS External Shelter V2"): the
+        # job number is the identity. Only where exactly ONE known top sheet carries it.
+        try:
+            from product_identity import _job_number_with_title
+            _jn = _job_number_with_title(str(value or ""))
+            if _jn:
+                _tops = [k for k in known if _job_number_with_title(k) == _jn]
+                if len(_tops) == 1:
+                    return _tops[0]
+        except Exception:                                            # noqa: BLE001
+            pass
         return "" if must_be_known else (spellings[0] if spellings else "")
 
     rejected = rejected if rejected is not None else []
@@ -3553,6 +3565,22 @@ def job_drawing_numbers(summary: Mapping[str, Any]) -> List[str]:
             best = max(found, key=len)
             if best not in names:
                 names.append(best)
+            continue
+        # A JOB'S TOP SHEET IS FILED "<job number> - <title>". 12645's shelter is
+        # "12645 - DRS External Shelter V2_REVA.pdf" and its title block numbers it
+        # "12645 - DRS EXTERNAL SHELTER V2": no hyphenated drawing number anywhere, so the
+        # sheet was not a drawing of this job, its table's five rows named an owner nobody
+        # knew, and the declared product 12645 resolved to nothing (D-312). The identity is
+        # the file stem without its revision, spelled as the BOM reader spells the title
+        # block's number; the one resolver in product_identity decides it is a top sheet.
+        try:
+            from product_identity import _job_number_with_title, _REV_TAIL
+        except Exception:                                            # noqa: BLE001
+            continue
+        if _job_number_with_title(stem):
+            top = clean_part_number(_REV_TAIL.sub("", stem.strip()))
+            if top and top not in names:
+                names.append(top)
     return names
 
 
