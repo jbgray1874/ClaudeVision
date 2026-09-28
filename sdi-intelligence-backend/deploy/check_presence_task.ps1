@@ -40,7 +40,64 @@ $codes = @{
 Head "Task"
 $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 if (-not $task) {
-    Write-Host "   No task named '$TaskName'. Run deploy\install_presence_task.ps1." -ForegroundColor Red
+    Write-Host "   No task named '$TaskName' exists." -ForegroundColor Red
+
+    # "No task" is not one fault, it is several, and they need different fixes.
+    # Check the ones that can be checked from here rather than leaving the
+    # reader to guess.
+    $near = Get-ScheduledTask -ErrorAction SilentlyContinue |
+            Where-Object { $_.TaskName -match "BrightHR|InVentry|Presence|Blip" }
+    if ($near) {
+        Write-Host "   But these look related - the task may be registered under another name:" -ForegroundColor Yellow
+        $near | ForEach-Object { Write-Host "     $($_.TaskPath)$($_.TaskName)  [$($_.State)]" }
+        Write-Host "   Re-run with -TaskName '<that name>' to inspect it." -ForegroundColor Yellow
+    }
+
+    $elevated = ([Security.Principal.WindowsPrincipal] `
+        [Security.Principal.WindowsIdentity]::GetCurrent()
+        ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+
+    Write-Host ""
+    Write-Host "   Why the installer may not have got as far as registering:" -ForegroundColor Cyan
+    if (-not $elevated) {
+        Write-Host "     * This session is NOT elevated. Registering a task that runs as" -ForegroundColor Red
+        Write-Host "       SYSTEM needs Administrator. Open PowerShell as Administrator." -ForegroundColor Red
+    } else {
+        Write-Host "     * This session is elevated, so permissions are not the problem." -ForegroundColor Green
+    }
+
+    $backend = (Resolve-Path "$PSScriptRoot\..").Path
+    if (Test-Path (Join-Path $backend ".env")) {
+        Write-Host "     * .env found in $backend" -ForegroundColor Green
+    } else {
+        Write-Host "     * No .env in $backend - the installer throws here, by design," -ForegroundColor Red
+        Write-Host "       because the task would abort on every cycle without it." -ForegroundColor Red
+        Write-Host "       .env is deliberately not in git. Check the other worktree" -ForegroundColor Red
+        Write-Host "       (git worktree list) and copy it across." -ForegroundColor Red
+    }
+
+    $repoRoot = Split-Path $backend -Parent
+    $py = @(
+        (Join-Path $backend  ".venv\Scripts\python.exe"),
+        (Join-Path $repoRoot ".venv\Scripts\python.exe"),
+        (Join-Path $repoRoot "venv\Scripts\python.exe")
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if ($py) {
+        Write-Host "     * Interpreter found: $py" -ForegroundColor Green
+    } else {
+        $onPath = Get-Command python.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($onPath) {
+            Write-Host "     * No venv in this checkout; PATH has $($onPath.Source)" -ForegroundColor Yellow
+            Write-Host "       The installer will use it but SYSTEM may not be able to." -ForegroundColor Yellow
+        } else {
+            Write-Host "     * No Python found in this checkout or on PATH - the installer" -ForegroundColor Red
+            Write-Host "       throws here. Pass -Python <path to python.exe>." -ForegroundColor Red
+        }
+    }
+
+    Write-Host ""
+    Write-Host "   Then, in an ELEVATED prompt:" -ForegroundColor Cyan
+    Write-Host "     .\deploy\install_presence_task.ps1"
     return
 }
 Write-Host "   State    : $($task.State)"
