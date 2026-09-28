@@ -42,6 +42,35 @@ being awake.
 | 3.5 | Hosts entry `10.0.0.241  InVentry-PC` — add it to `SDI-Intelligence-HostsEntry.ps1` so a rebuild does not silently break it |
 | 3.6 | Scheduled task: Blip query + push every 5 minutes. Without it, presence is only as fresh as the last button click, and the code refuses snapshots over 15 minutes old |
 
+### When the task will not run
+
+`deploy\check_presence_task.ps1` answers this in one command: whether the
+task exists and is enabled, what account it runs as, whether a repetition
+interval actually stuck, the last result code translated into English, the
+tail of the run log, and how old the snapshot is.
+
+Three faults were found and fixed on 28 Sep, all of which produce a task that
+looks healthy and does nothing:
+
+* **No repetition duration.** `New-ScheduledTaskTrigger -Once` with a
+  repetition interval and no duration registers a task that fires once and
+  never again. The installer now asks for an indefinite duration, falls back
+  to ten years where that is rejected, and reads the trigger back to confirm.
+* **A hard-coded interpreter path.** The runner assumed
+  `C:\ClaudeVision\.venv`, which does not exist in the `C:\ClaudeVision-HR`
+  worktree. Worse, PowerShell treats a missing command as non-terminating, so
+  `$LASTEXITCODE` kept a stale value and the script carried on to the push
+  with no Blip data. The path is now resolved at install time, baked into the
+  task argument, and the runner aborts with exit 1 if it is not there.
+* **`-User SYSTEM` without a logon type.** SYSTEM needs
+  `LogonType ServiceAccount`, and a named account with no password needs S4U,
+  or the task registers and then fails at run time with 0x8007052E.
+
+The runner also appends everything it prints to
+`C:\SDIIntelligence\hr\snapshots\presence_sync.log`. Task Scheduler discards
+a task's console output, so before this a failed cycle left nothing behind but
+an exit code.
+
 ## 4. Waiting on InVentry — none of it blocking
 
 | # | Item | Impact |
