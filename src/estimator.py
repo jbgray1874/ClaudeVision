@@ -7629,6 +7629,11 @@ def estimate_labour_costs(process: Dict[str, Any], job_quantity: int = 1, materi
     }
 
 
+# Quantity sources that READ a count off a parts list or were given by a person.
+_QTY_SOURCES_THAT_READ_A_COUNT = frozenset({
+    "bom_tree", "estimator_confirmed", "estimator_read_drawing", "knowledge_base"})
+
+
 def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
     """
     Guard against the PDF parser reading drawing-number prefixes as quantities.
@@ -7654,6 +7659,25 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
             "detail": f"qty {raw_qty} matched leading digits of part_number '{pn}' — reset to 1",
         })
         return 1
+
+    # A COUNT A PARTS LIST PRINTS IS EVIDENCE, NOT PARSER NOISE (D-315). 12645's body table
+    # prints 120 M8 bolts and 120 nuts; this cap reset the bolts to 1, so the book charged
+    # one bolt. The cap exists for a number of unknown origin — a drawing number read as a
+    # count, caught above — and a quantity whose recorded source is a printed parts list
+    # or a person is neither. It stands, and anything over the cap is still flagged.
+    try:
+        from source_precedence import source_of as _src_of
+        _qsrc = str(_src_of(part, "quantity") or "")
+    except Exception:                                                # noqa: BLE001
+        _qsrc = ""
+    if raw_qty > _MAX and _qsrc in _QTY_SOURCES_THAT_READ_A_COUNT:
+        part.setdefault("review_flags", []).append({
+            "severity": "info",
+            "flag": "quantity_over_cap_kept",
+            "detail": (f"qty {raw_qty} is over MAX_PART_QTY_PER_UNIT ({_MAX}) and kept — it "
+                       f"was read from {_qsrc}, not guessed"),
+        })
+        return raw_qty
 
     if raw_qty > _MAX:
         part.setdefault("review_flags", []).append({

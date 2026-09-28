@@ -2679,6 +2679,11 @@ def build_part_graph(
             evidence={
                 "raw_record_present": identity in raw,
                 "extract_record_present": identity in extracted,
+                # A PRINTED PARTS-LIST ROW NAMES THIS NODE. The reached-item check uses it to
+                # tell a real item with a words-only code ("Roller Shutter" x2 on 12645's
+                # shelter sheet) from a model component name that duplicates a coded line
+                # (D-315).
+                "bom_stated": identity in _bom_owners,
                 "raw_aliases": sorted(
                     alias for alias, canonical in aliases.items()
                     if canonical == identity

@@ -153,3 +153,18 @@ def test_a_model_name_or_placeholder_node_is_a_warning_not_a_block():
         _summary(nodes, [_charged("12567-02-01M"), tape_rec]))
     assert [v["code"] for v in out] == ["reached_node_without_a_code_or_record"]
     assert out[0]["severity"] == inv.WARNING
+
+
+def test_a_words_only_row_a_parts_list_prints_blocks_until_charged_or_asked():
+    """12645: "Roller Shutter" x2 on the shelter sheet has no code, only words. It left the
+    bill and the check only warned, because a space in the identity read as a model name."""
+    shutter = _node("ROLLER SHUTTER", "bought_in")
+    shutter["evidence"]["bom_stated"] = True
+    sub = dict(SUB)
+    sub["children"] = SUB["children"] + [{"part_number": "ROLLER SHUTTER", "qty": 2.0}]
+    tape_rec = {"part_number": TAPE["part_number"], "quantity": 2,
+                "cost_breakdown": {"system_cost": {"unit_cost_gbp": 3.25, "applied_to_total": True}}}
+    out = inv.check_every_reached_bom_item_is_accounted_for(
+        _summary([GA, sub, TAPE, PANEL, shutter], [_charged("12567-02-01M"), tape_rec]))
+    assert [v["code"] for v in out] == ["reached_bom_item_unaccounted"]
+    assert "ROLLER SHUTTER" in out[0]["message"]

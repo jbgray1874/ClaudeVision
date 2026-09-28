@@ -4003,7 +4003,13 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
                 if rec is not None:
                     break
         if rec is None:
-            (unaccounted if _names_a_code(ident) else uncoded).append(ident)
+            # A WORDS-ONLY ROW A PARTS LIST PRINTS IS AN ITEM, NOT A NAME (D-315). "Roller
+            # Shutter" x2 on 12645's shelter sheet has a space in its code, so it was filed
+            # with the model component names below — a warning — and two industrial shutters
+            # left the bill with nothing to stop the book. Only a node no table states is
+            # treated as a name.
+            _stated = bool((node.get("evidence") or {}).get("bom_stated"))
+            (unaccounted if (_names_a_code(ident) or _stated) else uncoded).append(ident)
             continue
         if not _money(rec) and not _asked_or_ruled(rec):
             unaccounted.append(ident)
