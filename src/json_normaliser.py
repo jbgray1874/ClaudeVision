@@ -23,6 +23,11 @@ MATERIAL_NORMALISATION = {
     "SS": "STAINLESS_STEEL",
     "ALUMINIUM": "ALUMINIUM",
     "ALUMINUM": "ALUMINIUM",
+    # SolidWorks' default library name for a steel nobody specified. Dave Wright (estimating,
+    # 28 Sep 2026, on 12645): "material can be just standard mild steel – not the 'PLAIN
+    # CARBON STEEL' stated on the drawings". It resolved to nothing, so the part had no
+    # material at all.
+    "PLAIN CARBON STEEL": "MILD_STEEL",
     "Q195": "MILD_STEEL",
     "Q235": "MILD_STEEL",
     "SPCC": "MILD_STEEL_SPCC",
