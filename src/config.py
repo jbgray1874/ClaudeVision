@@ -3271,6 +3271,21 @@ PRICING_SERVICE_POLICY = {
 # scope="assembly" is charged once per product.
 ASSEMBLY_SCOPED_OPS_CHARGE_ONCE = False
 
+# Whether a part costed in the Sheet Steel, Other Sheet Material or Wire block is ALSO listed
+# in the Bill of Materials as a £0 "costed in <block> below" line.
+#
+# Listed since 2085 so the bill read as a parts list. Dave (estimating, 28 Sep 2026, on
+# 11650-06-GA): "could the sub drawings come out of material and into labour" — the part is
+# already represented, by code and name, in the block that prices it and on its labour rows;
+# a £0 line in the bill is one more row to read past. Estimating's ruling: describe it well
+# where it is priced and leave it off the bill. True restores the cross-reference rows.
+BOM_LISTS_PARTS_COSTED_IN_BLOCKS = False
+
+# The labour block's part numbers in a column of their own (Dave, 28 Sep 2026: "2 columns").
+# Where the template's labour header has no part-number column, the Part Description merge
+# gives up its last column under this label. Empty keeps the part numbers in the text.
+LABOUR_PARTS_COLUMN_LABEL = "Part No."
+
 # Canonical BOM/route cutover.
 #
 # On the route-compiler cutover branch the hierarchy-aware OperationDecision graph is the

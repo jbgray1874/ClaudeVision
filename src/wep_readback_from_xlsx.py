@@ -378,6 +378,8 @@ def _used_bounds(com_ws) -> Tuple[int, int]:
 # than fail. Same reasoning as _find_wb_sell_price_ref scanning for its label.
 _LABOUR_HEADER_KEYS = {
     "operation": "operation", "part description": "description", "dept": "department",
+    # The labour block's own part-number column, where the template has one (Dave, 28 Sep).
+    "part no": "part_numbers",
     # Named for what they CONTAIN, not what the template's headers say. On this sheet
     # "Rate Per Hour" is a THROUGHPUT (99 pieces/hour) and "Labour Cost" is the department's
     # HOURLY RATE (GBP 25.43/hr) - only "Total Value" is a per-unit cost. Carrying the header

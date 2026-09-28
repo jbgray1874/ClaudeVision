@@ -291,8 +291,12 @@ CELL_MAP = {
 
     # Header input cells (row, col) or "A1" style
     "header": {
-        "customer":   "C3",
-        "drawing_no": "C5",
+        # The VALUE cells. C3 and C5 hold the template's own "Customer" and "Drawing No."
+        # labels; 11650-06-GA went out with "Boots" and "11650-06-GA" written over them
+        # (Dave, 28 Sep). Written beside the label when the label is found — see
+        # write_header_value_beside_label — and at these addresses only when it is not.
+        "customer":   "D3",
+        "drawing_no": "D5",
         "order_qty":  "D6",   # drives $D$6 everywhere — critical
     },
 
@@ -3611,6 +3615,125 @@ def full_drawing_number(summary: Dict[str, Any], job_folder_name: str) -> str:
     return _m.group(1).strip(" -_") if _m else str(job_folder_name or "")
 
 
+def write_header_value_beside_label(ws, labels, fallback_cell: str, value: Any) -> str:
+    """Write a header value in the cell beside its label; return the cell written.
+
+    THE LABEL STAYS A LABEL. The customer and drawing number were written to C3 and C5 by
+    address, and C3 and C5 are where the template prints "Customer" and "Drawing No." — so
+    11650-06-GA's sheet read "Boots" and "11650-06-GA" in the label column with nothing
+    beside them (Dave, estimating, 28 Sep 2026). Found by exact label in the top rows, as
+    Description and Date are; the value goes in the next cell (the top-left of its merge).
+    Where no label is found, the configured cell is used, and never a cell holding a label.
+    """
+    wanted = {str(l).strip().rstrip(":").lower() for l in labels}
+    try:
+        for _row in ws.iter_rows(min_row=1, max_row=10):
+            for _c in _row:
+                if isinstance(_c.value, str) and \
+                        _c.value.strip().rstrip(":").lower() in wanted:
+                    _cell = _writable_cell(ws, _c.row, _c.column + 1)
+                    if _cell is not None:
+                        _cell.value = value
+                        return _cell.coordinate
+    except Exception:                                                # noqa: BLE001
+        pass
+    _cur = ws[fallback_cell].value
+    if isinstance(_cur, str) and _cur.strip().rstrip(":").lower() in wanted:
+        return ""                    # the fallback is the label itself: write nothing over it
+    ws[fallback_cell] = value
+    return fallback_cell
+
+
+_LABOUR_PARTS_LABELS = ("part no", "part nos", "part number", "part numbers", "part code",
+                        "part codes", "parts", "drawing no", "drawing nos", "dwg no")
+
+
+def labour_parts_column(ws, lb: Dict[str, Any], flags=None) -> Optional[int]:
+    """The labour block's own column for part numbers, or None to keep them in the text.
+
+    Dave (estimating, 28 Sep 2026, on 11650-06-GA), pencilled across the labour block:
+    "2 columns" — the operation's description in one, the drawings it covers in the other,
+    now that the sub-drawings have come off the bill of materials and the labour rows are
+    where an estimator reads them.
+
+    The template decides. A header in the labour row labelled for part numbers ("Part No.",
+    "Parts", "Drawing No") is used where it stands. Otherwise, with
+    config.LABOUR_PARTS_COLUMN_LABEL set, the Part Description header's own merge gives up its
+    LAST column: the description keeps the rest, the freed column is labelled, and nothing
+    outside that merge moves. A header that is not merged across two or more columns has
+    nothing to give, and the parts stay in the description as before.
+    """
+    hr = int(lb["first_row"]) - 1
+    c_desc = int(lb["col_desc"])
+    c_stop = int(lb.get("col_qty") or c_desc + 4)
+    try:
+        for c in range(c_desc + 1, c_stop):
+            v = ws.cell(hr, c).value
+            if isinstance(v, str) and \
+                    " ".join(v.replace(".", " ").split()).lower() in _LABOUR_PARTS_LABELS:
+                return c
+        try:
+            import config as _cfg_lp
+            label = str(getattr(_cfg_lp, "LABOUR_PARTS_COLUMN_LABEL", "") or "")
+        except Exception:                                            # noqa: BLE001
+            label = ""
+        if not label:
+            return None
+        rng = next((m for m in list(ws.merged_cells.ranges)
+                    if m.min_row <= hr <= m.max_row and m.min_col == c_desc
+                    and m.max_col > c_desc), None)
+        if rng is None or rng.max_col >= c_stop:
+            return None
+        parts_col = rng.max_col
+        anchor = ws.cell(hr, c_desc)
+        ws.unmerge_cells(str(rng))
+        if parts_col - 1 > c_desc:
+            ws.merge_cells(start_row=rng.min_row, start_column=c_desc,
+                           end_row=rng.max_row, end_column=parts_col - 1)
+        cell = ws.cell(hr, parts_col)
+        cell.value = label
+        if anchor.has_style:
+            from copy import copy as _copy_style
+            cell._style = _copy_style(anchor._style)
+        return parts_col
+    except Exception as exc:                                         # noqa: BLE001
+        _flag(f"labour part-number column not set up ({exc}); part numbers stay in the "
+              f"description", flags if isinstance(flags, list) else [])
+        return None
+
+
+def free_labour_parts_cell(ws, row: int, col_desc: int, parts_col: int):
+    """Give one labour row its part-number cell: a D:F-style merge on the row is narrowed to
+    stop short of the parts column. Returns the cell, or None if it cannot be written."""
+    for m in list(ws.merged_cells.ranges):
+        if m.min_row <= row <= m.max_row and m.min_col <= parts_col <= m.max_col:
+            if m.min_col != col_desc:
+                return None                      # somebody else's merge: leave it alone
+            ws.unmerge_cells(str(m))
+            if parts_col - 1 > col_desc:
+                ws.merge_cells(start_row=m.min_row, start_column=col_desc,
+                               end_row=m.max_row, end_column=parts_col - 1)
+    return _writable_cell(ws, row, parts_col)
+
+
+def split_labour_description(rd: str, wb_op: Any, parts: Any) -> Tuple[str, str]:
+    """(description, part numbers) for a labour row whose parts have their own column.
+
+    The operation's name is already in the Operation column, so the description starts at
+    what the work is on; the parts list comes out of the text and whole into its cell."""
+    _pl = [str(p) for p in (parts or []) if p]
+    text = str(rd or "")
+    if _pl:
+        shown = ", ".join(_pl[:6]) + (", +%d more" % (len(_pl) - 6) if len(_pl) > 6 else "")
+        text = text.replace(" (" + shown + ")", "", 1)
+    op = str(wb_op or "")
+    if op and text.startswith(op):
+        text = text[len(op):].lstrip()
+        if text.startswith("—"):
+            text = text[1:].lstrip()
+    return text, ", ".join(_pl)
+
+
 def write_job_identity_header(ws, summary: Dict[str, Any], job_folder_name: str) -> List[str]:
     """Fill Description and Date beside the template's own labels. Returns what was written.
 
@@ -4508,8 +4631,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     _customer_name = (summary.get("customer") or summary.get("client")
                       or client_from_job_folder(summary) or job_folder_name)
-    ws[hdr["customer"]]   = _customer_name
-    ws[hdr["drawing_no"]] = full_drawing_number(summary, job_folder_name)
+    write_header_value_beside_label(ws, ("customer",), hdr["customer"], _customer_name)
+    write_header_value_beside_label(ws, ("drawing no.", "drawing no", "drawing number"),
+                                    hdr["drawing_no"],
+                                    full_drawing_number(summary, job_folder_name))
     ws[hdr["order_qty"]]  = order_qty
     write_job_identity_header(ws, summary, job_folder_name)
 
@@ -4987,8 +5112,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         bom_parts = list(bom_parts) + _spilled_from_blocks
 
     _xref_rows: List[Dict[str, Any]] = []
-    for _blk_name, _blk in (("Sheet Steel", steel_parts), ("Other Sheet Material", board_parts),
-                            ("Wire", wire_parts)):
+    try:
+        import config as _cfg_x
+        _list_xrefs = bool(getattr(_cfg_x, "BOM_LISTS_PARTS_COSTED_IN_BLOCKS", False))
+    except Exception:                                                # noqa: BLE001
+        _list_xrefs = False
+    for _blk_name, _blk in ((("Sheet Steel", steel_parts), ("Other Sheet Material", board_parts),
+                             ("Wire", wire_parts)) if _list_xrefs else ()):
         for _xp in _blk:
             if not isinstance(_xp, dict) or not _xp.get("part_number"):
                 continue
@@ -5939,6 +6069,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     {str(k).strip().lower(): v for k, v in _rh.items()})
     lb = cm["labour"]
     row = lb["first_row"]
+    _parts_col = labour_parts_column(ws, lb, flags)
     labour_overflow = False
     # Labour applies to FABRICATED parts (steel, board, weldment) plus tubes (which get
     # powder/handling as real finishing). Bought-in BOM items (fixings, BI-*, NOTE-*,
@@ -6773,6 +6904,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                      work_ops=g.get("engine_ops") or ())
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
+        _pcell = (free_labour_parts_cell(ws, row, int(lb["col_desc"]), _parts_col)
+                  if _parts_col else None)
+        if _pcell is not None:
+            _rd, _pn_text = split_labour_description(_rd, wb_op, g["parts"])
+            _pcell.value = _pn_text[:200] or None
+            from openpyxl.styles import Alignment as _Al
+            _a = _pcell.alignment
+            _pcell.alignment = _Al(horizontal=_a.horizontal, vertical="top", wrap_text=True)
         ws.cell(row=row, column=lb["col_desc"],      value=_rd[:200])
         ws.cell(row=row, column=lb["col_qty"],       value=_qty)
 
