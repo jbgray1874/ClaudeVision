@@ -4339,8 +4339,14 @@ def test_every_fabricated_part_is_in_the_bill_of_materials():
     Listed now, and listed first. The price is deliberately ZERO because Total Material Cost
     (M92) sums BOM + Wire + Sheet Steel + Other Sheet — a priced duplicate here would double
     that part's material and the sheet would be wrong in a way nobody would spot.
+
+    SINCE 28 SEP 2026 OFF BY DEFAULT. Estimating (Dave, on 11650-06-GA) asked for the sub-
+    drawings to come off the bill: each is named where it is priced and on its labour rows.
+    config.BOM_LISTS_PARTS_COSTED_IN_BLOCKS = True restores the rows below.
     """
     _wb = open(__import__("wb_populate").__file__, encoding="utf-8").read()
+    ok("BOM_LISTS_PARTS_COSTED_IN_BLOCKS" in _wb,
+       "the cross-reference rows are behind estimating's configured choice")
     ok('"_bom_cross_reference": True' in _wb,
        "fabricated parts are added to the BOM list as identifiable cross-reference rows")
     ok('"unit_cost_gbp": 0.0' in _wb,
