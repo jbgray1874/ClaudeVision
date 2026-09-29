@@ -5816,6 +5816,48 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             for _t in (tuple(getattr(config, "FACED_BOARD_TOKENS", ()))
                        + tuple(getattr(config, "SHEET_BOARD_TOKENS", ()))
                        + tuple(getattr(config, "SOLID_TIMBER_TOKENS", ()))))
+        # A BOARD WITH NO DENSITY STILL HAS AN AREA, AND AREA IS HOW BOARD IS BOUGHT. 12173's
+        # MFC backs (18 mm Unilin Minnesota Oak) reached this line with a measured blank and
+        # were held at £0 — "no density recorded" — because the researched rung was wired
+        # into the faced-board branch and the per-kg branch, and plain MFC is in neither
+        # (D-341). The same rung, per square metre, before the line is given up.
+        _res_b = (_researched_board_rate_m2(material, thickness, part)
+                  if _is_board_mat and blank_length and blank_width else None)
+        if _res_b:
+            _rb_unit = round(float(_res_b["price_gbp"]) * (1.0 + float(
+                getattr(config, "SCRAP_PERCENTAGE", 0.04))), 2)
+            _rb_ev = _res_b.get("evidence") or {}
+            part.setdefault("review_flags", []).append(
+                f"{material} at {thickness:g}mm: no SDI Live or catalogue rate and no density, "
+                f"so this is a RESEARCHED indicative price — "
+                f"{(_res_b.get('calculation') or {}).get('working')}, plus scrap, from "
+                f"{_rb_ev.get('source')} as at {_rb_ev.get('as_of')} "
+                f"({_rb_ev.get('quantity_basis')}). {_res_b.get('status')}: confirm against a "
+                f"current supplier price before it goes out firm.")
+            return {
+                "material": material, "thickness_mm": thickness,
+                "blank_length_mm": blank_length, "blank_width_mm": blank_width,
+                "blank_area_m2": round(area_m2, 4),
+                "unit_material_mass_kg": None,
+                "unit_material_cost_gbp": _rb_unit,
+                "cost_per_part_gbp": _rb_unit,
+                "extended_sheet_material_cost_gbp": round(_rb_unit * quantity, 2),
+                "extended_material_cost_gbp": round(_rb_unit * quantity, 2),
+                "powder_consumable": None,
+                "stock_estimate": select_sheet_size(material, blank_length, blank_width),
+                "cost_method": "board_rate_researched",
+                "costing_material_family": material,
+                "scrap_pct": round(float(getattr(config, "SCRAP_PERCENTAGE", 0.04)), 4),
+                "reliability_flags": ["indicative_price", "llm_indicative"],
+                "indicative_price": _res_b,
+                "note": (f"{material} researched indicative rate — "
+                         f"{_rb_ev.get('source')}, {_rb_ev.get('as_of')}"),
+                "part_confidence_overall": _part_confidence_overall(part),
+                "part_geometry_reliability": _part_geometry_reliability(part),
+                "price_source": _build_price_source_metadata(
+                    {}, fallback_source="llm_indicative_researched",
+                    applied=True, applied_basis="GBP_per_m2_researched"),
+            }
         if _is_board_mat:
             part.setdefault("review_flags", []).append(
                 f"{material}: no density recorded, so its material cannot be massed and is "
