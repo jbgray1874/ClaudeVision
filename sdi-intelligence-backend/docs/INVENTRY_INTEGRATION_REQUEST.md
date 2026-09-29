@@ -409,11 +409,17 @@ Sent the Postman collection (the endpoint paths) and answered everything else:
 
 Everything is now built against this. See `docs/INVENTRY_API_NOTES.md`.
 
-## Round 4 — to send
+## Round 4 — sent 28 Sep 2026
 
-Only physical facts remain: console access, an admin login, the API host, and
-the certificate. Charlotte offered a support connection — this accepts it and
-asks for all four at once.
+Only physical facts remained: console access, an admin login, the API host, and
+the certificate. Charlotte offered a support connection — this accepted it and
+asked for all four at once.
+
+> **Inaccurate as drafted.** "Built and running in dry run" was never true: the
+> integration had been tested offline against fixtures, but had never
+> authenticated against the live system. The phrase reached a real email before
+> it was caught. Round 5 corrects it. Never describe a pipeline as running until
+> a live call has returned something.
 
 > Hi Charlotte,
 >
@@ -457,3 +463,73 @@ asks for all four at once.
 > James Gray
 > AI & Systems Controller, SDI Displays Ltd
 > james.gray@wearesdi.com · 07585 816501
+
+## Round 5 — to send
+
+Round 4 asked which partner secret to use as though we had not tried one. We
+have: the console key is created, the headers are going out correctly, and
+InVentry is rejecting them. That is a far more answerable question, and it is
+the only thing now blocking a first live cycle.
+
+Two additions to round 4's asks:
+
+* **Service restart.** A newly created key may only become active once the
+  InVentry service restarts. If so that explains the failure by itself.
+* **The contradiction in their own advice.** Charlotte said End User Development
+  "wouldn't require the Partner API", yet every endpoint in the collection is
+  under `/PartnerAPI/` and is rejected without a `partnersecret` header. This is
+  the likeliest root cause, and naming it is the fastest route to a real answer.
+
+The support connection is declined: the host question is settled (10.0.0.241)
+and console access was solved from Adam Stiff's instructions.
+
+> Hi Charlotte,
+>
+> Thank you — that was very helpful, and the Postman collection was the missing
+> piece. The integration is built and configured to run in dry run, logging what
+> it would change without writing anything. The one thing standing between us
+> and a first real cycle is authentication, and that's where I'm stuck.
+>
+> What I've done:
+>
+> - Confirmed our InVentry system at 10.0.0.241 is reachable on port 4816 from
+>   our network, and exported the certificate from the V4 folder.
+> - Created an API key in the console under Setup & Options → Partner API → Add
+>   API Key, with the partner set to **End User Development** as you suggested.
+>   Partner API is enabled.
+> - Called `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+>   request headers, using the `partnersecret` pre-filled in your Postman
+>   collection — your overview notes that value is the same across on-premises
+>   installations.
+>
+> The response is `Authentication failed`.
+>
+> So, two questions:
+>
+> 1. **The partner secret.** Is the value in the collection the one we should be
+>    using, or is one issued per site? I wonder whether I'm caught by your note
+>    that End User Development doesn't require the Partner API: every endpoint in
+>    the collection is under `/PartnerAPI/` and the call is rejected without a
+>    `partnersecret` header, so I'm not sure what an End User Development key is
+>    meant to be paired with. If there's a different secret, or a different
+>    endpoint set for end-user keys, that would explain this.
+>
+> 2. **Does the InVentry service need restarting before a newly created API key
+>    becomes active?** I've regenerated the key once. If it only takes effect
+>    after a restart that would explain the failure on its own, and I'd rather
+>    know before arranging any downtime.
+>
+> And one smaller thing for when we go live: does `ActionLocation` on
+> `AddPersonnelAction` accept free text, or must it match an existing location on
+> our system? We send a distinctive value so we can recognise our own sign-ins
+> and never sign out someone who signed in at reception. If it has to be a real
+> location, we'll create one.
+>
+> On the support connection — thank you, but I don't think we need it now. We've
+> established the software runs on 10.0.0.241, and a colleague passed on
+> instructions from Adam Stiff for reaching the console, so I can get to it
+> myself.
+>
+> Thanks for getting us this far so quickly.
+>
+> James
