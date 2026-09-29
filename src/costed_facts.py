@@ -1121,6 +1121,23 @@ def nest_on_sheet(material, part_length_mm, part_width_mm,
                          sheet_length_mm, sheet_width_mm)
 
 
+def oversize_sheet_for(material, part_length_mm, part_width_mm):
+    """((sheet_l, sheet_w), nest) for the smallest LISTED oversize sheet this blank nests on,
+    or None. Asked only once no stocked sheet holds it: config.OVERSIZE_SHEET_SIZES_MM, by
+    the same nesting rule every sheet is asked by (12645's 3,020 mm covers, D-332)."""
+    try:
+        import config as _cfg_os
+        table = getattr(_cfg_os, "OVERSIZE_SHEET_SIZES_MM", {}) or {}
+    except Exception:                                                # noqa: BLE001
+        return None
+    key = str(material or "").replace("_", " ").strip().upper()
+    for sl, sw in sorted(table.get(key) or [], key=lambda s: s[0] * s[1]):
+        nest = nest_on_sheet(material, part_length_mm, part_width_mm, sl, sw)
+        if nest:
+            return (float(sl), float(sw)), nest
+    return None
+
+
 def _nest_by_rule(rule, part_length_mm, part_width_mm, sheet_length_mm, sheet_width_mm):
     length_gap, width_margin, width_gap, label = _NESTING_RULES[rule]
     try:

@@ -3749,6 +3749,31 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
             if best is None or qty > best["parts_per_sheet"]:
                 best = candidate
 
+    # A BLANK NO STOCKED SHEET HOLDS IS BOUGHT ON A BIGGER ONE, PROVISIONALLY — NOT £0.
+    # 12645's 3,020 mm covers: 20 mm past the largest stocked 3000 x 1500. The steel is priced
+    # from the smallest size a stockist lists that nests it (config.OVERSIZE_SHEET_SIZES_MM),
+    # at the sheet's own rate, and marked so the workbook raises the make-or-buy question
+    # (D-332).
+    if best is None:
+        _over = _costed_facts.oversize_sheet_for(material, blank_length, blank_width)
+        if _over:
+            (_osl, _osw), _onest = _over
+            _oq = _onest["parts_per_sheet"]
+            best = {
+                "candidate_sheet_size_mm": [_osl, _osw],
+                "utilisation_pct": round((_oq * blank_length * blank_width)
+                                         / (_osl * _osw) * 100.0, 2),
+                "rotated": False,
+                "oversize_sheet": True,
+                **_onest,
+            }
+            if part is not None:
+                part.setdefault("review_flags", []).append(
+                    f"OVERSIZE SHEET: {blank_length:g} x {blank_width:g} mm is longer or "
+                    f"wider than every stocked sheet; steel priced PROVISIONALLY from a "
+                    f"{_osl:g} x {_osw:g} sheet ({_oq} a sheet), a size stockists list and SDI "
+                    f"does not hold. Estimator to confirm the make-or-buy route.")
+
     return best or {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None}
 
 
@@ -5897,6 +5922,16 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "parts_per_sheet": int(parts_per_sheet),
             "sheet_mm": [sheet_dims[0], sheet_dims[1]],
         }
+        # BOUGHT ON A SHEET SDI DOES NOT HOLD (D-332): priced, provisional, and said.
+        if sheet_estimate.get("oversize_sheet"):
+            part["oversize_sheet"] = {"sheet_mm": [sheet_dims[0], sheet_dims[1]],
+                                      "parts_per_sheet": int(parts_per_sheet)}
+            part.setdefault("review_flags", []).append(
+                f"OVERSIZE SHEET: longer or wider than every stocked sheet; steel priced "
+                f"PROVISIONALLY from a {float(sheet_dims[0]):g} x {float(sheet_dims[1]):g} "
+                f"sheet ({int(parts_per_sheet)} a sheet) at £{sheet_steel_per_tonne:,.0f}/tonne. "
+                f"Estimator to confirm SDI can cut and fold it in one piece, or buy it "
+                f"cut-and-folded (then replace the in-house laser and fold, not both).")
         # SAID ONLY WHERE THERE WAS A REAL SECOND ANSWER. The config £/kg fallback exists
         # for every steel on the books and was never going to price this line — flagging it
         # would put a sentence on every steel part in the shop, which is how a warning stops

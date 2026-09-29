@@ -1685,6 +1685,20 @@ STANDARD_SHEET_SIZES_MM = {
     "DEFAULT": [(2500, 1250)],
 }
 
+# SHEETS A STOCKIST LISTS THAT SDI DOES NOT HOLD, for a blank no STOCKED sheet can nest.
+#
+# 12645's covers (12645-01-32M x1, -33M x3) are 3,020 mm flats, 20 mm longer than the largest
+# stocked 3000 x 1500. The book charged their steel at £0 and asked a question (D-314/D-318);
+# James Gray, 29 Sep 2026: "Neither should remain at £0 in a working estimate ... the engine
+# should produce these as flagged, costed alternatives rather than £0". 4000 x 1830 x 2 mm
+# mild steel is commercially listed and nests two covers a sheet. A blank costed here is
+# PROVISIONAL and raises the make-or-buy question: whether SDI can cut and fold the part in
+# one piece, or buys it cut-and-folded. Sizes are physical stock facts, not prices; the rate
+# is the sheet's own £/tonne cell. Add a size here when a stockist confirms it.
+OVERSIZE_SHEET_SIZES_MM = {
+    "MILD STEEL": [(4000, 1830), (4000, 2000)],
+}
+
 MATERIAL_DENSITY_KG_PER_M3 = {
     "MILD STEEL": 7850,
     "MILD_STEEL": 7850,

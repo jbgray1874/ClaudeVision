@@ -1385,8 +1385,43 @@ def steel_sheet_for_row(length: Any, width: Any, material: Any,
                                             f"{float(template_sheet[0]):g} x "
                                             f"{float(template_sheet[1]):g} cannot nest it")
     largest = max(sizes, key=lambda s: s[0] * s[1]) if sizes else None
-    return None, ("longer or wider than every stocked sheet"
-                  + (f" (largest {largest[0]:g} x {largest[1]:g})" if largest else ""))
+    beyond = ("longer or wider than every stocked sheet"
+              + (f" (largest {largest[0]:g} x {largest[1]:g})" if largest else ""))
+    # A SIZE A STOCKIST LISTS, BEFORE £0 (D-332). 12645's 3,020 mm covers nest two a sheet on
+    # 4000 x 1830: the row takes that sheet and its own formula prices the steel; the caller
+    # raises the make-or-buy question, because SDI does not hold the size.
+    import costed_facts as _cf_os
+    over = _cf_os.oversize_sheet_for(material, length, width)
+    if over:
+        (osl, osw), nest = over
+        return (osl, osw), (f"{OVERSIZE_WHY} {osl:g} x {osw:g} ({nest['parts_per_sheet']} a "
+                            f"sheet) — {beyond}; a size stockists list, not one SDI holds")
+    return None, beyond
+
+
+OVERSIZE_WHY = "OVERSIZE sheet"
+
+
+def is_oversize_sheet(why: str) -> bool:
+    return str(why or "").startswith(OVERSIZE_WHY)
+
+
+def raise_oversize_route(pe: Dict[str, Any], length: Any, width: Any, why: str,
+                         flags: List[str]) -> None:
+    """A blank priced from a sheet SDI does not stock (D-332): the money is on the sheet,
+    PROVISIONAL, and the route is a decision — raised ONE way, row or spilled line."""
+    pn = str(pe.get("part_number") or "")
+    _flag(f"steel {pn}: {length:g} x {width:g} blank priced PROVISIONALLY from an {why}. "
+          f"ESTIMATOR TO CONFIRM the route", flags)
+    if not isinstance(pe.get("route_gap"), dict):
+        pe["route_gap"] = {
+            "issue": (f"{pn} is a {length:g} x {width:g} mm flat; its steel is priced "
+                      f"provisionally from an {why}"),
+            "assumption": "cut and folded in-house in one piece from the larger sheet",
+            "action": ("confirm SDI can cut and fold it in one piece; if it is bought "
+                       "cut-and-folded, replace the in-house laser and fold with the "
+                       "subcontract price, not both. Do not shorten or join it without Design"),
+        }
 
 
 def raise_unnestable_steel(pe: Dict[str, Any], length: Any, width: Any, why: str,
@@ -1435,6 +1470,10 @@ def spill_from_full_block(ws, block_name: str, block_key: str, block: Mapping[st
                 basis, cost = "no_stocked_sheet", None
                 extra["_price_explicitly_withheld"] = True
                 words = f"{block_name} block full — NOT PRICED: no stocked sheet holds it"
+            elif sheet is not None and is_oversize_sheet(why):
+                raise_oversize_route(part, length, width, why, flags)
+                words = (f"{block_name} block full — PROVISIONAL: oversize "
+                         f"{sheet[0]:g} x {sheet[1]:g} sheet, route to confirm")
     if basis == "net_part_provisional":
         _flag(f"{block_name} overflow {part.get('part_number')}: costed on the engine's own "
               f"figure, not the block's nest — estimator input.", flags)
@@ -5998,7 +6037,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             if _sheet is not None:
                 ws.cell(row=row, column=s["col_sheet_l"], value=_sheet[0])
                 ws.cell(row=row, column=s["col_sheet_w"], value=_sheet[1])
-                _flag(f"steel {_pn_g}: {length:g} x {width:g} blank cut from a {_why}", flags)
+                if is_oversize_sheet(_why):
+                    raise_oversize_route(pe, length, width, _why, flags)
+                else:
+                    _flag(f"steel {_pn_g}: {length:g} x {width:g} blank cut from a {_why}", flags)
             elif _why:
                 raise_unnestable_steel(pe, length, width, _why, flags)
         # Which row did this part land on? The template's own Laser Rate Calculator

@@ -1699,11 +1699,28 @@ class PricingService:
                                       enable_web_search=True, enable_llm_estimate=True)
                     return _fut.result(timeout=_timeout_s) or {}
             except _futures.TimeoutError:
-                _live["timed_out"] = True
+                # A SLOW SEARCH IS NOT "NO PRICE" (D-333). 12645's roller shutters: a new,
+                # harder search than any fastener, past the budget, so the line went to £0 and
+                # — a miss is never stored — did so every run. The model's own market estimate
+                # answers the same brief without the web round-trips; it is tagged indicative
+                # and cached like any other, so the estimator has a figure to replace.
                 print(f"   [pricing] web/AI fallback timed out ({_timeout_s:.0f}s) on "
-                      f"{part.get('part_number') or _spec.get('description')} — flagged "
-                      f"'estimator to confirm', run continues", flush=True)
-                return {}
+                      f"{part.get('part_number') or _spec.get('description')} — asking the "
+                      f"model's market estimate for the same brief", flush=True)
+                try:
+                    with _futures.ThreadPoolExecutor(max_workers=1) as _ex2:
+                        _fut2 = _ex2.submit(lookup_web_ai_price, _spec,
+                                            enable_web_search=False, enable_llm_estimate=True)
+                        return _fut2.result(timeout=_timeout_s) or {}
+                except _futures.TimeoutError:
+                    _live["timed_out"] = True
+                    print(f"   [pricing] market estimate also timed out on "
+                          f"{part.get('part_number') or _spec.get('description')} — flagged "
+                          f"'estimator to confirm', run continues", flush=True)
+                    return {}
+                except Exception:                                # noqa: BLE001
+                    _live["timed_out"] = True
+                    return {}
             except Exception:                                    # noqa: BLE001
                 return {}
 

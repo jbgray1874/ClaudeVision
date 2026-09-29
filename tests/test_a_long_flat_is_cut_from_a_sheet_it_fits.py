@@ -31,10 +31,20 @@ def test_an_over_length_flat_takes_the_smallest_stocked_sheet_it_fits():
         assert "cannot nest it" in why
 
 
-def test_a_flat_longer_than_every_stocked_sheet_is_said_not_guessed():
-    sheet, why = wp.steel_sheet_for_row(3020, 727.4, "MILD_STEEL", TEMPLATE)
+def test_a_flat_longer_than_every_stocked_sheet_takes_a_listed_oversize_sheet():
+    """12645's 3,020 mm covers (D-332): priced from a size stockists list, two a sheet,
+    and said to be one SDI does not hold — never £0, never a sheet that cannot hold them."""
+    sheet, why = wp.steel_sheet_for_row(3020.02, 727.39, "MILD_STEEL", TEMPLATE)
+    assert sheet == (4000.0, 1830.0)
+    assert wp.is_oversize_sheet(why)
+    assert "2 a sheet" in why and "every stocked sheet" in why and "not one SDI holds" in why
+
+
+def test_a_flat_beyond_every_listed_sheet_is_still_said_not_guessed():
+    sheet, why = wp.steel_sheet_for_row(4500, 727.4, "MILD_STEEL", TEMPLATE)
     assert sheet is None
     assert "every stocked sheet" in why and "3000 x 1500" in why
+    assert not wp.is_oversize_sheet(why)
 
 
 def test_the_fit_is_the_one_nesting_rule():

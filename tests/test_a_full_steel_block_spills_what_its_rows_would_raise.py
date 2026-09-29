@@ -42,21 +42,38 @@ def _steel(pn, length, width, gauge=2.0, qty=1, cost=45.92):
                                   "blank_length_mm": length, "blank_width_mm": width}}
 
 
-def test_a_spilled_flat_no_stocked_sheet_holds_raises_what_its_row_would():
+def test_a_spilled_flat_no_listed_sheet_holds_raises_what_its_row_would():
     ws, flags = _sheet(), []
-    cover = _steel("12645-01-32M", 3020.02, 727.39)
-    line = wp.spill_from_full_block(ws, "Sheet Steel", "steel", _S, cover, flags)
-    # the decision the block row raises (D-314), word for word, on the part the tally reads
-    row_part, row_flags = _steel("12645-01-32M", 3020.02, 727.39), []
-    wp.raise_unnestable_steel(row_part, 3020.02, 727.39,
-                              wp.steel_sheet_for_row(3020.02, 727.39, "MILD_STEEL",
+    giant = _steel("X-01M", 4500.0, 727.39)
+    line = wp.spill_from_full_block(ws, "Sheet Steel", "steel", _S, giant, flags)
+    row_part, row_flags = _steel("X-01M", 4500.0, 727.39), []
+    wp.raise_unnestable_steel(row_part, 4500.0, 727.39,
+                              wp.steel_sheet_for_row(4500.0, 727.39, "MILD_STEEL",
                                                      (2500, 1250))[1], row_flags)
-    assert cover["route_gap"] == row_part["route_gap"]
-    assert "every stocked sheet" in cover["route_gap"]["issue"]
-    # and the money the row would charge: none, visibly, never a sheet that cannot hold it
+    assert giant["route_gap"] == row_part["route_gap"]
+    assert "every stocked sheet" in giant["route_gap"]["issue"]
     assert wp._bom_line_price(line) is None
     assert "NOT PRICED" in line["description"]
-    assert cover["block_overflow"]["basis"] == "no_stocked_sheet"
+    assert giant["block_overflow"]["basis"] == "no_stocked_sheet"
+
+
+def test_a_spilled_oversize_flat_is_priced_provisionally_and_its_route_asked():
+    """12645-01-32M, 3020.02 x 727.39 (D-332): priced — the engine now costs it on the
+    listed 4000 x 1830 sheet — counted as provisional, and the make-or-buy route raised the
+    same way the block row raises it."""
+    ws, flags = _sheet(), []
+    cover = _steel("12645-01-32M", 3020.02, 727.39, cost=53.79)
+    line = wp.spill_from_full_block(ws, "Sheet Steel", "steel", _S, cover, flags)
+    row_part, row_flags = _steel("12645-01-32M", 3020.02, 727.39), []
+    wp.raise_oversize_route(row_part, 3020.02, 727.39,
+                            wp.steel_sheet_for_row(3020.02, 727.39, "MILD_STEEL",
+                                                   (2500, 1250))[1], row_flags)
+    assert cover["route_gap"] == row_part["route_gap"]
+    assert "4000 x 1830" in cover["route_gap"]["issue"]
+    assert "not both" in cover["route_gap"]["action"]
+    assert line["unit_cost_gbp"] == 53.79
+    assert "PROVISIONAL: oversize 4000 x 1830" in line["description"]
+    assert cover["block_overflow"]["basis"] == "net_part_provisional"
 
 
 def test_a_spilled_flat_that_fits_keeps_its_figure_and_is_marked_provisional():
