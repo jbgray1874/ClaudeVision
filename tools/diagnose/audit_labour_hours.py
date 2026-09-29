@@ -26,16 +26,30 @@ def audit(path):
     for r in range(1, 201):
         m = re.match(r"^=\s*'?Estimate'?!\$?G\$?(\d+)", str(L.cell(r, 1).value or ""))
         if m: read.add(int(m.group(1)))
-    hours = {r: Ev.cell(r, 10).value for r in range(fr, lr + 1)}
-    hours = {r: float(v) for r, v in hours.items() if isinstance(v, (int, float)) and v}
+    gap = [r for r in range(fr, lr + 1) if r not in read]      # the sheet's own references
+    ops = [r for r in range(fr, lr + 1) if E.cell(r, 3).value not in (None, "")]
+    raw = {r: Ev.cell(r, 10).value for r in ops}
+    hours = {r: float(v) for r, v in raw.items() if isinstance(v, (int, float)) and v}
+    calculated = any(isinstance(v, (int, float)) for v in raw.values())
     missed = {r: h for r, h in hours.items() if r not in read}
-    dept_label = next((r for r in range(tot, E.max_row + 1) if str(E.cell(r, 3).value or "").strip().lower() == "total hours"), None)
+    dept_label = next((r for r in range(tot, E.max_row + 1)
+                       if str(E.cell(r, 3).value or "").strip().lower() == "total hours"), None)
     shown = Ev.cell(dept_label, 4).value if dept_label else None
-    tag = "UNDERSTATED" if missed else "ok"
-    return (f"{tag:11} {os.path.basename(path)}: labour rows {fr}..{lr}, {len(hours)} with hours = "
-            f"{sum(hours.values()):.2f} h; dept total shown {shown if shown is None else round(float(shown),2)}; "
-            f"rows not read: {len(missed)} ({sum(missed.values()):.2f} h)"
-            + (f" first {min(missed)}" if missed else ""))
+    sheet = (f"Labour sheet misses rows {gap[0]}..{gap[-1]} ({len(gap)})" if gap
+             else "Labour sheet covers the block")
+    name = os.path.basename(path)
+    if missed:
+        return (f"UNDERSTATED {name}: {sheet}; {len(hours)} rows = {sum(hours.values()):.2f} h, "
+                f"dept total shown {round(float(shown or 0), 2)}, missed {len(missed)} rows "
+                f"({sum(missed.values()):.2f} h)")
+    if ops and not calculated:
+        return (f"NOT CALC    {name}: {sheet}; {len(ops)} labour rows but no calculated values "
+                f"(never opened and saved in Excel) - cannot say; affected only if rows beyond "
+                f"the sheet's reach are used: {[r for r in ops if r not in read][:3] or 'none are'}")
+    tag = "GAP (unused)" if gap else "ok"
+    return (f"{tag:11} {name}: {sheet}; {len(ops)} labour rows, "
+            f"{sum(hours.values()):.2f} h, dept total shown {shown}")
+
 
 paths = []
 for a in sys.argv[1:]:
