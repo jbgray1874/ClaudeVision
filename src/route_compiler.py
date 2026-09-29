@@ -1308,6 +1308,48 @@ def _pdf_primary_stated_roots(
             if n >= 3 and code not in _child_codes}
 
 
+def _settle_alias_loops(aliases: Dict[str, str], records: Mapping[str, Any]) -> List[List[str]]:
+    """Resolve every alias to the end of its chain, in place; settle each loop on one name.
+
+    A loop's members are one part named several ways. Its name is the one a person wrote
+    before one this engine synthesised ("BI-..."), then one holding a part record, then the
+    alphabetical first, so the choice never depends on dict order. Returns the loops found."""
+    def _rank(code: str):
+        return (str(code).upper().startswith("BI-"), code not in (records or {}), str(code))
+
+    loops: List[List[str]] = []
+    final: Dict[str, str] = {}
+    for start in list(aliases):
+        if start in final:
+            continue
+        path: List[str] = []
+        seen: Dict[str, int] = {}
+        node = start
+        while node in aliases and node not in final and node not in seen:
+            seen[node] = len(path)
+            path.append(node)
+            node = aliases[node]
+        if node in final:
+            end = final[node]
+        elif node in seen:                               # a loop: path[seen[node]:]
+            cycle = path[seen[node]:]
+            loops.append(sorted(cycle))
+            end = min(cycle, key=_rank)
+        else:
+            end = node                                   # a name nothing re-points
+        for member in path:
+            final[member] = end
+    for key, end in final.items():
+        if key == end:
+            aliases.pop(key, None)                       # a name is not an alias of itself
+        else:
+            aliases[key] = end
+    for cycle in loops:
+        print(f"   [graph] {' / '.join(cycle)} named each other — one part, held as "
+              f"{min(cycle, key=_rank)}", flush=True)
+    return loops
+
+
 def build_part_graph(
     parts: Sequence[Mapping[str, Any]],
     llm_extract: Optional[Mapping[str, Any]] = None,
@@ -1464,6 +1506,17 @@ def build_part_graph(
                 if _m in raw_original and (not _rec_desc or _one_item(
                         _descs_by_code.get(_rc, [])[:1] + [_rec_desc])):
                     aliases.setdefault(_rc, _m)
+    # ONE NAME PER PART, HOWEVER MANY JOINS POINTED AT IT (D-334). Every rule above writes one
+    # hop, and everything below reads one hop (aliases.get(x, x)). Two rules that joined the
+    # same pair in opposite directions made a loop: 12645's parts list prints "HALF INCH
+    # WHITWORTH NUT / M8 FULL NUT BZP GRADE 8" x120, the vague-code join pointed that code at
+    # the minted BI-NUT and another join pointed BI-NUT back at the printed code. Each name
+    # then resolved to the other, the graph held two nodes each listing the other as its
+    # alias, and the sheet charged 120 nuts twice (rows 15 and 18 of the 14:03 book). Chains
+    # are followed to their end here, once, and a loop settles on one name: a code printed on
+    # the drawing before one this engine invented, then the one with a record.
+    _settle_alias_loops(aliases, raw_original)
+
     # THE SAME COLLAPSE, ON THE OTHER SIDE. The alias map was applied to the part records
     # and not to the extract's own BOM rows, so a duplicate spelling that appears ONLY in
     # the extract survived as a node of its own — a leaf with no parent and no geometry,

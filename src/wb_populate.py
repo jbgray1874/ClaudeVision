@@ -2314,8 +2314,18 @@ def canonicalise_part_estimates_for_workbook(
         str(alias).strip().upper(): identity
         for identity, node in nodes.items()
         for alias in ((node.get("evidence") or {}).get("raw_aliases") or [])
-        if str(alias).strip()
+        if str(alias).strip() and str(alias).strip().upper() != identity
     }
+    # TWO NODES THAT NAME EACH OTHER ARE ONE PART (D-334). 12645's 14:03 book: BI-NUT and
+    # HALF INCH WHITWORTH NUT each listed the other as its alias, so each record was renamed
+    # to the other's identity and the sheet still carried 120 nuts twice. The graph now
+    # settles such a loop itself; this settles it again on the exact list the rows are
+    # written from, for a graph built before that, by the same rule.
+    try:
+        from route_compiler import _settle_alias_loops
+        _settle_alias_loops(aliases, nodes)
+    except Exception as _loop_exc:                                   # noqa: BLE001
+        print(f"   [wb_populate] alias loops not settled ({_loop_exc})", flush=True)
     # A SYNTHESISED CODE YIELDS TO A CANONICAL ONE FOR THE SAME ITEM.
     #
     # 12120 shipped the same PEM stud twice: STD PART qty 2 from the GA BOM, and BI-PEMSTUD
@@ -2538,6 +2548,10 @@ def canonicalise_part_estimates_for_workbook(
     _norm_squash = {re.sub(r"[^A-Z0-9]", "", str(k).upper()): k for k in normalised}
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
+            continue
+        if aliases.get(identity, identity) != identity:
+            # ANOTHER NAME FOR A PART ALREADY ON THE SHEET (D-334) — BI-NUT, once its loop
+            # with HALF INCH WHITWORTH NUT is settled, is not a purchase to invent.
             continue
         _id_squash = re.sub(r"[^A-Z0-9]", "", str(identity).upper())
         if _id_squash and _id_squash in _norm_squash:
