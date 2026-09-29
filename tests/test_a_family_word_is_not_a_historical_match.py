@@ -99,3 +99,20 @@ def test_a_historical_match_is_labelled_as_one_on_the_sheet():
     src = inspect.getsource(wp._price_origin)
     assert "stamp_source_name(best)" in src
     assert wp._ORIGIN_LABELS["historical_quote_material_line"] == "Historical quote match - verify"
+
+
+def test_a_squashed_code_is_read_for_what_it_adds_not_as_one_word():
+    """The 29 Sep run: the shutter's code arrived as ROLLERSHUTTER, the rule required that
+    token of the history line, and 'ALLUMINIUM ROLLER SHUTTER DOOR' was refused. The code adds
+    nothing beyond "Roller Shutter Door"; the hinge's squashed code still adds PIANO."""
+    tok = PricingService._tokenize
+    assert ps.code_column_words({"part_number": "ROLLERSHUTTER",
+                                 "description": "Roller Shutter Door"}, tok) == set()
+    assert ps.code_column_words({"part_number": "PIANOHINGE", "description": "HINGE"}, tok) == {"PIANO"}
+    svc, _ = _history(("ALLUMINIUM ROLLER SHUTTER DOOR", 306.16))
+    got = svc._get_historical_rag({"part_number": "ROLLERSHUTTER",
+                                   "description": "Roller Shutter Door"})
+    assert got and got["unit_price_gbp"] == 306.16
+    svc, _ = _history(("HINGE", 0.26))
+    assert svc._get_historical_rag({"part_number": "PIANOHINGE", "description": "HINGE",
+                                    "normalized_material": "MILD STEEL"}) is None

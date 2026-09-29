@@ -316,7 +316,16 @@ def code_column_words(part: Dict[str, Any], tokenize) -> set:
             return set()
     except ImportError:                                               # pragma: no cover
         return set()
-    return set(tokenize(code)) - set(tokenize(str(part.get("description") or "")))
+    # WHAT THE CODE ADDS, READ WITHOUT ITS SPACES. The record often carries the code squashed
+    # ("ROLLERSHUTTER", "PIANOHINGE"), so its words cannot be split back out. Take the code's
+    # letters, remove every description word from them, and what is left is the qualifier:
+    # "PIANO" for the hinge, nothing for "Roller Shutter / Roller Shutter Door". The first
+    # version compared whole tokens, required "ROLLERSHUTTER" of the history line, and refused
+    # 'ALLUMINIUM ROLLER SHUTTER DOOR' for 12645's shutters (D-323).
+    rest = re.sub(r"[^A-Z]", "", code.upper())
+    for w in sorted(tokenize(str(part.get("description") or "")), key=len, reverse=True):
+        rest = rest.replace(re.sub(r"[^A-Z]", "", str(w).upper()), " ")
+    return {w for w in rest.split() if len(w) >= 3}
 
 
 def choose_udef_description_row(desc: Any, rows: List[Any]):
@@ -1149,7 +1158,8 @@ class PricingService:
         for row in rows:
             score = self._token_overlap_score(query_tokens, str(row[0] or ""))
             if score >= _MIN_OVERLAP and row[1] is not None and float(row[1] or 0) > 0:
-                _missing = _named - self._tokenize(str(row[0] or ""))
+                _row_letters = re.sub(r"[^A-Z]", "", str(row[0] or "").upper())
+                _missing = {w for w in _named if w not in _row_letters}
                 if _missing:
                     refused.append((score, row, _missing))
                     continue
