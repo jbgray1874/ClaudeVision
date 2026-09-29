@@ -1264,8 +1264,25 @@ def _bom_stated_edges(
             rejected.append(str(_stated))
         if not child or not parent or child == parent:
             continue
-        edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0))
-    return edges
+        edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0,
+                      str(row.get("item_number") or "").strip()))
+    # ONE CODE AT SEVERAL ITEM NUMBERS OF ONE TABLE IS SEVERAL LINES (D-335). The caller
+    # writes children[parent][child] = qty, so a second row overwrote the first: 12173's
+    # trough lists its handed SIDE PANEL at items 1 and 3 and would have had one. Different
+    # item numbers add; the same item number, or none, is the same line and does not.
+    combined: Dict[tuple, List[Any]] = {}
+    for child, parent, qty, item in edges:
+        held = combined.get((child, parent))
+        if held is None:
+            combined[(child, parent)] = [qty, {item} if item else set()]
+        elif item and held[1] and item not in held[1]:
+            held[0] += qty
+            held[1].add(item)
+        else:
+            held[0] = qty
+            if item:
+                held[1].add(item)
+    return [(c, p, q) for (c, p), (q, _items) in combined.items()]
 
 
 def _pdf_primary_stated_roots(

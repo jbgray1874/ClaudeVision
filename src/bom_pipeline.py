@@ -187,6 +187,11 @@ def reconciled_bom_rows_for_job(
                 "bom_parent_known": _parent_known,
                 # Which sheet the row was read off, and any others that restated it.
                 "bom_sheet": r.get("sheet"),
+                # The ITEM number the table printed. Two rows of one parent's table with the
+                # same code and different item numbers are two lines (12173-07-2-GA lists its
+                # handed SIDE PANEL as items 1 and 3, qty 1 each) and add up (D-335).
+                "item_number": (str(r.get("item_number")).strip()
+                                if r.get("item_number") not in (None, "") else None),
                 "bom_also_on_sheets": list(r.get("also_on_sheets") or []) or None,
             }
             # --- THE ROW'S OWN PRINTED SPECIFICATION SURVIVES THE FLATTEN. The readers

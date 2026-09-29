@@ -248,6 +248,40 @@ def _install_context(bom_rows: List[Dict[str, Any]],
         f"by {_n} to give one quoted unit")
 
 
+def combine_repeated_item_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One parent's rows, with a code printed at several ITEM numbers added up (D-335).
+
+    12173-07-2-GA's table lists 12173-07-2-02M SIDE PANEL at item 1 and again at item 3, qty
+    1 each: a handed pair made under one code. Keyed by code, the second row overwrote the
+    first and the trough had one side panel. Within one parent's bill an item number is
+    unique, and the readers are reconciled per (parent, item) before this, so different item
+    numbers are different lines and their quantities add; the same item number is the same
+    line, read again, and is not added. A row with no item number is left as it is."""
+    out: List[Dict[str, Any]] = []
+    by_code: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        code = _norm(r.get("part_number"))
+        item = str(r.get("item_number") or "").strip()
+        if not code or not item:
+            out.append(r)
+            continue
+        held = by_code.get(code)
+        if held is None:
+            held = dict(r)
+            held["_items"] = [item]
+            by_code[code] = held
+            out.append(held)
+            continue
+        if item in held["_items"]:
+            continue                                   # the same line, seen again
+        held["_items"].append(item)
+        held["quantity"] = _qty(held) + _qty(r)  # precedence: direct-write ok — a table row's own count, two item lines of one parent added, not a part record
+        held["combined_items"] = list(held["_items"])
+    for r in out:
+        r.pop("_items", None)
+    return out
+
+
 def resolve_effective_quantities(
     bom_rows: List[Dict[str, Any]],
     main_ga: Optional[str] = None,
@@ -258,6 +292,8 @@ def resolve_effective_quantities(
         src = str(r.get("source_pdf") or "")
         if src:                      # rows without a source drawing don't participate in the tree
             groups[src].append(r)
+    for src in list(groups):
+        groups[src] = combine_repeated_item_rows(groups[src])
 
     # the main GA is the drawing that references the most distinct families
     # (it lists every sub-assembly); override is honoured when given.
