@@ -475,9 +475,17 @@ def bom_sheet(summary: Mapping[str, Any]) -> List[Dict[str, Any]]:
         _article_id = {}
     _aliases: Dict[str, str] = {}
     for _payload in route_payloads(summary):
-        for _k, _v in ((_payload.get("aliases") or {}) if isinstance(_payload, Mapping)
-                       else {}).items():
-            _aliases.setdefault(_text(_k).upper(), _text(_v).upper())
+        # THE PAYLOAD HAS NO "aliases" KEY; each node carries its own (evidence.raw_aliases),
+        # which is where wb_populate reads them. Reading the absent key left every row printed
+        # under an aliased spelling with a blank qty effective (12645: 12645-01GAV2, and the
+        # nut row the graph holds as BI-NUT).
+        for _node in (_payload.get("nodes") or []) if isinstance(_payload, Mapping) else []:
+            if not isinstance(_node, Mapping):
+                continue
+            _nid = _text(_node.get("part_number")).upper()
+            for _a in ((_node.get("evidence") or {}).get("raw_aliases") or []):
+                if _nid and _text(_a):
+                    _aliases.setdefault(_text(_a).upper(), _nid)
     for _row_index, row in enumerate(_all_rows):
         if not isinstance(row, Mapping):
             continue

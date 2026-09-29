@@ -263,6 +263,10 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             # child for a synthesised BI- code, so the record must carry the parent.
             "bom_parent": str(_r.get("bom_parent") or _r.get("source_pdf") or "") or None,
         })
+        # THE COUNT IS THE TABLE'S, AND THE RECORD SAYS SO — as the two matches above do.
+        # Written bare, it had no source, so the over-50 guard (D-315 exempts a count read off
+        # a parts list) reset 12645's 120 nuts to 1.
+        _apply_field(_parts_recon[-1], "quantity", _qty, "bom_tree")
         _note_parent(_parts_recon[-1], _r, _qty)
         _added += 1
         print(f"   [recon-row] ADD {_cc} '{_desc}' qty {_qty}", flush=True)

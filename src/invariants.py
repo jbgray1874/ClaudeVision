@@ -3846,6 +3846,48 @@ def check_the_sheet_carries_only_the_graphs_identities(summary: Any) -> List[Dic
     return out
 
 
+def check_a_set_aside_root_is_not_the_products_drawing(summary: Any) -> List[Dict[str, Any]]:
+    """A line set aside as outside the product must not hang from another spelling of a drawing
+    the product reaches.
+
+    12645, 19:17 book: the product reached the body as "12645-01GA V2" (the model's name) and
+    set aside "12645-01GA" (its title block's) with the two lines only that spelling owned —
+    120 M8 nuts and 16 tek screws. The reached-item check (D-315) walks the reached graph, and
+    scoping had removed both, so nothing blocked and the report said only "the 2 line(s) only
+    it reaches". One drawing under two names is an identity fault, not a second product."""
+    if not isinstance(summary, dict):
+        return []
+    _es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    payload = (_es or {}).get("canonical_route_shadow") or summary.get("canonical_route_shadow") or {}
+    if not isinstance(payload, dict) or not payload.get("product_root"):
+        return []
+    try:
+        from route_compiler import _code_spellings, clean_part_number
+    except Exception:                                                # noqa: BLE001
+        return []
+    held: Dict[str, str] = {}
+    for n in payload.get("nodes") or []:
+        pn = clean_part_number((n or {}).get("part_number") if isinstance(n, dict) else "")
+        for s in _code_spellings(pn):
+            held.setdefault(s, pn)
+    out: List[Dict[str, Any]] = []
+    for issue in payload.get("issues") or []:
+        if not isinstance(issue, dict) or issue.get("code") != "outside_the_product":
+            continue
+        root = clean_part_number(issue.get("root"))
+        same = next((held[s] for s in _code_spellings(root) if s in held), "")
+        if not same:
+            continue
+        lost = [str(i) for i in (issue.get("identities") or []) if clean_part_number(i) != root]
+        out.append(_violation("set_aside_root_is_the_products_drawing", BLOCKING,
+                      f"{root} was set aside as outside the product, but it is a spelling of "
+                      f"{same}, which the product reaches. Lines lost with it: "
+                      f"{', '.join(lost) or '(none)'} — one drawing under two names, not a "
+                      f"second product; join the identities, do not re-add the lines by hand.",
+                              identities=lost, root=root, reached_as=same))
+    return out
+
+
 def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
     """Every BOM item the product reaches is charged, explicitly free-issued, or an open
     question a person can see. An item that is none of the three has fallen off the bill
@@ -4105,6 +4147,7 @@ CHECKS = (
     check_the_identity_gate_actually_ran,
     check_the_sheet_carries_only_the_graphs_identities,
     check_every_reached_bom_item_is_accounted_for,
+    check_a_set_aside_root_is_not_the_products_drawing,
     check_two_roots_do_not_price_the_same_members,
     check_a_short_run_is_charged_for_the_sheet_it_uses,
     check_the_price_source_was_reached,

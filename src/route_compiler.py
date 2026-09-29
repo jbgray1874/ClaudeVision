@@ -1110,11 +1110,19 @@ def _code_spellings(value: Any) -> List[str]:
     # aside. The code without a trailing version mark (" V2", "_V3", " REV A") is offered LAST,
     # and like the others it only counts where it names a drawing or part we already hold. A
     # hyphenated "-V2" is left alone: that can be a real code segment.
-    if primary:
-        bare = _VERSION_MARK_RE.sub("", primary).strip()
-        if bare and bare != primary and bare not in out:
-            out.append(bare)
+    bare = _without_version_mark(value)
+    if bare and bare not in out:
+        out.append(bare)
     return out
+
+
+def _without_version_mark(value: Any) -> str:
+    """The code with its trailing version mark (" V2", "_V3", " REV A") removed, or "" when it
+    carries none. The one reading of that mark in this module (D-310): the edge resolver
+    offers it as a last spelling, and the identity join below uses the same answer."""
+    primary = clean_part_number(value)
+    bare = _VERSION_MARK_RE.sub("", primary).strip() if primary else ""
+    return bare if bare and bare != primary else ""
 
 
 _VERSION_MARK_RE = re.compile(r"(?:[ _]+(?:V\d{1,2}|REV\.? ?[A-Z0-9]{1,2}))+$")
@@ -1373,6 +1381,41 @@ def build_part_graph(
             _kind_records, _refused_cross_kind,
             listed=_bom_listed | _hierarchy_codes).items():
         aliases.setdefault(_src, _dst)
+    # ONE DRAWING, ONE NODE, WHATEVER VERSION MARK THE MODEL GAVE IT. 12645: the model names
+    # the body "12645-01GA V2"; its sheet, its title block and this job's drawing list number
+    # it "12645-01GA". _code_spellings already reads the first as a spelling of the second,
+    # but only the edge resolver asked it, so the job held two body nodes: the model's, which
+    # the product reached, and the title block's, which owned the parts-list rows the model
+    # does not hold (120 M8 nuts, 16 tek screws). That node reached nothing, was set aside as
+    # "outside the product", and the fixings left the bill. Joined only where the job OPENED
+    # the bare drawing, and only where it holds ONE versioned spelling of it: two versions of
+    # one sheet are two things until a person says otherwise.
+    _opened = {s for _d in (known_assemblies or []) for s in _code_spellings(_d)}
+    _opened.discard("")
+    _versions_of: Dict[str, Set[str]] = {}
+    for _ident in set(raw_original) | set(extracted) | _hierarchy_codes | _bom_listed:
+        _canon = aliases.get(_ident, _ident)
+        _bare = _without_version_mark(_canon)
+        if _bare and _bare in _opened:
+            _versions_of.setdefault(_bare, set()).add(_canon)
+    _version_issues: List[Dict[str, Any]] = []
+    for _bare, _vs in sorted(_versions_of.items()):
+        if len(_vs) != 1:
+            _version_issues.append({
+                "code": "two_versions_of_one_drawing",
+                "identity": _bare, "versions": sorted(_vs),
+                "detail": (f"{_bare} is held as {', '.join(sorted(_vs))}: more than one "
+                           f"version of one drawing, so none is joined to it — confirm "
+                           f"which version ships")})
+            continue
+        _v = next(iter(_vs))
+        _target = aliases.get(_bare, _bare)
+        if _target == _v:
+            continue
+        for _k in [k for k, t in aliases.items() if t == _v] + [_v]:
+            aliases[_k] = _target
+        print(f"   [graph] {_v} is {_target} with its version mark — one drawing, "
+              f"one node", flush=True)
     # A VAGUE CODE IS THE RECORD THE SHARED RULE MADE OF IT. The drawing prints "FIXING" for
     # an uncoded stud; file_scan mints the record from the row's words through
     # part_identity.synthesise_bought_in_code ("M4x12mm THREADED PEM STUD" -> BI-PEMSTUD),
@@ -2632,6 +2675,29 @@ def build_part_graph(
                 return False
         return True
 
+    # A COLUMN HEADER IS NOT A DESCRIPTION. 12645's body title block reads "QTY." where a
+    # description would sit, and once the model's "12645-01GA V2" joined the sheet's
+    # "12645-01GA" (one drawing, one node) the body was described as "QTY.". The words a
+    # parts list printed against the identity, or any spelling of it, describe it instead.
+    # The header vocabulary is the parts-list reader's own.
+    try:
+        from _bom_words_reader import HEADER_TOKENS as _HEADER_WORDS
+    except Exception:                                                # noqa: BLE001
+        _HEADER_WORDS = {"ITEM", "DWG", "NO.", "NO", "DESCRIPTION", "QTY", "QTY."}
+    _row_words: Dict[str, str] = {}
+    for _r in bom_rows or []:
+        if not isinstance(_r, Mapping) or not str(_r.get("description") or "").strip():
+            continue
+        _c = clean_part_number(_r.get("part_number"))
+        if _c:
+            _row_words.setdefault(aliases.get(_c, _c), str(_r["description"]).strip())
+
+    def _described(identity: str, record: Mapping[str, Any]) -> str:
+        own = str(record.get("description") or "").strip()
+        if own and own.upper() not in _HEADER_WORDS:
+            return own
+        return _row_words.get(identity, "" if own.upper() in _HEADER_WORDS else own)
+
     nodes: List[PartNode] = []
     for identity in sorted(identities):
         record = records.get(identity) or {}
@@ -2664,7 +2730,7 @@ def build_part_graph(
         kind = "assembly" if is_assembly else ("bought_in" if is_bought_in else "leaf")
         nodes.append(PartNode(
             part_number=identity,
-            description=str(record.get("description") or ""),
+            description=_described(identity, record),
             kind=kind,
             qty_per_unit=quantities.get(identity, 1.0),
             qty_own=qty_own.get(identity),
@@ -2700,6 +2766,7 @@ def build_part_graph(
         ))
 
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
+                    + list(_version_issues)
                     + list(_product_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
@@ -3154,8 +3221,9 @@ def product_scope_sentences(summary: Optional[Mapping[str, Any]]) -> List[str]:
     if sc["hint"]:
         out.append(sc["hint"])
     for r in sc["other_roots"]:
-        out.append(f"Set aside, not priced: {r['root']} and the {len(r['identities']) - 1} "
-                   f"line(s) only it reaches." if len(r["identities"]) > 1 else
+        _only = [i for i in r["identities"] if i != r["root"]]
+        out.append(f"Set aside, not priced: {r['root']} and the {len(_only)} "
+                   f"line(s) only it reaches: {', '.join(_only)}." if _only else
                    f"Set aside, not priced: {r['root']}.")
     if sc["unlinked"]:
         out.append(f"Not linked to {sc['product'] or 'the product'}, so not priced: "
