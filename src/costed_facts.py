@@ -2071,6 +2071,18 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "issue": str(_gap.get("issue")), "assumption": str(_gap.get("assumption") or ""),
                 "action": str(_gap.get("action") or ""), "owner": "estimator",
                 "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
+        _ov = part.get("block_overflow")
+        if isinstance(_ov, Mapping) and _ov.get("basis") == "net_part_provisional":
+            _line = _by_pn.get(str(part.get("part_number") or "").upper())
+            decisions.append({
+                "part": str(part.get("part_number") or ""), "kind": "provisional_price",
+                "issue": (f"{part.get('part_number')} did not fit the {_ov.get('block')} block "
+                          f"and is on the Bill of Materials at the engine's own figure"),
+                "assumption": "the engine's sheet and yield, not the block's nest",
+                "action": ("nest it by hand and replace the line's price, or widen the block "
+                           "in the template"),
+                "owner": "estimator",
+                "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
         _tc = thickness_conflict(part, boilerplate_mm=_boiler)
         if _tc:
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
@@ -2287,18 +2299,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
     _qty_checks = [d for d in decisions if d["kind"] == "quantity_check"]
     if _qty_checks:
         reasons.append(f"{len(_qty_checks)} quantity check(s) open")
+    _provisional = [d for d in decisions if d["kind"] == "provisional_price"]
+    if _provisional:
+        reasons.append(f"{len(_provisional)} line(s) spilled from a full block at a "
+                       f"provisional price")
     blocking_n = (sum(1 for v in (inv.get("violations") or [])
                       if isinstance(v, dict) and v.get("severity") == "blocking")
                   if inv is not None else 0)
-    status = ("provisional" if (unpriced or market or not calculated or blocking_n or inv is None)
+    status = ("provisional" if (unpriced or market or _provisional or not calculated
+                                or blocking_n or inv is None)
               else ("reviewable" if (house or manufacturing or _qty_checks) else "firm"))
     # DRAFT is narrower than PROVISIONAL. A quote is a draft while a person still owes it
     # something — a price, a replacement for a market guess, a manufacturing decision, or a
     # blocking check to clear. "The checks have not run yet" and "the sheet was not read
     # back" keep the estimate provisional but say nothing about the quote's scope; the
     # LLM-only path already marks those runs in its own words.
-    draft = bool(unpriced or market or blocking_n or manufacturing)
-    outstanding = len(unpriced) + len(market) + len(manufacturing) + blocking_n
+    draft = bool(unpriced or market or blocking_n or manufacturing or _provisional)
+    outstanding = (len(unpriced) + len(market) + len(manufacturing) + blocking_n
+                   + len(_provisional))
 
     return {
         "schema": COSTED_JOB_SCHEMA,
@@ -2357,13 +2375,14 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     prices, market = _n("missing_price"), _n("market_figure")
     mfg, house = _n("manufacturing_decision"), _n("indicative_rate")
     qty = _n("quantity_check")
+    prov = _n("provisional_price")
     # A kind none of the four buckets recognises must still be SEEN: on the 12:28 run of
     # 7332-01 an "advisory" entry sat in the list, the headline said "7 to settle" and
     # the phrase added to 6, because total counted every row and the phrase counted four
     # kinds. The headline and the phrase are one tally or they are two lies — so every
     # row lands in a named bucket, and an unclassified kind is counted as blocking, not
     # quietly dropped: an open item nobody classified is not thereby advisory.
-    other = len(ds) - (prices + market + mfg + house + qty)
+    other = len(ds) - (prices + market + mfg + house + qty + prov)
     bits: List[str] = []
     if prices:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
@@ -2373,6 +2392,8 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{mfg} manufacturing decision{'s' if mfg != 1 else ''}")
     if qty:
         bits.append(f"{qty} quantity check{'s' if qty != 1 else ''}")
+    if prov:
+        bits.append(f"{prov} provisional line{'s' if prov != 1 else ''} to nest by hand")
     if house:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
     if other:
@@ -2395,7 +2416,8 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     return {
         "prices_missing": prices, "market_figures": market,
         "manufacturing": mfg, "indicative": house, "other": other,
-        "blocking": prices + market + mfg + other, "advisory": house,
+        "provisional": prov,
+        "blocking": prices + market + mfg + prov + other, "advisory": house,
         "total": len(ds),
         "phrase": " + ".join(bits) if bits else "nothing outstanding",
         # The blocking items by name, worst first — the order `decisions_required` is

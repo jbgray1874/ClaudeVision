@@ -303,9 +303,14 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
                 return _held[_w]
             _ws = set(_w)
             if _ws:
+                from bought_in_policy import is_bought_in as _bought
                 for _hw, _hp in _held.items():
                     _hs = set(_hw)
-                    if _hs and (_ws <= _hs or _hs <= _ws):
+                    # ONE ARTICLE INSIDE ANOTHER ONLY BETWEEN PURCHASES. 12645-03GA's one word
+                    # "DOOR" sits inside "Roller Shutter Door", so the shutter row was filed as
+                    # an occurrence of the door ASSEMBLY and never minted: no line, no price,
+                    # not in "to settle" (D-318). An exact article match is unchanged.
+                    if _hs and (_ws <= _hs or _hs <= _ws) and _bought(dict(_hp)):
                         return _hp
             return None
 

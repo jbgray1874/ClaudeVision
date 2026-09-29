@@ -210,6 +210,29 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
             "others": others, "message": msg}
 
 
+def product_sheets(product: Any, file_names: Sequence[Any]) -> List[Dict[str, Any]]:
+    """The product's own drawing files, as drawing_of_file reads each one.
+
+    A JOB'S TOP SHEET IS ITS NUMBER WITH ITS TITLE. 12645's shelter is filed "12645 - DRS
+    External Shelter V2_REVA.PDF", which reads as number "12645" and title "DRS External
+    Shelter V2", while the graph's product root is the whole "12645-DRS EXTERNAL SHELTER V2"
+    (the title block's own number). Compared on the number alone, the product's own sheet
+    never named the product, and the 19:17 book's Description box fell through to a sibling:
+    "DOOR FRAME" (D-319). So a top sheet is compared on its whole identity as well, by the
+    same resolver."""
+    out: List[Dict[str, Any]] = []
+    for name in file_names or []:
+        d = drawing_of_file(name)
+        if not d:
+            continue
+        ids = [d["number"]]
+        if d.get("top_sheet") and d.get("title"):
+            ids.append(f"{d['number']} {d['title']}")
+        if any(names_the_product(product, i) for i in ids):
+            out.append(d)
+    return out
+
+
 def title_from_files(product: Any, file_names: Sequence[Any]) -> str:
     """The product's title as its own drawing file names it ("11650-06-GA COFFRET HOSPITAL
     KIT_REVB.PDF" -> "COFFRET HOSPITAL KIT"), or "" when no file names it.
@@ -218,9 +241,5 @@ def title_from_files(product: Any, file_names: Sequence[Any]) -> str:
     block, read by the model off another page of the same pack — and the report's scope line
     read "assembly (from the SolidWorks model's own tree)", an engine note. The file name is
     the drawing office's own label for the product's sheet, and it does not move."""
-    best = ""
-    for name in file_names or []:
-        d = drawing_of_file(name)
-        if d and names_the_product(product, d["number"]) and len(d.get("title") or "") > len(best):
-            best = d["title"]
-    return best
+    return max((d.get("title") or "" for d in product_sheets(product, file_names)),
+               key=len, default="")

@@ -364,13 +364,14 @@ def test_the_overflow_basis_is_declared_provisional_rather_than_claimed_equivale
     The honest fix is a wider block in the template — a change to the workbook, not to this
     writer — and until then this is a declared gap rather than a silent one.
     """
+    # D-321 moved the spill into one helper, which also asks a steel part the fit question
+    # and counts every provisional line in the tally. The declaration stands, shorter so it
+    # fits the 120-character cell ("nest it by hand" never reached the sheet before).
     src = (ROOT / "src" / "wb_populate.py").read_text(encoding="utf-8")
-    assert "PROVISIONAL: this line carries the engine's" in src
-    assert "UNDER-stated" in src
-    assert "cannot be reproduced out here" in src
-    assert '_sbasis = "net_part_provisional"' in src
+    assert "block full — PROVISIONAL: engine figure, not the block's nest" in src
+    assert 'basis = "net_part_provisional"' in src
     # and the run carries the same warning, not only the cell
-    assert '_flag(f"{_blk_name} overflow' in src
+    assert '_flag(f"{block_name} overflow' in src
     # the withdrawn claim must not survive anywhere in the writer
     assert "on the same nested basis" not in src, \
         "the spill must not claim the block's basis it cannot reproduce"

@@ -1385,6 +1385,78 @@ def steel_sheet_for_row(length: Any, width: Any, material: Any,
                   + (f" (largest {largest[0]:g} x {largest[1]:g})" if largest else ""))
 
 
+def raise_unnestable_steel(pe: Dict[str, Any], length: Any, width: Any, why: str,
+                           flags: List[str]) -> None:
+    """A Sheet Steel blank no stocked sheet can hold, raised ONE way wherever the part is
+    written: the block row (D-314) and a line the full block spilled to the BOM (D-318)."""
+    pn = str(pe.get("part_number") or "")
+    _flag(f"steel {pn}: {length:g} x {width:g} blank is {why} — its steel cannot be nested "
+          f"and the row charges no material. ESTIMATOR TO DECIDE: plate, a split, or a sheet "
+          f"size we do not list", flags)
+    if not isinstance(pe.get("route_gap"), dict):
+        pe["route_gap"] = {
+            "issue": (f"{pn} is a {length:g} x {width:g} mm flat, {why}, "
+                      f"so its steel is not charged"),
+            "assumption": "no stocked sheet can be nested for it",
+            "action": ("say how it is made: cut from plate or a larger sheet "
+                       "(give the size), or split and joined"),
+        }
+
+
+def spill_from_full_block(ws, block_name: str, block_key: str, block: Mapping[str, Any],
+                          part: Dict[str, Any], flags: List[str]) -> Dict[str, Any]:
+    """The Bill of Materials line for one part a full costing block could not hold (D-318).
+
+    A Sheet Steel part is asked the question its block row would have asked it
+    (steel_sheet_for_row, on the block's own template sheet): a blank no stocked sheet holds
+    raises the same decision the row raises and carries no price, because the row would
+    charge none. Every other spilled line keeps the engine's figure, and the part is marked
+    so the one tally counts it until a person has nested it."""
+    me = part.get("material_estimate") or {}
+    cost = _safe(me.get("cost_per_part_gbp") or me.get("unit_material_cost_gbp"))
+    basis = "net_part_provisional"
+    words = f"{block_name} block full — PROVISIONAL: engine figure, not the block's nest"
+    extra: Dict[str, Any] = {}
+    if block_key == "steel" and block.get("col_sheet_l") and block.get("col_sheet_w"):
+        bd = _costed_facts.blank_dimensions(part)
+        length, width = _safe(bd["length_mm"]), _safe(bd["width_mm"])
+        if length and width:
+            fr = int(block["first_row"])
+            tpl = (ws.cell(row=fr, column=int(block["col_sheet_l"])).value or 2500,
+                   ws.cell(row=fr, column=int(block["col_sheet_w"])).value or 1250)
+            mat = part.get("normalized_material") or me.get("material") or "MILD STEEL"
+            sheet, why = steel_sheet_for_row(length, width, mat, tpl)
+            if sheet is None and why:
+                raise_unnestable_steel(part, length, width, why, flags)
+                basis, cost = "no_stocked_sheet", None
+                extra["_price_explicitly_withheld"] = True
+                words = f"{block_name} block full — NOT PRICED: no stocked sheet holds it"
+    if basis == "net_part_provisional":
+        _flag(f"{block_name} overflow {part.get('part_number')}: costed on the engine's own "
+              f"figure, not the block's nest — estimator input.", flags)
+    part["block_overflow"] = {"block": block_name, "basis": basis}
+    return dict(part) | extra | {
+        "description": f"{part.get('description') or ''} — {words}",
+        "unit_cost_gbp": cost,
+        "_block_overflow_from": block_name,
+        "_block_overflow_basis": basis,
+    }
+
+
+def waste_already_in_price(pe: Dict[str, Any]) -> bool:
+    """True when the line's unit figure already carries its cut allowance, so the BOM's own
+    4% would charge it twice. Section stock and fixed-each commodities (see the BOM writer),
+    and a line a full block spilled at the engine's own figure (D-318)."""
+    me = pe.get("material_estimate") or {}
+    method = str(me.get("cost_method") or pe.get("cost_source") or "").lower()
+    if bool(me.get("waste_included")) or method in (
+            "standard_commodity_provisional", "subcontract_plating_indicative"):
+        return True
+    # every engine per-part material figure is multiplied by (1 + scrap) before it leaves
+    # the estimator (sheet formula, board yield, per-kilo, wire, bar, area rates)
+    return bool(pe.get("_block_overflow_from"))
+
+
 def _largest_fabricated_part_area(parts):
     """(area_m2, part_number) of the biggest part we FABRICATE — the size proxy for throughput
     banding of Assemble/pack and P.Coat.
@@ -5191,26 +5263,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 #
                 # The real fix is a wider block in the template, which is a change to the
                 # workbook and not to this writer.
-                _sme = _sp.get("material_estimate") or {}
-                _scost = _safe(_sme.get("cost_per_part_gbp")
-                               or _sme.get("unit_material_cost_gbp"))
-                _sbasis = "net_part_provisional"
-                _basis = (f"{_blk_name} block full — PROVISIONAL: this line carries the engine's "
-                          f"NET-PART cost because parts-per-sheet is computed by the block's own "
-                          f"cell and cannot be reproduced out here. It EXCLUDES the sheet drop "
-                          f"the block charges its rows, so it is UNDER-stated against an "
-                          f"identical part inside the block — nest it by hand before issue")
-                _flag(f"{_blk_name} overflow {_sp.get('part_number')}: costed on the NET-PART "
-                      f"basis, not the block's nested basis, so it is under-stated against an "
-                      f"identical part that fitted in the block — estimator input.", flags)
                 if _blk_key == "other_sheet":
                     _board_spill.append(_sp)
-                _spilled_from_blocks.append(dict(_sp) | {
-                    "description": f"{_sp.get('description') or ''} — {_basis}",
-                    "unit_cost_gbp": _scost,
-                    "_block_overflow_from": _blk_name,
-                    "_block_overflow_basis": _sbasis,
-                })
+                _spilled_from_blocks.append(
+                    spill_from_full_block(ws, _blk_name, _blk_key, _cap_map, _sp, flags))
             _flag(f"{_blk_name}: {len(_blk_list)} part(s) for {_cap} template row(s) — "
                   f"{len(_blk_list) - _cap} moved to the Bill of Materials at their own "
                   f"per-part cost so no line is dropped: "
@@ -5586,10 +5642,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #     four pads and stick on four pads; there is no cut loss to allow for, and £0.80
         #     became £0.83.
         # Sheet and board keep their allowance — a panel is still scratched.
-        _me_scrap = pe.get("material_estimate") or {}
-        _method = str(_me_scrap.get("cost_method") or pe.get("cost_source") or "").lower()
-        _waste_already_in = bool(_me_scrap.get("waste_included")) or _method in (
-            "standard_commodity_provisional", "subcontract_plating_indicative")
+        _waste_already_in = waste_already_in_price(pe)
         ws.cell(row=row, column=b["col_scrap"],
                 value=None if (_is_commercial or _waste_already_in) else 0.04)
         # A line the material block covers, or an assembly, is not a gap somebody fills.
@@ -5611,6 +5664,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # coloured as an input rather than left looking like a result.
             from estimator_inputs import input_note_for_line as _input_note
             _note = _line["note"] or _input_note(pe)
+            # A SPILLED STEEL LINE NO STOCKED SHEET HOLDS SAYS WHY IT HAS NO PRICE. The generic
+            # note ("enter the per-unit figure") replaced the block-full words, so 12645's
+            # 3,020 mm covers read as an ordinary gap rather than a make decision (D-321).
+            if pe.get("_block_overflow_basis") == "no_stocked_sheet" \
+                    and isinstance(pe.get("route_gap"), dict):
+                _note = dict(_note, note=f"NOT PRICED — {pe['route_gap']['issue']}; "
+                                         f"{pe['route_gap']['action']}")
             _inputs.append({
                 "kind": _note["kind"], "part": pe.get("part_number") or "",
                 "where": f"BOM row {row}", "what": _note["note"], "row": row,
@@ -5813,17 +5873,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 ws.cell(row=row, column=s["col_sheet_w"], value=_sheet[1])
                 _flag(f"steel {_pn_g}: {length:g} x {width:g} blank cut from a {_why}", flags)
             elif _why:
-                _flag(f"steel {_pn_g}: {length:g} x {width:g} blank is {_why} — its steel "
-                      f"cannot be nested and the row charges no material. ESTIMATOR TO "
-                      f"DECIDE: plate, a split, or a sheet size we do not list", flags)
-                if not isinstance(pe.get("route_gap"), dict):
-                    pe["route_gap"] = {
-                        "issue": (f"{_pn_g} is a {length:g} x {width:g} mm flat, {_why}, "
-                                  f"so its steel is not charged"),
-                        "assumption": "no stocked sheet can be nested for it",
-                        "action": ("say how it is made: cut from plate or a larger sheet "
-                                   "(give the size), or split and joined"),
-                    }
+                raise_unnestable_steel(pe, length, width, _why, flags)
         # Which row did this part land on? The template's own Laser Rate Calculator
         # computes a throughput on THIS row (col W = 3600/V). The labour block should
         # READ that, not substitute our own model — ours is ~4x slow on small parts.
@@ -7665,9 +7715,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     if _board_nest_rows:
         _moved = point_bom_lines_at_nest_rows(ws, cm["bom"], _board_nest_rows)
+        for _bp in _board_spill:
+            if str(_bp.get("part_number") or "").strip() in _moved:
+                _bp["block_overflow"] = {"block": "Other Sheet Material",
+                                         "basis": "nested_by_block_formulas"}
         if _moved:
             flags[:] = [f for f in flags if not (
-                "overflow" in f and "NET-PART basis" in f
+                "overflow" in f and "engine's own figure" in f
                 and any(str(pn) in f for pn in _moved))]
             _flag(f"Other Sheet Material block full: {', '.join(_moved)} nested by the "
                   f"block's own formulas on the '{OVERFLOW_NEST_SHEET}' sheet and priced "

@@ -1055,16 +1055,17 @@ def _product_revision(summary: Dict[str, Any], product: str) -> str:
                 v = str(rec.get(k) or "").strip()
                 if v:
                     return v
-    for entry in (summary.get("job_source_pdfs") or []):
-        name = str((entry.get("name") if isinstance(entry, dict) else entry) or "")
-        name = name.replace("\\", "/").rsplit("/", 1)[-1]
-        stem_ = re.sub(r"\.pdf$", "", name, flags=re.IGNORECASE)
-        first = re.split(r"[\s_]+", stem_, maxsplit=1)[0]
-        if not _names_the_product(product, first):
-            continue
-        m = re.search(r"REV(?:ISION)?[\s._()\[-]*([A-Z]{1,2})\b", stem_.upper())
-        if m:
-            return m.group(1)
+    # The product's own FILE, found the way its title is (product_identity.product_sheets):
+    # a top sheet filed "12645 - <title>_REVx" is the product's although its first token is
+    # the bare job number. One reading of a file name, not a second REV regex (D-319).
+    try:
+        from product_identity import product_sheets
+    except Exception:                                                # noqa: BLE001
+        return ""
+    for d in product_sheets(product, [(e.get("name") if isinstance(e, dict) else e)
+                                      for e in (summary.get("job_source_pdfs") or [])]):
+        if d.get("revision"):
+            return d["revision"]
     return ""
 
 

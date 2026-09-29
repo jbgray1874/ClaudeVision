@@ -4809,6 +4809,19 @@ def compile_job_route(
     # person: the parent keeps its charge and the question is recorded, because a
     # deleted operation cannot be reviewed and an over-charge can.
     _pw_required = _powder_required_assembly_targets()
+    # A MEMBER WHOSE OWN SHEET RULES THE COAT OUT DOES NOT CARRY IT. This pass runs before the
+    # finish gate, so a RAW member still holds whatever REQUIRED powder another reader gave it
+    # (12645: the document-level stamp). Counting it as coated stood the weldment down, and
+    # the gate then ruled the member out too: the door and the door frame left the booth
+    # (D-320). The same rule the gate applies.
+    from finish_rules import finish_contradiction as _pw_ruled_out
+
+    def _pw_member_carries_coat(_pn: str) -> bool:
+        _rec = (graph["records"].get(_pn)
+                or _record_by_squashed_key(graph["records"], _pn) or {})
+        return not _pw_ruled_out("powder_coating",
+                                 weldment_finish_for_gate(_rec, _pn, graph))
+
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
@@ -4823,7 +4836,8 @@ def compile_job_route(
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,
                                                         graph["parents"])}
-        _coated_desc = {pn for pn in _leaf_desc if pn in _pw_required}
+        _coated_desc = {pn for pn in _leaf_desc
+                        if pn in _pw_required and _pw_member_carries_coat(pn)}
         if _leaf_desc and _coated_desc == _leaf_desc:
             add_claim(event_id, make_claim(
                 "powder_coating", NOT_APPLICABLE, "bom_tree",

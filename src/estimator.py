@@ -10859,6 +10859,17 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 if "bought_in" in _p_roles or _p.get("bought_in") \
                         or str(_p.get("part_number") or "").upper().startswith("BI-"):
                     continue
+                # A PART WHOSE OWN SHEET STATES ANOTHER FINISH IS NOT THE DOCUMENT'S TO COAT.
+                # 12645's door members state SURFACE FINISH: RAW and the door GA states POWDER
+                # COATED. The stamp gave each RAW member a powder op, which later stood the GA's
+                # own coat down and was then ruled out itself: nothing of the door was coated
+                # (D-320). The member's own words win, by the finish gate's rule.
+                try:
+                    from finish_rules import finish_contradiction as _fc, stated_finish as _sf
+                    if not _p.get("finish_inherited_from") and _fc(_coat_op, _sf(_p)):
+                        continue
+                except Exception:                                  # noqa: BLE001
+                    pass
                 _existing = list(_p.get("textual_operations") or []) + list(_p.get("inferred_operations") or [])
                 if _coat_op not in _existing:
                     record_operation(_p, _coat_op, "drawing_deterministic")

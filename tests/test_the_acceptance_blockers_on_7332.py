@@ -99,8 +99,13 @@ def test_the_sheet_leaves_scrap_alone_when_the_price_already_carries_it():
     """wb_populate writes 4% into the scrap column; a line whose rate already includes its
     allowance must get no scrap, or the same 4% is charged twice."""
     import wb_populate as wp
+    import inspect
     src = open(wp.__file__, encoding="utf-8").read()
-    assert "_waste_already_in" in src
-    assert '_me_scrap.get("waste_included")' in src
+    assert "_waste_already_in = waste_already_in_price(pe)" in src
+    rule = inspect.getsource(wp.waste_already_in_price)      # one rule, D-321
+    assert 'me.get("waste_included")' in rule
     # and the fixed per-each commodity rates are covered by the same rule
-    assert "standard_commodity_provisional" in src.split("_waste_already_in")[1][:400]
+    assert "standard_commodity_provisional" in rule
+    assert wp.waste_already_in_price({"material_estimate": {"waste_included": True}})
+    assert wp.waste_already_in_price({"cost_source": "standard_commodity_provisional"})
+    assert not wp.waste_already_in_price({"material_estimate": {"cost_method": "sheet"}})
