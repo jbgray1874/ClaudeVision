@@ -382,8 +382,13 @@ def test_the_summary_sentence_counts_the_cards_below_it():
     # Intelligence workstream — the ERP is the business's programme — but it carries the
     # nearest hard date on the page and reads the same SDI Live tables the estimating engine
     # does, so a dashboard without it is one somebody keeps a second list beside.
-    assert cards == 5, f"expected five cards, found {cards}"
+    # SIX SINCE 29 SEP 2026: the SDI Intelligence server, ordered that week. Not a workstream
+    # either, but every workstream card names it as the blocker, and the dashboard is where a
+    # reader looks for what the programme is waiting on.
+    assert cards == 6, f"expected six cards, found {cards}"
     assert "fourth" in intro, (
         "the summary paragraph does not account for the fourth card directly beneath it")
     assert "Sage X3" in intro, (
         "the summary paragraph does not account for the Sage X3 card directly beneath it")
+    assert "SDI Intelligence server" in intro, (
+        "the summary paragraph does not account for the server card directly beneath it")

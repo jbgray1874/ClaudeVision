@@ -147,6 +147,48 @@ _SUPERSEDED = [
         r"|Not released, and on hold)",
         id="client-briefing-back-on",
     ),
+    # 29 Sep 2026: Client Briefing version 2 runs on Jonathan's live jobs (24 on the day),
+    # built from the design team's 25 requests. "Two briefs, none on live work" was on the
+    # dashboard, the roadmap, the programme page and the service card.
+    pytest.param(
+        "Client Briefing v2 runs on live jobs from 29 Sep 2026",
+        r"(?:two briefs through it"
+        r"|Two briefs (?:through it|have been through it)"
+        r"|none (?:yet )?on live work)",
+        id="client-briefing-on-live-jobs",
+    ),
+    # 29 Sep 2026: the SDI Intelligence server is ordered (Scan 3XS, Threadripper PRO 9975WX),
+    # in service w/c 26 Oct after a three-week lead time and a week's build. "Not ordered" and
+    # "the shared workstation, ordered this week" (a 10 Sep claim that did not happen) are gone.
+    pytest.param(
+        "The SDI Intelligence server is ordered, in service w/c 26 Oct 2026",
+        r"(?:server specification is settled; the constraint is IT hardware"
+        r"|The shared workstation, ordered this week"
+        r"|until the workstation is racked"
+        r"|needs a Linux/GitLab machine by 10 Sep)",
+        id="server-ordered",
+    ),
+    # 29 Sep 2026: the Sage X3 plan changed from a three-week mobilise / cleanse / cut-over to
+    # load-and-UAT by area, estimating first, all areas tested by 30 Oct and cutover in
+    # November. The week-one gate, the mid-November rebaseline, the 20,724 blank descriptions
+    # (10,687 of the 10,738 current ones have the text elsewhere) and "routings are not in
+    # the eleven" (they are in scope) all stated the old plan.
+    pytest.param(
+        "Sage X3 loads and user-tests by area from 29 Sep 2026",
+        r"(?:rebaselines to mid-November"
+        r"|confirmed by (?:<b>)?Friday 16 October"
+        r"|20,724 blank"
+        r"|Routings are not in the eleven"
+        r"|go / no-go Friday 30 October"
+        r"|cutover 30 Oct)",
+        id="x3-load-and-uat",
+    ),
+    # 29 Sep 2026: P1 stands at 90% on Yogesh's 25 Sep tracker, not 60%.
+    pytest.param(
+        "P1 is at 90% on the 25 Sep 2026 tracker",
+        r"In progress, 60%",
+        id="p1-progress",
+    ),
 ]
 
 

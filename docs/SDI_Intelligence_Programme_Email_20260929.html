@@ -1,0 +1,181 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SDI Intelligence — what has changed, and where to see it</title>
+</head>
+<body style="margin:0;padding:0;background:#ffffff;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#ffffff;">
+<tr><td align="center" style="padding:0;">
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="720" style="width:720px;max-width:720px;font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:15px;line-height:1.55;color:#1d2328;">
+
+  <tr><td style="padding:22px 0 6px 0;border-bottom:3px solid #c47d12;">
+    <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;letter-spacing:2px;text-transform:uppercase;color:#c47d12;font-weight:bold;">SDI Intelligence &middot; programme update</div>
+    <div style="font-size:23px;font-weight:bold;line-height:1.25;padding-top:6px;">What has changed in the last fortnight, and where to see it</div>
+    <div style="font-size:13px;color:#5a6572;padding:6px 0 14px 0;">Tuesday 29 September 2026 &middot; every section below links to the page it was made on</div>
+  </td></tr>
+
+  <tr><td style="padding:18px 0 0 0;">
+    <p style="margin:0 0 12px 0;">James, Jack,</p>
+    <p style="margin:0 0 12px 0;">A fuller note than usual, because a lot has moved. <b>Each heading below links to the portal page where the change was made.</b> Links go to the server copy of the portal; the same pages are on the estimating laptop at localhost:8072.</p>
+    <p style="margin:0 0 16px 0;">Six things. The estimating wave has put <b>twenty packs</b> in front of the estimators, with <b>eight reviews</b> back. <b>Sage X3</b> now loads and tests area by area, <b>estimating first</b>. The <b>Design Vault</b> reaches its go/no-go at the end of October. <b>Drawing Search</b> is on trial with the studio. <b>Client Briefing version 2</b> runs on Jonathan's live jobs. And <b>the server is being ordered</b>.</p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-estimating" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">1 · SDI Estimating Intelligence &mdash; twenty packs out, eight reviews back</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-estimating &middot; laptop: http://localhost:8072/#aisvc-estimating</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">The September wave has put <b>twenty estimate packs</b> in front of four estimators &mdash; Howard, Tim, Dave and Tony &mdash; and <b>eight detailed reviews</b> have come back. Every point went into the engine as a general rule, not as a correction to one workbook. Twelve jobs are now integrated; seven are awaiting review, the newest <b>12645, the Tesco DRS external shelter</b>, sent to Dave today.</p>
+    <p style="margin:0px 0 12px 0;">Two things changed how the work is done. <b>Each pack is now scored against its own drawings before it is sent</b>: a pass table is written first, and a book that fails a row is fixed in the engine and re-run, never edited by hand. On 12645 the faults found in the early books became eleven general rules instead of a list of corrections for Dave. And <b>every run now writes a BOMs and Routes pair</b> beside the estimate, which is what Tim asked for on 16 September and is the shape a Sage X3 upload takes.</p>
+    <p style="margin:0px 0 12px 0;">Where the reviews prove it, stated as a variance and a direction: material to within a penny on 10975-02; about 6% from the manual estimate on 11908-21; on 1176-02 the AI is about a third high at 10 off, and one line, the vinyl graphic the customer had already priced, carries more than all of it. Without that line the AI is about 17% under. Dave on the 11650-06 book: <i>“This looks good now.”</i></p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-x3" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">2 · Access Supply Chain &rarr; Sage X3 &mdash; load and test together, estimating first</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-x3 &middot; laptop: http://localhost:8072/#aisvc-x3</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">The plan has changed for the better. <b>Loading and user testing are one cycle</b>, area by area: each area is loaded into test, tested by its own users on real SDI data, fixed, then kept current by incremental updates. <b>Estimating goes first</b>, in the week of 5 October: products, prices, BOMs and routes, with Dave's team uploading sample estimates and running the standard reports, including how our estimating tools connect.</p>
+    <p style="margin:0px 0 12px 0;">All <b>813 source tables</b> are classified (21 carry the migration), and every record in 8 of the 13 load templates has a status and a reason. The headline numbers: about 16,400 of 41,645 products are current; of 10,738 current products with no main description, all but 51 have the text in another field; 918 of 936 open works orders need an end date, which one rule clears. Acuity's 16 new templates are mapped field by field (207 fields, 22 waiting on Acuity's configuration answers, four of them critical). We expect to load roughly 40% of product, BOM and route data and about 60% of customers and suppliers.</p>
+    <p style="margin:0px 0 12px 0;"><b>Every area loaded and user-tested by Friday 30 October</b>; the dress rehearsal and cutover move to November, to be confirmed; the ERP goes live 4 January 2027. Routes are in scope.</p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-technical-design" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">3 · SDI Technical Design Intelligence &mdash; the Design Vault reaches its decision</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-technical-design &middot; laptop: http://localhost:8072/#aisvc-technical-design</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">Yogesh has the <b>SDI Design Vault's core loop working</b> (browse, lock, edit, check in to GitLab), and the designers received it well on 23 September. It is about 90% technically proven. Its advantage over PDM Standard is an API that the estimating tools, Sage, QC and AI can reach. A <b>go/no-go on Standard against in-house is set for the end of October</b>, decided on cross-project and library referencing, which he builds and demonstrates next.</p>
+    <p style="margin:0px 0 12px 0;">The extraction endpoint is now correct end to end for the 12633 family (582 tests, verified against the W: share). P2's user testing with Ed and Ian has not started: it <b>waits on the test server</b>, so its date is to be re-planned against the server below.</p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-drawing-search" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">4 · SDI Drawing Search Intelligence &mdash; on trial with the studio</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-drawing-search &middot; laptop: http://localhost:8072/#aisvc-drawing-search</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">The design and technical teams are on a <b>two-week trial</b>, with their feedback due at the end of the month and changes to follow. It still runs from Muhammad's own machine; its always-on home is the server below.</p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#aisvc-client-briefing" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">5 · SDI Client Briefing Intelligence &mdash; version 2, on Jonathan&rsquo;s live jobs</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-client-briefing &middot; laptop: http://localhost:8072/#aisvc-client-briefing</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">A big week. The design team saw version 1, liked it, and asked for 25 changes. <b>Version 2 is built from them, with 19 done and 3 partly done</b>, and runs alongside version 1. It shows each job's size, how much information is in and whether it is booked. Each person has their own view. Jonathan's three everyday e-mails are drafted for him to check and send, and his calendar is in the tool, read-only. It <b>runs on his live jobs</b>, 24 of them today, picked up automatically.</p>
+    <p style="margin:0px 0 12px 0;">Voice notes are written up on our own machine, so there is no AI cost and the client is not recorded. WhatsApp is built and <b>needs IT to set up a secure connection</b> for the Meta test number. Every AI call is logged: $2.92 so far.</p>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 2px 0;">
+      <div style="font-size:17px;font-weight:bold;">
+        <a href="http://10.0.0.5:8071/#servers" style="color:#1d2328;text-decoration:none;border-bottom:2px solid #c47d12;">6 · The SDI Intelligence server &mdash; ordered</a>
+      </div>
+      <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#servers &middot; laptop: http://localhost:8072/#servers</div>
+    </div>
+    <p style="margin:12px 0 12px 0;">The server all three workstreams have been waiting on is <b>being ordered this week</b> from Scan 3XS. It has a <b>three-week lead time</b>, then about <b>a week's build</b> between the two of us, so it is in service in the <b>week of 26 October</b>. The specification is an AMD Threadripper PRO 9975WX (32 cores) on an ASUS Pro WS WRX90E-SAGE SE, with 128 GB of DDR5 ECC memory, an NVIDIA RTX 4000 Ada SFF 20 GB graphics card, 2 &times; 2 TB NVMe drives and a 3-year warranty. The price is <b>&pound;13,155.28 inc VAT</b>.</p>
+    <p style="margin:0px 0 12px 0;">It is sized to run an estimate driving SolidWorks with one or two more beside it, Drawing Search and the Design Vault together. The operating system and licensing, RAID and backup, a UPS and its place on the network are for us to settle before it arrives, so that the build week is spent building.</p>
+  </td></tr>
+
+  <tr><td style="padding:22px 0 0 0;">
+    <div style="border-top:1px solid #d8dee5;padding:16px 0 10px 0;font-size:17px;font-weight:bold;">Everything above, on the portal</div>
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #d8dee5;border-collapse:collapse;font-size:13.5px;">
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #d8dee5;background:#f7f9fa;font-weight:bold;">Page</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #d8dee5;background:#f7f9fa;font-weight:bold;">Server</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #d8dee5;background:#f7f9fa;font-weight:bold;">Estimating laptop</td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>Dashboard </b>&mdash; all workstreams, the Sage X3 plan and the server at a glance</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#dashboard" style="color:#1f4e79;">10.0.0.5:8071/#dashboard</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#dashboard" style="color:#1f4e79;">localhost:8072/#dashboard</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>AI Roadmap </b>&mdash; the phases, Sage X3 and the server</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#roadmap" style="color:#1f4e79;">10.0.0.5:8071/#roadmap</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#roadmap" style="color:#1f4e79;">localhost:8072/#roadmap</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>AI Programme </b>&mdash; the timeline</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#programme" style="color:#1f4e79;">10.0.0.5:8071/#programme</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#programme" style="color:#1f4e79;">localhost:8072/#programme</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>SDI Estimating Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-estimating" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-estimating</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#aisvc-estimating" style="color:#1f4e79;">localhost:8072/#aisvc-estimating</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>SDI Technical Design Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-technical-design" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-technical-design</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#aisvc-technical-design" style="color:#1f4e79;">localhost:8072/#aisvc-technical-design</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>SDI Drawing Search Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-drawing-search" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-drawing-search</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#aisvc-drawing-search" style="color:#1f4e79;">localhost:8072/#aisvc-drawing-search</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>SDI Client Briefing Intelligence</b></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-client-briefing" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-client-briefing</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#aisvc-client-briefing" style="color:#1f4e79;">localhost:8072/#aisvc-client-briefing</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>SDI Sage X3 Data Migration </b>&mdash; the plan of record</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#aisvc-x3" style="color:#1f4e79;">10.0.0.5:8071/#aisvc-x3</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#aisvc-x3" style="color:#1f4e79;">localhost:8072/#aisvc-x3</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;width:46%;"><b>Server Infrastructure </b>&mdash; the new server in the inventory</td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#servers" style="color:#1f4e79;">10.0.0.5:8071/#servers</a></td>
+        <td style="padding:9px 13px;border-bottom:1px solid #e6eaee;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#servers" style="color:#1f4e79;">localhost:8072/#servers</a></td>
+      </tr>
+      <tr>
+        <td style="padding:9px 13px;width:46%;"><b>Status Reports </b>&mdash; issue 4 of the programme report, HTML and PDF</td>
+        <td style="padding:9px 13px;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://10.0.0.5:8071/#reports" style="color:#1f4e79;">10.0.0.5:8071/#reports</a></td>
+        <td style="padding:9px 13px;font-family:Consolas,'Courier New',monospace;font-size:12px;"><a href="http://localhost:8072/#reports" style="color:#1f4e79;">localhost:8072/#reports</a></td>
+      </tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="padding:20px 0 0 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border:1px solid #e0c9a6;background:#fdf8f1;">
+      <tr><td style="padding:13px 15px;">
+        <b style="color:#9a5f05;">Still the thing we need from outside the programme:</b> the <b>supplier price lists</b> from Elite, Eagle and Thermaset. Every market figure on this month's books traces back to them. The machinery to load them is built, tested and waiting on the files.
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td style="padding:22px 0 8px 0;border-top:1px solid #d8dee5;">
+    <p style="margin:14px 0 12px 0;">Happy to walk either of you through any of it.</p>
+    <p style="margin:0 0 12px 0;">Kind regards,<br>James</p>
+    <div style="font-size:13px;color:#5a6572;line-height:1.7;">
+      <b style="color:#1d2328;">James Gray</b><br>
+      AI and Systems Controller &middot; SDI Displays<br>
+      07585 816501 &middot; wearesdi.com
+    </div>
+  </td></tr>
+
+  <tr><td style="padding:14px 0 26px 0;">
+    <div style="font-size:11.5px;color:#7d8b97;line-height:1.8;border-top:1px solid #e6eaee;padding-top:12px;">
+      Attached: <b>SDI Intelligence Programme Status</b>, issue 4 (29 September 2026), the full report, HTML and PDF, also on the portal's Status Reports page &middot;
+      <b>SDI Intelligence Testing Status</b> and the <b>Estimating Test Log</b>, with 12645 added.
+    </div>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>
