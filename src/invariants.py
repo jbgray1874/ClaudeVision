@@ -3975,6 +3975,19 @@ def _reached_unaccounted_core(summary: Any) -> Dict[str, Any]:
         if pn:
             by_ident.setdefault(pn, rec)
             by_ident.setdefault(_squash(pn), rec)
+    # AND THE LIST THE SHEET WAS WRITTEN FROM. The workbook mints a line for a bought-in node
+    # with no engine record (and prices it through the commodity pass), so that line exists
+    # only in canonical_part_estimates. 12645's 14:03 report said "FIXING x16 is on the bill
+    # the product reaches and has no line on the sheet" beside Estimate row 19, FIXING x16 at
+    # £1.50 (D-328). An item either list accounts for is accounted for.
+    sheet_ident: Dict[str, Dict[str, Any]] = {}
+    for rec in (_es.get("canonical_part_estimates") or []):
+        if not isinstance(rec, dict):
+            continue
+        pn = str(rec.get("part_number") or "").strip().upper()
+        if pn:
+            sheet_ident.setdefault(pn, rec)
+            sheet_ident.setdefault(_squash(pn), rec)
 
     def _money(rec: Dict[str, Any]) -> bool:
         me = rec.get("material_estimate") if isinstance(rec.get("material_estimate"), dict) else {}
@@ -3989,6 +4002,15 @@ def _reached_unaccounted_core(summary: Any) -> Dict[str, Any]:
             if n and n > 0:
                 return True
         return False
+
+    def _bom_price_of(rec: Dict[str, Any]) -> Optional[float]:
+        """A price the sheet line carries at the top level (the commodity pass writes
+        unit_cost_gbp / unit_price_gbp on a minted line, not a material estimate)."""
+        for k in ("unit_cost_gbp", "unit_price_gbp"):
+            n = _num(rec.get(k))
+            if n and n > 0:
+                return n
+        return None
 
     _ASKED_RE = re.compile(r"NOT\s+(YET\s+)?PRICED|UNPRICED|ESTIMATOR TO PRICE|"
                            r"FREE[\s-]?ISSUE|NOT COSTED", re.IGNORECASE)
@@ -4048,6 +4070,12 @@ def _reached_unaccounted_core(summary: Any) -> Dict[str, Any]:
                 rec = by_ident.get(str(alias).strip().upper())
                 if rec is not None:
                     break
+        _keys = [ident, _squash(ident)] + [str(a).strip().upper() for a in
+                                           ((node.get("evidence") or {}).get("raw_aliases") or [])]
+        _sheet = next((sheet_ident[k] for k in _keys if k in sheet_ident), None)
+        if _sheet is not None and (_money(_sheet) or _asked_or_ruled(_sheet)
+                                   or _bom_price_of(_sheet) is not None):
+            continue
         if rec is None:
             # A WORDS-ONLY ROW A PARTS LIST PRINTS IS AN ITEM, NOT A NAME (D-315). "Roller
             # Shutter" x2 on 12645's shelter sheet has a space in its code, so it was filed

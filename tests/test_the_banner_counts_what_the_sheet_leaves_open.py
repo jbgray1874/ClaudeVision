@@ -99,3 +99,34 @@ def test_a_clean_job_still_says_nothing_outstanding():
     top = dict(TOP, children=[{"part_number": "P-BODY", "qty": 1.0}])
     s = _summary([top, BODY, PANEL], [_charged("P-01M")])
     assert cf.outstanding_summary(s)["phrase"] == "nothing outstanding"
+
+
+def test_a_line_the_sheet_carries_is_not_reported_as_missing():
+    """12645 14:03 report: "FIXING x16 is on the bill the product reaches and has no line on
+    the sheet" — beside Estimate row 19, FIXING x16 at £1.50. The workbook minted and priced
+    that line for a bought-in node with no engine record, so it lived only in the list the
+    sheet was written from, which the check did not read (D-328)."""
+    fixing = _node("FIXING", "bought_in", qty=16.0)
+    top = dict(TOP, children=[{"part_number": "P-BODY", "qty": 1.0},
+                              {"part_number": "FIXING", "qty": 16.0}])
+    s = _summary([top, BODY, PANEL, fixing], [_charged("P-01M")])
+    assert "FIXING" in inv._reached_unaccounted_core(s)["unaccounted"], "the fault, as shipped"
+    s["estimate_summary"]["canonical_part_estimates"] = [
+        _charged("P-01M"),
+        {"part_number": "FIXING", "description": "M8x20mm HEX HEAD BOLT", "quantity": 16,
+         "unit_cost_gbp": 0.09, "_canonical_kind": "bought_in"}]
+    assert inv._reached_unaccounted_core(s)["unaccounted"] == []
+    assert not any("has no line on the sheet" in str(d.get("issue"))
+                   for d in cf.costed_job(s)["decisions_required"])
+
+
+def test_a_sheet_line_with_no_price_is_still_an_open_question():
+    """The sheet's list is read for what it carries, not as a pass: a minted line with no price
+    and no ask is still unaccounted."""
+    fixing = _node("FIXING", "bought_in", qty=16.0)
+    top = dict(TOP, children=[{"part_number": "P-BODY", "qty": 1.0},
+                              {"part_number": "FIXING", "qty": 16.0}])
+    s = _summary([top, BODY, PANEL, fixing], [_charged("P-01M")])
+    s["estimate_summary"]["canonical_part_estimates"] = [
+        {"part_number": "FIXING", "description": "M8 BOLT", "quantity": 16}]
+    assert "FIXING" in inv._reached_unaccounted_core(s)["unaccounted"]
