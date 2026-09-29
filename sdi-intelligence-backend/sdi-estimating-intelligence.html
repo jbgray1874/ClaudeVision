@@ -1165,6 +1165,8 @@ function drawingNumberLooksWrong(){
                     pack, named, so an estimator who meant one of those sees it now
      none / several a correction is needed: Run is held, and nothing is chosen for them
      a part drawing a single-part job; said, not blocked
+     a job number   "12173" alone: the run takes the job's top assembly (the GA no other
+                    parts list includes) and names it; said, not blocked
      no numbers     nothing to check against; said, not blocked */
 let productCheck = null, _pcTimer = null, _pcSeq = 0;
 function checkProduct(){
@@ -1194,7 +1196,7 @@ function renderProductCheck(){
   const st = productCheck.status;
   const colour = st === "ok" ? ((productCheck.others || []).length ? "var(--warn)" : "var(--ok)")
                : (st === "none" || st === "many") ? "var(--bad)"
-               : st === "not_an_assembly" ? "var(--warn)" : "";
+               : (st === "not_an_assembly" || st === "job") ? "var(--warn)" : "";
   box.style.color = colour;
   box.style.fontWeight = (st === "none" || st === "many" || (productCheck.others || []).length)
                        ? "600" : "";

@@ -87,6 +87,24 @@ def names_the_product(declared: Any, identity: Any) -> bool:
     return False
 
 
+def job_number_only(declared: Any) -> str:
+    """The job number when the Drawing Number typed is a job number alone ("12173"), else ""."""
+    ds = str(declared or "").strip()
+    return ds if _BARE_JOB_NUMBER.match(ds) else ""
+
+
+def is_of_the_job(job: Any, identity: Any) -> bool:
+    """Is this drawing one of the job's own numbered sheets ("12173-02-GA" of job 12173)?
+
+    The job number, then a separator, then the rest of the drawing number. "121730-01" is
+    not job 12173's; "12173 - Card Spinner" (the job's number with its title) is."""
+    j = str(job or "").strip()
+    t = str(identity or "").strip()
+    if not j or not _BARE_JOB_NUMBER.match(j):
+        return False
+    return bool(re.match(rf"^{re.escape(j)}(?:$|[\s\-_])", t, re.IGNORECASE))
+
+
 def drawing_of_file(name: Any) -> Dict[str, Any]:
     """What a drawing file's own name says: number, title, revision, whether it is an
     assembly. Estimating names drawings "<number> <what it is>_rev<x>" — a convention, not
@@ -180,6 +198,26 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
                 "message": f"{declared_s} names {len(matches)} different drawings here ("
                            + "; ".join(_label(m) for m in matches)
                            + "). Type the one that is the product."}
+    # THE JOB NUMBER ON ITS OWN IS THE JOB, AND THE JOB SHIPS ITS TOP ASSEMBLY. James Gray,
+    # 29 Sep 2026, on 12173 Card Spinner: "it is 02 but we need to be able to run against the
+    # top level 12173." The pack holds 12173-02-GA (the spinner) and the GAs it is built from
+    # (03, 04, 05, 06, 07...). Which is on top is written in the parts lists — 02's table
+    # takes the others — and file names cannot say it, so this check does not guess: it lets
+    # the run go, and the run takes the one job GA no other drawing's parts list includes
+    # (route_compiler, same rule). Two such tops and the run refuses, as for any other
+    # unresolved number.
+    job = job_number_only(declared_s)
+    job_assemblies = [a for a in assemblies if is_of_the_job(job, a["number"])] if job else []
+    if not matches and job_assemblies:
+        return {"status": "job", "declared": declared_s, "match": None, "matches": [],
+                "others": job_assemblies,
+                "message": f"{declared_s} is the job number, not a drawing: this run prices the "
+                           f"job's top assembly — the one general arrangement no other "
+                           f"drawing's parts list includes — and the book names it. "
+                           f"Assemblies in the pack: "
+                           + "; ".join(_label(a) for a in job_assemblies)
+                           + ". If the product is one of the others, enter its number "
+                             "instead."}
     if not matches:
         return {"status": "none", "declared": declared_s, "match": None, "matches": [],
                 "others": assemblies,
