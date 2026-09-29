@@ -298,6 +298,27 @@ def udef_anchor_tokens(desc: Any) -> List[str]:
     return digitful[:2]
 
 
+def code_column_words(part: Dict[str, Any], tokenize) -> set:
+    """The words a line's code column adds when that column holds a NAME, not a code.
+
+    A code carries a digit (file_scan's part-number rule; supplier_reference hunts codes the
+    same way). A class word (FIXING, P/P) names a drawer, a minted BI- key or synthesised
+    key names nothing, and a placeholder is not an identity — none of those contribute. Words
+    already in the description add nothing new. Empty on every line with a real code."""
+    code = str(part.get("part_number") or "").strip()
+    if not code or any(c.isdigit() for c in code):
+        return set()
+    try:
+        from part_code_conventions import is_category_not_a_code      # noqa: PLC0415
+        from part_identity import is_engine_minted_code, is_placeholder_identity  # noqa: PLC0415
+        if (is_category_not_a_code(code) or is_engine_minted_code(code)
+                or supplier_reference.is_synthesised_key(code) or is_placeholder_identity(code)):
+            return set()
+    except ImportError:                                               # pragma: no cover
+        return set()
+    return set(tokenize(code)) - set(tokenize(str(part.get("description") or "")))
+
+
 def choose_udef_description_row(desc: Any, rows: List[Any]):
     """(the one UDEF row this description is, or None; why not, when None).
 
@@ -1065,7 +1086,12 @@ class PricingService:
         if not desc and not material:
             return None
 
-        query_tokens = self._tokenize(f"{desc} {material}")
+        # THE CODE COLUMN'S WORDS ARE PART OF WHAT THE LINE IS, AND THE MATCH MUST CARRY THEM.
+        # 12645-03GA's parts list reads `piano hinge | HINGE | 1`: the qualifier is in the code
+        # column and the description is the family noun. Asked as {HINGE}, the least specific
+        # hinge in history scored 100% and the door's piano hinge was charged £0.26 (D-323).
+        _named = code_column_words(part, self._tokenize)
+        query_tokens = self._tokenize(f"{desc} {material}") | _named
         if not query_tokens:
             return None
 
@@ -1119,10 +1145,21 @@ class PricingService:
             return None
 
         scored: List[tuple] = []
+        refused: List[tuple] = []
         for row in rows:
             score = self._token_overlap_score(query_tokens, str(row[0] or ""))
             if score >= _MIN_OVERLAP and row[1] is not None and float(row[1] or 0) > 0:
+                _missing = _named - self._tokenize(str(row[0] or ""))
+                if _missing:
+                    refused.append((score, row, _missing))
+                    continue
                 scored.append((score, row))
+        if refused and not scored:
+            _s, _r, _m = max(refused, key=lambda x: x[0])
+            print(f"   [pricing] historical line {str(_r[0])[:50]!r} (GBP {float(_r[1]):.2f}) "
+                  f"does not contain {', '.join(sorted(_m))}; not used for "
+                  f"{(str(part.get('part_number') or '') + ' ' + desc).strip()[:60]!r}",
+                  flush=True)
 
         # No "take the first priced row anyway" fallback: with the broad per-token fetch,
         # the first fetched row is often unrelated. If nothing clears _MIN_OVERLAP, return

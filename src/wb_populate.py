@@ -246,7 +246,11 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         # off the total; a stored one prices the line, tagged.
         return (f"{_llm_engine_name(best)} - INDICATIVE",
                 not price_provenance.stamp_is_reproducible(best))
-    label = _ORIGIN_LABELS.get(cls, "")
+    # A RESEMBLANCE IS CLASSED `catalogue` — a row somebody can look up again — and its
+    # warning is keyed by SOURCE. Read by class alone, "Historical quote match - verify" was
+    # unreachable and 12645's £0.26 hinge read "Historical quote" like an account price (D-323).
+    _src = str(price_provenance.stamp_source_name(best) or "").strip().lower()
+    label = _ORIGIN_LABELS[_src] if _ORIGIN_LABELS.get(_src) else _ORIGIN_LABELS.get(cls, "")
     if label is None:
         # A LOOKED-UP PRICE NAMES ITS SYSTEM. No warning word — there is nothing wrong with
         # the line — just which of the four things called "catalogue" answered it.
