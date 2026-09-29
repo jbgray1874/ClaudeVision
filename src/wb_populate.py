@@ -2204,7 +2204,20 @@ def merge_canonical_estimate_records(existing: Dict[str, Any], incoming: Dict[st
                     target[nested_key] = nested_value
             merged[key] = target
         elif key in {"review_flags", "reliability_flags"}:
-            merged[key] = list(dict.fromkeys(list(merged.get(key) or []) + list(value or [])))
+            # A FLAG CAN BE A DICT ({"severity", "field", "reason"}), and a dict is not
+            # hashable, so dict.fromkeys raised on the first merge of two records that both
+            # carried one. It had never happened until D-322 joined "12645-01GA V2" (the
+            # model) and "12645-01GA" (the sheet): the 29 Sep 10:43 run of 12645 wrote no
+            # workbook at all (D-326). Deduplicated by a stable text key instead.
+            _seen: set = set()
+            _out: List[Any] = []
+            for _f in list(merged.get(key) or []) + list(value or []):
+                _k = (json.dumps(_f, sort_keys=True, default=str)
+                      if isinstance(_f, (dict, list)) else repr(_f))
+                if _k not in _seen:
+                    _seen.add(_k)
+                    _out.append(_f)
+            merged[key] = _out
         elif merged.get(key) in (None, "", [], {}):
             merged[key] = value
     if canonical_kind:
