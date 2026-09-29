@@ -3522,6 +3522,115 @@ def _verify_template_matches_cellmap(ws, cm, flags=None):
         return  # never let the safety check itself break a run
 
 
+def labour_sheet_coverage(wb, cm) -> Optional[Dict[str, Any]]:
+    """Which Estimate labour rows the department-hours sheet actually reads, against the
+    labour block the template itself reports (cm["labour"], set by derive_cellmap_from_template).
+
+    THE DEPARTMENT TABLE READ A BLOCK THAT NO LONGER EXISTED. The hidden Labour sheet pairs
+    column A (the row's department) with column B (its hours) by single-cell reference, one row
+    per labour row, and its per-department formulas scan A1:B<capacity>. When the labour block
+    was widened from 40 to 72 rows, Excel shifted A41:B100 to the rows BELOW the new block
+    (Estimate!G198:J257, the totals area) instead of extending them, so rows 166-197 were
+    never read. 12645 19:17: "Total Labour Hours By Dept." summed 9.85 h against 12.60 h of
+    labour rows; P.Coat, Assemble/pack, Weld and Dress Welds (2.75 h) were missing (D-325).
+
+    Returns None when there is no such sheet (another template), else {sheet, dept_col,
+    hours_col, rows (the Estimate rows column A reads, in order), expected, capacity,
+    missing, stray, ok}. Read from the formulas, never from fixed row numbers."""
+    import re as _re
+    est = str(cm.get("estimate_sheet") or "Estimate")
+    lab = cm.get("labour") or {}
+    fr, lr = lab.get("first_row"), lab.get("last_row")
+    if not (isinstance(fr, int) and isinstance(lr, int) and lr >= fr):
+        return None
+    # THE BLOCK MUST BE THE ONE THE SHEET'S OWN LABELS BOUND. When the layout could not be
+    # read (a book whose material total is already AGGREGATE, a template reshaped past what
+    # derive_cellmap_from_template recognises) the map keeps its constants, and "repairing"
+    # against a stale map would point the department table at the wrong rows — it did, on
+    # the first try of this check. So: "Operation" directly above, "Total Labour Cost"
+    # directly below, or nothing is judged.
+    _es = wb[est] if est in wb.sheetnames else None
+    _col = int(lab.get("col_operation") or 3)
+    _above = str((_es.cell(fr - 1, _col).value if _es is not None else "") or "").strip().lower()
+    _below = str((_es.cell(lr + 1, _col).value if _es is not None else "") or "").strip().lower()
+    if _above != "operation" or not _below.startswith("total labour cost"):
+        return {"sheet": None, "ok": None, "unconfirmed": True,
+                "expected": list(range(fr, lr + 1))}
+    _ref = _re.compile(r"^=\s*'?" + _re.escape(est) + r"'?!\$?([A-Z]{1,3})\$?(\d+)\s*$")
+    for sh in wb.worksheets:
+        if sh.title == est:
+            continue
+        a1, b1 = _ref.match(str(sh.cell(1, 1).value or "")), _ref.match(str(sh.cell(1, 2).value or ""))
+        if not (a1 and b1):
+            continue
+        # capacity: the span the per-department formulas scan ($A$1:$B$<n>)
+        cap = None
+        for c in range(3, min(sh.max_column, 60) + 1):
+            v = sh.cell(2, c).value
+            m = _re.search(r"\$A\$1:\$B\$(\d+)", str(getattr(v, "text", v) or ""))
+            if m:
+                cap = int(m.group(1))
+                break
+        if cap is None:
+            continue
+        rows: List[Optional[int]] = []
+        for r in range(1, cap + 1):
+            m = _ref.match(str(sh.cell(r, 1).value or ""))
+            rows.append(int(m.group(2)) if m else None)
+        expected = list(range(fr, lr + 1))
+        got = [x for x in rows if x is not None]
+        return {"sheet": sh.title, "dept_col": a1.group(1), "hours_col": b1.group(1),
+                "rows": rows, "expected": expected, "capacity": cap,
+                "missing": sorted(set(expected) - set(got)),
+                "stray": sorted(set(got) - set(expected)),
+                "ok": got == expected}
+    return None
+
+
+def repair_labour_sheet_references(wb, cm, flags=None) -> Optional[Dict[str, Any]]:
+    """Point the department-hours sheet at exactly the labour block, in THIS book, and say so.
+
+    The template on the share is the thing to fix; until it is, every produced book is
+    repaired so its department hours add up to its labour rows. A block larger than the
+    sheet's scan capacity cannot be repaired here without rewriting its array formulas, and
+    is flagged as a template fault instead (D-325)."""
+    cov = labour_sheet_coverage(wb, cm)
+    _fl = flags if isinstance(flags, list) else []
+    if cov is not None and cov.get("unconfirmed"):
+        _e = cov["expected"]
+        _flag(f"labour block rows {_e[0]}..{_e[-1]} are not bounded by 'Operation' and "
+              f"'Total Labour Cost' on the sheet, so the department-hours sheet was NOT "
+              f"checked or repaired: department totals may not add up to the labour rows.", _fl)
+        return cov
+    if cov is None or cov["ok"]:
+        return cov
+    est = str(cm.get("estimate_sheet") or "Estimate")
+    exp = cov["expected"]
+    if len(exp) > cov["capacity"]:
+        _flag(f"TEMPLATE FAULT: the {cov['sheet']} sheet scans {cov['capacity']} rows but the "
+              f"labour block has {len(exp)} (rows {exp[0]}..{exp[-1]}); department hours will "
+              f"omit rows past its capacity. Widen that sheet's formulas in the template.", _fl)
+        return cov
+    sh = wb[cov["sheet"]]
+    for i in range(cov["capacity"]):
+        r = i + 1
+        if i < len(exp):
+            sh.cell(r, 1).value = f"={est}!{cov['dept_col']}{exp[i]}"
+            sh.cell(r, 2).value = f"={est}!{cov['hours_col']}{exp[i]}"
+        else:
+            sh.cell(r, 1).value = None
+            sh.cell(r, 2).value = None
+    _miss = cov["missing"]
+    _flag(f"TEMPLATE FAULT REPAIRED IN THIS BOOK: the {cov['sheet']} sheet read "
+          + (f"no labour rows {_miss[0]}..{_miss[-1]} ({len(_miss)} rows)" if _miss else "")
+          + (f"{' and ' if _miss else ''}{len(cov['stray'])} row(s) outside the labour block"
+             if cov["stray"] else "")
+          + f", so 'Total Labour Hours By Dept.' did not add up to the labour rows. Pointed "
+            f"at {est}!{cov['dept_col']}{exp[0]}:{cov['hours_col']}{exp[-1]} for this book; "
+            f"fix the template's {cov['sheet']} sheet so this is not needed.", _fl)
+    return cov
+
+
 def _make_material_total_error_tolerant(ws, flags=None):
     """Rewrite the Total Material Cost formula (M92) so an errored material row does not
     blank the whole total.
@@ -4784,6 +4893,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     ws = wb[cm["estimate_sheet"]]
     derive_cellmap_from_template(ws, cm, flags)
     _verify_template_matches_cellmap(ws, cm, flags)
+    repair_labour_sheet_references(wb, cm, flags)
     fill_missing_block_totals(ws, cm, flags)
 
     # Powder £/kg — write the code-controlled rate into the sheet (cell AF82),
