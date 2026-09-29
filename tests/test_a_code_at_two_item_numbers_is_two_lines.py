@@ -63,3 +63,28 @@ def test_bom_tree_adds_the_pair_too():
          _row("12173-07-2-02M", 1, "3")])
     assert len(rows) == 1 and rows[0]["quantity"] == 2
     assert rows[0]["combined_items"] == ["1", "3"]
+
+
+def test_the_tables_pair_corrects_the_extracts_single_edge():
+    """THE 29 SEP RUN (D-338). The extract's assembly list is keyed by code, so it named the
+    side panel once, x1; the table's summed 2 was then refused as a re-statement of a link the
+    extract already held. The book costed one side panel."""
+    parts = [{"part_number": p, "description": p, "quantity": 1}
+             for p in (TROUGH, "12173-07-2-01M", "12173-07-2-02M")]
+    extract = {"assemblies": [{"part_number": TROUGH, "children": [
+        {"part_number": "12173-07-2-01M", "qty": 1},
+        {"part_number": "12173-07-2-02M", "qty": 1}]}]}
+    rows = [_row("12173-07-2-02M", 1, "1"), _row("12173-07-2-01M", 1, "2"),
+            _row("12173-07-2-02M", 1, "3")]
+    g = rc.build_part_graph(parts, extract, rows)
+    assert g["quantities"]["12173-07-2-02M"] == 2, g["quantities"]
+    assert g["quantities"]["12173-07-2-01M"] == 1
+
+
+def test_one_row_per_code_leaves_the_extracts_edge_alone():
+    parts = [{"part_number": p, "description": p, "quantity": 1}
+             for p in (TROUGH, "12173-07-2-01M")]
+    extract = {"assemblies": [{"part_number": TROUGH, "children": [
+        {"part_number": "12173-07-2-01M", "qty": 3}]}]}
+    g = rc.build_part_graph(parts, extract, [_row("12173-07-2-01M", 1, "2")])
+    assert g["quantities"]["12173-07-2-01M"] == 3

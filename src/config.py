@@ -532,7 +532,11 @@ MATERIAL_PRICE_BREAK = {
     # anything past the table's last row would have been written into cells no LOOKUP reads.
     # The out-of-table report stays regardless, because the next template is not this one.
     "last_bom_row": 50,
-    "qty_vector_first_cell": "F180",  # Estimate's own Qty Breaks column, 11 cells down
+    # FALLBACKS ONLY. The writer reads the break tab's own formulas (=Estimate!F235,
+    # =Estimate!C11) and follows them; these stand only for a tab that says nothing. F180 was
+    # the anchor until rows were added to the Estimate — then it wrote the job's breaks over
+    # eleven labour Part No. cells on 12173 (D-338).
+    "qty_vector_first_cell": "F180",
     "first_price_col": 4,             # D
     "last_price_col": 14,             # N
 }

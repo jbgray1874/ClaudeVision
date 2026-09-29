@@ -175,6 +175,48 @@ def lines_from_record(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     return out
 
 
+def _bom_block_end(est: Any, first_bom: int) -> int:
+    """The last row of the Estimate's BOM block: the row before the next block's title
+    ("Wire", "Sheet Steel" ...) in column C, found by reading down from the first BOM row."""
+    try:
+        for r in range(first_bom, min((est.max_row or 0), first_bom + 400) + 1):
+            v = str(est.cell(row=r, column=3).value or "").strip().lower()
+            if v in ("wire", "sheet steel", "other sheet material", "labour"):
+                return r - 1
+    except Exception:                                                # noqa: BLE001
+        return 0
+    return 0
+
+
+def template_layout(ws: Any, est_name: str = "Estimate", first_col: int = 4) -> Dict[str, Any]:
+    """What the break tab's own formulas say about the Estimate's layout.
+
+    {"qty_first": "F235"} — the cell its quantity header (first price column) reads;
+    {"bom_map": {estimate row: break row}} — which break line each Estimate BOM row's label
+    formula is on. Not an offset: the 12173 template's break rows 5-25 read Estimate rows
+    11-31 and rows 26-44 read 62-80, because rows were inserted in the Estimate and not in
+    the tab. Empty where the tab says nothing: the config then stands."""
+    import re as _re
+    out: Dict[str, Any] = {}
+    ref = _re.compile(rf"^=\s*'?{_re.escape(est_name)}'?!\$?([A-Z]+)\$?(\d+)", _re.I)
+    try:
+        for r in range(1, 21):
+            m = ref.match(str(ws.cell(row=r, column=first_col).value or ""))
+            if m:
+                out["qty_first"] = f"{m.group(1).upper()}{m.group(2)}"
+                break
+        bom_map: Dict[int, int] = {}
+        for r in range(1, (ws.max_row or 0) + 1):
+            m = ref.match(str(ws.cell(row=r, column=first_col - 1).value or ""))
+            if m and m.group(1).upper() == "C":
+                bom_map.setdefault(int(m.group(2)), r)
+        if bom_map:
+            out["bom_map"] = bom_map
+    except Exception:                                                # noqa: BLE001
+        return {}
+    return out
+
+
 def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequence[int],
                        cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Fill the quantity row and every line's price at every break. Returns what it did.
@@ -210,6 +252,24 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
             return done
         ws = wb[sheet]
         est = wb[est_name]
+        # WHERE THE TEMPLATE POINTS, NOT WHERE IT USED TO. The anchor was the literal "F180"
+        # and the BOM range literal rows; James added rows to the Sheet Steel block, Excel
+        # moved the break tab's own references (=Estimate!F235, =Estimate!C11) with them, and
+        # the 12173 book had the job's breaks written over eleven labour Part No. cells while
+        # the break tab read the template's defaults (D-338). The formulas are the layout.
+        _found = template_layout(ws, est_name, first_col)
+        if _found.get("qty_first"):
+            qty_first = _found["qty_first"]
+        _break_for: Dict[int, int] = {r: r + row_offset for r in range(first_bom, last_bom + 1)}
+        if _found.get("bom_map"):
+            # Only the BOM block's own rows: the tab's later labels read the Wire block.
+            _block = {e: b for e, b in _found["bom_map"].items() if e >= first_bom}
+            _end = _bom_block_end(est, first_bom)
+            if _end:
+                _block = {e: b for e, b in _block.items() if e <= _end}
+            if _block:
+                _break_for = _block
+                first_bom, last_bom = min(_block), max(_block)
 
         # THE QUANTITY ROW IS WRITTEN ON THE ESTIMATE, NOT HERE. The break tab's header
         # reads =Estimate!F180..F190, so the numbers belong in the Estimate's own Qty Breaks
@@ -291,7 +351,7 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
                 continue
             _occupied = any(str(est.cell(row=_r, column=_cc).value or "").strip()
                             for _cc in _codecols)
-            _want = _r + row_offset
+            _want = _break_for.get(_r, 0)
             if "#REF!" in _v:
                 if _occupied:
                     done["refused"].append(
@@ -333,9 +393,9 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
                 _r = int(ln.get("sheet_row") or 0)
             except (TypeError, ValueError):
                 continue
-            if first_bom <= _r <= last_bom:
+            if _r in _break_for:
                 _by_row[_r] = ln
-            elif _r > last_bom:
+            elif _r > first_bom:
                 # NO SILENT CAP. The break table is shorter than the BOM block, so a line
                 # below its last row cannot be priced across the quantities — and a table
                 # that is simply missing a material reads as "this one does not move",
@@ -344,7 +404,7 @@ def write_price_breaks(wb: Any, lines: Sequence[Dict[str, Any]], breaks: Sequenc
                     f"{ln.get('code') or ln.get('description') or '?'} (sheet row {_r})")
 
         for bom_row, line in sorted(_by_row.items()):
-            target = bom_row + row_offset
+            target = _break_for.get(bom_row, 0)
             if target < 1:
                 continue
             wrote = False

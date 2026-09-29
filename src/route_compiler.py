@@ -1134,8 +1134,12 @@ def _bom_stated_edges(
     known: Set[str],
     rejected: Optional[List[str]] = None,
     allow_placeholder_mint: bool = False,
+    several_items: Optional[Set[tuple]] = None,
 ) -> List[tuple]:
     """(child, parent, qty) for every BOM row that names an owner we already know.
+
+    `several_items`, when given, receives each (child, parent) whose count was summed from
+    more than one item number of the table — a count no code-keyed reader can have.
 
     THE DETERMINISTIC READ OF A BOM TABLE IS THE STRONGEST HIERARCHY EVIDENCE ON A DRAWING
     PACK, and it was the only one this compiler never consulted. bom_pipeline stamps each row
@@ -1282,6 +1286,8 @@ def _bom_stated_edges(
             held[0] = qty
             if item:
                 held[1].add(item)
+    if several_items is not None:
+        several_items.update(k for k, (_q, _items) in combined.items() if len(_items) > 1)
     return [(c, p, q) for (c, p), (q, _items) in combined.items()]
 
 
@@ -1727,9 +1733,11 @@ def build_part_graph(
     # assemblies that each use the part, which is the ordinary shape of a fastener.
     _claimed_before_bom = set(parents)
     _rejected_parents: List[str] = []
+    _several_items: Set[tuple] = set()
     _bom_edges = _bom_stated_edges(
         bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings,
-        _rejected_parents, allow_placeholder_mint=(pack_mode == "pdf_primary"))
+        _rejected_parents, allow_placeholder_mint=(pack_mode == "pdf_primary"),
+        several_items=_several_items)
     if _rejected_parents:
         _unique = sorted({r for r in _rejected_parents if r})
         print(f"   [bom] {len(_rejected_parents)} row(s) name an owner this job does not "
@@ -1767,6 +1775,19 @@ def build_part_graph(
             # a sub-assembly's rows restated) and would count twice, so it is still refused.
             # Only an owner in a different tree — another general arrangement — is added.
             _have = parents.get(_child_id) or set()
+            # THE SAME LINK, COUNTED BY THE TABLE OVER SEVERAL ITEM NUMBERS. The extract's
+            # assembly list is keyed by code, so 12173-07-2-GA's SIDE PANEL at items 1 and 3
+            # (a handed pair) reached it once, and this refusal then kept the table's 2 out:
+            # the 29 Sep book costed one side panel. A count summed from distinct item rows
+            # is one no code-keyed reader can hold, so it corrects the extract's (D-338).
+            if _parent_id in _have and (_child_id, _parent_id) in _several_items:
+                _was = (children.get(_parent_id) or {}).get(_child_id)
+                if _was != _qty:
+                    children.setdefault(_parent_id, {})[_child_id] = _qty
+                    print(f"   [bom] {_child_id} is at several item numbers of "
+                          f"{_parent_id}'s table — x{_qty:g}, not the extract's "
+                          f"x{number(_was, 0) or 0:g}", flush=True)
+                continue
             # AND ONLY WHERE THE TABLES AGREE WITH THE EXTRACT. A table that names a DIFFERENT
             # owner and never the extract's is a disagreement, and the extract still wins
             # (12392: a panel the BOM put under the bracket set). A table that lists the part
@@ -5165,6 +5186,15 @@ def compile_job_route(
                 or record.get("bar_schedule")
             ) else str(record.get("stock_form")
                        or (record.get("material_estimate") or {}).get("stock_form") or "")
+            # A MEASURED FLAT BLANK IS SHEET STOCK, whatever else the record leaves blank — the
+            # same evidence the bar rule above treats as "not a bar".
+            if not stock_form:
+                try:
+                    from bought_in_policy import has_fabrication_evidence as _flat
+                    if _flat(dict(record)):
+                        stock_form = "sheet"
+                except Exception:                                    # noqa: BLE001
+                    pass
             material = str(
                 record.get("normalized_material") or record.get("material") or "")
             reason = impossibility_reason(template.operation, stock_form, material)
@@ -5272,8 +5302,17 @@ def compile_job_route(
             f"assemble here would charge for building it twice.")
         _d.field_provenance["status"] = "specific_joining_covers_this_assembly"
 
-    if pack_mode == "pdf_primary":
-        _family_gate(decisions, raw)
+    # EVERY LANE, NOT ONLY DRAWINGS-ONLY. 12173 had SolidWorks data, so this gate never ran —
+    # and the M&S sheet's general notes ("RESISTANCE WELDING WIRE TO WIRE", "POWDERCOATING
+    # 80-120 MICRON") were transcribed onto every part as operations: the purchased glides,
+    # screws and inserts were deburred, powder coated, welded and wire-formed, and the MDF base
+    # was welded and folded. The model adds geometry; it does not make a screw something we
+    # fabricate, so the part's own family decides in every lane (D-338).
+    # Outside the drawings-only lane only the two branches that need POSITIVE evidence run —
+    # a purchase statement, a joinery material. The sheet-good and hole branches lean on a
+    # family defaulted from a code's shape, which a model-backed pack has better answers to.
+    _family_gate(decisions, raw, graph.get("records") or {},
+                 positive_only=(pack_mode != "pdf_primary"))
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -5327,7 +5366,7 @@ def compile_job_route(
 # £656 of welding and £511 of powder on panels the drawing finishes with laminate.
 _METAL_ONLY_OPS = frozenset({
     "laser_cutting", "folding", "welding", "dress_welds", "powder_coating",
-    "linebend", "tubebend",
+    "linebend", "tubebend", "wire_forming", "robomac",
 })
 
 # Making a hole. A purchased sheet good arrives finished — with its holes if it has any — so
@@ -5453,8 +5492,10 @@ def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
     return any(cue in _text for cue in _HOLE_PRESENCE_CUES + _MACHINING_INSTRUCTION_CUES)
 
 
-def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]]) -> None:
-    """pdf_primary only: a part's OWN material decides which route family may charge it.
+def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
+                 records: Optional[Mapping[str, Mapping[str, Any]]] = None,
+                 positive_only: bool = False) -> None:
+    """Every lane: a part's OWN material decides which route family may charge it.
 
     On 0359342 the whole-document extract transcribed the general finish legend onto
     every part record, and each part's textual_operations then became a required
@@ -5486,16 +5527,35 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
     # Drill rows through countersinking claims the legend transcription minted.
     _FAB_ALL = set(_FAB_ALL) | {"countersinking", "drilling", "hole_machining",
                                 "drill", "cnc_machining"}
+    try:
+        from bought_in_policy import has_fabrication_evidence as _made_here
+        from bought_in_policy import bought_in_reason as _bought_reason
+    except Exception:                                            # pragma: no cover
+        _made_here = _bought_reason = None
     for _d in decisions:
         if _d.status != REQUIRED or str(_d.scope or "") != "part":
             continue
-        _rec = raw.get(_d.target_id) or {}
+        # THE MERGED RECORD FIRST: the raw one can be keyed under another spelling, and then
+        # the gate read no description at all ("3.5-X16MM-PAN-HEAD", a pan-head screw).
+        _rec = (records or {}).get(_d.target_id) or raw.get(_d.target_id) or {}
         _mat = str(_rec.get("normalized_material")
                    or (_rec.get("material_estimate") or {}).get("material") or "")
         _desc = str(_rec.get("description") or "")
         _fam = family_for(_mat, _d.target_id, _desc)
         _hardware = bool(synthesise_bought_in_code(_desc)) \
             or family_for("", _d.target_id, "") == BOUGHT_IN
+        # AND WHAT THE ENGINE PRICES AS BOUGHT IN. bought_in_policy is the authority the
+        # costing reads (FIXING125 and FIXING49 are catalogue codes; the Windmill ticket strip
+        # is priced as a purchased line), and a line priced as bought cannot also be made
+        # here — that is the price twice. Measured geometry of its own still says we make it.
+        # Not the code-SHAPE rule alone: JAE820 is a Boots code for an MDF plinth top we
+        # cut, and a word-and-number shape is not a purchase statement when the part names a
+        # material of its own — the joinery branch below is its answer.
+        if not _hardware and _bought_reason is not None:
+            _probe = dict(_rec, part_number=_rec.get("part_number") or _d.target_id)
+            _why = _bought_reason(_probe)
+            _hardware = bool(_why) and not _why.startswith("a catalogue family code") \
+                and not _made_here(_probe)
         if _hardware and _d.operation in _FAB_ALL:
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_d.target_id} is purchased hardware "
@@ -5509,6 +5569,8 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]])
                          f"document-level note transcribed onto the part, not from its "
                          f"own route")
             _d.field_provenance["status"] = "family_gate_joinery"
+        elif positive_only:
+            continue
         elif _fam == BOUGHT_IN and _d.operation in _METAL_ONLY_OPS:
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_mat or _d.target_id} is a bought-in sheet good — it is "

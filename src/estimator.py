@@ -9672,7 +9672,13 @@ def _bought_in_token_set(part: Dict[str, Any]) -> Optional[set]:
     # "M4"/"M6" so _bought_in_same_item can refuse two different threads.
     stemmed |= {"THREAD:M" + m for m in
                 _re.findall(r"(?<![A-Z0-9])M(\d+(?:\.\d+)?)(?=\s*(?:X|-|\b|[A-Z]))", desc)}
-    words = {t for t in stemmed if not t.replace(".", "").isdigit()}
+    # AND A SIZE IS ONE TOKEN TOO. "Ø3.5x12mm" split into 3.5 and 12, so a 3.5 x 12 and a
+    # 3.5 x 16 pan-head screw shared "3.5" and were read as one item: on 12173 the x16 screw
+    # took the x12 row's quantity, and the x12 row was added a second time under its own
+    # code (D-338). Kept as "SIZE:3.5X12" so _bought_in_same_item can refuse two sizes.
+    stemmed |= {f"SIZE:{a}X{b}" for a, b in
+                _re.findall(r"(\d+(?:\.\d+)?)\s*(?:MM)?\s*[X\u00D7]\s*(\d+(?:\.\d+)?)", desc)}
+    words = {t for t in stemmed if not t.replace(".", "").isdigit() and not t.startswith("SIZE:")}
     if not words:
         return None
     return stemmed
@@ -9691,6 +9697,13 @@ def _bought_in_same_item(a: set, b: set) -> bool:
         return False
     a = a - at
     b = b - bt
+    # Two stated sizes with nothing in common are two items ("3.5x12" is not "3.5x16").
+    asz = {t for t in a if t.startswith("SIZE:")}
+    bsz = {t for t in b if t.startswith("SIZE:")}
+    if asz and bsz and not (asz & bsz):
+        return False
+    a = a - asz
+    b = b - bsz
     aw = {t for t in a if not t.replace(".", "").isdigit()}
     bw = {t for t in b if not t.replace(".", "").isdigit()}
     an = {t for t in a if t.replace(".", "").isdigit()}

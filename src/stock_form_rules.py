@@ -51,7 +51,13 @@ IMPOSSIBLE_OPS_BY_STOCK_FORM: Dict[str, Set[str]] = {
     # on a tube bender (its own op) or cut and welded, never put through a press brake. 7332-01's
     # square-tube leg carried a folding charge it can never incur. Cutting stays OUT of this set
     # (a tube is sawn / laser-tube-cut, redirected by _TUBE_OP_REMAP — see the note above).
-    "tube": {"punch", "punching", "fold", "folding", "linebend", "line_bend"},
+    "tube": {"punch", "punching", "fold", "folding", "linebend", "line_bend",
+             "wire_forming", "robomac"},
+    # WIRE FORMING NEEDS WIRE. The Robomac bends round bar; a flat blank goes to the press
+    # brake and a tube to the tube bender. 12173's sheet brackets and tube frames each carried
+    # a Robomac row off a general note ("RESISTANCE WELDING WIRE TO WIRE ...") that every M&S
+    # sheet prints whether or not the product has any wire in it (D-338).
+    "sheet": {"wire_forming", "robomac"},
     # A SOLID ROUND BAR HAS NO FLAT BLANK EITHER, AND UNLIKE A TUBE IT HAS NO WALL.
     # It cannot be lasered, folded, punched, line-bent, guillotined or diamond-polished.
     # It is cut (Robomac / Saw) and welded. 1310-02 STUD (8mm dia x 65) carried Laser £4.91
