@@ -519,6 +519,28 @@ def estimating_page(request: Request):
                                            "is not next to app.py"})
 
 
+# THE TECHNICAL DESIGN WORKFLOW MAPS. Two standalone pages from Technical Design (full and
+# compact), served from workflows/ beside this file so they travel with the portal to every
+# box it runs on. A fixed list, not a path parameter read from disk: nothing a URL names can
+# reach a file that is not one of these.
+_WORKFLOW_DIR = Path(__file__).with_name("workflows")
+_WORKFLOWS = {
+    "technical-design": "technical-design-workflow.html",
+    "technical-design-compact": "technical-design-workflow-compact.html",
+}
+
+
+@app.get("/workflow/{name}")
+def workflow_page(name: str, request: Request):
+    """A Technical Design workflow map, opened from the portal's left-hand menu."""
+    if auth.current_user(request) is None:
+        return auth.login_redirect(request)
+    filename = _WORKFLOWS.get(name)
+    if filename is None or not (_WORKFLOW_DIR / filename).is_file():
+        raise HTTPException(status_code=404, detail="No such workflow page")
+    return FileResponse(str(_WORKFLOW_DIR / filename), headers=_PAGE_HEADERS)
+
+
 @app.get("/guide")
 def estimating_guide(request: Request):
     """What each deliverable means and what it is asking the estimator to decide.
