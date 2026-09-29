@@ -6,11 +6,11 @@ Plain-text twin of `SDI_Intelligence_Programme_Email_20260929.html`. The HTML is
 
 ---
 
-James, Jack,
+Matt, Charlotte,
 
 A fuller note than usual, because a lot has moved. **Each heading below links to the portal page where the change was made.** Links go to the server copy of the portal; the same pages are on the estimating laptop at localhost:8072.
 
-Six things. The estimating wave has put **twenty packs** in front of the estimators, with **eight reviews** back. **Sage X3** now loads and tests area by area, **estimating first**. The **Design Vault** reaches its go/no-go at the end of October. **Drawing Search** is on trial with the studio. **Client Briefing version 2** runs on Jonathan's live jobs. And **the server is being ordered**.
+Six things. **Three services go live with the server at the end of October**: AI estimating, the estimators' drawing-pack extraction and Drawing Search. The estimating wave has put **twenty packs** in front of the estimators, with **eight reviews** back, and the parity KPI Matt asked for is set out below. **Sage X3** now loads and tests area by area, **estimating first**. The **Design Vault** reaches its go/no-go at the end of October. **Drawing Search** is on trial with the studio. **Client Briefing version 2** runs on Jonathan's live jobs. And **the server is being ordered**.
 
 ## 1 · SDI Estimating Intelligence — twenty packs out, eight reviews back
 http://10.0.0.5:8071/#aisvc-estimating · laptop: http://localhost:8072/#aisvc-estimating
@@ -20,6 +20,8 @@ The September wave has put **twenty estimate packs** in front of four estimators
 Two things changed how the work is done. **Each pack is now scored against its own drawings before it is sent**: a pass table is written first, and a book that fails a row is fixed in the engine and re-run, never edited by hand. On 12645 the faults found in the early books became eleven general rules instead of a list of corrections for Dave. And **every run now writes a BOMs and Routes pair** beside the estimate, which is what Tim asked for on 16 September and is the shape a Sage X3 upload takes.
 
 Where the reviews prove it, stated as a variance and a direction: material to within a penny on 10975-02; about 6% from the manual estimate on 11908-21; on 1176-02 the AI is about a third high at 10 off, and one line, the vinyl graphic the customer had already priced, carries more than all of it. Without that line the AI is about 17% under. Dave on the 11650-06 book: *“This looks good now.”*
+
+**Parity, the go-live KPI.** Five AI-against-manual comparisons are complete, with a mean absolute variance of about 20%. On four of the five the cause is a line with no price source (plating, freight, packaging, a customer's own price), not the engine's method. The count grows only when the estimator's own sheet is filed with the job, which is the ask of Dave's team. **Go-live is targeted for the end of October, when the server goes live, and confirmed by that evidence rather than by the date.**
 
 ## 2 · Access Supply Chain → Sage X3 — load and test together, estimating first
 http://10.0.0.5:8071/#aisvc-x3 · laptop: http://localhost:8072/#aisvc-x3
@@ -35,12 +37,14 @@ http://10.0.0.5:8071/#aisvc-technical-design · laptop: http://localhost:8072/#a
 
 Yogesh has the **SDI Design Vault's core loop working** (browse, lock, edit, check in to GitLab), and the designers received it well on 23 September. It is about 90% technically proven. Its advantage over PDM Standard is an API that the estimating tools, Sage, QC and AI can reach. A **go/no-go on Standard against in-house is set for the end of October**, decided on cross-project and library referencing, which he builds and demonstrates next.
 
-The extraction endpoint is now correct end to end for the 12633 family (582 tests, verified against the W: share). P2's user testing with Ed and Ian has not started: it **waits on the test server**, so its date is to be re-planned against the server below.
+The extraction endpoint is now correct end to end for the 12633 family (582 tests, verified against the W: share). P2, which extracts drawing packs into the production area for the estimators, is development-complete and **goes live with the server at the end of October**. Its user testing with Ed and Ian waits on the server.
+
+**Brought forward:** the SolidWorks drawing automations (drawing generation, up to about 70% of a drawing, and full export generation, both POC done) were scheduled for January/February. Yogesh is now working on them in parallel as far as he can. He has also pinned down with Ian exactly how PDM Standard handles cross-project parts, which is the behaviour the Vault must match.
 
 ## 4 · SDI Drawing Search Intelligence — on trial with the studio
 http://10.0.0.5:8071/#aisvc-drawing-search · laptop: http://localhost:8072/#aisvc-drawing-search
 
-The design and technical teams are on a **two-week trial**, with their feedback due at the end of the month and changes to follow. It still runs from Muhammad's own machine; its always-on home is the server below.
+The design and technical teams are on a **two-week trial**, with their feedback due at the end of the month and changes to follow. It still runs from Muhammad's own machine and **goes live on the server at the end of October**. Muhammad and I are also analysing how to fast-track the creative design process by integrating creative-design automations with the search tool.
 
 ## 5 · SDI Client Briefing Intelligence — version 2, on Jonathan’s live jobs
 http://10.0.0.5:8071/#aisvc-client-briefing · laptop: http://localhost:8072/#aisvc-client-briefing
@@ -52,9 +56,9 @@ Voice notes are written up on our own machine, so there is no AI cost and the cl
 ## 6 · The SDI Intelligence server — ordered
 http://10.0.0.5:8071/#servers · laptop: http://localhost:8072/#servers
 
-The server all three workstreams have been waiting on is **being ordered this week** from Scan 3XS. It has a **three-week lead time**, then about **a week's build** between the two of us, so it is in service in the **week of 26 October**. The specification is an AMD Threadripper PRO 9975WX (32 cores) on an ASUS Pro WS WRX90E-SAGE SE, with 128 GB of DDR5 ECC memory, an NVIDIA RTX 4000 Ada SFF 20 GB graphics card, 2 × 2 TB NVMe drives and a 3-year warranty. The price is **£13,155.28 inc VAT**.
+The server all three workstreams have been waiting on is **being ordered this week** from Scan 3XS. It has a **three-week lead time**, then about **a week's build** between the two of us, so it is in service in the **week of 26 October**, and the three go-lives above are timed to it. The specification is an AMD Threadripper PRO 9975WX (32 cores) on an ASUS Pro WS WRX90E-SAGE SE, with 128 GB of DDR5 ECC memory, an NVIDIA RTX 4000 Ada SFF 20 GB graphics card, 2 × 2 TB NVMe drives and a 3-year warranty. The price is **£13,155.28 inc VAT**.
 
-It is sized to run an estimate driving SolidWorks with one or two more beside it, Drawing Search and the Design Vault together. The operating system and licensing, RAID and backup, a UPS and its place on the network are for us to settle before it arrives, so that the build week is spent building.
+It is sized to run an estimate driving SolidWorks with one or two more beside it, Drawing Search and the Design Vault together. The operating system and licensing, RAID and backup, a UPS and its place on the network are for us to settle before it arrives, so that the build week is spent building. **One point for Matt:** the order is about £10,963 ex VAT, against the roughly £5,000 workstation specified in September, because it now carries three services and the Vault side by side. It is being ordered on the existing approval. If the difference needs your sign-off, that is the only decision in front of it.
 
 ## Everything above, on the portal
 
@@ -73,7 +77,7 @@ It is sized to run an estimate driving SolidWorks with one or two more beside it
 
 **Still the thing we need from outside the programme:** the **supplier price lists** from Elite, Eagle and Thermaset. Every market figure on this month's books traces back to them. The machinery to load them is built, tested and waiting on the files.
 
-Happy to walk either of you through any of it.
+Happy to walk you both through any of it. A shorter summary, answering Matt's points of 17 September, comes separately.
 
 Kind regards,
 James

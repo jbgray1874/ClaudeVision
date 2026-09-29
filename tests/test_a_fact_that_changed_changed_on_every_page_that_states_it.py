@@ -189,6 +189,19 @@ _SUPERSEDED = [
         r"In progress, 60%",
         id="p1-progress",
     ),
+    # 29 Sep 2026 (James Gray): AI estimating, P2 Production Design Extraction and Drawing
+    # Search go live when the SDI Intelligence server does, estimated end of October. The
+    # "September / October" target, and P2's 29 Sep go-live, stated the old plan.
+    pytest.param(
+        "Estimating and P2 go live with the server, end of October 2026",
+        r"(?:SEPT / OCT 2026"
+        r"|SEPT / OCT GO-LIVE"
+        r"|Go-live · September / October 2026 \(target\)"
+        r"|targeted? (?:GO-LIVE in )?September / October 2026"
+        r"|>Sep / Oct</div>"
+        r"|>29 SEP 2026<)",
+        id="go-live-with-the-server",
+    ),
 ]
 
 

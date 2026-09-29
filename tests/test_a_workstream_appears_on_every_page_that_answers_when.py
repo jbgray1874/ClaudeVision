@@ -195,6 +195,9 @@ def test_the_nodes_run_in_date_order():
         # took the slot Client Briefing's ~NOV 2026 node held until that project went on hold.
         "29 SEP 2026": _dt.date(2026, 9, 29),
         "SEPT / OCT 2026": _dt.date(2026, 9, 30),   # the target window opens end-Sept
+        # 29 Sep 2026: estimating, P2 and Drawing Search go live with the SDI Intelligence
+        # server, estimated end of October — the same day as the X3 node, which is allowed.
+        "END OCT 2026": _dt.date(2026, 10, 30),
         # The Sage X3 DATA MIGRATION, added 17 Sep 2026. Distinct from the ERP go-live below
         # and deliberately earlier: all data lands in X3 before the business runs on it.
         "30 OCT 2026": _dt.date(2026, 10, 30),

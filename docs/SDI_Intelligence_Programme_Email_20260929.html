@@ -16,9 +16,9 @@
   </td></tr>
 
   <tr><td style="padding:18px 0 0 0;">
-    <p style="margin:0 0 12px 0;">James, Jack,</p>
+    <p style="margin:0 0 12px 0;">Matt, Charlotte,</p>
     <p style="margin:0 0 12px 0;">A fuller note than usual, because a lot has moved. <b>Each heading below links to the portal page where the change was made.</b> Links go to the server copy of the portal; the same pages are on the estimating laptop at localhost:8072.</p>
-    <p style="margin:0 0 16px 0;">Six things. The estimating wave has put <b>twenty packs</b> in front of the estimators, with <b>eight reviews</b> back. <b>Sage X3</b> now loads and tests area by area, <b>estimating first</b>. The <b>Design Vault</b> reaches its go/no-go at the end of October. <b>Drawing Search</b> is on trial with the studio. <b>Client Briefing version 2</b> runs on Jonathan's live jobs. And <b>the server is being ordered</b>.</p>
+    <p style="margin:0 0 16px 0;">Six things. <b>Three services go live with the server at the end of October</b>: AI estimating, the estimators' drawing-pack extraction and Drawing Search. The estimating wave has put <b>twenty packs</b> in front of the estimators, with <b>eight reviews</b> back, and the parity KPI Matt asked for is set out below. <b>Sage X3</b> now loads and tests area by area, <b>estimating first</b>. The <b>Design Vault</b> reaches its go/no-go at the end of October. <b>Drawing Search</b> is on trial with the studio. <b>Client Briefing version 2</b> runs on Jonathan's live jobs. And <b>the server is being ordered</b>.</p>
   </td></tr>
 
   <tr><td style="padding:20px 0 0 0;">
@@ -31,6 +31,7 @@
     <p style="margin:12px 0 12px 0;">The September wave has put <b>twenty estimate packs</b> in front of four estimators &mdash; Howard, Tim, Dave and Tony &mdash; and <b>eight detailed reviews</b> have come back. Every point went into the engine as a general rule, not as a correction to one workbook. Twelve jobs are now integrated; seven are awaiting review, the newest <b>12645, the Tesco DRS external shelter</b>, sent to Dave today.</p>
     <p style="margin:0px 0 12px 0;">Two things changed how the work is done. <b>Each pack is now scored against its own drawings before it is sent</b>: a pass table is written first, and a book that fails a row is fixed in the engine and re-run, never edited by hand. On 12645 the faults found in the early books became eleven general rules instead of a list of corrections for Dave. And <b>every run now writes a BOMs and Routes pair</b> beside the estimate, which is what Tim asked for on 16 September and is the shape a Sage X3 upload takes.</p>
     <p style="margin:0px 0 12px 0;">Where the reviews prove it, stated as a variance and a direction: material to within a penny on 10975-02; about 6% from the manual estimate on 11908-21; on 1176-02 the AI is about a third high at 10 off, and one line, the vinyl graphic the customer had already priced, carries more than all of it. Without that line the AI is about 17% under. Dave on the 11650-06 book: <i>“This looks good now.”</i></p>
+    <p style="margin:0px 0 12px 0;"><b>Parity, the go-live KPI.</b> Five AI-against-manual comparisons are complete, with a mean absolute variance of about 20%. On four of the five the cause is a line with no price source (plating, freight, packaging, a customer's own price), not the engine's method. The count grows only when the estimator's own sheet is filed with the job, which is the ask of Dave's team. <b>Go-live is targeted for the end of October, when the server goes live, and confirmed by that evidence rather than by the date.</b></p>
   </td></tr>
 
   <tr><td style="padding:20px 0 0 0;">
@@ -53,7 +54,8 @@
       <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-technical-design &middot; laptop: http://localhost:8072/#aisvc-technical-design</div>
     </div>
     <p style="margin:12px 0 12px 0;">Yogesh has the <b>SDI Design Vault's core loop working</b> (browse, lock, edit, check in to GitLab), and the designers received it well on 23 September. It is about 90% technically proven. Its advantage over PDM Standard is an API that the estimating tools, Sage, QC and AI can reach. A <b>go/no-go on Standard against in-house is set for the end of October</b>, decided on cross-project and library referencing, which he builds and demonstrates next.</p>
-    <p style="margin:0px 0 12px 0;">The extraction endpoint is now correct end to end for the 12633 family (582 tests, verified against the W: share). P2's user testing with Ed and Ian has not started: it <b>waits on the test server</b>, so its date is to be re-planned against the server below.</p>
+    <p style="margin:0px 0 12px 0;">The extraction endpoint is now correct end to end for the 12633 family (582 tests, verified against the W: share). P2, which extracts drawing packs into the production area for the estimators, is development-complete and <b>goes live with the server at the end of October</b>. Its user testing with Ed and Ian waits on the server.</p>
+    <p style="margin:0px 0 12px 0;"><b>Brought forward:</b> the SolidWorks drawing automations (drawing generation, up to about 70% of a drawing, and full export generation, both POC done) were scheduled for January/February. Yogesh is now working on them in parallel as far as he can. He has also pinned down with Ian exactly how PDM Standard handles cross-project parts, which is the behaviour the Vault must match.</p>
   </td></tr>
 
   <tr><td style="padding:20px 0 0 0;">
@@ -63,7 +65,7 @@
       </div>
       <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#aisvc-drawing-search &middot; laptop: http://localhost:8072/#aisvc-drawing-search</div>
     </div>
-    <p style="margin:12px 0 12px 0;">The design and technical teams are on a <b>two-week trial</b>, with their feedback due at the end of the month and changes to follow. It still runs from Muhammad's own machine; its always-on home is the server below.</p>
+    <p style="margin:12px 0 12px 0;">The design and technical teams are on a <b>two-week trial</b>, with their feedback due at the end of the month and changes to follow. It still runs from Muhammad's own machine and <b>goes live on the server at the end of October</b>. Muhammad and I are also analysing how to fast-track the creative design process by integrating creative-design automations with the search tool.</p>
   </td></tr>
 
   <tr><td style="padding:20px 0 0 0;">
@@ -84,8 +86,8 @@
       </div>
       <div style="font-family:Consolas,'Courier New',monospace;font-size:11px;color:#5a6572;padding-top:5px;">http://10.0.0.5:8071/#servers &middot; laptop: http://localhost:8072/#servers</div>
     </div>
-    <p style="margin:12px 0 12px 0;">The server all three workstreams have been waiting on is <b>being ordered this week</b> from Scan 3XS. It has a <b>three-week lead time</b>, then about <b>a week's build</b> between the two of us, so it is in service in the <b>week of 26 October</b>. The specification is an AMD Threadripper PRO 9975WX (32 cores) on an ASUS Pro WS WRX90E-SAGE SE, with 128 GB of DDR5 ECC memory, an NVIDIA RTX 4000 Ada SFF 20 GB graphics card, 2 &times; 2 TB NVMe drives and a 3-year warranty. The price is <b>&pound;13,155.28 inc VAT</b>.</p>
-    <p style="margin:0px 0 12px 0;">It is sized to run an estimate driving SolidWorks with one or two more beside it, Drawing Search and the Design Vault together. The operating system and licensing, RAID and backup, a UPS and its place on the network are for us to settle before it arrives, so that the build week is spent building.</p>
+    <p style="margin:12px 0 12px 0;">The server all three workstreams have been waiting on is <b>being ordered this week</b> from Scan 3XS. It has a <b>three-week lead time</b>, then about <b>a week's build</b> between the two of us, so it is in service in the <b>week of 26 October</b>, and the three go-lives above are timed to it. The specification is an AMD Threadripper PRO 9975WX (32 cores) on an ASUS Pro WS WRX90E-SAGE SE, with 128 GB of DDR5 ECC memory, an NVIDIA RTX 4000 Ada SFF 20 GB graphics card, 2 &times; 2 TB NVMe drives and a 3-year warranty. The price is <b>&pound;13,155.28 inc VAT</b>.</p>
+    <p style="margin:0px 0 12px 0;">It is sized to run an estimate driving SolidWorks with one or two more beside it, Drawing Search and the Design Vault together. The operating system and licensing, RAID and backup, a UPS and its place on the network are for us to settle before it arrives, so that the build week is spent building. <b>One point for Matt:</b> the order is about &pound;10,963 ex VAT, against the roughly &pound;5,000 workstation specified in September, because it now carries three services and the Vault side by side. It is being ordered on the existing approval. If the difference needs your sign-off, that is the only decision in front of it.</p>
   </td></tr>
 
   <tr><td style="padding:22px 0 0 0;">
@@ -158,7 +160,7 @@
   </td></tr>
 
   <tr><td style="padding:22px 0 8px 0;border-top:1px solid #d8dee5;">
-    <p style="margin:14px 0 12px 0;">Happy to walk either of you through any of it.</p>
+    <p style="margin:14px 0 12px 0;">Happy to walk you both through any of it. A shorter summary, answering Matt's points of 17 September, comes separately.</p>
     <p style="margin:0 0 12px 0;">Kind regards,<br>James</p>
     <div style="font-size:13px;color:#5a6572;line-height:1.7;">
       <b style="color:#1d2328;">James Gray</b><br>
