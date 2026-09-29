@@ -1779,6 +1779,74 @@ def removed_identities(source: Any) -> Set[str]:
     return out
 
 
+def _squash(v: Any) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+
+def stated_rows_not_carried(source: Any) -> List[Dict[str, Any]]:
+    """Parts-list rows the pack STATES that the product does not carry: the row's code joins
+    no reached node under any alias or spelling, and no ledger ruled it out. 12645 19:17: the
+    M8 nut x120 and the tek screw x16 on the body's own parts list (D-324).
+
+    Empty unless the product resolved. A stopped roll-up has its own issue; forcing either of
+    12645's offline roots as the product flagged every row under the other."""
+    if not isinstance(source, dict):
+        return []
+    try:
+        from invariants import _reached_unaccounted_core as _ruc  # noqa: PLC0415
+        _r = _ruc(source)
+    except Exception:                                             # noqa: BLE001
+        return []
+    nodes = _canonical_nodes(source)
+    payload = ((source.get("estimate_summary") or {}).get("canonical_route_shadow")
+               if isinstance(source.get("estimate_summary"), dict) else None) \
+        or source.get("canonical_route_shadow") or {}
+    root = str((payload or {}).get("product_root") or "").strip().upper()
+    if not root or root not in nodes:
+        return []
+    reached: Set[str] = set()
+    frontier = [root]
+    while frontier:
+        ident = frontier.pop()
+        if ident in reached:
+            continue
+        reached.add(ident)
+        for edge in (nodes.get(ident, {}).get("children") or []):
+            child = str((edge or {}).get("part_number") if isinstance(edge, dict) else edge
+                        or "").strip().upper()
+            if child and child not in reached:
+                frontier.append(child)
+    reached_sq = {_squash(r) for r in reached}
+    for r in list(reached):
+        for a in ((nodes.get(r) or {}).get("evidence") or {}).get("raw_aliases") or []:
+            reached_sq.add(_squash(a))
+    ruled = {_squash(x) for x in removed_identities(source)}
+    ruled |= {_squash(e.get("part_number")) for e in (source.get("set_aside_outside_product") or [])
+              if isinstance(e, dict)}
+    try:
+        from part_identity import is_placeholder_identity           # noqa: PLC0415
+    except Exception:                                             # noqa: BLE001
+        def is_placeholder_identity(_x):                          # type: ignore
+            return False
+    out: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for row in ((source.get("document_analysis") or {}).get("bom_rows") or []):
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("part_number") or "").strip()
+        qty = _num(row.get("quantity"))
+        key = _squash(canonical_identity(source, code))
+        if not code or not qty or not key or key in seen or is_placeholder_identity(code):
+            continue
+        if key in reached_sq or _squash(code) in reached_sq or key in ruled:
+            continue
+        seen.add(key)
+        out.append({"part_number": code, "description": str(row.get("description") or ""),
+                    "qty": qty, "sheet": str(row.get("bom_sheet") or row.get("source_page")
+                                             or row.get("bom_parent") or "")})
+    return out
+
+
 def costed_job(source: Any) -> Dict[str, Any]:
     """THE record. Pure: same summary in, same record out. Cheap enough to call from every
     writer; persisted by main.py after the read-back for the audit trail only."""
@@ -1949,6 +2017,35 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "action": ("enter the per-unit figure" if l["kind"] == "commercial"
                        else "supply a rate or a supplier quote"),
             "owner": l["price_origin"]["owner"], "gbp_at_stake": None})
+    # ── WHAT THE TALLY COULD NOT SEE, FROM THE RESOLVERS THAT ALREADY SEE IT (D-324) ──
+    # The tally built its list from priced lines only, so an item with NO line — 12645's
+    # shutters, reached and absent — was counted nowhere, and the reached-item check that
+    # does see it runs after the banner is written. The same walk now feeds both.
+    _named_now = {str(d.get("part") or "").upper() for d in decisions}
+    try:
+        from invariants import _reached_unaccounted_core as _ruc   # noqa: PLC0415
+        _ru = _ruc(source)
+    except Exception:                                              # noqa: BLE001
+        _ru = {}
+    for _ident in _ru.get("unaccounted") or []:
+        if str(_ident).upper() in _named_now:
+            continue
+        _q = _num(((_ru.get("nodes") or {}).get(_ident) or {}).get("qty_per_unit")) or None
+        decisions.append({
+            "part": _ident, "kind": "missing_price", "qty": _q,
+            "issue": (f"{_ident}{f' x{_q:g}' if _q else ''} is on the bill the product reaches "
+                      f"and has no line on the sheet"),
+            "assumption": "not in the unit cost at all — nothing on the sheet carries it",
+            "action": "price it and add the line, or record why SDI does not buy it",
+            "owner": "estimator", "gbp_at_stake": None})
+    for _r in stated_rows_not_carried(source):
+        decisions.append({
+            "part": _r["part_number"], "kind": "stated_not_carried", "qty": _r["qty"],
+            "issue": (f"{_r['part_number']} ({_r['description']}) x{_r['qty']:g} is stated on "
+                      f"{_r['sheet'] or 'a parts list'} and the product does not carry it"),
+            "assumption": "not in the unit cost — the row never reached the bill",
+            "action": "charge it on the assembly that lists it, or rule it out with a reason",
+            "owner": "estimator", "gbp_at_stake": None})
     if plating.get("charged"):
         decisions.append({
             "part": plating.get("parent") or plating.get("line"), "kind": "manufacturing_decision",
@@ -2240,6 +2337,12 @@ def costed_job(source: Any) -> Dict[str, Any]:
             # cannot tell the two apart; a person can.
             _qn = str(_node.get("qty_note") or "")
             if "counted once" in _qn:
+                # £ WHERE KNOWN: the model's whole-product count is on the record (the TWO
+                # ROADS check reads the same field). 12645: 120 bolts costed, the model 136.
+                _prec = next((p for p in job_parts(source)
+                              if str(p.get("part_number") or "").upper() == _ident), {})
+                _tot = _num(_prec.get("quantity_total_per_unit"))
+                _each_q = _money_of(_line) / _eff if _eff else 0.0
                 decisions.append({
                     "part": _line["part_number"], "kind": "quantity_check",
                     "issue": (f"{_line['part_number']}: listed twice (a table and a "
@@ -2247,7 +2350,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
                     "assumption": _qn,
                     "action": ("confirm it is one item described twice — or, if the table "
                                "adds a spare or second item, raise the line"),
-                    "owner": "estimator", "gbp_at_stake": None})
+                    "owner": "estimator",
+                    "gbp_at_stake": (round(abs(_tot - _eff) * _each_q, 2)
+                                     if _tot and _each_q and abs(_tot - _eff) > 1e-9 else None)})
             continue
         if len(_trails) == 1 and not str(_node.get("qty_note") or ""):
             continue
@@ -2281,6 +2386,11 @@ def costed_job(source: Any) -> Dict[str, Any]:
     reasons: List[str] = []
     if unpriced:
         reasons.append(f"{len(unpriced)} line(s) carry no price: {', '.join(gaps['unpriced'])}")
+    _no_line = [d for d in decisions if d["kind"] == "missing_price"
+                and "has no line on the sheet" in str(d.get("issue") or "")]
+    if _no_line:
+        reasons.append(f"{len(_no_line)} reached item(s) have no line at all: "
+                       f"{', '.join(str(d['part']) for d in _no_line)}")
     if market:
         reasons.append(f"{len(market)} line(s) rest on a researched market price")
     inv = source.get("invariants") if isinstance(source.get("invariants"), dict) else None
@@ -2303,10 +2413,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
     if _provisional:
         reasons.append(f"{len(_provisional)} line(s) spilled from a full block at a "
                        f"provisional price")
+    _stated = [d for d in decisions if d["kind"] == "stated_not_carried"]
+    if _stated:
+        reasons.append(f"{len(_stated)} parts-list row(s) stated and not carried")
+    # A BLOCKING CHECK WHOSE ITEMS ARE ALREADY ROWS ABOVE IS NOT COUNTED TWICE. The shutter
+    # is a missing-price row now; the reached-item check that also names it adds nothing.
+    _itemised = {str(d.get("part") or "").upper() for d in decisions}
+
+    def _already_itemised(v: Mapping[str, Any]) -> bool:
+        ids = [str(i).upper() for i in (v.get("identities")
+                                        or (v.get("detail") or {}).get("identities") or [])]
+        return bool(ids) and all(i in _itemised for i in ids)
+
     blocking_n = (sum(1 for v in (inv.get("violations") or [])
-                      if isinstance(v, dict) and v.get("severity") == "blocking")
+                      if isinstance(v, dict) and v.get("severity") == "blocking"
+                      and not _already_itemised(v))
                   if inv is not None else 0)
-    status = ("provisional" if (unpriced or market or _provisional or not calculated
+    unpriced_all = [d for d in decisions if d["kind"] == "missing_price"]
+    status = ("provisional" if (unpriced_all or _stated or market or _provisional or not calculated
                                 or blocking_n or inv is None)
               else ("reviewable" if (house or manufacturing or _qty_checks) else "firm"))
     # DRAFT is narrower than PROVISIONAL. A quote is a draft while a person still owes it
@@ -2314,9 +2438,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # blocking check to clear. "The checks have not run yet" and "the sheet was not read
     # back" keep the estimate provisional but say nothing about the quote's scope; the
     # LLM-only path already marks those runs in its own words.
-    draft = bool(unpriced or market or blocking_n or manufacturing or _provisional)
-    outstanding = (len(unpriced) + len(market) + len(manufacturing) + blocking_n
-                   + len(_provisional))
+    draft = bool(unpriced_all or _stated or market or blocking_n or manufacturing
+                 or _provisional)
+    outstanding = (len(unpriced_all) + len(_stated) + len(market) + len(manufacturing)
+                   + blocking_n + len(_provisional))
 
     return {
         "schema": COSTED_JOB_SCHEMA,
@@ -2376,24 +2501,33 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     mfg, house = _n("manufacturing_decision"), _n("indicative_rate")
     qty = _n("quantity_check")
     prov = _n("provisional_price")
+    stated = _n("stated_not_carried")
     # A kind none of the four buckets recognises must still be SEEN: on the 12:28 run of
     # 7332-01 an "advisory" entry sat in the list, the headline said "7 to settle" and
     # the phrase added to 6, because total counted every row and the phrase counted four
     # kinds. The headline and the phrase are one tally or they are two lies — so every
     # row lands in a named bucket, and an unclassified kind is counted as blocking, not
     # quietly dropped: an open item nobody classified is not thereby advisory.
-    other = len(ds) - (prices + market + mfg + house + qty + prov)
+    other = len(ds) - (prices + market + mfg + house + qty + prov + stated)
+
+    def _gbp(kind: str) -> str:
+        v = sum(_num(d.get("gbp_at_stake")) for d in ds if d.get("kind") == kind)
+        return f" (£{v:,.2f})" if v else ""
     bits: List[str] = []
     if prices:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
+    if stated:
+        bits.append(f"{stated} stated row{'s' if stated != 1 else ''} not carried")
     if market:
-        bits.append(f"{market} market figure{'s' if market != 1 else ''} to replace")
+        bits.append(f"{market} market figure{'s' if market != 1 else ''} to replace"
+                    f"{_gbp('market_figure')}")
     if mfg:
         bits.append(f"{mfg} manufacturing decision{'s' if mfg != 1 else ''}")
     if qty:
         bits.append(f"{qty} quantity check{'s' if qty != 1 else ''}")
     if prov:
-        bits.append(f"{prov} provisional line{'s' if prov != 1 else ''} to nest by hand")
+        bits.append(f"{prov} provisional line{'s' if prov != 1 else ''} to nest by hand"
+                    f"{_gbp('provisional_price')}")
     if house:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
     if other:
@@ -2416,8 +2550,8 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     return {
         "prices_missing": prices, "market_figures": market,
         "manufacturing": mfg, "indicative": house, "other": other,
-        "provisional": prov,
-        "blocking": prices + market + mfg + prov + other, "advisory": house,
+        "provisional": prov, "stated_not_carried": stated,
+        "blocking": prices + market + mfg + prov + stated + other, "advisory": house,
         "total": len(ds),
         "phrase": " + ".join(bits) if bits else "nothing outstanding",
         # The blocking items by name, worst first — the order `decisions_required` is

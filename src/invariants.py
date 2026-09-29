@@ -3888,7 +3888,7 @@ def check_a_set_aside_root_is_not_the_products_drawing(summary: Any) -> List[Dic
     return out
 
 
-def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+def _reached_unaccounted_core(summary: Any) -> Dict[str, Any]:
     """Every BOM item the product reaches is charged, explicitly free-issued, or an open
     question a person can see. An item that is none of the three has fallen off the bill
     in silence, and silence is the one state the estimate must not contain.
@@ -3917,12 +3917,12 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
     yet — a graph-only fixture, a run that died before costing — returns nothing: this gate
     reconciles a bill, and there is no bill to reconcile."""
     if not isinstance(summary, dict):
-        return []
+        return {"unaccounted": [], "uncoded": [], "nodes": {}}
     payload = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
                if isinstance(summary.get("estimate_summary"), dict) else None) \
         or summary.get("canonical_route_shadow") or {}
     if not isinstance(payload, dict):
-        return []
+        return {"unaccounted": [], "uncoded": [], "nodes": {}}
 
     def _nd(n: Any) -> Dict[str, Any]:
         if isinstance(n, dict):
@@ -3945,7 +3945,7 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
              + list(payload.get("top_assemblies") or []) if str(r).strip()]
     roots = [r for r in dict.fromkeys(roots) if r in nodes]
     if not nodes or not roots:
-        return []
+        return {"unaccounted": [], "uncoded": [], "nodes": {}}
 
     reached: Set[str] = set()
     frontier = list(roots)
@@ -4016,7 +4016,7 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
     # No bill yet, nothing to reconcile — a graph-only fixture or a run that died before
     # costing must not read as a job whose every item fell off the bill.
     if not any(_money(rec) for rec in records):
-        return []
+        return {"unaccounted": [], "uncoded": [], "nodes": {}}
 
     _COMMERCIAL = {"PACKAGING", "DELIVERY", "CARRIAGE", "PALLET", "FREIGHT", "POWDER",
                    "BOM-OVERFLOW"}
@@ -4059,6 +4059,13 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
             continue
         if not _money(rec) and not _asked_or_ruled(rec):
             unaccounted.append(ident)
+    return {"unaccounted": unaccounted, "uncoded": uncoded, "nodes": nodes}
+
+
+def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str, Any]]:
+    """See _reached_unaccounted_core (F7 prototype: one walk, shared with costed_facts)."""
+    _r = _reached_unaccounted_core(summary)
+    unaccounted, uncoded = _r["unaccounted"], _r["uncoded"]
     out: List[Dict[str, Any]] = []
     if uncoded:
         out.append(_violation(
