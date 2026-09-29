@@ -533,3 +533,50 @@ and console access was solved from Adam Stiff's instructions.
 > Thanks for getting us this far so quickly.
 >
 > James
+
+## Round 6 — follow-up, 29 Sep 2026
+
+Round 5 went out on 28 Sep at 11:05 still carrying round 4's "built and running
+in dry run", and without the one fact that makes the partner secret urgent: the
+call is being rejected. This follow-up supplies it. It does not re-ask the two
+questions, it re-frames them as a failure with a specific cause.
+
+Console state verified the same day, from the live system:
+
+* **Settings → System → Partner API** (bottom of the left menu) — path confirmed.
+* **Enable partner API: On.**
+* One key, partner **"End User Developer"** — the option Charlotte named and the
+  one the documentation's example uses. So the key is correctly scoped.
+* **There is no Locations list anywhere in Settings.** The menu was walked end
+  to end: General options, Licencing, Integrations, Alerts and notifications,
+  Health assist, Door access control, Checkpoint, System. Locations cannot be
+  created customer-side, which kills the idea of sidestepping the
+  `ActionLocation` question by creating a real location. Charlotte's own
+  examples - "Main Touchscreen", "Quickscan", "Backdoor Quickscan" - look like
+  *device* names, so `LastEventLocation` probably reports the physical sign-in
+  point. `Checkpoint → Checkpoint devices` would confirm it.
+
+> Hi Charlotte,
+>
+> One update since yesterday, which makes question 1 more pressing than I put it.
+>
+> I've now created the API key — Setup & Options → System → Partner API → Add
+> API key, partner set to **End User Developer**, and "Enable partner API" is On.
+> Calling `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+> request headers returns **`Authentication failed`**. The `partnersecret` I'm
+> using is the one pre-filled in your Postman collection.
+>
+> So the key exists and is the right type, and the call is being rejected. Two
+> things would resolve it:
+>
+> 1. Is the `partnersecret` in the collection the one we should use, or is one
+>    issued per site?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active?
+>
+> Also, on my earlier `ActionLocation` question — I've been through Settings end
+> to end and there's no Locations list to add to, so I can't create one my side.
+> That makes the free-text answer the deciding factor for us.
+>
+> Thanks,
+> James
