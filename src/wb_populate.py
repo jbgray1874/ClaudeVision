@@ -7208,8 +7208,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                       f"config.ASSEMBLY_SCOPED_OPS_CHARGE_ONCE once the rates are confirmed.",
                       flags)
         if row > lb["last_row"]:
+            # A FULL BLOCK DROPS WORK, AND DROPPED WORK MUST BE SEEN. This was a `break` and
+            # one line in the flags: on 12173 (29 Sep) thirty false Robomac rows filled the
+            # block and Wet Spray and Assemble/pack fell off the end, while the unit cost
+            # read as complete. Every group that does not fit is now recorded with its parts
+            # and hours, and costed_facts counts it as blocking on every surface (D-340).
             labour_overflow = True
-            break
+            summary.setdefault("labour_not_on_sheet", []).append({
+                "operation": str(g.get("wb_op") or ""),
+                "parts": [str(p) for p in (g.get("parts") or [])],
+                "batch_hours": round(float(_safe(g.get("bh"), 0) or 0), 4),
+            })
+            continue
         wb_op = g["wb_op"]
 
         # Assemble/pack is PER PRODUCT: you pack the finished product once, not once per
@@ -7713,7 +7723,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _flag(f"labour: {len(_groups)} grouped row(s) — setup is booked once per tooling group, "
           f"not once per part.", flags)
     if labour_overflow:
-        _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} rows — extras DROPPED.", flags)
+        _dropped = summary.get("labour_not_on_sheet") or []
+        _flag(f"Labour overflow: more operations than {lb['last_row']-lb['first_row']+1} "
+              f"rows — {len(_dropped)} NOT ON THE SHEET and not in the unit cost: "
+              + "; ".join(f"{d['operation']} ({', '.join(d['parts'][:4])})" for d in _dropped)
+              + ". Add rows to the Labour block of the template.", flags)
 
     # ── Make Total Material Cost tolerate not-yet-dimensioned rows ─────────
     # One steel part with no blank L/W (or blank gauge) errors its per-row cost and, via the

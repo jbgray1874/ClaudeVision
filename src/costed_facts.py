@@ -2063,6 +2063,24 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "assumption": "not in the unit cost — the row never reached the bill",
             "action": "charge it on the assembly that lists it, or rule it out with a reason",
             "owner": "estimator", "gbp_at_stake": None})
+    # LABOUR THE BLOCK HAD NO ROOM FOR (D-340). Not a price the engine lacks — work it
+    # timed and could not put on the sheet, so the unit cost is short by exactly it.
+    for _d in ((source.get("labour_not_on_sheet") if isinstance(source, Mapping) else None)
+               or []):
+        if not isinstance(_d, Mapping):
+            continue
+        _parts = [str(p) for p in (_d.get("parts") or [])]
+        decisions.append({
+            "part": f"{_d.get('operation') or 'labour'}"
+                    + (f" ({', '.join(_parts[:3])}{'…' if len(_parts) > 3 else ''})"
+                       if _parts else ""),
+            "kind": "labour_not_on_sheet", "qty": None,
+            "issue": (f"{_d.get('operation')} on {', '.join(_parts) or 'the job'} is on the "
+                      f"route and was timed, but the Labour block was full, so it has no row"),
+            "assumption": "not in the unit cost — the row was never written",
+            "action": "add rows to the template's Labour block and re-run, or add the row by "
+                      "hand from the route",
+            "owner": "estimator", "gbp_at_stake": None})
     if plating.get("charged"):
         decisions.append({
             "part": plating.get("parent") or plating.get("line"), "kind": "manufacturing_decision",
@@ -2433,6 +2451,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
     _stated = [d for d in decisions if d["kind"] == "stated_not_carried"]
     if _stated:
         reasons.append(f"{len(_stated)} parts-list row(s) stated and not carried")
+    _off_sheet = [d for d in decisions if d["kind"] == "labour_not_on_sheet"]
+    if _off_sheet:
+        reasons.append(f"{len(_off_sheet)} timed operation(s) not on the sheet — the Labour "
+                       f"block was full")
     # A BLOCKING CHECK WHOSE ITEMS ARE ALREADY ROWS ABOVE IS NOT COUNTED TWICE. The shutter
     # is a missing-price row now; the reached-item check that also names it adds nothing.
     _itemised = {str(d.get("part") or "").upper() for d in decisions}
@@ -2447,7 +2469,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
                       and not _already_itemised(v))
                   if inv is not None else 0)
     unpriced_all = [d for d in decisions if d["kind"] == "missing_price"]
-    status = ("provisional" if (unpriced_all or _stated or market or _provisional or not calculated
+    status = ("provisional" if (unpriced_all or _stated or _off_sheet or market or _provisional
+                                or not calculated
                                 or blocking_n or inv is None)
               else ("reviewable" if (house or manufacturing or _qty_checks) else "firm"))
     # DRAFT is narrower than PROVISIONAL. A quote is a draft while a person still owes it
@@ -2519,13 +2542,14 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     qty = _n("quantity_check")
     prov = _n("provisional_price")
     stated = _n("stated_not_carried")
+    off_sheet = _n("labour_not_on_sheet")
     # A kind none of the four buckets recognises must still be SEEN: on the 12:28 run of
     # 7332-01 an "advisory" entry sat in the list, the headline said "7 to settle" and
     # the phrase added to 6, because total counted every row and the phrase counted four
     # kinds. The headline and the phrase are one tally or they are two lies — so every
     # row lands in a named bucket, and an unclassified kind is counted as blocking, not
     # quietly dropped: an open item nobody classified is not thereby advisory.
-    other = len(ds) - (prices + market + mfg + house + qty + prov + stated)
+    other = len(ds) - (prices + market + mfg + house + qty + prov + stated + off_sheet)
 
     def _gbp(kind: str) -> str:
         v = sum(_num(d.get("gbp_at_stake")) for d in ds if d.get("kind") == kind)
@@ -2535,6 +2559,9 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
     if stated:
         bits.append(f"{stated} stated row{'s' if stated != 1 else ''} not carried")
+    if off_sheet:
+        bits.append(f"{off_sheet} operation{'s' if off_sheet != 1 else ''} not on the sheet "
+                    f"(Labour block full)")
     if market:
         bits.append(f"{market} market figure{'s' if market != 1 else ''} to replace"
                     f"{_gbp('market_figure')}")
@@ -2568,7 +2595,9 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         "prices_missing": prices, "market_figures": market,
         "manufacturing": mfg, "indicative": house, "other": other,
         "provisional": prov, "stated_not_carried": stated,
-        "blocking": prices + market + mfg + prov + stated + other, "advisory": house,
+        "labour_not_on_sheet": off_sheet,
+        "blocking": prices + market + mfg + prov + stated + off_sheet + other,
+        "advisory": house,
         "total": len(ds),
         "phrase": " + ".join(bits) if bits else "nothing outstanding",
         # The blocking items by name, worst first — the order `decisions_required` is
