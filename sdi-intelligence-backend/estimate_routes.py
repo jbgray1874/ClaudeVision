@@ -81,6 +81,7 @@ _OVERRIDE_CLI = str(_REPO_ROOT / "src" / "client_quote_regen.py")
 _PARITY_CLI = str(_REPO_ROOT / "src" / "parity_run.py")
 _PRINT_CLI = str(_REPO_ROOT / "src" / "drawings_print.py")
 _MATERIAL_CLI = str(_REPO_ROOT / "src" / "material_confirmation.py")
+_PRODUCT_CLI = str(_REPO_ROOT / "src" / "product_identity.py")
 _MAX_OVERRIDE_UPLOAD_BYTES = int(os.getenv("SDI_MAX_OVERRIDE_UPLOAD_MB", "20")) * 1024 * 1024
 
 # Where finished estimates are filed. A DRIVE LETTER IS NOT A LOCATION: K: is the
@@ -1132,6 +1133,25 @@ def _names_in(paths: List[str], limit: int = 2000) -> List[str]:
     return out[:limit]
 
 
+def _drawing_texts(paths: List[str]) -> Dict[str, str]:
+    """Each drawing PDF's words, read out of process with the ENGINE's python (PyMuPDF), as
+    the material step reads title blocks. Empty when it cannot be read here — never a guess."""
+    import json as _json
+    import subprocess
+    resolved = [str(p) for p in (_within_a_root(str(r or "").strip()) for r in paths or [])
+                if p is not None]
+    if not resolved or not Path(_ENGINE_PYTHON).exists():
+        return {}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _PRODUCT_CLI, "--texts", *resolved, "--json"],
+                              capture_output=True, text=True, timeout=60)
+        data = _json.loads(proc.stdout.strip().splitlines()[-1]) if proc.returncode == 0 else {}
+    except (subprocess.TimeoutExpired, OSError, ValueError, IndexError):
+        return {}
+    texts = data.get("texts") if isinstance(data, dict) else None
+    return texts if isinstance(texts, dict) else {}
+
+
 @router.post("/product-check")
 def product_check(req: ProductCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
     """WHICH DRAWING WILL THIS RUN PRICE — answered before Run, with the engine's own resolver.
@@ -1143,7 +1163,18 @@ def product_check(req: ProductCheckRequest, x_sdi_key: Optional[str] = Header(de
     picks one. One match beside other assemblies: the page names them, and guesses nothing."""
     _check_key(x_sdi_key)
     try:
-        return _product_identity().resolve_product(req.drawing_number, _names_in(req.files))
+        pi = _product_identity()
+        names = _names_in(req.files)
+        out = pi.resolve_product(req.drawing_number, names)
+        # THE JOB NUMBER ALONE (D-337): which of the job's GAs is on top is in the drawings'
+        # parts lists, not their names, so the drawings are read — by the engine's python,
+        # which has the PDF reader. Where there is none, the name-only answer stands and the
+        # run settles it from the same tables.
+        if out.get("status") == "job" and not out.get("match"):
+            texts = _drawing_texts(req.files)
+            if texts:
+                out = pi.resolve_product(req.drawing_number, names, texts=texts)
+        return out
     except Exception as exc:                                         # noqa: BLE001
         return {"status": "unchecked", "declared": req.drawing_number, "match": None,
                 "matches": [], "others": [],

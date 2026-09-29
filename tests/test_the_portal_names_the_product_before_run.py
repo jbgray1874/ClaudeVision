@@ -106,3 +106,24 @@ def test_the_page_holds_run_on_none_or_many_and_asks_on_every_change():
     assert 'drawing.addEventListener("input", checkProduct)' in page
     render = page[page.index("function renderFiles(){"):]
     assert "checkProduct()" in render[:2500], "adding or removing a drawing does not re-check"
+
+
+def test_the_job_number_is_answered_from_the_drawings_parts_lists(api, monkeypatch):
+    """D-337: "12173" alone. The service reads the PDFs with the engine's python and names
+    the GA no other sheet lists. Here the engine's python is this one, and the sheets are
+    PDFs written with the words a parts list prints."""
+    fitz = pytest.importorskip("pymupdf")
+    er, tmp = api
+    job = tmp / "12173 - Card Spinner"
+    job.mkdir()
+    sheets = {"12173-02-GA_Card_Spinner_revA.pdf":
+              "ITEM DWG NO. QTY 1 12173-03-GA 1 2 12173-07-GA 1 DRAWING No 12173-02-GA",
+              "12173-03-GA_Spinner_revA.pdf": "DRAWING No 12173-03-GA",
+              "12173-07-GA_Wrapping_Paper_Rack_revA.pdf": "DRAWING No 12173-07-GA"}
+    for name, words in sheets.items():
+        doc = fitz.open()
+        doc.new_page().insert_text((40, 60), words, fontsize=8)
+        doc.save(str(job / name))
+    monkeypatch.setattr(er, "_ENGINE_PYTHON", sys.executable)
+    out = er.product_check(er.ProductCheckRequest(drawing_number="12173", files=[str(job)]))
+    assert out["status"] == "job" and out["match"]["number"] == "12173-02-GA", out

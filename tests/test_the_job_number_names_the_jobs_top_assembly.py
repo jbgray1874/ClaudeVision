@@ -6,8 +6,13 @@ added here. Assemblies in the pack: 12173-02-GA Card Spinner; 12173-03-GA Spinne
 12173-07-GA Windmill WSF45. Type the one that is the product."
 
 No sheet is numbered 12173 alone. But only one of the job's GAs is on top — 12173-02-GA,
-whose parts list takes 03, 04, 05, 06 and 07-GA — and that one is the product. The rule is
-the parts lists', not a name: two tops are still a choice, and a choice is still refused.
+whose parts list takes 03, 04, 05, 06 and 07-GA — and that one is the product.
+
+Then: "we can't have a hard coding... it needs to accept a job number without needing a
+version number and work out from the PDF GAs what needs to be analysed". So the rule is the
+parts lists' and nothing else — no suffix, no "GA", no sheet number decides it: before Run
+from the drawings' own words, in the run from its parsed tables. Two tops are a choice, and
+a choice is still refused.
 """
 from __future__ import annotations
 
@@ -66,11 +71,66 @@ def _pack():
     return parts, extract
 
 
+# The words on each sheet, as PyMuPDF gives them: each prints its own number in its title
+# block, and a GA prints the numbers its parts list takes.
+_TEXTS = {
+    "12173-02-GA Card Spinner_REVA.pdf":
+        "CARD SPINNER ITEM DWG NO. DESCRIPTION QTY 1 12173-03-GA CARD SPINNER 1 "
+        "2 12173-04-GA CARD POCKET 8 3 12173-05-GA RSB RAIL 4 "
+        "4 12173-06-GA SINGLE BAR HOOK - 100mm 7 5 12173-07-GA WRAPPING PAPER ROLL RACK 1 "
+        "6 // UPC STICKER; 15x10mm 1 DRAWING No 12173-02-GA",
+    "12173-03-GA Spinner_REVA.pdf": "1 12173-03-201 FRAME 2 DRAWING No 12173-03-GA",
+    "12173-04-GA Windmill WSF45_REVA.pdf": "1 12173-04-201 POCKET 1 DRAWING No 12173-04-GA",
+    "12173-05-GA Rail_REVA.pdf": "1 12173-05-101 RAIL 1 DRAWING No 12173-05-GA",
+    "12173-06-GA Single Bar Hook - 100mm_REVA.pdf": "1 12173-06-201 1 DRAWING No 12173-06-GA",
+    "12173-07-GA Windmill WSF45_REVA.pdf":
+        "1 12173-07-1-GA TOP RACK 1 2 12173-07-2-GA TROUGH 1 DRAWING No 12173-07-GA",
+    "12173-07-1-GA Wrapping Paper Top Rack_REVA.pdf": "DRAWING No 12173-07-1-GA",
+    "12173-07-2-GA Wrapping Paper Trough_REVA.pdf": "DRAWING No 12173-07-2-GA",
+}
+
+
+def test_the_portal_reads_the_top_from_the_parts_lists():
+    r = pi.resolve_product("12173", _FILES, texts=_TEXTS)
+    assert r["status"] == "job", r
+    assert r["match"]["number"] == "12173-02-GA"
+    assert "12173-02-GA" in r["message"] and "parts lists" in r["message"]
+
+
+def test_no_name_decides_it():
+    """Renumber the spinner's sheet so nothing about its name says "top" — 12173-09, no GA —
+    and it is still the product, because it is still the sheet nobody lists."""
+    files = [f.replace("12173-02-GA", "12173-09") for f in _FILES]
+    texts = {k.replace("12173-02-GA", "12173-09"): v.replace("12173-02-GA", "12173-09")
+             for k, v in _TEXTS.items()}
+    names = files + ["12173-09 Card Spinner ASSY_REVA.pdf"]
+    texts["12173-09 Card Spinner ASSY_REVA.pdf"] = texts.pop("12173-09 Card Spinner_REVA.pdf")
+    r = pi.resolve_product("12173", names, texts=texts)
+    assert r["status"] == "job" and r["match"]["number"] == "12173-09", r
+
+
+def test_two_sheets_nobody_lists_are_a_choice_before_run_too():
+    texts = dict(_TEXTS)
+    texts["12173-02-GA Card Spinner_REVA.pdf"] = texts[
+        "12173-02-GA Card Spinner_REVA.pdf"].replace("5 12173-07-GA WRAPPING PAPER ROLL RACK 1 ", "")
+    r = pi.resolve_product("12173", _FILES, texts=texts)
+    assert r["status"] == "many", r
+    assert sorted(m["number"] for m in r["matches"]) == ["12173-02-GA", "12173-07-GA"]
+
+
+def test_a_number_is_not_mentioned_inside_a_longer_one():
+    assert not pi._mention("12173-07").search("1 12173-07-1-GA TOP RACK")
+    assert pi._mention("12173-07-GA").search("5 12173-07-GA WRAPPING")
+    assert pi._mention("12173-07-GA").search("5 12173 07 GA WRAPPING")
+    assert pi._mention("12173-07-GA").search("2 12173-07-GA 1 DRAWING")   # QTY column next
+
+
 def test_the_portal_lets_the_job_number_run():
     """Not "none" — "none" holds Run. Said, and the assemblies named, but not blocked."""
     r = pi.resolve_product("12173", _FILES)
     assert r["status"] == "job", r
     assert "job number" in r["message"] and "12173-02-GA" in r["message"]
+    assert r["match"] is None           # without the drawings' words, nothing is chosen
     assert "Type the one that is the product" not in r["message"]
 
 
@@ -117,3 +177,14 @@ def test_two_tops_of_the_job_are_a_choice_and_refused():
     issue = next(i for i in g["issues"] if i.get("code") == "declared_product_not_resolved")
     assert issue["rolled_up"] is False
     assert sorted(issue["candidates"]) == ["12173-02-GA", "12173-07-GA"]
+
+
+def test_the_run_takes_a_top_whatever_it_is_called():
+    """The same pack with the spinner renumbered 12173-09 (no GA): the graph's one root."""
+    parts, extract = _pack()
+    for p in parts:
+        if p["part_number"] == "12173-02-GA":
+            p["part_number"] = "12173-09"
+    extract["assemblies"][0]["part_number"] = "12173-09"
+    g = rc.build_part_graph(parts, extract, declared_product="12173")
+    assert g["product_root"] == "12173-09", g["issues"]

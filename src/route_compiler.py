@@ -2219,28 +2219,22 @@ def build_part_graph(
             if len(_rooted) == 1:
                 _candidates = _rooted
         # THE JOB NUMBER ON ITS OWN NAMES THE JOB'S TOP ASSEMBLY. 12173 Card Spinner, 29 Sep
-        # 2026: "it is 02 but we need to be able to run against the top level 12173." No sheet
-        # is numbered 12173 alone, but only one of the job's GAs is a root — 12173-02-GA,
-        # whose table takes 03, 04, 05, 06 and 07-GA — and that one IS the product. Only a
-        # root of the job's own numbering, and only when there is exactly one: two roots is a
-        # choice, and a choice is refused below as before (product_identity, same rule).
+        # 2026: "it is 02 but we need to be able to run against the top level 12173", and "it
+        # needs to accept a job number without needing a version number and work out from
+        # the PDF GAs what needs to be analysed." No sheet is numbered 12173 alone; the parts
+        # lists say which is on top — 02-GA's table takes 03, 04, 05, 06 and 07-GA, and no
+        # table takes 02-GA — so the root of the job's own numbering IS the product. Nothing
+        # about a name decides it: one root is the product, two are a choice, and a choice
+        # is refused below as before (product_identity.tops_of_the_job, the same rule pre-run).
         _job_top = ""
         if not _candidates:
-            from product_identity import _REV_TAIL, is_of_the_job, job_number_only
+            from product_identity import is_of_the_job, job_number_only
             _job = job_number_only(_declared)
             _job_roots = sorted(t for t in top_ids if t and is_of_the_job(_job, t)) \
                 if _job else []
-            # A weldment whose own table was read but whose link up was not is a root too;
-            # of several roots the one general arrangement is the top, as for top_id above.
-            _job_gas = [t for t in _job_roots
-                        if re.search(r"(?:^|[\s\-_])GA\d?$", _REV_TAIL.sub("", t).strip(), re.I)]
-            if len(_job_roots) > 1 and len(_job_gas) == 1:
-                _job_roots = _job_gas
             if len(_job_roots) == 1:
-                _candidates = _job_roots
                 _job_top = _job_roots[0]
-            elif _job_roots:
-                _candidates = _job_roots
+            _candidates = _job_roots
         if len(_candidates) == 1:
             product_root = _candidates[0]
             if _job_top:
@@ -2251,7 +2245,8 @@ def build_part_graph(
                     "detail": (f"The Drawing Number {_declared!r} is the job number, not a "
                                f"drawing. The product is {product_root}: the only one of the "
                                f"job's assemblies that no other drawing's parts list "
-                               f"includes."),
+                               f"includes, so everything its lists reach is analysed and "
+                               f"nothing else is."),
                 })
                 print(f"   [graph] {_declared!r} is the job number — the product is its top "
                       f"assembly, {product_root}", flush=True)

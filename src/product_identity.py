@@ -16,8 +16,11 @@ different interpreter with a different `config`, and must be able to load this w
 """
 from __future__ import annotations
 
+import json
 import re
-from typing import Any, Dict, List, Optional, Sequence
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 try:
     from part_code_conventions import (looks_like_a_drawing_number,
@@ -140,7 +143,66 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
             "is_assembly": is_assembly, "file": base, "top_sheet": top_sheet}
 
 
-def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
+def _mention(number: Any) -> "re.Pattern[str]":
+    """A drawing number as another sheet would print it: its own tokens, any separator, and
+    not running on into a longer number ("12173-07" is not "12173-07-1-GA")."""
+    toks = [t for t in re.split(r"[\s\-_]+", str(number or "").strip().upper()) if t]
+    body = r"[\s\-_]*".join(re.escape(t) for t in toks)
+    # A dash or underscore then a digit continues the number; a space then a digit is the
+    # QTY column ("12173-07-GA 1").
+    return re.compile(rf"(?<![A-Z0-9]){body}(?![A-Z0-9])(?![\-_]\d)", re.IGNORECASE)
+
+
+def tops_of_the_job(assemblies: Sequence[Mapping[str, Any]],
+                    texts: Mapping[str, str]) -> List[Dict[str, Any]]:
+    """Of these assemblies, the ones no OTHER drawing in the pack lists.
+
+    `texts` is each drawing file's own words (file name -> text of its pages). A GA that
+    appears in another sheet's parts list is detail to that sheet; the one that appears in
+    none is what ships. 12173: 02-GA's table lists 03-, 04-, 05-, 06- and 07-GA, 07-GA's
+    lists 07-1 and 07-2, and nothing lists 02-GA. Read from the drawings, not from a name:
+    no suffix, sheet number or wording decides it."""
+    own = {str(f): _key((drawing_of_file(f) or {}).get("number") or "") for f in texts}
+    out: List[Dict[str, Any]] = []
+    for a in assemblies:
+        k = _key(a["number"])
+        pat = _mention(a["number"])
+        listed_by = sorted(f for f, t in texts.items() if own.get(f) != k and pat.search(t or ""))
+        if not listed_by:
+            out.append(a)
+    return out
+
+
+def read_texts(paths: Sequence[Any]) -> Dict[str, str]:
+    """Each PDF's words, keyed by file name — folders as their contents, one level down as
+    well. Needs PyMuPDF, so the service runs it with the ENGINE's python (see __main__)."""
+    try:
+        import pymupdf as fitz                                       # type: ignore
+    except Exception:                                                # noqa: BLE001
+        import fitz                                                  # type: ignore
+    files: List[Path] = []
+    for raw in paths or []:
+        p = Path(str(raw))
+        if p.is_dir():
+            for c in sorted(p.iterdir()):
+                files.extend([c] if c.is_file() else
+                             sorted(g for g in c.iterdir() if g.is_file()) if c.is_dir() else [])
+        elif p.is_file():
+            files.append(p)
+    out: Dict[str, str] = {}
+    for f in files:
+        if f.suffix.lower() != ".pdf" or not drawing_of_file(f.name):
+            continue
+        try:
+            with fitz.open(str(f)) as doc:
+                out[f.name] = " ".join(" ".join(pg.get_text().split()) for pg in doc)
+        except Exception:                                            # noqa: BLE001
+            continue
+    return out
+
+
+def resolve_product(declared: Any, file_names: Sequence[Any],
+                    texts: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     """The product a Drawing Number names among these files, said the way the engine will.
 
     status:
@@ -150,6 +212,9 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
       "none"       drawing numbers were read from the files and none matches
       "many"       more than one DIFFERENT drawing matches — the estimator must choose
       "unchecked"  no file name carries a drawing number, so nothing can be said
+      "job"        the job number alone ("12173"): the product is the job's assembly no
+                   other drawing lists, read from `texts` (the drawings' own words) when
+                   given — `match` is it — and left to the run's parts lists when not
     `others` are the other assemblies in the pack: detail to this product, priced only where
     its BOM reaches them. Named so an estimator who meant one of THEM sees it before Run."""
     declared_s = str(declared or "").strip()
@@ -202,22 +267,40 @@ def resolve_product(declared: Any, file_names: Sequence[Any]) -> Dict[str, Any]:
     # 29 Sep 2026, on 12173 Card Spinner: "it is 02 but we need to be able to run against the
     # top level 12173." The pack holds 12173-02-GA (the spinner) and the GAs it is built from
     # (03, 04, 05, 06, 07...). Which is on top is written in the parts lists — 02's table
-    # takes the others — and file names cannot say it, so this check does not guess: it lets
-    # the run go, and the run takes the one job GA no other drawing's parts list includes
-    # (route_compiler, same rule). Two such tops and the run refuses, as for any other
-    # unresolved number.
+    # takes the others — so it is read from them: the drawings' own words (`texts`), the one
+    # job GA no other sheet lists. Then: "It needs to accept a job number without needing a
+    # version number and work out from the PDF GAs what needs to be analysed" — no suffix or
+    # name decides it. Without the words (a machine with no PDF reader) the check lets the run
+    # go, and the run takes the same answer from its parsed tables (route_compiler). Two tops
+    # are a choice, and a choice is the estimator's.
     job = job_number_only(declared_s)
     job_assemblies = [a for a in assemblies if is_of_the_job(job, a["number"])] if job else []
     if not matches and job_assemblies:
+        listing = "; ".join(_label(a) for a in job_assemblies)
+        tops = tops_of_the_job(job_assemblies, texts) if texts else []
+        if len(tops) == 1:
+            top = tops[0]
+            rest = [a for a in job_assemblies if a is not top]
+            return {"status": "job", "declared": declared_s, "match": top, "matches": [top],
+                    "others": rest,
+                    "message": f"{declared_s} is the job number. Read from the drawings' own "
+                               f"parts lists, the product is {_label(top)} — no other drawing "
+                               f"in the pack lists it. This run prices it, and "
+                               + ("; ".join(_label(a) for a in rest) or "nothing else")
+                               + " only where its parts list reaches them."}
+        if len(tops) > 1:
+            return {"status": "many", "declared": declared_s, "match": None, "matches": tops,
+                    "others": job_assemblies,
+                    "message": f"{declared_s} is the job number, and {len(tops)} of its "
+                               f"drawings are listed by no other drawing in the pack ("
+                               + "; ".join(_label(t) for t in tops)
+                               + "), so there is more than one thing on top. Type the one "
+                                 "that is the product, or add the drawing that lists them."}
         return {"status": "job", "declared": declared_s, "match": None, "matches": [],
                 "others": job_assemblies,
-                "message": f"{declared_s} is the job number, not a drawing: this run prices the "
-                           f"job's top assembly — the one general arrangement no other "
-                           f"drawing's parts list includes — and the book names it. "
-                           f"Assemblies in the pack: "
-                           + "; ".join(_label(a) for a in job_assemblies)
-                           + ". If the product is one of the others, enter its number "
-                             "instead."}
+                "message": f"{declared_s} is the job number, not a drawing: the run reads the "
+                           f"parts lists and prices the assembly no other drawing lists, and "
+                           f"the book names it. Assemblies in the pack: {listing}."}
     if not matches:
         return {"status": "none", "declared": declared_s, "match": None, "matches": [],
                 "others": assemblies,
@@ -281,3 +364,18 @@ def title_from_files(product: Any, file_names: Sequence[Any]) -> str:
     the drawing office's own label for the product's sheet, and it does not move."""
     return max((d.get("title") or "" for d in product_sheets(product, file_names)),
                key=len, default="")
+
+
+def _main(argv: List[str]) -> int:
+    """`--texts <file or folder>... --json`: each drawing PDF's words, for the service, which
+    has no PDF library of its own."""
+    if not argv or argv[0] != "--texts":
+        print("usage: product_identity.py --texts <file or folder>... [--json]", file=sys.stderr)
+        return 2
+    paths = [a for a in argv[1:] if a != "--json"]
+    print(json.dumps({"texts": read_texts(paths)}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_main(sys.argv[1:]))
