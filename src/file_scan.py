@@ -2982,6 +2982,26 @@ def _finalize_scan_summary(
             print(f"   [solidworks] skipped ({_e_sw})", flush=True)
             _sw_why = f"the connector raised {type(_e_sw).__name__}: {_e_sw}"
 
+    # ── WELD SYMBOLS ON A PART'S OWN SHEET ─────────────────────────────────────────────
+    # Before every reader that can add an operation, so a weld the drawing states by symbol
+    # rules out one a later pass infers from a name. 12527-22-101 carries four ISO spot-weld
+    # symbols and no text; the engine charged Weld (CO2) and dressing and said "no weld note
+    # or symbol on the drawing". Failure-isolated: an unreadable sheet leaves the job as it is.
+    if pdf_path:
+        try:
+            from weld_symbols import apply_to_parts as _ws_apply, sheet_weld_symbols as _ws_read
+            run_timing.mark("start weld_symbols")
+            _ws_by_part = _ws_read(pdf_path)
+            _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
+            run_timing.mark("done weld_symbols")
+            summary["weld_symbols_by_part"] = _ws_by_part
+            if _ws_ruled:
+                print(f"   [weld-symbols] spot welded per its own sheet: "
+                      f"{', '.join(_ws_ruled)} — arc weld ruled out", flush=True)
+        except Exception as _ws_err:
+            print(f"   [weld-symbols] not read: {type(_ws_err).__name__}: {_ws_err}",
+                  flush=True)
+
     # ── Whole-document LLM extract — DRIVE the estimate from a chat-session-style read ──
     # Gated (SDI_LLM_FULL_EXTRACT). Reasons over the ENTIRE pack in one call (hierarchy + tube
     # cut lengths + materials + weights) and folds it into the pre-estimate parts BEFORE costing,

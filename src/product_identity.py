@@ -119,6 +119,21 @@ def drawing_of_file(name: Any) -> Dict[str, Any]:
     parts = re.split(r"[\s_]+", stem.strip(), maxsplit=1)
     number = parts[0].strip() if parts else ""
     top_sheet = False
+    # THE CUSTOMER'S FILING, NUMBER NOT FIRST. M&S packs arrive as
+    # "0359887_TSE FOOTWEAR RISER_12527-22-GA_REV A.pdf": their enquiry number, the title,
+    # then the drawing number. Read number-first, that is no drawing at all, so the product's
+    # own sheet named nothing and 12527-22's header took a title block read off another page
+    # ("RISER WELMENT"). Where the first token is not a drawing number, an underscore-separated
+    # segment that IS one is the number, and the words around it — less the revision and any
+    # all-digit reference — are the title.
+    if not looks_like_a_drawing_number(number) and "_" in stem:
+        segs = [s.strip() for s in stem.split("_") if s.strip()]
+        hit = next((s for s in segs if looks_like_a_drawing_number(s)), "")
+        if hit:
+            words = [s for s in segs if s != hit and not s.isdigit()
+                     and not _REV_TAIL.fullmatch("_" + s) and not re.fullmatch(
+                         r"(?i)rev\.?\s*[A-Z0-9]{1,3}", s)]
+            number, parts = hit, [hit, " ".join(words)]
     if not looks_like_a_drawing_number(number):
         # A job's own top sheet is filed "<job number> - <title>" (12645's shelter). The bare
         # number is accepted only with a title after it; a lone number is not a drawing.

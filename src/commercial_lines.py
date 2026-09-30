@@ -124,6 +124,15 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
             _leave_out(part, "an assembly, weighed through its children")
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
+        if not (L and W):
+            # THROUGH THE SHARED RESOLVER. A DXF-measured flat is held under the geometry
+            # record, not at the top of the part; 12527-22's riser and rail were both
+            # measured, and packing declined because "no part was measured".
+            try:
+                from document_builder import flat_blank_mm as _fb    # noqa: PLC0415
+                L, W = (_num(v) for v in _fb(part))
+            except Exception:                                        # noqa: BLE001
+                pass
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
@@ -149,8 +158,8 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # it says "about 49 kg" for a 2.3 kg tray there is no way to see which part put the
         # 46 kg in. Every counted part is recorded with what it contributed, so the covering
         # note can print the arithmetic and a phantom names itself.
-        _line_kg = ((_num(part.get("blank_length_mm")) or 0) / 1000.0
-                    * (_num(part.get("blank_width_mm")) or 0) / 1000.0
+        _line_kg = ((L or 0) / 1000.0
+                    * (W or 0) / 1000.0
                     * (_num(part.get("normalized_thickness_mm")) or 0) / 1000.0
                     * _density_for(part.get("normalized_material")))
         try:

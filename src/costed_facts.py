@@ -1419,6 +1419,22 @@ def thickness_conflict(part: Mapping[str, Any],
                 abs(v - b) <= 0.05 for b in boilerplate_mm):
             continue
         rivals.append((v, src))
+    # A PRODUCTION RULE IS NOT TWO READERS DISAGREEING. 12527-22-01M is drawn 0.9 mm and
+    # production buys 1.0 in lieu; the sheet costs 1.0 and says so ("drawn at 0.9 mm, COSTED
+    # AT 1 mm", with how to stand the rule down). This decision then read the drawn figure
+    # off the record and told the estimator the rail was "nested and cut at 0.9 mm" against
+    # a 1 mm "rival" — the two halves of the rule, presented as a contradiction. Both gauges
+    # the rule names are explained by it; the gauge in force is the one it costs at. Any
+    # third reading is still a real disagreement and is still raised.
+    _ps = part.get("production_substitution")
+    if isinstance(_ps, Mapping):
+        _costed = _num(_ps.get("costed_thickness_mm"))
+        _explained = [g for g in (_num(_ps.get("drawn_thickness_mm")), _costed) if g]
+        rivals = [(v, s) for v, s in rivals
+                  if not any(abs(v - g) <= 0.05 for g in _explained)]
+        if _costed:
+            kept, kept_src = _costed, "production_substitution"
+        rivals = [(v, s) for v, s in rivals if abs(v - kept) > 0.05]
     if not rivals:
         return None
     # "NEITHER OUTRANKS A PERSON" — so when a person HAS ruled, the question is answered.

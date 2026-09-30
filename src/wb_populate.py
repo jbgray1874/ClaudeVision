@@ -446,6 +446,12 @@ OP_NAME_MAP = {
     "brush_before_plate": "Manual labour (Metal)",
     "spotweld":       "Spotweld",
     "spot_weld":      "Spotweld",
+    # The engine's OWN name for it — the estimator times `spot_welding`, the rate table and
+    # the route compiler both carry it — and the one spelling this map lacked, so a spot weld
+    # read off 12527-22-101's sheet reached the Labour block as a row called "spot_welding"
+    # with no department and no rate.
+    "spot_welding":   "Spotweld",
+    "resistance_welding": "Spotweld",
     "roll":           "Roll",
     "rolling":        "Roll",
     "guillotine":     "Guillotine",
@@ -1323,8 +1329,15 @@ def _part_long_length_mm(part: Mapping[str, Any]) -> Optional[float]:
     length for a linear part."""
     me = part.get("material_estimate") or {}
     ng = part.get("normalized_geometry") or {}
-    dims = [_safe(me.get(k) or ng.get(k)) for k in
-            ("blank_length_mm", "blank_width_mm", "length_mm", "cut_length_mm")]
+    # A CUT LENGTH IS A LENGTH ONLY FOR A LINEAR PART. On a sheet part or an assembly it is
+    # the total cut path — every edge added up — and 12527-22-101, a 250 mm riser, hung as
+    # 6,168 mm: 16 bars a piece, 20 pieces an hour, £19 of powder on a £36 unit.
+    _form = str(me.get("stock_form") or (part.get("manufacturing_interpretation") or {})
+                .get("stock_form") or "").strip().lower()
+    _keys = ["blank_length_mm", "blank_width_mm", "length_mm"]
+    if _form in _FABRICATED_LINEAR_STOCK_FORMS or _form in ("tube", "section"):
+        _keys.append("cut_length_mm")
+    dims = [_safe(me.get(k) or ng.get(k)) for k in _keys]
     dims = [d for d in dims if d and d > 0]
     return max(dims) if dims else None
 
