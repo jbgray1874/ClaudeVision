@@ -8,6 +8,8 @@ D-354  Packing and delivery read their placeholder while the 1-off break was emp
 D-355  Four castors priced at £44 were called "material costs NOTHING … UNDER-CHARGED".
 D-356  The banner said "5 market figures" beside 7 failing checks and four sizes read off a picture.
 D-357  11:00 re-run: the lid hinge's AI £3.25 read "SDI Live" and sat beside "NOT PRICED — refused".
+D-358  Its provenance record still named a config default; and the render-only BOM checks read
+       as though a drawing had been misread.
 """
 from __future__ import annotations
 
@@ -95,7 +97,65 @@ def test_a_rescued_line_is_labelled_by_the_rescue_and_loses_its_refusal():
     assert not any("NOT PRICED —" in f for f in hinge["review_flags"])
     assert "sighted as 'metal hinge'" in hinge["review_flags"]
     # a stale stamp from the failed chain no longer names the supplier
-    hinge["material_estimate"]["price_source"] = {"source_name": "config_default_material_rates",
-                                                  "applied": True}
+    hinge["cost_breakdown"] = {"system_cost": {"source_name": "config_default_material_rates",
+                                               "applied": True, "affects_total": True}}
     label, _ = W._price_origin(hinge)
     assert label == "AI ESTIMATE - INDICATIVE"
+
+
+def test_the_rescue_writes_its_own_price_source():
+    import wb_populate as W
+    hinge = {"part_number": "CPT06", "description": "LID HINGE", "quantity": 1,
+             "material_estimate": {},
+             "cost_breakdown": {"system_cost": {"source_name": "config_default_material_rates",
+                                                "applied": True, "affects_total": True}}}
+
+    def look(pe):
+        pe["_last_resort_result"] = {"selected": {
+            "source": "web_ai_fallback", "price": 3.25,
+            "metadata": {"pricing_mode": "llm_market_estimate", "llm_provider": "xai"}}}
+        return 3.25
+    E.apply_last_resort_prices([hinge], look)
+    st = hinge["material_estimate"]["price_source"]
+    assert st["source_class"] == "ai_estimate" and st["source_name"] != \
+        "config_default_material_rates"
+    assert "_last_resort_result" not in hinge
+    assert W._price_origin(hinge)[0].endswith("INDICATIVE")
+
+
+def test_a_rescue_with_no_recorded_answer_is_still_a_market_indication():
+    part = {"part_number": "X", "description": "CASTOR", "quantity": 4, "material_estimate": {}}
+    E.apply_last_resort_prices([part], lambda pe: 11.0)
+    assert part["material_estimate"]["price_source"]["source_class"] == "ai_estimate"
+
+
+def _render(**extra):
+    return dict({"source_format": "image_render"}, **extra)
+
+
+def test_a_render_run_says_its_parts_are_concept_assumptions_and_still_blocks():
+    import invariants as inv
+    s = _render(document_analysis={"bom_rows": [], "bom_readers_unread": [
+        {"scope": "job", "path": "A", "detail": "disabled by --llm-only"}]})
+    out = inv.check_both_bom_readers_ran(s)
+    assert out and out[0]["severity"] == inv.BLOCKING
+    assert "customer render" in out[0]["message"] and "concept assumptions" in out[0]["message"]
+
+
+def test_a_drawing_run_keeps_the_old_words():
+    import invariants as inv
+    s = {"document_analysis": {"bom_rows": [], "bom_readers_unread": [
+        {"scope": "job", "path": "A", "detail": "x"}]}}
+    assert "read once, not twice" in inv.check_both_bom_readers_ran(s)[0]["message"]
+
+
+def test_a_sighted_part_is_owned_by_a_concept_assumption_not_a_phantom():
+    import invariants as inv
+    s = _render(canonical_route_shadow={"mode": "cutover", "decisions": [], "issues": [
+        {"code": "bom_node_disconnected", "part_number": "CPT07", "kind": "leaf",
+         "description": "CASTOR", "in_raw_records": True, "in_extract": False}]})
+    out = [v for v in inv.check_canonical_route_shadow(s)
+           if v["code"] == "canonical_route_bom_node_disconnected"]
+    assert out and out[0]["severity"] == inv.BLOCKING
+    assert "sighted on the customer's render" in out[0]["message"]
+    assert "invented downstream" not in out[0]["message"]

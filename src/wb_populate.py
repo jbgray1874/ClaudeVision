@@ -203,10 +203,15 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     # 30 Sep 11:00: an AI figure of £3.25 wore "SDI Live" in the supplier column, the
     # provenance tab called it a config default, and the report called it researched: three
     # names for one guess. Where the rescuer priced the line, its mark decides the label.
-    if str(((pe.get("material_estimate") or {}).get("cost_method")) or "") == \
-            "last_resort_market_indication":
-        return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
     best = None
+    _me_lr = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    _lr = str(_me_lr.get("cost_method") or "") == "last_resort_market_indication"
+    if _lr:
+        # The rescue's own stamp names the source that answered it (D-358) — a market
+        # estimate, or a catalogue row the first pass never asked. Without one, it is a guess.
+        if not isinstance(_me_lr.get("price_source"), dict):
+            return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
+        best = _me_lr["price_source"]
     # THE LABEL FOLLOWS THE MONEY, and the record says which branch put the money on.
     #
     # The 16:07 10975-02 book charged the tape at £0.09 a piece — 200 mm of the £—
@@ -220,7 +225,7 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     # it tells the estimator to distrust the one number on the job that came off UDEF.
     _mat_charged = str(((pe.get("material_estimate") or {}).get("cost_method")) or "")\
         .startswith("roll_goods")
-    for _path, block in price_provenance.iter_price_stamps(pe):
+    for _path, block in ([] if _lr else price_provenance.iter_price_stamps(pe)):
         if not price_provenance.stamp_affects_total(block):
             continue
         if _mat_charged and "material_estimate" in _path:

@@ -1435,13 +1435,20 @@ def check_both_bom_readers_ran(summary: Any) -> List[Dict[str, Any]]:
         _who = ", ".join(sorted({("deterministic" if u.get("path") == "A" else "vision")
                                  for u in job_scope}))
         _why = "; ".join(str(u.get("detail") or "").strip() for u in job_scope if u.get("detail"))
+        _msg = (f"The {_who} BOM reader did not run on this job ({_why}). The {row_count} BOM "
+                f"line(s) costed here were read once, not twice, so none of them carries "
+                f"corroboration and no line only one reader could see has been flagged as "
+                f"such. A parent BOM missing from this estimate would look exactly like a job "
+                f"that has none.")
+        if summary.get("source_format") == "image_render":
+            # SAID AS WHAT IT IS ON A RENDER (D-358): no parts list exists to be read twice.
+            _msg = ("This pack is a customer render: there is no parts list for either BOM "
+                    "reader to read, so every part here was sighted on the picture and none is "
+                    "corroborated — they are concept assumptions, not read lines. The estimate "
+                    "stays blocked from release until a parts list or dimensioned drawing "
+                    "confirms them.")
         out.append(_violation(
-            "bom_reader_never_ran", BLOCKING,
-            f"The {_who} BOM reader did not run on this job ({_why}). The {row_count} BOM "
-            f"line(s) costed here were read once, not twice, so none of them carries "
-            f"corroboration and no line only one reader could see has been flagged as such. "
-            f"A parent BOM missing from this estimate would look exactly like a job that "
-            f"has none.",
+            "bom_reader_never_ran", BLOCKING, _msg,
             readers=_who, unread=job_scope[:6], bom_rows=row_count))
     if page_scope:
         _pages = "; ".join(
@@ -2354,6 +2361,16 @@ def check_canonical_route_shadow(summary: Any) -> List[Dict[str, Any]]:
                 _why = (f" It is a prefix of {', '.join(_stems)} on this same job, which is "
                         f"the signature of a TRUNCATED code rather than a real part — the "
                         f"fix is to stop creating it, not to give it a parent.")
+            elif summary.get("source_format") == "image_render" and issue.get("code") == \
+                    "bom_node_disconnected":
+                # A RENDER HAS NO PARTS LIST TO OWN ANYTHING (D-358). On M&S's bin the
+                # graphic, hinge and castors were "invented downstream of the drawing read"
+                # — there was no drawing. They were sighted on the picture: an uncorroborated
+                # concept assumption, still blocking release until Design confirms them.
+                _why = (" It was sighted on the customer's render, which has no parts list "
+                        "to own it, so it is costed as part of the product on an "
+                        "uncorroborated concept assumption. Confirm it with Design (a "
+                        "parts list or a dimensioned drawing) before this is released.")
             elif issue.get("in_raw_records") and not issue.get("in_extract"):
                 _why = (" It appears in the raw part records and NOT in the extract, so it "
                         "was invented downstream of the drawing read — check what created "

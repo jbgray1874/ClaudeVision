@@ -10049,6 +10049,21 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
             "extended_material_cost_gbp": _ext,
             "cost_method": "last_resort_market_indication",
         })
+        # THE RESCUE WRITES ITS OWN PRICE-SOURCE RECORD (D-358). It left the failed chain's
+        # stamp in place, so M&S's lid hinge — £3.25 from a market estimate — read in the
+        # provenance tab as "config_default_material_rates". The record now says what
+        # answered: the chain's own selection where the lookup kept it, and a market
+        # indication where nothing said otherwise.
+        _res = pe.pop("_last_resort_result", None)
+        _stamp = _build_price_source_metadata(
+            _res if isinstance(_res, dict) else {},
+            fallback_source="last_resort_market_indication", applied=True,
+            applied_basis="last_resort_market_indication")
+        if not isinstance(_res, dict) or not _extract_selected_price(_res):
+            _stamp.update({"source_class": "ai_estimate", "reproducible": False,
+                           "source_type": "web_ai_fallback",
+                           "review_reason": "market indication — verify before quoting"})
+        _me["price_source"] = _stamp
         pe["unit_cost_gbp"] = _round_money(_prior_unit + _unit)
         pe["unit_total_cost_gbp"] = _round_money(_prior_unit + _unit)
         pe["extended_total_cost_gbp"] = _round_money(_prior_ext + _ext)
@@ -10072,9 +10087,11 @@ def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
     system-cost path uses, run as a guaranteed last resort for a line the normal path left
     unpriced (a bought-in the classifier skipped, a code the first pass did not look up)."""
     try:
-        return _safe_float(_resolve_part_system_cost(pe).get("applied_unit_cost"))
+        _r = _resolve_part_system_cost(pe)
     except Exception:                                            # noqa: BLE001
         return None
+    pe["_last_resort_result"] = _r.get("result") or {}
+    return _safe_float(_r.get("applied_unit_cost"))
 
 
 _BOUGHT_IN_KEYWORDS = (
