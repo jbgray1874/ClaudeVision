@@ -1329,6 +1329,52 @@ def _part_long_length_mm(part: Mapping[str, Any]) -> Optional[float]:
     return max(dims) if dims else None
 
 
+def _part_coated_m2(part: Mapping[str, Any]) -> Optional[float]:
+    """The coated area one piece of this part carries, as the costing stage measured it: its
+    own blank, or its members' blanks for an assembly coated as one. None when unmeasured."""
+    _det = ((part.get("process_estimate") or {}).get("powder_coating_detail") or {})
+    for _v in (_det.get("coated_m2"), part.get("_powder_members_coated_m2"),
+               part.get("_powder_reliable_coated_m2")):
+        _a = _safe(_v)
+        if _a and _a > 0:
+            return float(_a)
+    return None
+
+
+def powder_area_throughput(parts: Sequence[Mapping[str, Any]],
+                           rule: Optional[Mapping[str, Any]] = None
+                           ) -> Optional[Tuple[float, str]]:
+    """(pieces an hour, the working) for a P.Coat row from the area its pieces carry, at the
+    line's square metres an hour (config.LABOUR_RULES['powder_coating']). None when any piece
+    on the row has no measured area — the size band then stands, as before.
+
+    Several parts combine as the true rate: the row's pieces over the hours their total area
+    takes, never an average of separate rates."""
+    if rule is None:
+        try:
+            import config as _cfg_pa
+            rule = (getattr(_cfg_pa, "LABOUR_RULES", {}) or {}).get("powder_coating") or {}
+        except Exception:                                            # noqa: BLE001
+            rule = {}
+    m2_hr = _safe(rule.get("throughput_m2_per_hour"))
+    if not m2_hr or m2_hr <= 0 or not parts:
+        return None
+    pieces, area, shown = 0.0, 0.0, []
+    for p in parts:
+        a = _part_coated_m2(p)
+        if a is None:
+            return None              # one unmeasured piece and the row's area is unknown
+        q = float(_safe(p.get("quantity"), 1) or 1)
+        pieces += q
+        area += q * a
+        shown.append(f"{p.get('part_number')} {a:.3f} m2")
+    if pieces <= 0 or area <= 0:
+        return None
+    rate = float(m2_hr) * pieces / area
+    return rate, (f"{'; '.join(shown)} at {float(m2_hr):g} m2/hr gives {rate:.0f} pieces/hr "
+                  f"(config.LABOUR_RULES powder_coating)")
+
+
 def powder_hanging_throughput(parts: Sequence[Mapping[str, Any]],
                               rule: Optional[Mapping[str, Any]] = None
                               ) -> Optional[Tuple[float, str]]:
@@ -4797,7 +4843,13 @@ def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str],
 
     assembly_own_time is the same claim from the grouping side: the row's hours came from
     the ASSEMBLY's own record rather than from summing its members, so they are one number
-    for one thing and the corpus median has nothing better to offer."""
+    for one thing and the corpus median has nothing better to offer.
+
+    Not when the row's time follows a measured area (time_from_area): the assembly's own
+    figure is then the engine's arithmetic on that same area, floored — not a person's
+    statement. 12527-22-101's coat read as "stated" at 20/hr and charged £19 a unit."""
+    if (group or {}).get("time_from_area"):
+        return False
     if (group or {}).get("assembly_own_time"):
         return True
     _ops = [o for o in ((group or {}).get("engine_ops") or [])]
@@ -7516,6 +7568,21 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 _rate_basis = "powder_hanging_geometry"
                 g["rate_working"] = _hang[1]
                 _flag(f"throughput for 'P.Coat' from hanging geometry: {_hang[1]}", flags)
+            # AND THE COAT'S TIME FOLLOWS ITS AREA. The size band and the bars say how many
+            # pieces the line can hang; neither says how long a large piece takes to spray.
+            # The M&S steel unit coated 9.36 m2 at the band's 319/hr — about £1 — and its
+            # riser (12527-22) coated 0.17 m2 at a floor of 20/hr — £19. The row takes the
+            # slower of line capacity and area, and the area rate is a measurement, so an
+            # assembly's own engine-computed coat time does not outrank it as "stated".
+            _by_area = powder_area_throughput(_row_parts_ph)
+            if _by_area is not None:
+                g["time_from_area"] = True
+                if not default_tp or _by_area[0] < float(default_tp):
+                    default_tp = round(_by_area[0], 1)
+                    _rate_basis = "powder_coated_area"
+                    g["rate_working"] = _by_area[1]
+                _flag(f"throughput for 'P.Coat' checked against coated area: {_by_area[1]} "
+                      f"— row charged at {float(default_tp):g}/hr.", flags)
 
         # Assembly, packing and welding time is NOT in the DXF. There is no geometry from
         # which to derive "how long does it take to pack this" — the engine's derived value

@@ -7278,7 +7278,13 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _has_flat_blank = bool(blank_length_pm and blank_width_pm)
         _wire_pc_floor = float(pc_rule.get("wire_min_run_min", 3.0))
         _normal_pc_floor = float(pc_rule.get("min_run_min", 0.25))
-        _pc_min = _wire_pc_floor if (_is_wire_op_part and not _has_flat_blank) else _normal_pc_floor
+        # AND AN ASSEMBLY COATED OVER ITS MEMBERS' FLAT BLANKS COATS LIKE SHEET. It has no
+        # blank of its own, so it read as "no flat blank"; it is welded, so it read as a wire
+        # op — and 12527-22-101, two folded 1 mm panels spot-welded together, took the 3-minute
+        # wire floor for 0.17 m2 and charged £19 a unit on a £36 riser. Its members are sheet
+        # by construction (a member without a flat blank is not summed), so its area is real.
+        _coats_as_sheet = _has_flat_blank or bool(part.get("_powder_members_coated_m2"))
+        _pc_min = _wire_pc_floor if (_is_wire_op_part and not _coats_as_sheet) else _normal_pc_floor
         run_min = max(_pc_min, run_min)
         if _pc_parent and coated_m2 <= 0:
             # AN ASSEMBLY CLAIMING THE COAT WITH NO AREA OF ITS OWN IS A QUESTION, NOT A

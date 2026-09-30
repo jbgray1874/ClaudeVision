@@ -78,6 +78,25 @@ def supply_notes(texts: Iterable[str]) -> List[Dict[str, Any]]:
     return found
 
 
+# A BOM line naming its own supplier: "TICKET-SUPPLIED BY OTHERS", "GRAPHIC - FREE ISSUE BY
+# CUSTOMER". Hyphens and dashes count as spaces — a title-block field is often joined to them.
+_OWN_CLAUSE = re.compile(
+    r"(?:^|[\s\-\u2013\u2014/(,])(?:SUPPLIED\s*(?:AND|&)\s*(?:FITTED|INSTALLED)|SUPPLIED|PROVIDED|"
+    r"FREE[\s-]*ISSUED?)\s+BY\s+(?P<party>[A-Z][A-Z0-9 &.'-]{1,60})")
+
+
+def own_supply_party(description: str) -> str:
+    """The party a BOM line says supplies it, or "" — never SDI."""
+    d = " ".join(str(description or "").upper().split())
+    m = _OWN_CLAUSE.search(d)
+    if not m:
+        return ""
+    party = re.split(r"\s{2,}|,|;|\bFOR\b|\bON\b|\bAT\b|\(", m.group("party"))[0].strip(" .-")
+    if not party or "SDI" in party.split():
+        return ""
+    return party
+
+
 def _synonyms(item: str) -> List[str]:
     extra = dict(getattr(config, "THIRD_PARTY_ITEM_SYNONYMS", {}) or {}) if config else {}
     for key, words in list(_SYNONYMS.items()) + list(extra.items()):
@@ -121,11 +140,28 @@ def mark_third_party_supplied(parts: List[Dict[str, Any]],
             texts.append(str(pg.get("pdfplumber_text") or ""))
             texts.append(str(pg.get("normalized_text") or ""))
     notes = supply_notes(texts)
-    if not notes:
-        return []
     marked: List[Dict[str, str]] = []
     for p in parts or []:
-        if not isinstance(p, dict) or p.get("supplied_by_third_party") or _is_ours(p):
+        if not isinstance(p, dict) or p.get("supplied_by_third_party"):
+            continue
+        # THE LINE'S OWN WORDS FIRST. 12527-22-03X is "TICKET-SUPPLIED BY OTHERS": the BOM
+        # line itself says who supplies it. The protections below stop a note about a screen
+        # zeroing the bracket that holds it; they have nothing to say against a line that
+        # names its own supplier, so its code, its model geometry and its structural nouns
+        # do not make it ours. It went out at £0.08 on a researched price for a card M&S
+        # supplies.
+        _own = own_supply_party(str(p.get("description") or ""))
+        if _own:
+            p["supplied_by_third_party"] = _own
+            p.setdefault("risk_flags", []).append("customer_supplied_zero_cost")
+            p.setdefault("review_flags", []).append(
+                f"supplied by {_own.title()} per its own BOM line "
+                f"('{str(p.get('description') or '')[:120]}') — listed at £0 so the pack is "
+                f"complete. If SDI is buying it, price the line.")
+            marked.append({"part_number": str(p.get("part_number") or ""),
+                           "item": "its own line", "party": _own})
+            continue
+        if not notes or _is_ours(p):
             continue
         desc = " ".join(str(p.get(k) or "") for k in ("description", "part_number"))
         for n in notes:
