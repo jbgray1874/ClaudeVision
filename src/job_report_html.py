@@ -2241,12 +2241,33 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
     # lines where the gap is real. So a blank row is cross-checked against what the job
     # actually costed for that part before it is called unpriced at all.
     _costed_elsewhere: Dict[str, float] = {}
+    try:
+        from bought_in_policy import is_bought_in as _bought_here
+    except Exception:                                                # noqa: BLE001
+        _bought_here = None
     for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
         if not isinstance(_pe, dict):
             continue
         _pn = str(_pe.get("part_number") or "").strip().upper()
         if not _pn:
             continue
+        # A PURCHASED LINE'S MONEY IS ITS PURCHASE, NOT ITS LABOUR. A bought-in whose price
+        # sits on its total is costed (FIXING2104's £12.40); one whose total is only the
+        # handling labour is not. On the 12645 book of 29 Sep 21:27 the two roller shutters —
+        # £0, "nothing holds a rate" in the same report — were also listed as "show zero here
+        # and ARE costed … their money is on the block rows above", because their assembly
+        # labour made the engine's total non-zero (D-346).
+        if _bought_here is not None and _bought_here(_pe):
+            try:
+                _lab = float(((_pe.get("labour_estimate") or {}).get(
+                    "extended_labour_cost_gbp")) or 0)
+                _tot = float(_pe.get("extended_total_cost_gbp") or 0)
+                _mat_b = float((_pe.get("material_estimate") or {}).get(
+                    "extended_material_cost_gbp") or 0)
+            except (TypeError, ValueError):
+                _lab = _tot = _mat_b = 0.0
+            if max(_mat_b, _tot - _lab) <= 0.005:
+                continue
         # THE ENGINE ANSWERS "IS THIS ROW'S MONEY ELSEWHERE", NOT "WHAT IS THE FIGURE".
         #
         # Two different questions, and this loop was being used for both. The CLASSIFICATION

@@ -1360,6 +1360,28 @@ def steel_row_fits(length: Any, width: Any, sheet_l: Any, sheet_w: Any,
     return _cf_nest.nest_on_sheet(material, length, width, sheet_l, sheet_w) is not None
 
 
+def template_block_sheet(ws, block: Mapping[str, Any]) -> Tuple[float, float]:
+    """The stock sheet the template pre-fills on its Sheet Steel rows, (0, 0) when none does.
+
+    Read from the block's own rows — the most common numeric (length, width) pair — and
+    before any row is written, so an engine-chosen sheet cannot vote. Not a number in the
+    code: rows added to the template in Excel can arrive without the pre-filled sheet (12645,
+    29 Sep: rows 104-128 carried J=1250 and an empty I), and the old `or 2500` assumed a
+    value the cell did not hold (D-342)."""
+    col_l, col_w = block.get("col_sheet_l"), block.get("col_sheet_w")
+    if not col_l or not col_w:
+        return (0.0, 0.0)
+    counts: Dict[Tuple[float, float], int] = {}
+    for r in range(int(block["first_row"]), int(block["last_row"]) + 1):
+        sl = _safe(ws.cell(row=r, column=int(col_l)).value)
+        sw = _safe(ws.cell(row=r, column=int(col_w)).value)
+        if sl and sw and sl > 0 and sw > 0:
+            counts[(float(sl), float(sw))] = counts.get((float(sl), float(sw)), 0) + 1
+    if not counts:
+        return (0.0, 0.0)
+    return max(counts.items(), key=lambda kv: (kv[1], -kv[0][0] * kv[0][1]))[0]
+
+
 def steel_sheet_for_row(length: Any, width: Any, material: Any,
                         template_sheet: Tuple[Any, Any]) -> Tuple[Optional[Tuple[float, float]], str]:
     """(sheet to write, or None to leave the template's; why) for one Sheet Steel row.
@@ -1372,13 +1394,8 @@ def steel_sheet_for_row(length: Any, width: Any, material: Any,
     the template's sheet keeps it, so no existing book moves (D-314)."""
     if steel_row_fits(length, width, *template_sheet, material=material):
         return None, ""
-    try:
-        import config as _cfg_ss
-        table = getattr(_cfg_ss, "STANDARD_SHEET_SIZES_MM", {}) or {}
-    except Exception:                                                # noqa: BLE001
-        table = {}
-    key = str(material or "").replace("_", " ").strip().upper()
-    sizes = table.get(key) or table.get("MILD STEEL") or []
+    import costed_facts as _cf_stock
+    sizes = _cf_stock.stocked_sheet_sizes(material)
     for sl, sw in sorted(sizes, key=lambda s: s[0] * s[1]):
         if steel_row_fits(length, width, sl, sw, material=material):
             return (float(sl), float(sw)), (f"{sl:g} x {sw:g} — the template's "
@@ -1460,9 +1477,7 @@ def spill_from_full_block(ws, block_name: str, block_key: str, block: Mapping[st
         bd = _costed_facts.blank_dimensions(part)
         length, width = _safe(bd["length_mm"]), _safe(bd["width_mm"])
         if length and width:
-            fr = int(block["first_row"])
-            tpl = (ws.cell(row=fr, column=int(block["col_sheet_l"])).value or 2500,
-                   ws.cell(row=fr, column=int(block["col_sheet_w"])).value or 1250)
+            tpl = template_block_sheet(ws, block)
             mat = part.get("normalized_material") or me.get("material") or "MILD STEEL"
             sheet, why = steel_sheet_for_row(length, width, mat, tpl)
             if sheet is None and why:
@@ -5969,6 +5984,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
 
     # ── Steel block: desc, qty, length, width, gauge ───────────────────────
     s = cm["steel"]
+    _block_sheet = template_block_sheet(ws, s)
     row = s["first_row"]
     for _si, pe in enumerate(steel_parts):
         if row > s["last_row"]:
@@ -6044,10 +6060,22 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         ws.cell(row=row, column=s["col_gauge"],  value=gauge)
         # THE SHEET THE PART IS CUT FROM, WHERE THE TEMPLATE'S CANNOT NEST IT (D-314).
         if length and width and s.get("col_sheet_l") and s.get("col_sheet_w"):
-            _tpl = (ws.cell(row=row, column=s["col_sheet_l"]).value or 2500,
-                    ws.cell(row=row, column=s["col_sheet_w"]).value or 1250)
+            # THE ROW'S OWN SHEET, OR THE BLOCK'S WHERE THE ROW HAS NONE — and then WRITTEN.
+            # A blank cell used to be read as 2500 x 1250 for the fit test and left blank on
+            # the sheet, so the row's own nest formula found no sheet: 20 of 12645's parts
+            # (29 Sep, 21:27 book) had no parts-per-sheet, no cost and a default laser rate,
+            # and the banner said "21 prices missing" (D-342).
+            _l0 = _safe(ws.cell(row=row, column=s["col_sheet_l"]).value)
+            _w0 = _safe(ws.cell(row=row, column=s["col_sheet_w"]).value)
+            _tpl = (_l0 or _block_sheet[0], _w0 or _block_sheet[1])
             _mat_ss = pe.get("normalized_material") or me.get("material") or "MILD STEEL"
             _sheet, _why = steel_sheet_for_row(length, width, _mat_ss, _tpl)
+            if _sheet is None and not _why and not (_l0 and _w0):
+                ws.cell(row=row, column=s["col_sheet_l"], value=_tpl[0])
+                ws.cell(row=row, column=s["col_sheet_w"], value=_tpl[1])
+                _flag(f"steel {_pn_g}: template row {row} had no stock sheet size; wrote the "
+                      f"block's own {_tpl[0]:g} x {_tpl[1]:g} — copy the sheet size into the "
+                      f"template's added rows", flags)
             if _sheet is not None:
                 ws.cell(row=row, column=s["col_sheet_l"], value=_sheet[0])
                 ws.cell(row=row, column=s["col_sheet_w"], value=_sheet[1])
@@ -7889,10 +7917,25 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _question_records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]
     _question_records += [r for r in ((summary.get("estimate_summary") or {}).get(
         "part_estimates") or []) if isinstance(r, dict)]
+    try:
+        from part_identity import thread_names_disagree as _threads_disagree
+    except Exception:                                                # noqa: BLE001
+        _threads_disagree = None
     for _qp in _question_records:
         if not isinstance(_qp, dict):
             continue
         _qpn = str(_qp.get("part_number") or "").strip()
+        # A CODE AND A DESCRIPTION THAT NAME DIFFERENT THREADS (D-347): priced as the code,
+        # and asked, because which one is meant is the drawing office's to say.
+        _tw = _threads_disagree(_qpn, _qp.get("description")) if _threads_disagree else ""
+        if _tw and (_qpn.upper(), "thread") not in _seen_asks:
+            _seen_asks.add((_qpn.upper(), "thread"))
+            _inputs.append({
+                "kind": "assumption_unconfirmed", "part": _qpn or "—",
+                "where": "engine question",
+                "what": (f"WHICH ITEM? {_tw}. The line is priced as the code; confirm which "
+                         f"is meant, and the drawing's parts list should say one thing")[:400],
+            })
         for _fl in (_qp.get("review_flags") or []):
             _txt = str(_fl or "").strip()
             if not _txt or not any(_w in _txt.lower() for _w in _ASKS):

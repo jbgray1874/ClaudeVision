@@ -265,19 +265,10 @@ def plausible_as_a_sheet_part(length_mm: Any, width_mm: Any) -> bool:
 def _stock_sheets_for(material: Any) -> Tuple[Tuple[float, float], ...]:
     """The sheet sizes this material is actually stocked in, from config."""
     try:
-        import config
-        sizes = getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}
+        import costed_facts as _cf_stock
+        return tuple(_cf_stock.stocked_sheet_sizes(material))
     except Exception:                                            # noqa: BLE001
-        sizes = {}
-    key = str(material or "").strip().upper()
-    found = sizes.get(key) or sizes.get(key.replace(" ", "_")) or sizes.get("DEFAULT")
-    out = []
-    for pair in (found or ()):
-        try:
-            out.append((float(pair[0]), float(pair[1])))
-        except Exception:                                        # noqa: BLE001
-            continue
-    return tuple(out)
+        return ()
 
 
 def fits_a_stock_sheet(length_mm: Any, width_mm: Any, material: Any) -> Optional[bool]:

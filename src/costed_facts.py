@@ -1121,6 +1121,34 @@ def nest_on_sheet(material, part_length_mm, part_width_mm,
                          sheet_length_mm, sheet_width_mm)
 
 
+def stocked_sheet_sizes(material):
+    """The sheet sizes config.STANDARD_SHEET_SIZES_MM stocks this material in, whatever the
+    material's spelling — "MILD_STEEL", "Mild Steel", "MILD STEEL" — else the DEFAULT row.
+
+    ONE LOOKUP, BECAUSE FOUR DISAGREED. The table is keyed "MILD STEEL"; the estimator asked
+    it with the normalised "MILD_STEEL", missed, and fell back to DEFAULT's 2500 x 1250 alone.
+    On 12645 (29 Sep, 21:27 book) that called six 2,600-2,975 mm parts "longer than every
+    stocked sheet" and asked Dave whether SDI could cut them in one piece, while the workbook
+    rows — which normalised the key — nested them on the stocked 3000 x 1500 (D-343)."""
+    try:
+        import config as _cfg_st
+        table = getattr(_cfg_st, "STANDARD_SHEET_SIZES_MM", {}) or {}
+    except Exception:                                                # noqa: BLE001
+        table = {}
+    raw = str(material or "").strip().upper()
+    spaced = re.sub(r"[\s_]+", " ", raw).strip()
+    found = (table.get(raw) or table.get(spaced) or table.get(spaced.replace(" ", "_"))
+             or table.get("DEFAULT") or [])
+    out = []
+    for pair in found:
+        try:
+            float(pair[0]), float(pair[1])
+            out.append((pair[0], pair[1]))       # the table's own numbers, as it holds them
+        except Exception:                                            # noqa: BLE001
+            continue
+    return out
+
+
 def oversize_sheet_for(material, part_length_mm, part_width_mm):
     """((sheet_l, sheet_w), nest) for the smallest LISTED oversize sheet this blank nests on,
     or None. Asked only once no stocked sheet holds it: config.OVERSIZE_SHEET_SIZES_MM, by

@@ -190,7 +190,13 @@ def reconciled_bom_rows_for_job(
                 # The ITEM number the table printed. Two rows of one parent's table with the
                 # same code and different item numbers are two lines (12173-07-2-GA lists its
                 # handed SIDE PANEL as items 1 and 3, qty 1 each) and add up (D-335).
-                "item_number": (str(r.get("item_number")).strip()
+                #
+                # ITS OWN KEY, NEVER "item_number". Readers across the engine take a row's
+                # identity as `part_number or item_number`, so under that name a row with an
+                # empty code column became a part called "4": 12645's hinge (item 4 of
+                # 12645-03GA's table) came back as a second hinge line priced at £0.26 on the
+                # 29 Sep 21:27 book (D-344). A position in a table is not a part.
+                "bom_item_no": (str(r.get("item_number")).strip()
                                 if r.get("item_number") not in (None, "") else None),
                 "bom_also_on_sheets": list(r.get("also_on_sheets") or []) or None,
             }

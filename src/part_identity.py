@@ -178,6 +178,34 @@ def threads_differ(a: Any, b: Any) -> bool:
     return bool(ta and tb and ta != tb)
 
 
+_IMPERIAL_THREAD = re.compile(
+    r"\b(?:WHITWORTH|BSW|BSF|BSP|UNC|UNF|(?:HALF|QUARTER|THREE[\s-]QUARTERS?)\s+INCH)\b"
+    r"|\b\d+\s*/\s*\d+\s*(?:\"|IN\b|INCH)", re.IGNORECASE)
+
+
+def thread_names_disagree(code: Any, description: Any) -> str:
+    """Why a line's code and its description name different threads, or "".
+
+    12645-01GA's parts list prints "Half Inch Whitworth Nut" in the code column and "M8 FULL
+    NUT BZP GRADE 8" in the description — an imperial nut and a metric one on the same row.
+    The line was priced as the code (the Udef row for a half-inch Whitworth nut) and nothing
+    asked which is meant. Dave Wright, 18 Sep: "Would need to stop it making presumptions" —
+    so the disagreement is put to a person, not settled by whichever column is read first
+    (D-347)."""
+    c, d = str(code or ""), str(description or "")
+    c_imp, d_imp = bool(_IMPERIAL_THREAD.search(c)), bool(_IMPERIAL_THREAD.search(d))
+    c_met, d_met = thread_sizes(c), thread_sizes(d)
+    if (c_imp and d_met) or (d_imp and c_met):
+        return (f"the code '{c}' names an imperial thread and the description '{d}' a "
+                f"metric one" if c_imp else
+                f"the code '{c}' names a metric thread and the description '{d}' an "
+                f"imperial one")
+    if c_met and d_met and c_met != d_met:
+        return (f"the code '{c}' names M{'/M'.join(sorted(c_met))} and the description "
+                f"'{d}' M{'/M'.join(sorted(d_met))}")
+    return ""
+
+
 def stem_duplicate_target(code: Any, others: Any) -> str:
     """The fuller code this one is a truncated stem of, or "" when it stands alone.
 

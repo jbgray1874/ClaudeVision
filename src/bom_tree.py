@@ -261,7 +261,7 @@ def combine_repeated_item_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
     by_code: Dict[str, Dict[str, Any]] = {}
     for r in rows:
         code = _norm(r.get("part_number"))
-        item = str(r.get("item_number") or "").strip()
+        item = str(r.get("bom_item_no") or r.get("item_number") or "").strip()
         if not code or not item:
             out.append(r)
             continue

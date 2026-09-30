@@ -1269,7 +1269,7 @@ def _bom_stated_edges(
         if not child or not parent or child == parent:
             continue
         edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0,
-                      str(row.get("item_number") or "").strip()))
+                      str(row.get("bom_item_no") or row.get("item_number") or "").strip()))
     # ONE CODE AT SEVERAL ITEM NUMBERS OF ONE TABLE IS SEVERAL LINES (D-335). The caller
     # writes children[parent][child] = qty, so a second row overwrote the first: 12173's
     # trough lists its handed SIDE PANEL at items 1 and 3 and would have had one. Different

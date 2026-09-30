@@ -471,6 +471,7 @@
       <div class="field">
         <label for="client">Client</label>
         <input id="client" type="text" autocomplete="off">
+        <p class="note" id="clientHint" hidden style="color:var(--warn);font-weight:600;margin:6px 0 0"></p>
       </div>
       <p class="req" id="req"></p>
 
@@ -1203,6 +1204,29 @@ function renderProductCheck(){
   box.textContent = productCheck.message || "";
 }
 drawing.addEventListener("input", checkProduct);
+
+/* ── THE CLIENT STAYS IN THE BOX; THE JOB MAY NOT (D-345) ──────────────────────
+   12645 (Tesco) went out headed "M&S" on 29 Sep: the box still held the client typed for
+   12173 on the run before. Not a block — one client has many jobs — but said, the moment the
+   job number changes under a client nobody has touched since. */
+let clientFor = null;
+function jobOf(v){
+  const t = String(v || "").trim();
+  const m = t.match(/^\d{4,6}/);
+  return m ? m[0] : t.toUpperCase();
+}
+function checkClient(){
+  const h = document.getElementById("clientHint");
+  if(!h) return;
+  const c = safe(client.value).trim(), j = jobOf(drawing.value);
+  const show = !!(c && clientFor && j && j !== clientFor);
+  h.hidden = !show;
+  h.textContent = show
+    ? `Client still says "${c}", entered for ${clientFor}. Check it is right for ${j}.`
+    : "";
+}
+client.addEventListener("input", () => { clientFor = jobOf(drawing.value); checkClient(); });
+drawing.addEventListener("input", checkClient);
 
 /* ── MATERIALS, CONFIRMED BEFORE THE RUN (D-313) ─────────────────────────
    The service reads each part's title block and DXF name (out of process, with the
@@ -2421,6 +2445,7 @@ runBtn.onclick = async () => {
   blockedBy = ""; $("release").hidden = true;   // last run's blocker is not this run's
   runDest = null;              // the previous run's folder is not this run's
   running = true; refresh();
+  clientFor = jobOf(drawing.value); checkClient();   // this run pairs the client with this job
   log.innerHTML=""; out.innerHTML="";
   setStatus("run","Running");
   line("Job "+safe(drawing.value)+" · "+safe(client.value)+" · "+units.value+" off");

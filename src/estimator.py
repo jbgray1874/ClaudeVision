@@ -3696,7 +3696,8 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     if blank_length is None or blank_width is None:
         return {"candidate_sheet_size_mm": None, "parts_per_sheet": None, "utilisation_pct": None}
 
-    sizes = STANDARD_SHEET_SIZES_MM.get(material or "", STANDARD_SHEET_SIZES_MM["DEFAULT"])
+    # ONE LOOKUP, WHATEVER THE SPELLING (D-343) — "MILD_STEEL" used to miss "MILD STEEL".
+    sizes = _costed_facts.stocked_sheet_sizes(material)
 
     best: Optional[Dict[str, Any]] = None
     # THE TEMPLATE NEVER ROTATES, SO THE ENGINE TURNS THE BLANK BEFORE THE TEMPLATE SEES IT.
@@ -3727,7 +3728,17 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     if (part is not None and _sheet_plastic and blank_length != blank_width
             and not _blank_has_a_direction(part)):
         _orientations.append((blank_width, blank_length, True))
+    # SHEET STEEL IS CUT FROM THE SMALLEST STOCKED SHEET IT NESTS ON — the workbook row's own
+    # rule (wb_populate.steel_sheet_for_row keeps the template's sheet while the blank fits it,
+    # and only then steps up). Best-yield across every size stays for the Other Sheet
+    # Material block, whose rows take the sheet this function chooses. Asked this way so the
+    # JSON and the Sheet Steel row name one sheet (D-343).
+    _steel_rule = (_costed_facts.nesting_rule_for(material) == "workbook_sheet_steel_K38")
+    if _steel_rule:
+        sizes = sorted(sizes, key=lambda _s: float(_s[0]) * float(_s[1]))
     for sheet_length, sheet_width in sizes:
+        if _steel_rule and best is not None:
+            break
         for _bl, _bw, _turned in _orientations:
             # No separate "bigger than the sheet" guard: a part that does not fit comes back
             # as no nest at all, because the gap and the margin are subtracted before the
@@ -4145,8 +4156,7 @@ def market_indication_for(part: Dict[str, Any], material: Any) -> Optional[Dict[
         from web_ai_price_lookup import market_sheet_rate_indication
     except Exception:                                        # noqa: BLE001
         return None
-    sheet = (getattr(config, "STANDARD_SHEET_SIZES_MM", {}) or {}).get(
-        str(material or "").strip().upper())
+    sheet = _costed_facts.stocked_sheet_sizes(material)
     sheet_l, sheet_w = (sheet[-1] if sheet else (None, None))
     # ONE CALL PER MATERIAL AND GAUGE, ACROSS JOBS AND NOT JUST WITHIN ONE. A job with six
     # ABS panels asked six times for the same sheet rate -- six round trips for one answer,
