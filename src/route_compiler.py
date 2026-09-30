@@ -5556,6 +5556,21 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
             _why = _bought_reason(_probe)
             _hardware = bool(_why) and not _why.startswith("a catalogue family code") \
                 and not _made_here(_probe)
+        # A DRAWN PART OF OURS IS NOT HARDWARE BY ITS NAME (D-348). 12645-02-04M is a 47 x 47 x
+        # 6 mm plate drawn as "SQUARE-NUT", with its own DXF flat, model and detail page. The
+        # description branch above minted BI-NUT from the word and refused its laser, and the
+        # 21:27 book gave the part neither a cutting charge nor a purchase price. Measured
+        # geometry of its own, or SDI's own cut-part numbering (a material suffix such as M),
+        # says we make it, whatever the word.
+        if _hardware:
+            try:
+                from part_code_conventions import material_suffix as _cut_suffix
+                _probe_m = dict(_rec, part_number=_rec.get("part_number") or _d.target_id)
+                if (_made_here is not None and _made_here(_probe_m)) \
+                        or _cut_suffix(str(_d.target_id or "")):
+                    _hardware = False
+            except Exception:                                    # noqa: BLE001
+                pass
         if _hardware and _d.operation in _FAB_ALL:
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_d.target_id} is purchased hardware "

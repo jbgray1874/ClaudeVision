@@ -1616,11 +1616,23 @@ def build(workbook: Path, scan_json: Optional[Path],
         + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
            if _other_gbp else "")
         + ".")
+    # THE BANNER'S TALLY, NOT A SECOND ONE (D-349). This counted bill-of-materials lines
+    # only, so the 12645 book of 29 Sep 21:27 said "1 line(s) carry no price at all — Roller
+    # Shutter" beneath a banner of "21 prices missing": twenty Sheet Steel rows with no cost
+    # are missing prices too. Where the costed record has its decisions, their missing
+    # prices are the answer, named as the banner names them.
+    if isinstance(record, dict) and isinstance(record.get("decisions_required"), list):
+        _missing = [str(d.get("part") or "").strip()
+                    for d in record["decisions_required"]
+                    if isinstance(d, dict) and d.get("kind") == "missing_price"]
+        _missing = [m for m in dict.fromkeys(_missing) if m]
+    else:
+        _missing = [r["code"] or _description(r) for r in _unpriced]
     add(f"- **What must be replaced before this is a quote?** "
-        + (f"{len(_unpriced)} line(s) carry no price at all — "
-           + ", ".join(r["code"] or _description(r) for r in _unpriced[:8])
-           + ("…" if len(_unpriced) > 8 else "") + ". "
-           if _unpriced else "No line is unpriced. ")
+        + (f"{len(_missing)} line(s) carry no price at all — "
+           + ", ".join(_missing[:8])
+           + ("…" if len(_missing) > 8 else "") + ". "
+           if _missing else "No line is unpriced. ")
         + (f"{len(_market)} line(s) worth {_gbp(_market_gbp)} are AI market "
            f"indications, not catalogue prices: "
            + ", ".join(r["code"] or _description(r) for r in _market[:8]) + ". "

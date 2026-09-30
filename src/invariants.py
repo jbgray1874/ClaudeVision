@@ -2590,6 +2590,18 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
     def _bare(code: Any) -> str:
         return str(pcc.bare_code(code) or "").strip().upper()
 
+    # THE FILE A PAGE CAME FROM NAMES ITS DRAWING TOO (D-350). 12645's top sheet lists the
+    # body frame as "12645-01GA V2"; the frame's sheet is in the pack as "12645-01GA V2_REVA
+    # .PDF", and its title block reads "12645-01GA". Asked of the title block alone, the frame
+    # was "a drawing this pack does not contain" and the 29 Sep book carried a false blocker.
+    # A file named for a drawing is that drawing: its number, and its number with the rest of
+    # its name (less the revision), are witnesses as good as the title block, compared in the
+    # same bare form. drawing_of_file is the engine's one reading of a drawing file's name.
+    try:
+        from product_identity import drawing_of_file as _drawing_of_file
+    except Exception:                                               # noqa: BLE001
+        _drawing_of_file = None
+
     # EVERYTHING THIS PACK DEMONSTRABLY READ. A page that names a drawing was read; a part
     # carrying measured geometry was read. Both are recorded already.
     present = set()
@@ -2602,6 +2614,14 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
         tb = ((page.get("page_analysis") or {}).get("title_block") or {})
         for value in (tb.get("drawing_numbers") or []):
             present.add(_bare(value))
+        if _drawing_of_file is not None and page.get("source_pdf_path"):
+            try:
+                _filed = _drawing_of_file(page["source_pdf_path"]) or {}
+            except Exception:                                       # noqa: BLE001
+                _filed = {}
+            if _filed.get("number"):
+                present.add(_bare(_filed["number"]))
+                present.add(_bare(f"{_filed['number']} {_filed.get('title') or ''}"))
     for part in _parts(summary):
         code = _bare(part.get("part_number"))
         if not code:

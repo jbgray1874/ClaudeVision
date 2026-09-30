@@ -218,8 +218,9 @@ def test_the_office_can_turn_the_researched_rung_off(monkeypatch):
     import web_ai_price_lookup as w
     monkeypatch.setattr(w, "lookup_web_ai_price",
                         lambda _s: called.append(_s) or {"found": False})
-    assert estimator._rung4_researcher({"description": "9mm MFMDF board",
-                                        "wanted_unit": "square metre"}) == {}
+    got = estimator._rung4_researcher({"description": "9mm MFMDF board",
+                                       "wanted_unit": "square metre"})
+    assert not got.get("price_gbp") and "switched off" in got.get("not_found", ""), got
     assert not called, "the lookup ran with the fallback switched off"
 
 

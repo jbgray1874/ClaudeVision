@@ -7910,8 +7910,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # A decision costs nothing to write and everything to lose. These are the flags that ASK
     # something — a confirm, a TBC, a call that is the estimator's — put where the other
     # outstanding inputs already are, so one list is the whole of what is unresolved.
+    # "NOT PRICED —" IS A QUESTION TOO (D-351): the researched rung's reason a bought-in line
+    # stayed at £0. 12645's shutters carried theirs only in the JSON, so the sheet could not
+    # say whether the research was never asked, found nothing, or was refused.
     _ASKS = ("confirm", "tbc", "your call", "estimator", "rule on", "add it if",
-             "needs to say", "or take the op off", "which gauge is bought")
+             "needs to say", "or take the op off", "which gauge is bought", "not priced —")
     _seen_asks = set()
     _question_records = list(bom_parts or [])
     _question_records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]

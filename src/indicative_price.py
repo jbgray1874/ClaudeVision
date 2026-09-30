@@ -294,11 +294,16 @@ def resolve_indicative(line: Any, *, order_qty: int = 1, as_of: str = "",
             return {"price_gbp": None, "status": "not priced", "brief": brief,
                     "missing": f"the research step failed ({_e})"}
 
+    # A RESEARCHER THAT RAN AND CAME BACK EMPTY SAYS WHY (D-351), and that reason is the
+    # line's, not "no researcher was available" — which is only true when none was.
+    _why_not = str(found.pop("not_found", "") or "").strip()
     if not found:
         return {"price_gbp": None, "status": "not priced", "brief": brief,
-                "missing": ("no researcher was available to answer this line. It needs a "
-                            "current SDI Live rate, a supplier catalogue, a quote, or a "
-                            "researched figure with its evidence.")}
+                "missing": ((f"{_why_not}. It needs a current SDI Live rate, a supplier "
+                             f"catalogue or a quote") if _why_not else
+                            ("no researcher was available to answer this line. It needs a "
+                             "current SDI Live rate, a supplier catalogue, a quote, or a "
+                             "researched figure with its evidence."))}
 
     _bad = _contaminated(found.get("origin") or found.get("source_type"))
     if _bad:

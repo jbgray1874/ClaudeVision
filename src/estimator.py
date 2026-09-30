@@ -3272,9 +3272,14 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
     # or while a provider is misbehaving — and a caller that ignores it makes the switch a
     # lie. The bought-in chain honoured it upstream; the board path reaches this function
     # directly, so the check belongs here, where both arrive.
+    # AN EMPTY ANSWER SAYS WHICH EMPTY IT IS (D-351). Every exit below used to return {},
+    # which the producer words as "no researcher was available" — on 12645's roller shutters
+    # that read the same whether the research was switched off, found nothing, or was refused,
+    # and the three have different fixes. `not_found` carries the reason and no figure.
     if not (getattr(config, "FALLBACK_PRICING_POLICY", {}) or {}).get(
             "enable_web_ai_fallback", True):
-        return {}
+        return {"not_found": "the market research is switched off "
+                             "(FALLBACK_PRICING_POLICY.enable_web_ai_fallback)"}
     from web_ai_price_lookup import lookup_web_ai_price as _look
     _found = _look({
         "description": _brief.get("description"),
@@ -3290,14 +3295,23 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         "supply": ("bought_in" if _brief.get("kind") == "bought_in_component" else ""),
     }) or {}
     if not _found.get("found"):
-        return {}
+        return {"not_found": "the market research was asked and found no listing and no "
+                             "estimate for it"}
     # ASKED AS A PURCHASE, ANSWERED AS A MADE PART: not an answer. The same check the first
     # asker makes (pricing_service.answers_a_purchase), so neither rung can carry it.
     if _brief.get("kind") == "bought_in_component":
         try:
             from pricing_service import answers_a_purchase as _purchase
             if not _purchase(_found):
-                return {}
+                _makers = "; ".join(str(v) for v in (_found.get("verify_against") or [])
+                                    if str(v).strip())[:160]
+                _p = _found.get("price_gbp")
+                return {"not_found": (
+                    "the market research answered"
+                    + (f" £{float(_p):,.2f}" if isinstance(_p, (int, float)) else "")
+                    + " but named makers, not sellers, as its suppliers"
+                    + (f" ({_makers})" if _makers else "")
+                    + ", so the figure was refused as the price of having it made")}
         except ImportError:
             pass
     return {
