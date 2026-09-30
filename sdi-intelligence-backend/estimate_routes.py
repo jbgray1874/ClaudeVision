@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from pydantic import BaseModel
@@ -261,6 +261,10 @@ class Run:
     email_quote: bool = False
     email_result: Dict[str, Any] = field(default_factory=dict)
     lease_until: float = 0.0
+    # WHICH RUNNER PROCESS CLAIMED IT (D-369). The runner's id is the machine's (host and
+    # network card), so a runner restarted mid-job comes back under the same id; only the
+    # process tells the two apart. Empty for a runner too old to say.
+    claimed_by_process: str = ""
     log: List[str] = field(default_factory=list)
     deliverables: List[Dict[str, str]] = field(default_factory=list)
 
@@ -364,6 +368,37 @@ def _expire_dead_claims() -> None:
             run.line(run.error)
             run.finished_at = now
             r = _RUNNERS.get(run.runner)
+            if r is not None and r.run_id == run.run_id:
+                r.run_id = ""
+
+
+def _release_runs_orphaned_by_a_restart(runner_id: str, process: str) -> None:
+    """Fail any run this machine's runner claimed under a process that has since been replaced.
+
+    A RESTARTED RUNNER CANNOT FINISH THE JOB ITS PREDECESSOR STARTED (D-369). The M&S steel
+    run of 30 Sep claimed at 17:5x; the runner was restarted at 18:04; the engine finished on
+    the laptop and nothing filed it. The service kept the run "running" because the new
+    runner, under the same machine id, kept polling, and the next run of the job was refused
+    as a duplicate for 27 minutes until it was released by hand.
+
+    No timer decides this. A different process under the same runner id is proof the old one
+    is gone (the runner holds a lock so only one runs per machine), whatever the job's size."""
+    if not runner_id or not process:
+        return
+    now = time.time()
+    for run in _RUNS.values():
+        if (run.status == "running" and run.runner == runner_id
+                and run.claimed_by_process and run.claimed_by_process != process):
+            run.status = "error"
+            run.error = (f"The runner on {run.runner} was restarted while this job was running "
+                         f"({run.claimed_by_process} was replaced by {process}), so nothing can "
+                         f"finish or file it. If the engine completed, its book and report are "
+                         f"in the engine's output\\estimates folder on that machine; otherwise "
+                         f"run the job again. Restart a runner only between jobs.")
+            run.line(run.error)
+            run.finished_at = now
+            run.lease_until = 0.0
+            r = _RUNNERS.get(runner_id)
             if r is not None and r.run_id == run.run_id:
                 r.run_id = ""
 
@@ -574,8 +609,36 @@ class CompleteRequest(BaseModel):
 # DECLARED BEFORE /{run_id}. FastAPI matches in declaration order, and a path
 # parameter will happily swallow "runner" as a run id if given the chance.
 
+# THE OTHER PORTAL ON THIS MACHINE (D-369). 30 Sep 2026: the laptop had services on 8071 and
+# 8072 at once, each with its own queue and its own idea of which runner was connected. A job
+# started on one was invisible to the other; the page on each looked healthy. The ports asked
+# are the house convention, overridable by SDI_LOCAL_SERVICE_PORTS, and the answer is cached
+# so the page's 15-second poll does not probe on every call.
+_LOCAL_PROBE: Dict[str, Any] = {"at": 0.0, "for": None, "found": []}
+
+
+def _other_local_services(own_port: Optional[int]) -> List[Dict[str, Any]]:
+    import urllib.request
+    now = time.time()
+    if _LOCAL_PROBE["for"] == own_port and now - _LOCAL_PROBE["at"] < 60:
+        return list(_LOCAL_PROBE["found"])
+    ports = [p.strip() for p in os.getenv("SDI_LOCAL_SERVICE_PORTS", "8071,8072").split(",")]
+    found: List[Dict[str, Any]] = []
+    for port in ports:
+        if not port.isdigit() or int(port) == (own_port or -1):
+            continue
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/estimating", timeout=1) as resp:
+                found.append({"port": int(port),
+                              "commit": resp.headers.get("X-SDI-Commit") or ""})
+        except Exception:                                            # noqa: BLE001
+            continue
+    _LOCAL_PROBE.update({"at": now, "for": own_port, "found": found})
+    return list(found)
+
+
 @router.get("/runners")
-def runners(x_sdi_key: Optional[str] = Header(default=None)):
+def runners(request: Request = None, x_sdi_key: Optional[str] = Header(default=None)):
     """Who is checked in. The page asks this so it can say "no runner is
     connected" instead of queueing work that nobody will ever pick up."""
     _check_key(x_sdi_key)
@@ -597,7 +660,12 @@ def runners(x_sdi_key: Optional[str] = Header(default=None)):
         queued = sum(1 for run in _RUNS.values() if run.status == "queued")
     # NAMED AT THE TOP LEVEL, so the page does not have to walk the list to find out that
     # its one green tick is two processes fighting over one SOLIDWORKS seat.
-    return {"runners": listed, "online": len(online), "queued": queued,
+    try:
+        _own = int(request.url.port) if request is not None and request.url.port else None
+    except Exception:                                                # noqa: BLE001
+        _own = None
+    return {"other_local_services": _other_local_services(_own),
+            "runners": listed, "online": len(online), "queued": queued,
             "busy": sum(1 for r in online if r.get("running")),
             "conflicts": [r["runner_id"] for r in online if r.get("conflict")]}
 
@@ -612,6 +680,7 @@ def heartbeat(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)
     _check_key(x_sdi_key)
     now = time.time()
     with _LOCK:
+        _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
@@ -630,6 +699,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
     now = time.time()
     with _LOCK:
         _expire_dead_claims()
+        _release_runs_orphaned_by_a_restart(req.runner_id, req.process)
         runner = _RUNNERS.setdefault(req.runner_id, Runner(runner_id=req.runner_id))
         runner.hostname = req.hostname or runner.hostname
         runner.last_seen = now
@@ -653,6 +723,7 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         run.runner = req.runner_id
         run.started_at = now
         run.lease_until = now + LEASE_SECONDS
+        run.claimed_by_process = req.process or ""
         runner.run_id = run.run_id
         run.line(f"Claimed by runner {req.hostname or req.runner_id}")
 

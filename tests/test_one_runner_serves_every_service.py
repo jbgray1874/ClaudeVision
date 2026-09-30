@@ -87,9 +87,13 @@ def test_a_dead_service_does_not_stop_the_live_one():
 
 def test_the_task_and_the_start_script_serve_both_ports_by_default():
     task = (ROOT / "tools" / "start" / "install-runner-task.ps1").read_text(encoding="utf-8-sig")
-    assert "http://localhost:8071,http://localhost:8072" in task
+    # Both ports always, SDI_PORT first when set (D-369): pinned to SDI_PORT alone, the
+    # laptop's runner sat on a dead 8072 on 30 Sep.
+    line = next(l for l in task.splitlines() if "[string] $Server" in l)
+    assert '"http://localhost:8071", "http://localhost:8072"' in line
     start = (ROOT / "tools" / "start" / "start-runner.ps1").read_text(encoding="utf-8-sig")
-    assert '$Server = ($answering -join ",")' in start
+    # Every candidate, not only those answering at the moment it starts (D-369).
+    assert '$Server = ($candidates -join ",")' in start
 
 
 @pytest.fixture()

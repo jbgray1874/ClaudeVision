@@ -1563,6 +1563,19 @@ async function checkRunners(){
       runnerText.innerHTML = '<span style="color:var(--bad)">No runner connected — '
         + 'estimates cannot be run</span>';
     }
+    /* A SECOND PORTAL ON THIS MACHINE (D-369). Each has its own queue and its own runner
+       list, so a job started on the other one is invisible here, and restarting either
+       strands work. Said plainly, with what to do. */
+    const others = d.other_local_services || [];
+    if(others.length){
+      runnerBox.style.borderLeftColor = "var(--bad)";
+      const esc = t => String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+      runnerText.innerHTML += `<div style="color:var(--bad);margin-top:4px"><b>A second `
+        + `portal is running on this machine</b> (port ${others.map(o => esc(o.port)
+            + (o.commit ? `, ${esc(o.commit)}` : "")).join("; ")}). Jobs started there `
+        + `queue separately from this one. Use one portal: stop the other service `
+        + `between jobs.</div>`;
+    }
   }catch(e){
     runnersOnline = 0;
     runnerBox.style.borderLeftColor = "var(--bad)";

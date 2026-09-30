@@ -63,6 +63,9 @@ param(
     [switch] $Clean,
     # Do not start it again - just stop it.
     [switch] $StopOnly,
+    # Restart even though a service says this machine's runner is in the middle of a job.
+    # The job is then lost: nothing will finish filing it (D-369).
+    [switch] $Force,
     # The service this runner reports to, asked at the end whether it sees exactly one
     # runner on the commit on disk. Empty means SDI_SERVICE_URL, else this machine's
     # SDI_PORT, else 8071. On a runner server that reports to a portal on another box,
@@ -103,6 +106,49 @@ if (-not (Test-Path -LiteralPath $runnerScript)) {
     Write-Host "  Nothing has been stopped." -ForegroundColor Green
     Write-Host ""
     exit 2
+}
+
+# -- 0b. NOT IN THE MIDDLE OF A JOB -----------------------------------------------------
+#
+# A RESTART MID-JOB LOSES THE JOB (D-369). 30 Sep 2026: the M&S steel run was 20 minutes in
+# when the runner was restarted. The engine finished on this machine, but filing the results
+# to the share is the runner's last step, so the report, quote and note never left
+# output\estimates, and the portal held the job as "running" until it was released by hand.
+# So every service this runner could be serving is asked first, BEFORE any pull (a pull can
+# change files a running engine has not imported yet). -Force overrides, and says so.
+$busyCandidates = @()
+if ($Service)             { $busyCandidates += ($Service -split ",") }
+if ($env:SDI_SERVICE_URL) { $busyCandidates += ($env:SDI_SERVICE_URL -split ",") }
+if ($env:SDI_PORT)        { $busyCandidates += "http://localhost:$($env:SDI_PORT)" }
+$busyCandidates += @("http://localhost:8071", "http://localhost:8072")
+$busyCandidates = $busyCandidates | ForEach-Object { "$_".Trim().TrimEnd("/") } |
+    Where-Object { $_ } | Select-Object -Unique
+$busyHdr = @{}
+if ($ApiKey) { $busyHdr["X-SDI-Key"] = $ApiKey }
+$busyWith = @()
+foreach ($svc in $busyCandidates) {
+    try {
+        $seen = Invoke-RestMethod -Uri "$svc/api/estimate/runners" -Headers $busyHdr -TimeoutSec 5
+    } catch { continue }
+    foreach ($r in @($seen.runners)) {
+        if ($r.running -and ("$($r.hostname)" -ieq $me -or "$($r.runner_id)".StartsWith($me, "CurrentCultureIgnoreCase"))) {
+            $busyWith += "$($r.running.drawing_number) for $($r.running.client), $($r.running.seconds)s in (service $svc)"
+        }
+    }
+}
+if ($busyWith.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  This machine's runner is in the middle of a job:" -ForegroundColor Yellow
+    foreach ($b in $busyWith) { Write-Host "      $b" -ForegroundColor Yellow }
+    if (-not $Force) {
+        Write-Host "  Restarting now would lose it: the engine would finish, but nothing would" -ForegroundColor Red
+        Write-Host "  file its results. Wait until the portal shows it filed, then run this" -ForegroundColor Red
+        Write-Host "  again. (-Force restarts anyway and gives the job up.)" -ForegroundColor Red
+        Write-Host "  Nothing has been stopped." -ForegroundColor Green
+        Write-Host ""
+        exit 6
+    }
+    Write-Host "  -Force: restarting anyway. That job is given up." -ForegroundColor Red
 }
 
 # -- 1. PULL, IF ASKED, AND BEFORE ANYTHING IS STOPPED --------------------------------

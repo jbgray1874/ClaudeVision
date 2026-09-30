@@ -387,7 +387,8 @@ def test_a_venv_launcher_and_its_child_are_reported_as_one_runner(script):
 
 def test_the_restart_ends_by_asking_the_service(script):
     code = _code(script)
-    ask = code.index("/api/estimate/runners")
+    # The LAST ask: the first is the mid-job guard before anything is stopped (D-369).
+    ask = code.rindex("/api/estimate/runners")
     assert ask > code.index("Start-ScheduledTask -TaskName")
     for check in ("process_count -ne 1", "$mine.conflict", "+local edits", "StartsWith($headSha)"):
         assert check in code, check

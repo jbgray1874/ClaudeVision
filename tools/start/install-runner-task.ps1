@@ -47,7 +47,9 @@ param(
     # AND THEN NEITHER. The runner now takes a LIST and serves every service on it, so the
     # default is both local ports: whichever service is up - installed, hand-started, or
     # both - sees the runner as connected. -Server still pins one (or a comma list).
-    [string] $Server   = $(if ($env:SDI_PORT) { "http://localhost:$($env:SDI_PORT)" } else { "http://localhost:8071,http://localhost:8072" }),
+    # SDI_PORT FIRST, NEVER ALONE (D-369): a runner pinned to one port is blind to the other
+    # the moment a service moves, which is how the 30 Sep laptop runner sat on a dead 8072.
+    [string] $Server   = $((@($(if ($env:SDI_PORT) { "http://localhost:$($env:SDI_PORT)" }), "http://localhost:8071", "http://localhost:8072") | Where-Object { $_ } | Select-Object -Unique) -join ","),
     [string] $TaskName = "SDI Estimating Runner",
     [switch] $Remove
 )

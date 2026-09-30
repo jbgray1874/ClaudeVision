@@ -173,7 +173,12 @@ if ($Server -and $Server.Contains(",")) {
     }
     # ALL OF THEM, NOT THE FIRST. Picking one is what left the other page saying "No runner
     # connected" beside a healthy runner, on 22 and 23 September. The runner takes a list.
-    if ($answering.Count -ge 1) { $Server = ($answering -join ",") }
+    # AND THE ONES NOT ANSWERING YET (D-369). Serving only the ports that answered at start
+    # left the 30 Sep runner on 8072 alone while 8071 was mid-restart, and blind to it
+    # afterwards. The runner asks every service on its list every cycle and says once when
+    # one cannot be reached, so listing a port that is down costs nothing and keeps the
+    # runner following whichever service is up.
+    if ($answering.Count -ge 1) { $Server = ($candidates -join ",") }
     if ($answering.Count -gt 1) {
         Write-Host ""
         Write-Host "  more than one service is running: this runner serves them all" -ForegroundColor Green
