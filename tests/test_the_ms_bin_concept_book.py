@@ -186,8 +186,8 @@ def test_the_list_drops_not_priced_for_a_line_the_sheet_prices():
     assert 'if "not priced —" in _txt.lower() and (_qpn.upper() in _priced_on_sheet):' in src
 
 
-def test_the_banner_is_rewritten_after_the_checks_run():
+def test_the_banner_is_written_once_before_excel_values_are_final():
+    """D-361 reverted D-359's second write: an openpyxl save after Excel calculated the
+    book stripped every cached value (13:07 M&S book opened with a blank Unit Cost)."""
     src = open(os.path.join(ROOT, "src", "main.py"), encoding="utf-8").read()
-    i = src.index('summary["invariants"] = _inv')
-    assert "_rewrite_estimate_banner(xlsx_path, summary)" in src[i:i + 400]
-    assert src.count("_rewrite_estimate_banner(xlsx_path, summary)") == 3  # def + 2 calls
+    assert src.count("_rewrite_estimate_banner(xlsx_path, summary)") == 2  # def + 1 call

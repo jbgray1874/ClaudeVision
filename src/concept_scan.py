@@ -114,6 +114,27 @@ def read_brief(job_folder: Any) -> str:
         return ""
 
 
+def find_brief(folders: List[Any]) -> tuple:
+    """(brief, file) from the first folder that holds one, or ("", "").
+
+    THE PACK'S FOLDER, WHEREVER THE RUN WAS POINTED (D-361). A render is scanned as a PDF
+    written into the output tree, so the scan's own job folder is not the folder the portal
+    staged — the 13:07 plywood run read the render alone with the brief sitting beside it.
+    Every folder the run knows its inputs came from is asked."""
+    seen = set()
+    for folder in folders:
+        if not folder:
+            continue
+        key = str(folder)
+        if key in seen:
+            continue
+        seen.add(key)
+        text = read_brief(folder)
+        if text:
+            return text, str(Path(key) / BRIEF_FILENAME)
+    return "", ""
+
+
 def _from_brief(sighted: Mapping[str, Any], field: str) -> bool:
     """Did the model say the brief fixes this field of this part?"""
     fb = sighted.get("from_brief")

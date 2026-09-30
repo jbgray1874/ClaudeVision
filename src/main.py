@@ -2005,12 +2005,10 @@ def main() -> None:
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
-            # THE BANNER AGAIN, NOW THE CHECKS HAVE RUN (D-359).
-            try:
-                if xlsx_path:
-                    _rewrite_estimate_banner(xlsx_path, summary)
-            except NameError:
-                pass
+            # NOT REWRITTEN HERE (D-361). D-359 wrote the banner again at this point, after
+            # Excel had calculated the book — and an openpyxl save strips every cached value,
+            # so the 13:07 M&S book opened with a blank Unit Cost. The failing checks are
+            # named on the report and the outstanding list; the book keeps Excel's figures.
             print(_fmt_inv(_inv), flush=True)
             if not _inv.get("may_quote_firm"):
                 # Said once, plainly, at the point a person is watching. The deliverables

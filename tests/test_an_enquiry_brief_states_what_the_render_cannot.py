@@ -131,3 +131,30 @@ def test_the_page_sends_the_brief_with_an_llm_read_only():
     assert page.count('enquiry_brief: ($("enquiryBrief").value') == 1
     i = page.index('enquiry_brief: ($("enquiryBrief").value')
     assert 'method: "llm"' in page[i - 200:i]
+
+
+# ── D-361 ──────────────────────────────────────────────────────────────────────────────
+
+def test_a_render_remembers_the_folder_it_was_staged_in(tmp_path, monkeypatch):
+    """13:07: the brief sat beside the PNG and the scan read a copy in the output tree."""
+    pymupdf = pytest.importorskip("pymupdf")
+    import config
+    import file_scan as fs
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "out")
+    job = tmp_path / "M&S" / "bdab4adf"
+    job.mkdir(parents=True)
+    png = job / "bin.png"
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 4, 4), 0)
+    pix.save(str(png))
+    (job / cs.BRIEF_FILENAME).write_text(BRIEF, encoding="utf-8")
+    pdf = fs.image_as_pdf(png)
+    assert pdf.parent != job
+    assert fs._render_source_dir(pdf) == str(job.resolve())
+    text, where = cs.find_brief([None, fs._render_source_dir(pdf)])
+    assert text == BRIEF and where.endswith(cs.BRIEF_FILENAME)
+
+
+def test_the_finished_book_is_not_resaved_after_excel_calculated_it():
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    i = src.index('summary["invariants"] = _inv')
+    assert "_rewrite_estimate_banner(" not in src[i:i + 900]

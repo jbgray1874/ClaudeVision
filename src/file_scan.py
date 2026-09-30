@@ -1951,6 +1951,20 @@ def is_image_path(path: Path) -> bool:
     return path.suffix.lower() in getattr(config, "IMAGE_RENDER_EXTENSIONS", set())
 
 
+# WHERE EACH RENDER CAME FROM (D-361). A render is scanned as a PDF in the output tree, so
+# the scan cannot see the staged folder it was dropped in — and the enquiry brief filed
+# beside it went unread on the 13:07 M&S run. Recorded here, per converted file.
+_RENDER_SOURCE_DIRS: Dict[str, str] = {}
+
+
+def _render_source_dir(pdf: Any) -> Optional[str]:
+    """The staged folder a converted render came from, or None."""
+    for key in (str(pdf), str(Path(str(pdf)).resolve())):
+        if key in _RENDER_SOURCE_DIRS:
+            return _RENDER_SOURCE_DIRS[key]
+    return None
+
+
 def image_as_pdf(image_path: Path) -> Path:
     """The one-page PDF this image is scanned as. Lossless — the image is embedded, not
     re-rendered — so the vision readers see exactly the pixels the customer sent.
@@ -1967,6 +1981,8 @@ def image_as_pdf(image_path: Path) -> Path:
     key = hashlib.sha256(raw).hexdigest()[:16]
     out_dir = Path(config.OUTPUT_DIR) / "render_pdfs"
     out = out_dir / f"{key}-{image_path.stem}.pdf"
+    _RENDER_SOURCE_DIRS[str(out)] = str(Path(image_path).resolve().parent)
+    _RENDER_SOURCE_DIRS[str(out.resolve())] = str(Path(image_path).resolve().parent)
     if out.is_file() and out.stat().st_size > 0:
         return out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -4106,7 +4122,15 @@ def _finalize_scan_summary(
     # drawing pack, or an engine run, the drawings are the facts and the brief is not.
     try:
         import concept_scan as _cs_brief
-        _brief_unused = _cs_brief.read_brief(job_folder)
+        _brief_unused = _cs_brief.find_brief(
+            [job_folder, summary.get("job_folder")]
+            + [_render_source_dir(p) for p in
+               (list(summary.get("scanned_documents") or [])
+                + list(summary.get("staged_inputs") or [])
+                + ([str(pdf_path)] if pdf_path is not None else []))]
+            + ([Path(str(summary["source_image_path"])).parent]
+               if summary.get("source_image_path") else [])
+            + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])])[0]
     except Exception:                                                # noqa: BLE001
         _brief_unused = ""
     if _brief_unused and (_concept_refused or not (_llm_only_run and (_no_parts
@@ -4131,11 +4155,24 @@ def _finalize_scan_summary(
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
-            _brief = concept_scan.read_brief(job_folder)
+            _brief, _brief_file = concept_scan.find_brief(
+                [job_folder, summary.get("job_folder")]
+            + [_render_source_dir(p) for p in
+               (list(summary.get("scanned_documents") or [])
+                + list(summary.get("staged_inputs") or [])
+                + ([str(pdf_path)] if pdf_path is not None else []))]
+                # THE STAGED RENDER'S OWN FOLDER — the PDF scanned is a copy in the output tree
+                + ([Path(str(summary["source_image_path"])).parent]
+                   if summary.get("source_image_path") else [])
+                + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])]
+                + [Path(str(p)).parent for p in (summary.get("scanned_documents") or [])]
+                + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
             if _brief:
-                summary["enquiry_brief"] = {"text": _brief,
-                                            "file": str(Path(job_folder) /
-                                                        concept_scan.BRIEF_FILENAME)}
+                summary["enquiry_brief"] = {"text": _brief, "file": _brief_file}
+                summary.setdefault("review_flags", []).append(
+                    "ENQUIRY BRIEF USED — stated facts given to the model, outranking the "
+                    "render: " + " ".join(_brief.split())[:300]
+                    + ("…" if len(_brief) > 300 else ""))
                 print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
                       f"facts outrank what the render suggests", flush=True)
             _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
