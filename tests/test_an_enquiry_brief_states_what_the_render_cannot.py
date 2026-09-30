@@ -158,3 +158,23 @@ def test_the_finished_book_is_not_resaved_after_excel_calculated_it():
     src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
     i = src.index('summary["invariants"] = _inv')
     assert "_rewrite_estimate_banner(" not in src[i:i + 900]
+
+
+# ── D-362 ──────────────────────────────────────────────────────────────────────────────
+
+def test_the_service_says_what_it_did_with_the_brief(routes, tmp_path):
+    run = routes.Run(run_id="t", client="M&S", drawing_number="bdab4adf", units=350,
+                     job_folder=str(tmp_path), output_path="o", queued_at=0.0)
+    assert routes._file_enquiry_brief(run, tmp_path, "") == "none"
+    assert routes._file_enquiry_brief(run, tmp_path, BRIEF) == "filed"
+    assert routes._file_enquiry_brief(run, tmp_path, None) == "removed"
+    src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
+    assert '"enquiry_brief": _brief_status}' in src
+
+
+def test_the_page_stops_a_run_whose_brief_was_not_filed():
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    i = page.index('if(_typed && started.enquiry_brief !== "filed"){')
+    block = page[i:i + 1200]
+    assert "/abandon" in block and "X-SDI-Commit" in block

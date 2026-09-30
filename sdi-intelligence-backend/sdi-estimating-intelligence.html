@@ -2150,6 +2150,23 @@ $("bRunLLM").onclick = async () => {
     const started = await r.json();
     runId = started.run_id;
     if(started.output_path){ runDest = started.output_path; refresh(); }
+    /* A BRIEF THE SERVICE DID NOT FILE IS A RUN ANSWERING A DIFFERENT QUESTION (D-362).
+       The 13:34 M&S read went out with a plywood brief typed here and a service still running
+       the code from before the brief existed: it ignored the field, filed nothing, and the
+       book priced the render alone. A current service answers "filed"; anything else means
+       the brief did not reach the job, so the run is stopped rather than left to finish. */
+    const _typed = ($("enquiryBrief").value || "").trim();
+    if(_typed && started.enquiry_brief !== "filed"){
+      const _commit = r.headers.get("X-SDI-Commit") || "unknown";
+      line("⚠ STOPPED — the enquiry brief was NOT filed with the pack. The service answering "
+         + "this page " + (started.enquiry_brief === undefined
+             ? "does not know about briefs: it is running older code (commit " + _commit
+               + ") than this page. Restart the SDI Intelligence service, then run again."
+             : "reported '" + started.enquiry_brief + "'. Check the job folder can be "
+               + "written, then run again."), "e");
+      try{ await api("/api/estimate/" + encodeURIComponent(runId) + "/abandon",
+                     {method:"POST"}); }catch(_e){}
+    }
     watchOneRun(runId);
   }catch(e){
     setStatus("err","Failed to start");

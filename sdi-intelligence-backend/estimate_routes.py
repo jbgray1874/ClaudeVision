@@ -686,12 +686,17 @@ _BRIEF_FILENAME = "ENQUIRY_BRIEF.txt"
 _BRIEF_MAX_CHARS = 4000
 
 
-def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> None:
+def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> str:
     """Write this run's brief into the job folder, or remove a stale one (D-360).
 
     THE BRIEF IS THIS RUN'S. A job folder is reused run after run, so a brief left from the
     last one would silently shape an LLM read nobody typed a brief for. Typed: written.
-    Blank: any earlier file is removed, and the log says which happened."""
+    Blank: any earlier file is removed, and the log says which happened.
+
+    RETURNS WHAT HAPPENED, and the route hands it back to the page (D-362): "filed",
+    "removed", "none" or "failed". A page that sent a brief and does not hear "filed" is
+    talking to a service older than itself — the 13:34 M&S run was, and read the render
+    alone while the log said nothing about the brief either way."""
     text = str(brief or "").strip()[:_BRIEF_MAX_CHARS]
     path = Path(str(job)) / _BRIEF_FILENAME
     try:
@@ -702,12 +707,17 @@ def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> None:
             for ln in text.splitlines()[:8]:
                 if ln.strip():
                     run.line("  | " + ln.strip()[:160])
-        elif path.exists():
+            return "filed"
+        if path.exists():
             path.unlink()
             run.line("No enquiry brief this run — the one filed by an earlier run was removed.")
+            return "removed"
+        run.line("No enquiry brief with this run — the model reads the pack alone.")
+        return "none"
     except OSError as exc:
         run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
                  f"render alone.")
+        return "failed"
 
 def _check_the_engine_was_told(run: "Run", text: str) -> None:
     """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
@@ -1498,8 +1508,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
-    if run.llm_only:
-        _file_enquiry_brief(run, job, req.enquiry_brief)
+    _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
+                     if run.llm_only else "not_an_llm_read")
     if run.fresh_read:
         # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
         # answer exactly; this one may not, and "the number moved and nothing changed" is
@@ -1556,7 +1566,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         run.line("Queued — waiting for a runner to pick it up.")
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder),
-            "waiting_behind": busy.run_id if busy is not None else None}
+            "waiting_behind": busy.run_id if busy is not None else None,
+            "enquiry_brief": _brief_status}
 
 
 @router.post("/override")
