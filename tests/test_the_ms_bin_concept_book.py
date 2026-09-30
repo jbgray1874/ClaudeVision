@@ -10,6 +10,8 @@ D-356  The banner said "5 market figures" beside 7 failing checks and four sizes
 D-357  11:00 re-run: the lid hinge's AI £3.25 read "SDI Live" and sat beside "NOT PRICED — refused".
 D-358  Its provenance record still named a config default; and the render-only BOM checks read
        as though a drawing had been misread.
+D-359  12:21 book (b37272b): D-355 and D-357 were in the build and did not show — both read the
+       raw part record, which carries no money.
 """
 from __future__ import annotations
 
@@ -159,3 +161,33 @@ def test_a_sighted_part_is_owned_by_a_concept_assumption_not_a_phantom():
     assert out and out[0]["severity"] == inv.BLOCKING
     assert "sighted on the customer's render" in out[0]["message"]
     assert "invented downstream" not in out[0]["message"]
+
+
+def test_the_castor_check_reads_the_costed_row_not_the_raw_one():
+    import invariants as inv
+    raw = {"part_number": "CPT07", "description": "CASTOR", "normalized_material": "NYLON"}
+    costed = dict(raw, material_estimate={"unit_material_cost_gbp": 11.0,
+                                          "cost_method": "last_resort_market_indication"})
+    out = inv.check_a_material_we_cannot_price_is_declared(
+        {"parts": [raw], "estimate_summary": {"part_estimates": [costed]}})
+    assert not any(v.get("code") == "material_has_no_rate_in_this_engine" for v in out)
+
+
+def test_an_unpriced_nylon_part_is_still_reported():
+    import invariants as inv
+    raw = {"part_number": "12999-01-09", "description": "SIDE PANEL", "normalized_material": "NYLON"}
+    out = inv.check_a_material_we_cannot_price_is_declared(
+        {"parts": [raw], "estimate_summary": {"part_estimates": [dict(raw)]}})
+    assert any(v.get("code") == "material_has_no_rate_in_this_engine" for v in out)
+
+
+def test_the_list_drops_not_priced_for_a_line_the_sheet_prices():
+    src = open(os.path.join(ROOT, "src", "wb_populate.py"), encoding="utf-8").read()
+    assert 'if "not priced —" in _txt.lower() and (_qpn.upper() in _priced_on_sheet):' in src
+
+
+def test_the_banner_is_rewritten_after_the_checks_run():
+    src = open(os.path.join(ROOT, "src", "main.py"), encoding="utf-8").read()
+    i = src.index('summary["invariants"] = _inv')
+    assert "_rewrite_estimate_banner(xlsx_path, summary)" in src[i:i + 400]
+    assert src.count("_rewrite_estimate_banner(xlsx_path, summary)") == 3  # def + 2 calls

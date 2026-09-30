@@ -1558,6 +1558,25 @@ _MIN_CREDIBLE_CUT_SPACING_MM = 1.0
 _CUT_PATH_ABSURDITY_MARGIN = 3.0
 
 
+
+def _line_carries_money(part: Any) -> bool:
+    """A purchase price reaching the total, or a material cost, on one record (D-355/D-359)."""
+    if not isinstance(part, dict):
+        return False
+    _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+    _sc = ((part.get("cost_breakdown") or {}).get("system_cost")
+           if isinstance(part.get("cost_breakdown"), dict) else None)
+    vals = [_me.get("unit_material_cost_gbp"), _me.get("cost_per_part_gbp")]
+    if isinstance(_sc, dict) and _sc.get("applied_to_total") is not False:
+        vals.append(_sc.get("unit_cost_gbp"))
+    for v in vals:
+        try:
+            if v is not None and float(v) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
 def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str, Any]]:
     """A part whose material this engine holds no rate for, and what happened about it.
 
@@ -1582,6 +1601,10 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
     if not parts:
         return []
     substituted, unpriceable, indicated = [], [], []
+    _costed_rows = {
+        str(p.get("part_number") or "").strip().upper(): p
+        for p in (((summary.get("estimate_summary") or {}).get("part_estimates")) or [])
+        if isinstance(p, dict) and str(p.get("part_number") or "").strip()}
     for part in parts:
         # A PURCHASED PART IS NOT A MATERIAL WE FAILED TO RATE. This check's premise -- "there is
         # no rate to enter against, no estimator input fixes this" -- holds only for stock we CUT.
@@ -1650,14 +1673,12 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
         # as a researched purchase — £44 on the sheet — and this check still called them "costs
         # NOTHING … THE JOB IS UNDER-CHARGED", because the price sits on the line's system cost,
         # not its material estimate. A line bought at a price reaching the total is not free.
-        _sc = ((part.get("cost_breakdown") or {}).get("system_cost")
-               if isinstance(part.get("cost_breakdown"), dict) else None)
-        if isinstance(_sc, dict) and _sc.get("applied_to_total") is not False:
-            try:
-                if float(_sc.get("unit_cost_gbp") or 0) > 0:
-                    continue
-            except (TypeError, ValueError):
-                pass
+        # ASKED OF THE COSTED ROW, NOT THE RAW ONE (D-359). _parts hands this check the raw
+        # records, which carry no money; the 12:21 book still called the castors free. The
+        # costed row for the same part number is where a purchase price or a rescue lives.
+        _costed = _costed_rows.get(str(part.get("part_number") or "").strip().upper()) or {}
+        if _line_carries_money(part) or _line_carries_money(_costed):
+            continue
         # And a pointer is not a material. "SEE INDIVIDUAL DRAWINGS" names no substance for
         # anyone to find a rate for, so demanding one is asking for the impossible.
         if any(w in material.upper() for w in _FINISH_POINTER_WORDS):

@@ -7953,6 +7953,18 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     _ASKS = ("confirm", "tbc", "your call", "estimator", "rule on", "add it if",
              "needs to say", "or take the op off", "which gauge is bought", "not priced —")
     _seen_asks = set()
+    _priced_on_sheet = set()
+    for _pr in list(bom_parts or []) + [r for r in ((summary.get("estimate_summary") or {})
+                                                     .get("part_estimates") or [])
+                                         if isinstance(r, dict)]:
+        if not isinstance(_pr, dict):
+            continue
+        try:
+            from invariants import _line_carries_money as _has_money
+            if _has_money(_pr):
+                _priced_on_sheet.add(str(_pr.get("part_number") or "").strip().upper())
+        except Exception:                                            # noqa: BLE001
+            pass
     _question_records = list(bom_parts or [])
     _question_records += [r for r in (summary.get("parts") or []) if isinstance(r, dict)]
     _question_records += [r for r in ((summary.get("estimate_summary") or {}).get(
@@ -7979,6 +7991,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         for _fl in (_qp.get("review_flags") or []):
             _txt = str(_fl or "").strip()
             if not _txt or not any(_w in _txt.lower() for _w in _ASKS):
+                continue
+            # A LINE THE SHEET PRICES IS NOT "NOT PRICED" (D-359). D-357 removed the flag
+            # from the rescued record, but the raw record the list also reads kept it, so the
+            # 12:21 book still said "NOT PRICED — … refused" beside a £3.25 hinge.
+            if "not priced —" in _txt.lower() and (_qpn.upper() in _priced_on_sheet):
                 continue
             _key = (_qpn.upper(), _txt[:120])
             if _key in _seen_asks:

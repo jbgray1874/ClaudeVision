@@ -311,6 +311,42 @@ def _print_enquiry_plan(folder: str, qty_spec: Optional[str],
     print("--- END ENQUIRY RUN PLAN ---")
 
 
+
+def _rewrite_estimate_banner(xlsx_path, summary) -> None:
+    """Write the shared tally into every PROVISIONAL banner cell of the Estimate sheet.
+
+    Called after the read-back and AGAIN after the consistency checks (D-359): the first
+    call is made before the checks run, so the M&S 12:21 book's banner said "5 market
+    figures + 4 sizes assumed" while its report added "+ 7 consistency checks failing"."""
+    try:
+        from costed_facts import outstanding_summary as _osum_b
+        _phrase_b = str((_osum_b(summary) or {}).get("phrase") or "").strip()
+        if not _phrase_b:
+            return
+        import openpyxl as _b_opxl
+        _bwb = _b_opxl.load_workbook(str(xlsx_path))
+        try:
+            _bws = _bwb["Estimate"] if "Estimate" in _bwb.sheetnames else _bwb.active
+            _bhits = 0
+            for _brow in _bws.iter_rows():
+                for _bcell in _brow:
+                    if isinstance(_bcell.value, str) and _bcell.value.startswith("PROVISIONAL —"):
+                        _bcell.value = (f"PROVISIONAL — to settle: {_phrase_b} "
+                                        f"(see OUTSTANDING ESTIMATOR INPUTS below)")
+                        _bhits += 1
+            if _bhits:
+                _bwb.save(str(xlsx_path))
+                print(f"   [banner] {_bhits} banner cell(s) now carry the shared tally: "
+                      f"{_phrase_b}", flush=True)
+        finally:
+            try:
+                _bwb.close()
+            except Exception:                                        # noqa: BLE001
+                pass
+    except Exception as _b_exc:                                      # noqa: BLE001
+        print(f"   [banner] shared tally not applied ({_b_exc}) — the banner keeps its "
+              f"own count.", flush=True)
+
 def main() -> None:
     args = parse_args()
     ensure_directories()
@@ -1568,36 +1604,7 @@ def main() -> None:
         # phrase every other surface prints. The sweep runs later, so the variants
         # inherit it.
         if xlsx_path:
-            try:
-                from costed_facts import outstanding_summary as _osum_b
-                _phrase_b = str((_osum_b(summary) or {}).get("phrase") or "").strip()
-                if _phrase_b:
-                    import openpyxl as _b_opxl
-                    _bwb = _b_opxl.load_workbook(str(xlsx_path))
-                    try:
-                        _bws = (_bwb["Estimate"] if "Estimate" in _bwb.sheetnames
-                                else _bwb.active)
-                        _bhits = 0
-                        for _brow in _bws.iter_rows():
-                            for _bcell in _brow:
-                                if isinstance(_bcell.value, str) and \
-                                        _bcell.value.startswith("PROVISIONAL —"):
-                                    _bcell.value = (
-                                        f"PROVISIONAL — to settle: {_phrase_b} "
-                                        f"(see OUTSTANDING ESTIMATOR INPUTS below)")
-                                    _bhits += 1
-                        if _bhits:
-                            _bwb.save(str(xlsx_path))
-                            print(f"   [banner] {_bhits} banner cell(s) now carry the "
-                                  f"shared tally: {_phrase_b}", flush=True)
-                    finally:
-                        try:
-                            _bwb.close()
-                        except Exception:                        # noqa: BLE001
-                            pass
-            except Exception as _b_exc:                          # noqa: BLE001
-                print(f"   [banner] shared tally not applied ({_b_exc}) — the banner "
-                      f"keeps its own count.", flush=True)
+            _rewrite_estimate_banner(xlsx_path, summary)
 
         if xlsx_path:
             try:
@@ -1998,6 +2005,12 @@ def main() -> None:
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val
             _inv = _check_job(_target)
             summary["invariants"] = _inv          # so anything reading `summary` agrees
+            # THE BANNER AGAIN, NOW THE CHECKS HAVE RUN (D-359).
+            try:
+                if xlsx_path:
+                    _rewrite_estimate_banner(xlsx_path, summary)
+            except NameError:
+                pass
             print(_fmt_inv(_inv), flush=True)
             if not _inv.get("may_quote_firm"):
                 # Said once, plainly, at the point a person is watching. The deliverables
