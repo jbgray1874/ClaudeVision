@@ -207,3 +207,36 @@ def test_the_minted_print_is_a_graphic_record_flagged_as_assumed():
 def test_the_prompt_asks_for_print_as_its_own_line():
     assert concept_scan.CONCEPT_PROMPT_VERSION == "c4"
     assert "PRINT IS ALWAYS ITS OWN LINE" in concept_scan._PROMPT
+
+
+# ── D-367: a blank that fits no sheet as given is costed turned ─────────────────────────
+
+def _back_panel(length, width):
+    return {"part_number": "BDAB4ADF-3340-40M-S-CPT01", "description": "TALL BACK PANEL",
+            "normalized_material": "PLYWOOD", "normalized_thickness_mm": 18, "quantity": 1,
+            "blank_length_mm": length, "blank_width_mm": width}
+
+
+def test_a_back_panel_given_across_the_sheet_is_turned_to_fit():
+    """17:30 book: 600 x 1800 nested on no plywood sheet and went through at £0."""
+    part = _back_panel(600, 1800)
+    me = estimator.estimate_material(part)
+    assert (me["blank_length_mm"], me["blank_width_mm"]) == (1800.0, 600.0)
+    assert me["stock_estimate"]["candidate_sheet_size_mm"] == [3050, 1525]
+    assert me["stock_estimate"]["parts_per_sheet"] == 2
+    assert part["blank_turned_to_fit"] == {"as_given": [600.0, 1800.0],
+                                           "costed": [1800.0, 600.0]}
+    assert any("TURNED TO FIT" in str(f) for f in part["review_flags"])
+
+
+def test_a_blank_that_already_fits_is_never_turned():
+    part = _back_panel(1200, 600)
+    me = estimator.estimate_material(part)
+    assert (me["blank_length_mm"], me["blank_width_mm"]) == (1200.0, 600.0)
+    assert "blank_turned_to_fit" not in part
+
+
+def test_a_blank_that_fits_neither_way_is_left_for_the_oversize_rule():
+    part = _back_panel(4000, 2000)
+    estimator.estimate_material(part)
+    assert "blank_turned_to_fit" not in part

@@ -3867,6 +3867,45 @@ def _canonical_material_family(raw: Any) -> Any:
     return raw
 
 
+def _blank_turned_to_fit(part: Dict[str, Any], material: Any,
+                         blank_length: Optional[float],
+                         blank_width: Optional[float]) -> Tuple[Optional[float], Optional[float]]:
+    """The blank turned round when it fits no stocked sheet as given but fits turned.
+
+    WHICH WAY ROUND IS A READER'S CHOICE, NOT A FACT (D-367). The M&S plywood read of 30 Sep,
+    17:30, gave the 1800 mm back panel as 600 x 1800 — long side across the sheet. Every
+    stocked plywood sheet is narrower than 1800, boards are never turned for yield, so it
+    nested on nothing and the panel was costed at £0 ("no operation or rate for this work").
+    As 1800 x 600 it is two to a 3050 x 1525 sheet.
+
+    This is not the yield turn select_sheet_size makes for grainless plastics: it only acts
+    when the given orientation fits NO stocked sheet, so it can never move a part that
+    already nests. It is written onto the record, so the workbook row nests the same turned
+    blank, and flagged, because a grained face or a print can make the turn a question."""
+    try:
+        bl, bw = float(blank_length), float(blank_width)
+    except (TypeError, ValueError):
+        return blank_length, blank_width
+    if not material or bl <= 0 or bw <= 0 or bl == bw:
+        return blank_length, blank_width
+    sizes = _costed_facts.stocked_sheet_sizes(material)
+    if not sizes:
+        return blank_length, blank_width
+
+    def _fits(length: float, width: float) -> bool:
+        return any(_costed_facts.nest_on_sheet(material, length, width, sl, sw)
+                   for sl, sw in sizes)
+
+    if _fits(bl, bw) or not _fits(bw, bl):
+        return blank_length, blank_width
+    part["blank_turned_to_fit"] = {"as_given": [bl, bw], "costed": [bw, bl]}
+    part.setdefault("review_flags", []).append(
+        f"TURNED TO FIT: {bl:g} x {bw:g} fits no stocked {material} sheet as given; turned "
+        f"to {bw:g} x {bl:g} it does, so it is costed turned. Check the grain or print "
+        f"direction allows it")
+    return bw, bl
+
+
 def _blank_that_could_have_been_cut(
     part: Dict[str, Any],
     blank_length: Optional[float],
@@ -4666,6 +4705,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
     blank_length, blank_width = estimate_blank_size(dims)
     blank_length, blank_width = _blank_that_could_have_been_cut(
         part, blank_length, blank_width)
+    blank_length, blank_width = _blank_turned_to_fit(part, material, blank_length, blank_width)
 
     # FIX 2 (general): a weldment/assembly PARENT part is a roll-up of child parts that
     # are themselves in the BOM and individually material-costed. Giving the parent its
