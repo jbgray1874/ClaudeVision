@@ -176,5 +176,15 @@ def test_the_page_stops_a_run_whose_brief_was_not_filed():
     page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
         encoding="utf-8")
     i = page.index('if(_typed && started.enquiry_brief !== "filed"){')
-    block = page[i:i + 1200]
+    block = page[i:i + 3000]
     assert "/abandon" in block and "X-SDI-Commit" in block
+
+
+def test_the_stop_line_names_the_machine_and_port_to_restart():
+    """D-363: "restart the service" was run twice on the wrong machine."""
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    i = page.index('if(_typed && started.enquiry_brief !== "filed"){')
+    block = page[i:i + 2400]
+    assert "location.hostname" in block and "location.port" in block
+    assert "restart-service.ps1 -Port " in block
