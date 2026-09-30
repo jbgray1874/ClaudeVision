@@ -2529,6 +2529,13 @@ def costed_job(source: Any) -> Dict[str, Any]:
         "decisions_required": decisions,
         "release": {"status": status, "reasons": reasons, "draft": draft,
                     "outstanding": outstanding,
+                    # WHAT THE BANNER LEFT OUT (D-356). M&S's render run said "5 market
+                    # figures to replace" while its report held 7 failing checks and every
+                    # panel size assumed from a picture. Both are counted here so the one
+                    # tally can name them; neither changes the status, which already reads
+                    # provisional on them.
+                    "blocking_checks": blocking_n,
+                    "sizes_assumed": _sizes_assumed_from_a_render(source),
                     "prices_outstanding": len(unpriced) + len(market),
                     "decisions_open": len(manufacturing)},
     }
@@ -2543,6 +2550,22 @@ def costed_line(source: Any, part_number: Any) -> Optional[Dict[str, Any]]:
             return line
     return None
 
+
+
+def _sizes_assumed_from_a_render(source: Any) -> int:
+    """Parts whose size the engine took from a render rather than a drawing or a model."""
+    if not isinstance(source, Mapping):
+        return 0
+    _es = source.get("estimate_summary") if isinstance(source.get("estimate_summary"), Mapping) else {}
+    _seen = set()
+    for _p in list(_es.get("part_estimates") or []) + list(source.get("parts") or []):
+        if not isinstance(_p, Mapping):
+            continue
+        if any("size assumed from the render" in str(f).lower()
+               for f in (_p.get("review_flags") or [])):
+            _seen.add(str(_p.get("part_number") or "").strip().upper())
+    _seen.discard("")
+    return len(_seen)
 
 def outstanding_summary(source: Any) -> Dict[str, Any]:
     """THE ONE TALLY of what still needs a person, printed identically on every surface.
@@ -2604,6 +2627,13 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         bits.append(f"{house} indicative rate{'s' if house != 1 else ''} to verify")
     if other:
         bits.append(f"{other} other open item{'s' if other != 1 else ''}")
+    _rel = job.get("release") if isinstance(job.get("release"), Mapping) else {}
+    _assumed = int(_num(_rel.get("sizes_assumed")) or 0)
+    _checks = int(_num(_rel.get("blocking_checks")) or 0)
+    if _assumed:
+        bits.append(f"{_assumed} size{'s' if _assumed != 1 else ''} assumed from a render")
+    if _checks:
+        bits.append(f"{_checks} consistency check{'s' if _checks != 1 else ''} failing")
     # AND WHAT THEY ARE, NOT ONLY HOW MANY. "4 prices missing + 1 market figure to replace +
     # 2 manufacturing decisions" is a number an estimator cannot act on: he has to open the
     # workbook and hunt for which four. Every one of those rows already knows its own part,

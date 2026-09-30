@@ -1639,6 +1639,18 @@ def check_a_material_we_cannot_price_is_declared(summary: Any) -> List[Dict[str,
                 continue
         except (TypeError, ValueError):
             pass
+        # A PURCHASE PRICE IS MONEY TOO (D-355). M&S's sighted castors (NYLON) carried £11 each
+        # as a researched purchase — £44 on the sheet — and this check still called them "costs
+        # NOTHING … THE JOB IS UNDER-CHARGED", because the price sits on the line's system cost,
+        # not its material estimate. A line bought at a price reaching the total is not free.
+        _sc = ((part.get("cost_breakdown") or {}).get("system_cost")
+               if isinstance(part.get("cost_breakdown"), dict) else None)
+        if isinstance(_sc, dict) and _sc.get("applied_to_total") is not False:
+            try:
+                if float(_sc.get("unit_cost_gbp") or 0) > 0:
+                    continue
+            except (TypeError, ValueError):
+                pass
         # And a pointer is not a material. "SEE INDIVIDUAL DRAWINGS" names no substance for
         # anyone to find a rate for, so demanding one is asking for the impossible.
         if any(w in material.upper() for w in _FINISH_POINTER_WORDS):

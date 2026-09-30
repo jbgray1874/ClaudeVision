@@ -437,7 +437,13 @@ def test_the_sheet_writes_a_lookup_with_the_runs_figure_as_fallback():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "wb_populate.py"),
                encoding="utf-8").read()
     assert "order_gbp_at_breaks" in src
-    assert 'value=(f"=IF(' in src and "LOOKUP($D$6," in src
+    assert "value=break_or_fallback_formula(_sheet_name, _t, _lit)" in src
+    import wb_populate as W
+    f = W.break_or_fallback_formula("Material Price Break", 8, 14.86)
+    assert f.startswith("=IF(") and "LOOKUP($D$6," in f and ",14.86," in f
+    # D-354: the cell tested is the break the order falls in, not the 1-off column
+    assert "INDEX('Material Price Break'!D8:N8,MATCH($D$6," in f
+    assert "!D8=\"\"" not in f
 
 
 def test_every_outcome_carries_a_method_status(monkeypatch):

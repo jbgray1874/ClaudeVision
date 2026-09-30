@@ -4535,6 +4535,22 @@ def labour_group_key(op: Any, wb_op: str, part_number: str,
     return (wb_op, str(material), "%g" % (_safe(thickness) or 0))
 
 
+
+def break_or_fallback_formula(sheet_name: str, break_row: int, fallback: Any) -> str:
+    """A commercial line's price: the break the order quantity falls in, else the run's figure.
+
+    THE BREAK THAT APPLIES, NOT THE 1-OFF ONE (D-354). The formula asked whether the FIRST
+    break cell (D, 1 off) was blank, and only then looked up the order's break. On M&S's bin
+    at 350 off an estimator who filled the 350 column alone kept the £14.86 and £9.14
+    placeholders, because the 1-off cell was still empty. Now the cell tested is the one the
+    lookup would read: filled, it prices the line; empty, the run's own figure stands.
+    """
+    _rng = f"'{sheet_name}'!D{break_row}:N{break_row}"
+    _brk = f"'{sheet_name}'!$D$4:$N$4"
+    _at = f"INDEX({_rng},MATCH($D$6,{_brk},1))"
+    return (f"=IF(IFERROR({_at},\"\")=\"\",{fallback},"
+            f"LOOKUP($D$6,{_brk},{_rng}))")
+
 def _ours_by_shape(formula: Any) -> bool:
     """Did THIS engine write that price formula, or was it already in the template?
 
@@ -5798,9 +5814,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # D6 drives the line like every other break-priced row.
             _lit = price if price is not None else 0
             ws.cell(row=row, column=b["col_price"],
-                    value=(f"=IF('{_sheet_name}'!D{_t}=\"\",{_lit},"
-                           f"LOOKUP($D$6,'{_sheet_name}'!$D$4:$N$4,"
-                           f"'{_sheet_name}'!D{_t}:N{_t}))"))
+                    value=break_or_fallback_formula(_sheet_name, _t, _lit))
         else:
             # CLEARED, NOT LEFT. openpyxl's ws.cell(..., value=None) assigns NOTHING — it only
             # writes when the value is not None — so an unpriced line kept whatever formula

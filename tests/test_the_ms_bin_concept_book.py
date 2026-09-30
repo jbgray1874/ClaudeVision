@@ -3,6 +3,10 @@
 D-352  18 mm MFMDF noted "GBP 14.00 a square metre, researched" and charged GBP 105.63 a
        2800 x 2070 sheet: the MDF per-kg config rate (1.35 x 750 kg/m3), GBP 18.22 a m2.
 D-353  "CNC Joinery … each: CPT01 7/hr …" on a row charging the department's 12/hr.
+D-354  Packing and delivery read their placeholder while the 1-off break was empty, even with
+       the 350-off break filled.
+D-355  Four castors priced at £44 were called "material costs NOTHING … UNDER-CHARGED".
+D-356  The banner said "5 market figures" beside 7 failing checks and four sizes read off a picture.
 """
 from __future__ import annotations
 
@@ -38,3 +42,42 @@ def test_both_researched_board_branches_carry_the_sheet_terms():
 def test_a_grouped_row_says_which_rate_it_charges():
     src = open(os.path.join(ROOT, "src", "wb_populate.py"), encoding="utf-8").read()
     assert '(engine estimate; "' in src and 'f"charged at {throughput:g}/hr)"' in src
+
+
+def test_the_break_the_order_falls_in_decides_not_the_one_off():
+    import wb_populate as W
+    f = W.break_or_fallback_formula("Material Price Break", 8, 14.86)
+    assert "INDEX('Material Price Break'!D8:N8,MATCH($D$6,'Material Price Break'!$D$4:$N$4,1))" in f
+    assert f.endswith("LOOKUP($D$6,'Material Price Break'!$D$4:$N$4,'Material Price Break'!D8:N8))")
+    assert W._ours_by_shape(f)
+
+
+def test_a_bought_castor_is_not_a_free_material():
+    import invariants as inv
+    castor = {"part_number": "CPT07", "description": "CASTOR", "normalized_material": "NYLON",
+              "material_estimate": {}, "quantity": 4,
+              "cost_breakdown": {"system_cost": {"unit_cost_gbp": 11.0,
+                                                 "applied_to_total": True}}}
+    out = inv.check_a_material_we_cannot_price_is_declared(
+        {"estimate_summary": {"part_estimates": [castor]}, "parts": [castor]})
+    assert not any(v.get("code") == "material_has_no_rate_in_this_engine" for v in out)
+
+
+def test_the_banner_names_assumed_sizes_and_failing_checks():
+    import costed_facts as cf
+    job = {"decisions_required": [{"kind": "market_figure", "part": "CASTOR",
+                                   "gbp_at_stake": 45.76}],
+           "release": {"status": "provisional", "blocking_checks": 7, "sizes_assumed": 4}}
+    ph = cf.outstanding_summary(job)["phrase"]
+    assert "1 market figure to replace" in ph
+    assert "4 sizes assumed from a render" in ph and "7 consistency checks failing" in ph
+
+
+def test_render_sizes_are_counted_once_per_part():
+    import costed_facts as cf
+    flag = "CONCEPT: size assumed from the render — confirm 620 x 380 x 18mm before release"
+    src = {"estimate_summary": {"part_estimates": [
+        {"part_number": "CPT01", "review_flags": [flag]},
+        {"part_number": "CPT03", "review_flags": [flag.replace("620", "780")]}]},
+        "parts": [{"part_number": "CPT01", "review_flags": [flag]}]}
+    assert cf._sizes_assumed_from_a_render(src) == 2
