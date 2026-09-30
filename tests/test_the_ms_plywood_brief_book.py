@@ -240,3 +240,45 @@ def test_a_blank_that_fits_neither_way_is_left_for_the_oversize_rule():
     part = _back_panel(4000, 2000)
     estimator.estimate_material(part)
     assert "blank_turned_to_fit" not in part
+
+
+# ── D-368: a lid, flap or door brings its hinges ────────────────────────────────────────
+
+def _bought(name, quantity=1):
+    return {"name": name, "kind": "bought_in", "sighted_material": name.lower(),
+            "material_guess": "", "assumed_blank_mm": {}, "quantity": quantity}
+
+
+def test_a_lid_with_no_hinge_gets_hinges_assumed():
+    """17:30 book: a LID PANEL and no hinge, so nothing held the lid on."""
+    answer = concept_scan._with_implied_fittings(_answer(
+        _panel("LID PANEL", "plywood", 564, 564), _bought("CASTOR", 4)))
+    hinge = [p for p in answer["parts"] if p["name"] == "HINGE"]
+    assert len(hinge) == 1 and hinge[0]["kind"] == "bought_in"
+    per = config.CONCEPT_IMPLIED_FITTINGS[0]["per_part"]
+    assert hinge[0]["quantity"] == per
+
+
+def test_a_listed_hinge_is_never_added_again():
+    answer = _answer(_panel("LID PANEL", "plywood"), _bought("LID HINGE", 2))
+    assert concept_scan._with_implied_fittings(answer) is answer
+
+
+def test_a_unit_without_a_lid_gets_no_hinge():
+    answer = _answer(_panel("BASE", "plywood"), _bought("CASTOR", 4))
+    assert concept_scan._with_implied_fittings(answer) is answer
+
+
+def test_the_assumed_hinge_reaches_the_book_flagged():
+    parts = concept_scan.parts_from_concept(
+        _answer(_panel("LID PANEL", "plywood", 564, 564)), "bdab4adf-3340-40M&S")
+    hinge = next(p for p in parts if "HINGE" in p["description"].upper())
+    assert hinge["concept_kind"] == "bought_in"
+    assert hinge.get("concept_fitting_assumed") is True
+    flag = " ".join(hinge["review_flags"])
+    assert "HINGE ASSUMED" in flag and "LID PANEL" in flag and "Confirm the fitting" in flag
+
+
+def test_the_rule_and_its_count_live_in_config():
+    rule = config.CONCEPT_IMPLIED_FITTINGS[0]
+    assert {"part_words", "fitting_words", "fitting", "per_part"} <= set(rule)

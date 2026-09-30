@@ -1713,6 +1713,21 @@ OVERSIZE_SHEET_SIZES_MM = {
 # stocked sheet it nests on.
 SHEET_CHOICE_YIELD_TIE_PCT = 1.0
 
+# FITTINGS A SIGHTED PART CANNOT WORK WITHOUT (D-368), for a concept read (a render, no
+# drawing). The M&S plywood read of 30 Sep, 17:30, returned a LID and no hinge, although the
+# prompt says a lid that lifts has one: the unit was costed with a lid nothing holds on. When
+# a made part matches `part_words` and no bought-in line matches `fitting_words`, the mapper
+# adds `fitting` at `per_part` for each such part, costed as a purchase and flagged as ASSUMED
+# for the estimator to confirm. A count here is a stated starting point, not a measurement;
+# change it here, not in code.
+CONCEPT_IMPLIED_FITTINGS = (
+    {"part_words": r"\bLID\b|\bFLAP\b|\bDOOR\b",
+     "fitting_words": r"HINGE|PIVOT",
+     "fitting": "HINGE",
+     "description": "hinge for a lifting lid, flap or door",
+     "per_part": 2},
+)
+
 MATERIAL_DENSITY_KG_PER_M3 = {
     "MILD STEEL": 7850,
     "MILD_STEEL": 7850,

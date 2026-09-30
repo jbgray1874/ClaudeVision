@@ -501,6 +501,62 @@ def _with_print_lines(answer: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _with_implied_fittings(answer: Dict[str, Any]) -> Dict[str, Any]:
+    """The answer with the fittings its sighted parts cannot work without, when none came back.
+
+    A LID NOTHING HOLDS ON (D-368). The M&S plywood read of 30 Sep, 17:30, returned a LID
+    PANEL and no hinge, so the unit was costed without one. The prompt already says a lid
+    that lifts has a hinge; this is the net under it, driven by config.CONCEPT_IMPLIED_FITTINGS
+    so the rule and its count are the estimators' to change. A fitting is added only when no
+    bought-in line already names it, so a model that listed the hinge is never charged twice."""
+    try:
+        import config                                               # noqa: WPS433
+        rules = tuple(getattr(config, "CONCEPT_IMPLIED_FITTINGS", ()) or ())
+    except Exception:                                               # noqa: BLE001
+        rules = ()
+    parts = [p for p in (answer.get("parts") or []) if isinstance(p, dict)]
+    if not parts or not rules:
+        return answer
+    bought = " ".join(f"{p.get('name') or ''} {p.get('sighted_material') or ''}"
+                      for p in parts if _concept_kind(p.get("kind")) != "fabricated")
+    added: List[Dict[str, Any]] = []
+    for rule in rules:
+        try:
+            part_re = re.compile(rule["part_words"], re.IGNORECASE)
+            fitting_re = re.compile(rule["fitting_words"], re.IGNORECASE)
+            per_part = float(rule.get("per_part") or 1)
+        except Exception:                                           # noqa: BLE001
+            continue
+        if fitting_re.search(bought):
+            continue
+        movers = [p for p in parts if _concept_kind(p.get("kind")) == "fabricated"
+                  and part_re.search(str(p.get("name") or ""))]
+        if not movers:
+            continue
+        qty = sum(per_part * float(p.get("quantity") or 1) for p in movers)
+        names = ", ".join(str(p.get("name") or "part").strip() for p in movers)
+        added.append({
+            "name": str(rule.get("fitting") or "FITTING"),
+            "kind": "bought_in",
+            "sighted_material": str(rule.get("description") or rule.get("fitting") or ""),
+            "material_guess": "",
+            "assumed_blank_mm": {"length": 0, "width": 0, "thickness": 0},
+            "quantity": int(qty) if float(qty).is_integer() else qty,
+            "quantity_basis": f"{per_part:g} per {names} (assumed)",
+            "operations": [],
+            "from_brief": [],
+            "seen": "not listed by the read; implied by " + names,
+            "why_size": "bought-in, no blank",
+            "_minted_fitting_for": names,
+            "_fitting_per_part": per_part,
+        })
+    if not added:
+        return answer
+    out = dict(answer)
+    out["parts"] = list(answer.get("parts") or []) + added
+    return out
+
+
 def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
@@ -513,6 +569,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
 
     parts: List[Dict[str, Any]] = []
     answer = _with_print_lines(answer)
+    answer = _with_implied_fittings(answer)
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -790,6 +847,14 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 f"its own, so one print of the panel's face is costed as a purchase. Confirm "
                 f"the print method (direct to board or applied), the faces printed and the "
                 f"price before release")
+        if sighted.get("_minted_fitting_for"):
+            record["concept_fitting_assumed"] = True
+            record["review_flags"].append(
+                f"CONCEPT: {sighted.get('name')} ASSUMED — the read listed "
+                f"{sighted['_minted_fitting_for']} and no {str(sighted.get('name')).lower()}, "
+                f"so {sighted.get('quantity')} are costed as a purchase "
+                f"({sighted.get('_fitting_per_part'):g} each). Confirm the fitting, the count "
+                f"and the price before release")
         record["concept_assumptions"] = assumed
         parts.append(record)
     return parts
