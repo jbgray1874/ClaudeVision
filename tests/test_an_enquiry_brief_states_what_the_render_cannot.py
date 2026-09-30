@@ -188,3 +188,8 @@ def test_the_stop_line_names_the_machine_and_port_to_restart():
     block = page[i:i + 2400]
     assert "location.hostname" in block and "location.port" in block
     assert "restart-service.ps1 -Port " in block
+
+
+def test_a_brief_saved_with_a_byte_order_mark_reads_clean(tmp_path):
+    (tmp_path / cs.BRIEF_FILENAME).write_bytes("﻿".encode("utf-8") + BRIEF.encode("utf-8"))
+    assert cs.read_brief(tmp_path) == BRIEF

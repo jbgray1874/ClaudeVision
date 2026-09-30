@@ -109,7 +109,9 @@ def read_brief(job_folder: Any) -> str:
         path = Path(str(job_folder)) / BRIEF_FILENAME
         if not path.is_file():
             return ""
-        return path.read_text(encoding="utf-8", errors="replace").strip()[:BRIEF_MAX_CHARS]
+        # utf-8-sig: a brief saved from Notepad or PowerShell's Set-Content -Encoding UTF8
+        # starts with a byte-order mark, which is not whitespace and would ride into the prompt.
+        return path.read_text(encoding="utf-8-sig", errors="replace").strip()[:BRIEF_MAX_CHARS]
     except OSError:
         return ""
 
