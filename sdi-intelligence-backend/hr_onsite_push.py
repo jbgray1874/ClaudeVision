@@ -196,6 +196,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
 
     client = client or api.InVentryAPI()
     summary["warnings"].extend(client.warnings)
+    warnings_taken = len(client.warnings)
 
     try:
         people = client.get_personnel()
@@ -290,6 +291,10 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         except api.InVentryAPIError as exc:
             summary["failures"].append(f"sign_out {ident}: {exc}")
             _log(f"  FAILED to sign out {label}: {exc}")
+
+    # Anything the client raised while writing - notably the ActionLocation
+    # fallback, which only shows up once a real POST has been refused.
+    summary["warnings"].extend(client.warnings[warnings_taken:])
 
     if summary["unmatched"]:
         summary["warnings"].append(

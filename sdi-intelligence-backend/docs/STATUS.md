@@ -84,7 +84,7 @@ an exit code.
 | # | Item |
 |---|---|
 | 5.1 | **Matching quality.** People are matched on `PersonID`, then email, then name. InVentry's `PersonID` is probably empty for SDI staff, and their email addresses may be too. If matching falls through to names, duplicates are skipped rather than guessed. Fix if needed: backfill `PersonID` with the BrightHR id using `AddPersonnel`/update, which the client already supports. The first dry run answers this in seconds. |
-| 5.2 | Whether the `ActionLocation` marker round-trips as `LastEventLocation` on the live system. `/api/hr/inventry/check` reports `on_site_signed_in_by_us`. |
+| 5.2 | Whether the `ActionLocation` marker round-trips as `LastEventLocation` on the live system. `/api/hr/inventry/check` reports `on_site_signed_in_by_us`. **No longer a risk to sign-ins**: if InVentry refuses the field the client drops it, warns, and completes the sign-in (30 Sep). It still gates safe sign-out. Note there is no Locations list in the console, so we cannot make the marker a real location — only InVentry can say whether free text is accepted. |
 
 ## 6. Deliberately deferred
 

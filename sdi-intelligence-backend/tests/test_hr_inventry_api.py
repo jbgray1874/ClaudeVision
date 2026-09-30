@@ -243,8 +243,9 @@ def test_fields_are_read_case_insensitively():
 class FakeAPI:
     """Stands in for InVentryAPI, recording writes."""
 
-    def __init__(self, people, fail_on=None, read_error=None):
+    def __init__(self, people, fail_on=None, read_error=None, warn_on_write=None):
         self.people = people
+        self.warn_on_write = warn_on_write
         self.signed_in = []
         self.signed_out = []
         self.warnings = []
@@ -259,6 +260,10 @@ class FakeAPI:
     def sign_in(self, ident, when=None, **kw):
         if ident in self.fail_on:
             raise api.InVentryAPIError("simulated failure")
+        # The real client appends here, mid-run, when it drops ActionLocation.
+        if self.warn_on_write:
+            self.warnings.append(self.warn_on_write)
+            self.warn_on_write = None
         self.signed_in.append(ident)
 
     def sign_out(self, ident, when=None, **kw):
@@ -529,3 +534,88 @@ def test_the_check_can_be_disabled():
                 "signed_in": "2026-07-28T09:23:49Z", "email": ""}]
     present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=0)
     assert len(present) == 1 and forgotten == []
+
+
+# ── the ActionLocation fallback ──────────────────────────────────────────
+# InVentry may require ActionLocation to name a real location, and there is no
+# Locations list in the console to create one in. If they refuse the field, a
+# sign-in must still go through: a missing sign-in is a person missing from a
+# fire roll, which is the failure this whole pipeline exists to prevent.
+
+def test_rejected_action_location_is_dropped_and_the_sign_in_still_happens():
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1", when="2026-09-21T09:00:00Z")
+
+    assert len(session.calls) == 2
+    assert "ActionLocation" in session.calls[0]["data"]
+    assert "ActionLocation" not in session.calls[1]["data"]
+    # The sign-in itself survived intact.
+    assert session.calls[1]["data"]["ActionType"] == cfg.INVENTRY_EVENT_TYPE_IN
+    assert session.calls[1]["data"]["PersonnelID"] == "INV-1"
+
+
+def test_the_fallback_warns_that_safe_sign_out_is_now_impossible():
+    client, _ = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1")
+    assert any("sign-out" in w for w in client.warnings)
+
+
+def test_the_location_is_not_retried_for_every_subsequent_person():
+    """89 people must not mean 178 POSTs."""
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+        StubResponse({"response": "OK"}),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1")
+    client.sign_in("INV-2")
+    client.sign_in("INV-3")
+
+    assert len(session.calls) == 4          # 2 for the first, 1 each after
+    assert all("ActionLocation" not in c["data"] for c in session.calls[1:])
+    # Warned once, not once per person. (The harness runs with verify=False,
+    # so the TLS warning is in there too - count only ours.)
+    assert sum("ActionLocation" in w for w in client.warnings) == 1
+
+
+def test_bad_credentials_are_not_mistaken_for_a_bad_location():
+    """A 401 would fail identically without the field - retrying writes nothing
+    twice and hides the real cause."""
+    client, session = make_client([StubResponse(status_code=401, payload=None)])
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("INV-1")
+    assert len(session.calls) == 1
+    assert client.action_location_dropped is False
+
+
+def test_a_server_error_is_not_mistaken_for_a_bad_location():
+    client, session = make_client([StubResponse(status_code=500, payload=None)] * 3)
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("INV-1")
+    assert client.action_location_dropped is False
+
+
+def test_an_empty_marker_sends_no_location_and_needs_no_fallback():
+    client, session = make_client([StubResponse({"response": "OK"})],
+                                  )
+    client.sign_in("INV-1", location="")
+    assert len(session.calls) == 1
+    assert "ActionLocation" not in session.calls[0]["data"]
+
+
+def test_a_warning_raised_during_the_writes_reaches_the_summary(snapshot):
+    """The ActionLocation fallback only fires once a POST has been refused,
+    which is long after the client's warnings are first collected. A warning
+    nobody sees is the same as no fallback at all."""
+    snapshot([clocked_in()])
+    client = FakeAPI([person(person_id="BH-1")],
+                     warn_on_write="InVentry rejected ActionLocation")
+    summary = push.run_push(apply=True, client=client)
+    assert any("ActionLocation" in w for w in summary["warnings"])

@@ -65,7 +65,28 @@ GET_WINDOW_SECONDS = 60.0
 
 
 class InVentryAPIError(RuntimeError):
-    """InVentry's API could not be reached, or refused a call."""
+    """InVentry's API could not be reached, or refused a call.
+
+    ``status`` is the HTTP status where there was one, and None when the call
+    never got a response. Callers use it to tell a rejected *request* from
+    rejected *credentials*, which need opposite responses.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+def rejected_the_request(exc):
+    """True when InVentry refused this particular request's contents.
+
+    Deliberately narrow. 401/403 mean the credentials are wrong, 404 the path
+    is wrong, 429 that we are calling too fast, 5xx that InVentry is unwell -
+    none of which a different request body would fix. What is left is the 4xx
+    range that means "I will not accept what you sent".
+    """
+    status = getattr(exc, "status", None)
+    return status is not None and 400 <= status < 500 and status not in (401, 403, 404, 429)
 
 
 class RateLimiter:
@@ -128,6 +149,8 @@ class InVentryAPI:
         self.session = session or requests.Session()
         self.limiter = limiter if limiter is not None else RateLimiter()
         self.warnings = []
+        # Set once InVentry has refused an ActionLocation - see add_action.
+        self.action_location_dropped = False
 
         # Their certificate is self-signed. A pinned CA bundle keeps
         # verification on and is preferred; otherwise verification is off,
@@ -189,7 +212,7 @@ class InVentryAPI:
             if response.status_code == 429:
                 # Documented for GET. Should not happen for POST, but honour it.
                 wait = _retry_after(response, attempt)
-                last = InVentryAPIError(f"Rate limited by InVentry ({url})")
+                last = InVentryAPIError(f"Rate limited by InVentry ({url})", status=429)
                 if attempt < retries:
                     time.sleep(wait)
                     continue
@@ -199,17 +222,18 @@ class InVentryAPI:
                 raise InVentryAPIError(
                     f"InVentry rejected the credentials ({response.status_code}). Check the API key "
                     f"is still listed in the console's Partner API section and that the partner "
-                    f"secret matches."
+                    f"secret matches.", status=response.status_code
                 )
 
             if response.status_code == 404:
                 raise InVentryAPIError(
                     f"InVentry returned 404 for {url}. The endpoint paths are still unconfirmed - "
-                    f"set INVENTRY_PATH_* from InVentry's Postman collection."
+                    f"set INVENTRY_PATH_* from InVentry's Postman collection.", status=404
                 )
 
             if response.status_code >= 500:
-                last = InVentryAPIError(f"InVentry returned {response.status_code} for {url}")
+                last = InVentryAPIError(f"InVentry returned {response.status_code} for {url}",
+                                        status=response.status_code)
                 if attempt < retries:
                     time.sleep(2 ** (attempt - 1))
                     continue
@@ -218,12 +242,14 @@ class InVentryAPI:
             if not response.ok:
                 # Non-200 bodies carry a useful string, per the documentation.
                 raise InVentryAPIError(
-                    f"InVentry returned {response.status_code} for {url}: {response.text[:300]}"
+                    f"InVentry returned {response.status_code} for {url}: {response.text[:300]}",
+                    status=response.status_code
                 )
 
             return _decode(response, url)
 
-        raise InVentryAPIError(f"InVentry API failed after {retries} attempts: {last}")
+        raise InVentryAPIError(f"InVentry API failed after {retries} attempts: {last}",
+                               status=getattr(last, "status", None))
 
     def get(self, path, params=None):
         return self._send("GET", path, params=params)
@@ -275,14 +301,49 @@ class InVentryAPI:
     # ── presence: one call, AddPersonnelAction ───────────────────────────
 
     def add_action(self, personnel_id, action_type, when=None, location=None):
-        """Record a sign-in or sign-out against an InVentry person."""
-        return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION, {
+        """Record a sign-in or sign-out against an InVentry person.
+
+        ``ActionLocation`` is the one field here we are not certain InVentry
+        will accept. We send a distinctive value so we can recognise our own
+        sign-ins later, but InVentry may require it to name a real location -
+        and there is no Locations list in the console to add one to, so we
+        cannot make it real. If they reject the request over it, dropping the
+        field costs us safe sign-out; letting the call fail costs us the
+        sign-in, and a missing sign-in is a person missing from a fire roll.
+        So we drop the field and carry on.
+
+        Dropped for the rest of the client's life, not just this call: once
+        InVentry has refused it, retrying it 89 more times only doubles the
+        writes.
+        """
+        wanted = cfg.INVENTRY_ACTION_LOCATION if location is None else location
+        body = {
             "PersonnelID": personnel_id,
             "ActionType": action_type,
             "ActionDateTime": format_datetime(when) if when else "",
-            "ActionLocation": (cfg.INVENTRY_ACTION_LOCATION
-                               if location is None else location),
-        })
+        }
+
+        if wanted and not self.action_location_dropped:
+            try:
+                return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION,
+                                 dict(body, ActionLocation=wanted))
+            except InVentryAPIError as exc:
+                # Only when InVentry refused the request itself. A 401 or a
+                # timeout would come back exactly the same way without the
+                # field, and retrying would just write nothing twice as slowly.
+                if not rejected_the_request(exc):
+                    raise
+                self.action_location_dropped = True
+                self.warnings.append(
+                    f"InVentry rejected AddPersonnelAction carrying "
+                    f"ActionLocation={wanted!r} ({exc}). Retried without it, and it is "
+                    f"omitted for the rest of this run. Sign-ins still work. Automatic "
+                    f"sign-out cannot be enabled, because it depends on recognising our "
+                    f"own marker in LastEventLocation - ask InVentry whether "
+                    f"ActionLocation accepts free text."
+                )
+
+        return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION, body)
 
     def sign_in(self, inventry_id, when=None, location=None, reason=""):
         return self.add_action(inventry_id, cfg.INVENTRY_EVENT_TYPE_IN,
