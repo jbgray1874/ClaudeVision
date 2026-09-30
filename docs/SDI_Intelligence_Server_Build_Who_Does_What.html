@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDI Intelligence Server Build</title>
+<style>
+/* Layout: one reading column; the handover gate sits between Jack's list and James's, because it is the point the work changes hands. */
+:root{
+  --bg:#f7f8f6; --surface:#ffffff; --fg:#1d2320; --muted:#5b655f; --line:#dde2de;
+  --jack:#2f6b8a; --james:#7a5a1f; --gate:#2e7d4f; --gate-bg:#eaf4ee;
+  --display:"IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141816; --surface:#1b201d; --fg:#e4e9e5; --muted:#9aa59e; --line:#2c3430;
+  --jack:#7fb6d3; --james:#d8b56d; --gate:#79c79a; --gate-bg:#1a2b21; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141816; --surface:#1b201d; --fg:#e4e9e5; --muted:#9aa59e; --line:#2c3430;
+  --jack:#7fb6d3; --james:#d8b56d; --gate:#79c79a; --gate-bg:#1a2b21; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font:15px/1.55 var(--body)}
+.wrap{max-width:860px;margin:0 auto;padding-inline:20px;padding-block:28px 56px}
+h1{font:600 30px/1.15 var(--display);margin:0 0 6px;text-wrap:balance;letter-spacing:.01em}
+.lede{color:var(--muted);max-width:66ch;margin:0 0 22px}
+.spec{font:13px/1.5 var(--mono);color:var(--muted);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding-block:10px;margin-bottom:28px;overflow-x:auto}
+section{margin-block:30px}
+.owner{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:4px}
+.owner h2{font:600 22px/1.2 var(--display);margin:0}
+.tag{font:600 11px/1 var(--body);text-transform:uppercase;letter-spacing:.08em;padding:5px 8px;border-radius:3px;color:var(--surface)}
+.jack .tag{background:var(--jack)} .james .tag{background:var(--james)}
+.jack h2{color:var(--jack)} .james h2{color:var(--james)}
+.sub{color:var(--muted);margin:0 0 14px;max-width:66ch}
+h3{font:600 13px/1.3 var(--body);text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin:22px 0 8px}
+ol{margin:0;padding-left:1.4em;display:grid;gap:8px}
+li{max-width:70ch} li b{font-weight:600}
+code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:0 4px;overflow-wrap:anywhere}
+.gate{background:var(--gate-bg);border:1px solid var(--gate);border-radius:6px;padding:16px 18px}
+.gate h2{font:600 20px/1.2 var(--display);color:var(--gate);margin:0 0 6px}
+.gate ul{margin:8px 0 0;padding-left:1.2em;display:grid;gap:6px}
+.both table{width:100%;border-collapse:collapse;font-size:14px}
+.tbl{overflow-x:auto}
+.both th,.both td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+.both th{font:600 12px var(--body);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.note{color:var(--muted);font-size:13.5px;margin:0 0 10px;max-width:70ch}
+@media print{body{font-size:13.5px}.wrap{padding-block:8px 0}section{margin-block:18px}ol{gap:5px}h3{margin-top:14px}tr{break-inside:avoid}.gate{break-inside:avoid}}
+</style>
+</head><body>
+<div id="sdi-dlbar" style="font:500 13px/1.4 ui-sans-serif,-apple-system,'Segoe UI',sans-serif;
+     display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+     max-width:940px;margin:0 auto;padding:10px 22px 0;color:inherit">
+  <a id="sdi-dlbar-pdf" href="" target="_blank" rel="noopener"
+     style="text-decoration:none;color:inherit;border:1px solid currentColor;border-radius:5px;
+            padding:5px 11px;opacity:.75">PDF version</a>
+  <button type="button" id="sdi-dlbar-save"
+     style="font:inherit;color:inherit;background:transparent;border:1px solid currentColor;
+            border-radius:5px;padding:5px 11px;opacity:.75;cursor:pointer">Save this page</button>
+  <span id="sdi-dlbar-note" style="opacity:.6"></span>
+</div>
+<script>
+(function () {
+  var bar = document.getElementById("sdi-dlbar");
+  if (!bar) return;
+  var link = document.getElementById("sdi-dlbar-pdf");
+  var save = document.getElementById("sdi-dlbar-save");
+  var note = document.getElementById("sdi-dlbar-note");
+
+  // WHERE THE PDF IS, WHICH DEPENDS ENTIRELY ON HOW THIS PAGE WAS OPENED.
+  var here = String(location.href).split("#")[0];
+  var name = (here.split("/").pop() || "").split("?")[0];
+  if (/[?&]path=/.test(here)) {
+    // The portal: /api/file?path=<dir>/<name>.html -> swap the extension inside the query.
+    link.href = here.replace(/(\.html?)(?=($|&))/i, ".pdf");
+  } else if (/\.html?$/i.test(name)) {
+    link.href = name.replace(/\.html?$/i, ".pdf");   // sibling file, on disk or on K:
+  } else {
+    link.hidden = true;                              // cannot work it out: offer nothing broken
+  }
+
+  save.addEventListener("click", function () {
+    try {
+      bar.hidden = true;                             // the saved copy carries the report, not the bar
+      var html = "<!doctype html>\n" + document.documentElement.outerHTML;
+      bar.hidden = false;
+      var url = URL.createObjectURL(new Blob([html], {type: "text/html;charset=utf-8"}));
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = (name && /\.html?$/i.test(name)) ? name : "sdi-status-report.html";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) {
+      note.textContent = "Saving is blocked here — use the browser's own Save Page As.";
+    }
+  });
+})();
+</script>
+<style>@media print { #sdi-dlbar { display:none !important; } }</style>
+
+
+<div class="wrap">
+  <h1>SDI Intelligence server: who does what</h1>
+  <p class="lede">Jack builds the machine and hands over a Windows&nbsp;11 virtual machine that behaves like a new laptop on the network, with the graphics card inside it. James takes it from there, exactly as he would set up a laptop. The handover checks in the middle are the line between the two.</p>
+  <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows Server 2025 host · Windows 11 VM for SOLIDWORKS</div>
+
+  <section class="jack">
+    <div class="owner"><span class="tag">Jack</span><h2>Infrastructure: the host and the VM</h2></div>
+    <p class="sub">Everything below the applications: hardware, operating systems, network, accounts, backup. In build order.</p>
+
+    <h3>The host (Windows Server 2025)</h3>
+    <ol>
+      <li><b>BIOS:</b> latest firmware; enable virtualisation (SVM) and IOMMU, which the GPU pass-through needs.</li>
+      <li><b>Storage:</b> set up the two NVMe drives (mirror or split OS / VMs — Jack's call) and install Windows Server 2025 with current drivers.</li>
+      <li><b>Network and domain:</b> fixed IP, DNS name, join the domain.</li>
+      <li><b>Hyper-V:</b> add the Hyper-V role.</li>
+      <li><b>Service account</b> for the SDI Intelligence portal service, with read/write to the estimating shares by UNC path (<code>\\server\share</code>, not K:).</li>
+      <li><b>Firewall:</b> allow the portal port (<code>8071</code>) from the office network and from the VM.</li>
+    </ol>
+
+    <h3>The VM (Windows 11)</h3>
+    <ol start="7">
+      <li><b>Create it as Generation 2</b> with Secure Boot and a virtual TPM (Windows 11 requires both).</li>
+      <li><b>Fixed resources:</b> 12 virtual CPUs, 48 GB memory with Dynamic Memory <b>off</b>, a 300 GB+ virtual disk on NVMe.</li>
+      <li><b>Pass the RTX 4000 through to the VM</b> (Discrete Device Assignment), then install NVIDIA's RTX workstation driver inside the VM. GPU partitioning is not needed.</li>
+      <li><b>Windows 11 Pro,</b> fixed IP and DNS name, joined to the domain, fully updated.</li>
+      <li><b>Runner account:</b> a dedicated domain user that logs on automatically at boot; read/write to the estimating shares by UNC path.</li>
+      <li><b>Power and lock policy:</b> no sleep, no screen lock, no screensaver on the VM — SOLIDWORKS and Excel need a live desktop session.</li>
+      <li><b>Admin access for James</b> on both machines: Remote Desktop, and the host's admin share (the laptop's <code>push-to-server.ps1</code> copies through it).</li>
+    </ol>
+
+    <h3>Running it</h3>
+    <ol start="14">
+      <li><b>Backups:</b> host and VM, with one restore tested before go-live.</li>
+      <li><b>Windows Update:</b> restarts scheduled out of hours, host and VM on different nights.</li>
+      <li><b>Antivirus:</b> apply the exclusions James supplies (SOLIDWORKS temp and the output folders).</li>
+      <li><b>Power:</b> on the UPS, and set to start again after a power cut, with the VM starting automatically.</li>
+    </ol>
+  </section>
+
+  <section class="gate">
+    <h2>Handover checks</h2>
+    <p>Jack confirms these, then the machine is James's:</p>
+    <ul>
+      <li>In the VM's Device Manager the graphics card shows as <b>NVIDIA RTX 4000 Ada</b> with the NVIDIA driver, not "Microsoft Basic Display".</li>
+      <li>After a full restart of the host, the VM starts and logs in as the runner account with nobody touching it.</li>
+      <li>Signed in as the runner account, the VM can open and save a file in the estimating folders by UNC path.</li>
+      <li>From the VM, the host answers on port 8071 (once James's service is running, this is just a browser test).</li>
+      <li>James can Remote Desktop into both, as an administrator.</li>
+    </ul>
+  </section>
+
+  <section class="james">
+    <div class="owner"><span class="tag">James</span><h2>Applications: the laptop premise</h2></div>
+    <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop.</p>
+
+    <h3>On the VM (runs the estimates)</h3>
+    <ol>
+      <li><b>SOLIDWORKS:</b> install and activate (see licensing below), open one model to confirm the graphics card is in use.</li>
+      <li><b>Office / Excel:</b> install and activate; open one estimate book.</li>
+      <li><b>PDM / Design Vault client,</b> if models come from the vault.</li>
+      <li><b>Python and Git,</b> clone the repository, create the engine's <code>.venv</code>.</li>
+      <li><b>The <code>.env</code> file,</b> written by hand for this machine — never copied from the laptop.</li>
+      <li><b>The runner:</b> scheduled task at logon (<code>restart-runner.ps1</code>) pointing at the host's service.</li>
+      <li><b>Hand Jack the antivirus exclusion paths.</b></li>
+    </ol>
+
+    <h3>On the host (runs the portal)</h3>
+    <ol start="8">
+      <li><b>Python</b> and the service's own <code>.venv</code>, the backend files, and the host's own <code>.env</code>.</li>
+      <li><b>Install and start the SDIIntelligence service;</b> check the portal loads from a desk.</li>
+    </ol>
+
+    <h3>Proving it</h3>
+    <ol start="10">
+      <li><b>Run one known job</b> (12645 or 12173) on the VM and compare the book and the run time with the laptop's.</li>
+      <li><b>Restart the host</b> and confirm the portal and the runner both come back without anyone logging in.</li>
+    </ol>
+  </section>
+
+  <section class="both">
+    <div class="owner"><h2>Agree together before the build week</h2></div>
+    <p class="note">Rule of thumb: if it would be the same on any Windows machine, it's Jack's. If it only exists because this is SDI Intelligence, it's James's.</p>
+    <div class="tbl"><table>
+      <thead><tr><th>Question</th><th>Who leads</th><th>Why it matters</th></tr></thead>
+      <tbody>
+        <tr><td>SOLIDWORKS licence type: standalone or network (SolidNetWork), and cover for unattended automated use</td><td>James, with the reseller</td><td>A standalone licence is tied to the machine and can need reactivating when a VM changes; a network licence avoids that. If it's a network licence, Jack hosts the licence server.</td></tr>
+        <tr><td>SOLIDWORKS support for this setup: your version on Windows 11 24H2, in a Hyper-V VM with the card passed through</td><td>James, with the reseller</td><td>Unsupported setups often run fine, but support can decline problems on them.</td></tr>
+        <tr><td>Machine names and IP addresses for host and VM</td><td>Jack</td><td>The runner, the portal links and the service settings all name them.</td></tr>
+        <tr><td>Who is told before Windows updates or restarts</td><td>Jack</td><td>A restart mid-run loses that estimate.</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+</div>
+</body></html>
