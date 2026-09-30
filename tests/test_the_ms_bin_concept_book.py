@@ -7,6 +7,7 @@ D-354  Packing and delivery read their placeholder while the 1-off break was emp
        the 350-off break filled.
 D-355  Four castors priced at £44 were called "material costs NOTHING … UNDER-CHARGED".
 D-356  The banner said "5 market figures" beside 7 failing checks and four sizes read off a picture.
+D-357  11:00 re-run: the lid hinge's AI £3.25 read "SDI Live" and sat beside "NOT PRICED — refused".
 """
 from __future__ import annotations
 
@@ -81,3 +82,20 @@ def test_render_sizes_are_counted_once_per_part():
         {"part_number": "CPT03", "review_flags": [flag.replace("620", "780")]}]},
         "parts": [{"part_number": "CPT01", "review_flags": [flag]}]}
     assert cf._sizes_assumed_from_a_render(src) == 2
+
+
+def test_a_rescued_line_is_labelled_by_the_rescue_and_loses_its_refusal():
+    import wb_populate as W
+    hinge = {"part_number": "CPT06", "description": "LID HINGE", "quantity": 1,
+             "material_estimate": {},
+             "review_flags": ["CPT06: NOT PRICED — the market research answered £3.50 but "
+                              "named makers, not sellers", "sighted as 'metal hinge'"]}
+    n = E.apply_last_resort_prices([hinge], lambda pe: 3.25)
+    assert n == 1
+    assert not any("NOT PRICED —" in f for f in hinge["review_flags"])
+    assert "sighted as 'metal hinge'" in hinge["review_flags"]
+    # a stale stamp from the failed chain no longer names the supplier
+    hinge["material_estimate"]["price_source"] = {"source_name": "config_default_material_rates",
+                                                  "applied": True}
+    label, _ = W._price_origin(hinge)
+    assert label == "AI ESTIMATE - INDICATIVE"

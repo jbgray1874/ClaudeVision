@@ -10054,6 +10054,11 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
         pe["extended_total_cost_gbp"] = _round_money(_prior_ext + _ext)
         pe["costing_basis"] = ("last_resort_market_indication_plus_labour"
                                if _prior_ext else "last_resort_market_indication")
+        # A LINE THAT IS NOW PRICED IS NOT "NOT PRICED" (D-357). The first pass's refusal
+        # stayed on the record beside the rescuer's figure, and the Estimate's outstanding
+        # list printed "NOT PRICED — … refused" against a hinge the sheet was charging £3.25.
+        pe["review_flags"] = [f for f in (pe.get("review_flags") or [])
+                              if "NOT PRICED —" not in str(f)]
         pe.setdefault("review_flags", []).append(
             "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
             "indicative market figure is shown rather than a blank that reads as free. NON-FIRM "

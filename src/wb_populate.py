@@ -197,6 +197,15 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
         import price_provenance
     except ImportError:
         return "", False
+    # THE RESCUER'S FIGURE IS THE MONEY ON ITS LINE (D-357). apply_last_resort_prices
+    # writes the line's only price into material_estimate, but the stamps of the chain that
+    # failed first stay on the record — and one of them won the loop below. M&S's lid hinge,
+    # 30 Sep 11:00: an AI figure of £3.25 wore "SDI Live" in the supplier column, the
+    # provenance tab called it a config default, and the report called it researched: three
+    # names for one guess. Where the rescuer priced the line, its mark decides the label.
+    if str(((pe.get("material_estimate") or {}).get("cost_method")) or "") == \
+            "last_resort_market_indication":
+        return "AI ESTIMATE - INDICATIVE", not _price_is_reproducible(pe)
     best = None
     # THE LABEL FOLLOWS THE MONEY, and the record says which branch put the money on.
     #
