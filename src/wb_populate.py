@@ -7618,6 +7618,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # are far apart. Nothing about the money changes — this is the working, not a
             # new figure, and the grouping stays because the set-up is genuinely shared.
             _hbp = g.get("hours_by_part") or {}
+            _each_cell = None
             if len(_hbp) > 1 and order_qty:
                 _per_part = []
                 for _ppn, _rec in _hbp.items():
@@ -7649,6 +7650,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     _desc_cell = ws.cell(row=row, column=lb["col_desc"])
                     _desc_cell.value = (f"{str(_desc_cell.value or '')}  —  each: {_shown}"
                                         )[:200]
+                    _each_cell = _desc_cell
                     if _spread >= float(getattr(
                             config, "LABOUR_GROUP_RATE_SPREAD_FLAG", 3.0)):
                         _inputs.append({
@@ -7726,6 +7728,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 # default, in which case the default's own basis stands.
                 if throughput == _derived:
                     _rate_basis = "engine_derived"
+                elif _each_cell is not None:
+                    # THE ROW SAYS WHICH RATE IT CHARGES (D-353). M&S's bin, 30 Sep: "CNC
+                    # Joinery … each: CPT01 7/hr; CPT04 7/hr; CPT05 7/hr" on a row charging
+                    # the department's 12/hr. The members' figures are the engine's own
+                    # estimate and are not what the row costs; the row says so.
+                    _each_cell.value = (f"{str(_each_cell.value or '')} (engine estimate; "
+                                        f"charged at {throughput:g}/hr)")[:240]
                 ws.cell(row=row, column=lb["col_throughput"], value=round(throughput, 4))
             elif default_tp:
                 ws.cell(row=row, column=lb["col_throughput"], value=float(default_tp))

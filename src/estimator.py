@@ -2219,6 +2219,33 @@ def _sheet_catalogue_probes(material: Any) -> List[Tuple[str, Optional[str]]]:
     return out
 
 
+
+def _researched_sheet_terms(res: Dict[str, Any], area_m2: float,
+                            stock_estimate: Dict[str, Any]) -> Dict[str, Any]:
+    """The sheet a researched per-area board rate buys, in the terms the workbook nests by.
+
+    THE RESEARCHED RATE NEVER REACHED THE SHEET (D-352). The researched rung returns a price
+    per PART (its area x the researched GBP per square metre), and the Other Sheet Material
+    row needs a price per SHEET. With no sheet price and no parts-per-sheet on the result,
+    the writer fell to the last gap-filler, the MDF per-kg config rate: M&S's recycling bin
+    (30 Sep, 18 mm MFMDF) was noted "GBP 14.00 a square metre, researched" and charged
+    GBP 105.63 a 2800 x 2070 sheet — 1.35 GBP/kg x 750 kg/m3, GBP 18.22 a square metre.
+    The researched rate x the stocked sheet's own area is the sheet price; nothing else is
+    assumed. {} when the terms cannot be read, and the writer's older path stands."""
+    try:
+        _rate = float(res["price_gbp"]) / float(area_m2)
+        _sh = list((stock_estimate or {}).get("candidate_sheet_size_mm") or [])
+        _sheet_m2 = float(_sh[0]) * float(_sh[1]) / 1_000_000.0
+    except (KeyError, TypeError, ValueError, ZeroDivisionError, IndexError):
+        return {}
+    if _rate <= 0 or _sheet_m2 <= 0:
+        return {}
+    out = {"sheet_price_gbp": round(_rate * _sheet_m2, 2),
+           "researched_rate_gbp_per_m2": round(_rate, 4)}
+    if (stock_estimate or {}).get("parts_per_sheet"):
+        out["parts_per_sheet"] = stock_estimate["parts_per_sheet"]
+    return out
+
 def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[float]) -> Optional[Dict[str, Any]]:
     """Live £/m² rate for a plastic sheet material (HIPS etc.) derived from the CURRENT
     UDEF catalogue, so it tracks price changes rather than a stale config table.
@@ -5724,6 +5751,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     "powder_consumable": None,
                     "stock_estimate": select_sheet_size(_faced_family, blank_length,
                                                         blank_width),
+                    **_researched_sheet_terms(
+                        _res, (blank_length * blank_width) / 1_000_000.0,
+                        select_sheet_size(_faced_family, blank_length, blank_width)),
                     "cost_method": "board_rate_researched",
                     "costing_material_family": _faced_family,
                     "scrap_pct": round(float(getattr(config, "SCRAP_PERCENTAGE", 0.04)), 4),
@@ -5869,6 +5899,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "extended_material_cost_gbp": round(_rb_unit * quantity, 2),
                 "powder_consumable": None,
                 "stock_estimate": select_sheet_size(material, blank_length, blank_width),
+                **_researched_sheet_terms(
+                    _res_b, (blank_length * blank_width) / 1_000_000.0,
+                    select_sheet_size(material, blank_length, blank_width)),
                 "cost_method": "board_rate_researched",
                 "costing_material_family": material,
                 "scrap_pct": round(float(getattr(config, "SCRAP_PERCENTAGE", 0.04)), 4),
