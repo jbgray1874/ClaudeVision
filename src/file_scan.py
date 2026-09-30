@@ -4102,6 +4102,18 @@ def _finalize_scan_summary(
             # the one thing worse than refusing a pack we could have sighted is sighting
             # over a pack we could have measured.
             _concept_refused = f"the measured-CAD guard could not run ({_wexc})"
+    # A BRIEF THAT NOTHING READ SAYS SO (D-360). It is used by the concept read only; on a
+    # drawing pack, or an engine run, the drawings are the facts and the brief is not.
+    try:
+        import concept_scan as _cs_brief
+        _brief_unused = _cs_brief.read_brief(job_folder)
+    except Exception:                                                # noqa: BLE001
+        _brief_unused = ""
+    if _brief_unused and (_concept_refused or not (_llm_only_run and (_no_parts
+                                                                     or _is_render_pack))):
+        summary.setdefault("review_flags", []).append(
+            "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
+            "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
     if _concept_refused:
         summary["concept_read"] = {"refused": _concept_refused}
         summary.setdefault("review_flags", []).append(
@@ -4118,7 +4130,15 @@ def _finalize_scan_summary(
                 _pack = [str(p) for p in sorted(Path(job_folder).glob("*.pdf"))]
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
-            _read = concept_scan.read_concept(_pack, refresh=_fresh)
+            # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
+            _brief = concept_scan.read_brief(job_folder)
+            if _brief:
+                summary["enquiry_brief"] = {"text": _brief,
+                                            "file": str(Path(job_folder) /
+                                                        concept_scan.BRIEF_FILENAME)}
+                print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
+                      f"facts outrank what the render suggests", flush=True)
+            _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
             _answer = _read.get("parsed") or {}
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
             # in the output tree, so the anchor's stem is a hash — and every sighted part
@@ -4200,6 +4220,12 @@ def _finalize_scan_summary(
                       "refused and the render's own assumption stands)")
             for _uv in (summary["concept_read"].get("not_visible") or [])[:6]:
                 print(f"   Not visible on the render, for the estimator: {_uv}")
+            for _oc in (summary["concept_read"].get("options_not_costed") or [])[:4]:
+                summary.setdefault("review_flags", []).append(
+                    f"ENQUIRY BRIEF OPTION NOT COSTED: {_oc} — this book prices the brief's "
+                    f"first option only; run the other as its own estimate with its own brief "
+                    f"(estimator to confirm which the customer wants)")
+                print(f"   Brief option NOT costed in this book: {_oc}")
             print("   " + "=" * 68)
             print("")
         except concept_scan.ConceptUnavailable as _cu:

@@ -281,6 +281,12 @@ SOURCE_RANK: Dict[str, int] = {
     # real drawing displaces it field by field, which is exactly the lifecycle a concept
     # estimate is for — budget first, tightened when the pack arrives.
     "vision_concept": 20,
+    # STATED IN THE ENQUIRY BRIEF (D-360). Typed by SDI estimating for this job and put to the
+    # concept read as fact: "600 x 600 x 1200mm … plywood". Above anything sighted or
+    # reasoned, below the LLM's read of a drawing and anything measured — a real pack still
+    # displaces it field by field. A part size the model DERIVED from the brief's overall is
+    # stamped here too, and its note says it was worked out, not stated.
+    "enquiry_brief": 45,
 }
 
 # ── WHICH OF TWO EQUALLY-RANKED SOURCES WINS ────────────────────────────────────────
@@ -467,6 +473,7 @@ def tiebreak_priority(source: Any, field: Any = None) -> int:
 # and printing nothing is the failure this exists to prevent.
 SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "vision_concept":         "sighted from the customer's render (assumed, unconfirmed)",
+    "enquiry_brief":          "the enquiry brief typed for this job (stated, unconfirmed by a drawing)",
     "production_substitution": "a confirmed production rule (the gauge the shop buys)",
     "estimator_confirmed":    "an estimator, overruling the files",
     "estimator_read_drawing": "an estimator reading the drawing",

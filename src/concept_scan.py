@@ -63,6 +63,66 @@ CONCEPT_PROMPT_VERSION = "c3"
 
 SOURCE = "vision_concept"
 
+# ── THE ENQUIRY BRIEF ─────────────────────────────────────────────────────────────────
+#
+# Dave Wright, 30 Sep 2026, on the M&S bin: "350off … Plywood construction with print, or
+# mild steel powder coated with print … 600 x 600 x 1200mm bump bin with lid with 1800mm back
+# panel." The render alone had been read as a 1,750 mm carcass of 18 mm MFMDF — a different
+# product. Nothing in the pack could say otherwise, and nothing may be typed into the code.
+#
+# So the brief is an INPUT, like the client and the drawing number: typed on the portal for
+# an LLM-only run, filed into the job folder beside the pack (on record with it), and put to
+# the vision model as stated facts that outrank what it infers from the picture. Every figure
+# it supplies is stamped `enquiry_brief` — above anything sighted, below anything read off a
+# drawing or measured — so a real pack still displaces it field by field (D-360).
+BRIEF_SOURCE = "enquiry_brief"
+BRIEF_FILENAME = "ENQUIRY_BRIEF.txt"
+BRIEF_MAX_CHARS = 4000
+
+_BRIEF_SECTION = """
+
+ENQUIRY BRIEF — written by SDI estimating for THIS job. These are STATED FACTS and they
+override anything you would infer from the images: overall sizes, materials, finish,
+construction, quantities, and parts the images cannot show.
+- Size every part from the stated dimensions wherever they fix it; use visual cues only for
+  what the brief leaves open.
+- If the brief offers alternative constructions ("A … or B …"), cost ONLY the FIRST one and
+  list the others in "options_not_costed".
+- Add to every part "from_brief": a list of which of "size", "material", "quantity" the brief
+  states or directly fixes for that part (empty list if none), and say "from the brief" in
+  why_size / quantity_basis for those.
+- A figure the brief gives as a price is ignored: you still never state a price.
+Add "options_not_costed": ["<each alternative the brief offered that you did not cost>"] to
+the top level of the JSON.
+
+BRIEF:
+<<<
+{brief}
+>>>"""
+
+
+def read_brief(job_folder: Any) -> str:
+    """The brief filed with this job's pack, or "" — trimmed and capped, never raised."""
+    if not job_folder:
+        return ""
+    try:
+        path = Path(str(job_folder)) / BRIEF_FILENAME
+        if not path.is_file():
+            return ""
+        return path.read_text(encoding="utf-8", errors="replace").strip()[:BRIEF_MAX_CHARS]
+    except OSError:
+        return ""
+
+
+def _from_brief(sighted: Mapping[str, Any], field: str) -> bool:
+    """Did the model say the brief fixes this field of this part?"""
+    fb = sighted.get("from_brief")
+    if fb is True:
+        return True
+    if isinstance(fb, (list, tuple)):
+        return field in {str(x).strip().lower() for x in fb}
+    return False
+
 # The field the model names visibly-finished edges in. Named once: the prompt asks for it
 # and the assembler gates edge_banding on it, and those two drifting apart is how a rule
 # becomes decorative.
@@ -164,7 +224,7 @@ class ConceptUnavailable(RuntimeError):
 
 # ── the call, isolated exactly as _bom_vision_reader isolates its own ───────────────
 
-def _call_vision_llm(png_pages: List[bytes], model: str) -> str:
+def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "") -> str:
     if os.getenv("SDI_OFFLINE", "").strip().lower() in {"1", "true", "yes"}:
         raise ConceptUnavailable(
             "SDI_OFFLINE=1 — the concept read needs the vision model and this run may not "
@@ -178,8 +238,10 @@ def _call_vision_llm(png_pages: List[bytes], model: str) -> str:
 
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
     _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
-    content: List[Dict[str, Any]] = [
-        {"type": "text", "text": _PROMPT.format(n=len(png_pages), ops=_ops)}]
+    _text = _PROMPT.format(n=len(png_pages), ops=_ops)
+    if brief:
+        _text += _BRIEF_SECTION.format(brief=brief)
+    content: List[Dict[str, Any]] = [{"type": "text", "text": _text}]
     for png in png_pages:
         b64 = base64.b64encode(png).decode("ascii")
         content.append({"type": "image_url",
@@ -212,7 +274,7 @@ def _cache_dir() -> Path:
     return Path(config.BASE_DIR) / "cache" / "vision_concept"
 
 
-def _cache_key(png_pages: List[bytes], model: str) -> str:
+def _cache_key(png_pages: List[bytes], model: str, brief: str = "") -> str:
     h = hashlib.sha256()
     for png in png_pages:
         h.update(png)
@@ -220,11 +282,16 @@ def _cache_key(png_pages: List[bytes], model: str) -> str:
     h.update(model.encode("utf-8"))
     h.update(b"\x00")
     h.update(CONCEPT_PROMPT_VERSION.encode("utf-8"))
+    if brief:
+        # A CHANGED BRIEF IS A NEW QUESTION. Only a run with a brief hashes it, so every
+        # brief-less read keeps the key it already has in the cache.
+        h.update(b"\x00brief\x00")
+        h.update(brief.encode("utf-8"))
     return h.hexdigest()
 
 
 def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
-                 refresh: bool = False) -> Dict[str, Any]:
+                 refresh: bool = False, brief: str = "") -> Dict[str, Any]:
     """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}.
 
     Pages are rendered exactly as the BOM vision reader renders them, and ALL of them go in
@@ -241,7 +308,8 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     if not pngs:
         raise ConceptUnavailable("no pages could be rendered from this pack")
 
-    key = _cache_key(pngs, model)
+    brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
+    key = _cache_key(pngs, model, brief)
     path = _cache_dir() / (key + ".json")
     if not refresh and path.is_file():
         try:
@@ -253,7 +321,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         except (OSError, ValueError):
             pass                                     # corrupt entry → re-fetch
 
-    raw = _call_vision_llm(pngs, model)
+    raw = _call_vision_llm(pngs, model, brief)
     parsed = parse_concept_response(raw)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -446,7 +514,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         except (TypeError, ValueError):
             qty = 1
             basis = "assumed — the render does not show a count"
-        apply_field(record, "quantity", qty, SOURCE, note=basis)
+        _qsrc = BRIEF_SOURCE if _from_brief(sighted, "quantity") else SOURCE
+        apply_field(record, "quantity", qty, _qsrc, note=basis)
         _assume("quantity", qty, basis)
 
         sighted_mat = str(sighted.get("sighted_material") or "").strip()
@@ -460,7 +529,10 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         if guess:
             _why_mat = (f"sighted as '{sighted_mat}' on the render" if sighted_mat
                         else "sighted on the render")
-            apply_field(record, "normalized_material", guess, SOURCE, note=_why_mat)
+            _msrc = BRIEF_SOURCE if _from_brief(sighted, "material") else SOURCE
+            if _msrc == BRIEF_SOURCE:
+                _why_mat = "stated in the enquiry brief"
+            apply_field(record, "normalized_material", guess, _msrc, note=_why_mat)
             _assume("material", guess, _why_mat)
         if sighted_mat:
             record["materials"].append(sighted_mat)
@@ -517,6 +589,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 + " — sighted on a customer render, so the size is approximate; price a "
                   "standard trade item of this description")
         why = str(sighted.get("why_size") or "scaled from the render")
+        _sized_by_brief = _from_brief(sighted, "size")
+        _ssrc = BRIEF_SOURCE if _sized_by_brief else SOURCE
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):
             try:
@@ -524,7 +598,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             except (TypeError, ValueError):
                 continue
             if value > 0:
-                apply_field(record, field, value, SOURCE, note=why)
+                apply_field(record, field, value, _ssrc, note=why)
                 _assume(field, value, why)
                 wrote_size = True
         try:
@@ -532,7 +606,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
         except (TypeError, ValueError):
             thickness = 0.0
         if thickness > 0:
-            apply_field(record, "normalized_thickness_mm", thickness, SOURCE, note=why)
+            apply_field(record, "normalized_thickness_mm", thickness, _ssrc, note=why)
             _assume("thickness_mm", thickness, why)
 
         # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
@@ -613,7 +687,13 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
 
         # THE ACTION RIDES ON THE PART. One line, in the estimator's imperative, because a
         # concept figure that nobody is told to confirm becomes a firm one by seniority.
-        if wrote_size or thickness > 0:
+        if (wrote_size or thickness > 0) and _sized_by_brief:
+            record["review_flags"].append(
+                f"CONCEPT: size from the enquiry brief ({why}) — the model worked this part "
+                f"out from the brief's stated dimensions; confirm "
+                f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
+                f"{blank.get('thickness', '?')}mm before release")
+        elif wrote_size or thickness > 0:
             record["review_flags"].append(
                 f"CONCEPT: size assumed from the render ({why}) — confirm "
                 f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
@@ -869,4 +949,8 @@ def concept_note(answer: Dict[str, Any]) -> Dict[str, Any]:
         "variants": product.get("variants"),
         "print_sets": answer.get("print_sets") or [],
         "not_visible": answer.get("not_visible") or [],
+        # THE BRIEF'S OTHER OPTIONS, NAMED AS NOT COSTED (D-360). "Plywood … or mild steel"
+        # is two estimates; this one priced the first, and the book says which it did not.
+        "options_not_costed": [str(o) for o in (answer.get("options_not_costed") or [])
+                               if str(o).strip()],
     }

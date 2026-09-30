@@ -484,6 +484,11 @@ class EstimateRequest(BaseModel):
     # Only meaningful alongside an LLM read; harmless and ignored on an ordinary estimate,
     # which has three other readers and does not want its one reproducible source moving.
     fresh_read: bool = False
+    # THE ENQUIRY BRIEF (D-360). Free text typed for an LLM-only run — "600 x 600 x 1200mm
+    # bump bin with lid, 1800mm back panel, plywood with print, 350 off" — filed into the job
+    # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
+    # any other method: a drawing pack's drawings are its facts.
+    enquiry_brief: Optional[str] = None
     # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
     # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
     # test run wants and what an API caller that has never heard of this field gets.
@@ -675,6 +680,34 @@ def claim(req: ClaimRequest, x_sdi_key: Optional[str] = Header(default=None)):
         "fresh_read": bool(run.fresh_read),
     }}
 
+
+
+_BRIEF_FILENAME = "ENQUIRY_BRIEF.txt"
+_BRIEF_MAX_CHARS = 4000
+
+
+def _file_enquiry_brief(run: "Run", job: Any, brief: Optional[str]) -> None:
+    """Write this run's brief into the job folder, or remove a stale one (D-360).
+
+    THE BRIEF IS THIS RUN'S. A job folder is reused run after run, so a brief left from the
+    last one would silently shape an LLM read nobody typed a brief for. Typed: written.
+    Blank: any earlier file is removed, and the log says which happened."""
+    text = str(brief or "").strip()[:_BRIEF_MAX_CHARS]
+    path = Path(str(job)) / _BRIEF_FILENAME
+    try:
+        if text:
+            path.write_text(text + "\n", encoding="utf-8")
+            run.line(f"ENQUIRY BRIEF filed with the pack ({len(text)} chars) — the model "
+                     f"reads it as stated facts that outrank what the render suggests:")
+            for ln in text.splitlines()[:8]:
+                if ln.strip():
+                    run.line("  | " + ln.strip()[:160])
+        elif path.exists():
+            path.unlink()
+            run.line("No enquiry brief this run — the one filed by an earlier run was removed.")
+    except OSError as exc:
+        run.line(f"WARNING — the enquiry brief could not be filed ({exc}); this run reads the "
+                 f"render alone.")
 
 def _check_the_engine_was_told(run: "Run", text: str) -> None:
     """THE RUNNER IS A LONG-LIVED PROCESS AND `git pull` DOES NOT RELOAD IT.
@@ -1465,6 +1498,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "the DXF flat patterns and the SolidWorks extract are all OFF. This is a "
                  "MEASUREMENT of the model, not an estimate, and its total must not be "
                  "quoted or compared with a normal run's.")
+    if run.llm_only:
+        _file_enquiry_brief(run, job, req.enquiry_brief)
     if run.fresh_read:
         # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
         # answer exactly; this one may not, and "the number moved and nothing changed" is

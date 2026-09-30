@@ -583,6 +583,23 @@
         the runner's machine and holds every other job's answers; this run just doesn't use
         it. Leave it off to re-read a pack the model has already seen.</label>
 
+      <!-- THE ENQUIRY BRIEF (D-360). Dave Wright, 30 Sep: "600 x 600 x 1200mm bump bin with
+           lid with 1800mm back panel … plywood construction with print, or mild steel powder
+           coated with print … 350 off." The render alone was read as a different product,
+           and nothing may be typed into the code. So the brief is an input for THIS run,
+           like the client: filed with the pack as ENQUIRY_BRIEF.txt and put to the model as
+           stated facts that outrank what the picture suggests. LLM-only runs only — on a
+           drawing pack the drawings are the facts. -->
+      <label class="note" for="enquiryBrief" style="display:block;margin:0 0 4px">
+        <b>Enquiry brief</b> (optional, LLM read only) — what the customer or estimator has
+        stated that the drawings or render cannot show: overall sizes, material, finish,
+        construction, parts not visible. One option per run: for "plywood <i>or</i> steel",
+        run it twice with each brief. Prices typed here are ignored — enter those on the
+        sheet.</label>
+      <textarea id="enquiryBrief" rows="4" maxlength="4000"
+        style="width:100%;box-sizing:border-box;margin:0 0 10px;font:inherit"
+        placeholder="e.g. 600 x 600 x 1200mm bump bin with lid and 1800mm back panel. Plywood construction with print. 350 off."></textarea>
+
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
@@ -2107,6 +2124,10 @@ $("bRunLLM").onclick = async () => {
        ? "FRESH READ: the caches are bypassed — every page is being sent to the model again."
        : "Cached read: pages the model has already seen are replayed from cache, so this "
        + "measures the plumbing rather than the model. Tick 'Fresh read' to ask it again.");
+  { const _b = ($("enquiryBrief").value || "").trim();
+    line(_b ? "Enquiry brief: " + _b.replace(/\s+/g, " ").slice(0, 200)
+               + (_b.length > 200 ? "…" : "")
+            : "No enquiry brief — the model reads the pack alone."); }
   line("Output → "+destination());
   const folder = drawings.find(d => d.is_dir);
   try{
@@ -2123,7 +2144,8 @@ $("bRunLLM").onclick = async () => {
                             job_folder: folder ? folder.path : null,
                             files: drawings.filter(d => !d.is_dir).map(d => d.path),
                             output_root: OUTPUT_ROOT, deliverables: true,
-                            method: "llm", fresh_read: !!freshRead.checked})});
+                            method: "llm", fresh_read: !!freshRead.checked,
+                            enquiry_brief: ($("enquiryBrief").value || "").trim() || null})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;
