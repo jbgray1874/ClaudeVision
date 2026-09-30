@@ -71,6 +71,72 @@ def _is_folded(part: Mapping[str, Any]) -> bool:
     return any(cue in text for cue in ("fold", "bend", "linebend", "line_bend"))
 
 
+# Where a flat that was MEASURED says it came from. A size from a drawing's printed overall or
+# a category default is not one of these.
+_MEASURED_GEOMETRY = ("dxf", "solidworks", "model", "flat_pattern", "mirror_of_measured")
+_ENVELOPE_WORDS = "the size used is a fallback envelope"
+
+
+def has_measured_flat(part: Mapping[str, Any]) -> bool:
+    """Does this part carry a flat a DXF, a model or a measured mirror supplied?"""
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                        Mapping) else {}
+    src = " ".join(str(v or "") for v in (
+        part.get("geometry_source"), ng.get("geometry_source"),
+        part.get("blank_length_mm_source"))).lower()
+    measured = (bool(part.get("dxf_augmented")) or bool(part.get("flat_pattern_detected"))
+                or any(w in src for w in _MEASURED_GEOMETRY))
+    if not measured:
+        return False
+    try:
+        from document_builder import flat_blank_mm
+        length, width = flat_blank_mm(dict(part))
+    except Exception:                                            # noqa: BLE001
+        length, width = part.get("blank_length_mm"), part.get("blank_width_mm")
+    return bool(_num(length) and _num(width))
+
+
+def not_cut_from_a_blank(part: Mapping[str, Any]) -> bool:
+    """An assembly (sized through its members) or a line SDI does not make (bought in, or
+    supplied by another party) uses no blank of its own, so no envelope stands in for one.
+    12527-22's live book told the estimator the weldment 101 and the customer's ticket 03X were
+    both costed on "a fallback envelope"; neither was costed on any size at all."""
+    ctx = part.get("route_context") if isinstance(part.get("route_context"), Mapping) else {}
+    if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+            or part.get("assembly_children") or ctx.get("is_assembly_parent")
+            # A part its own sheet shows JOINING members (a weld read off that sheet, or a
+            # coat charged over its members' blanks) is an assembly whatever the tree says.
+            or part.get("spot_weld_count") or part.get("_powder_members_coated_m2")
+            or part.get("supplied_by_third_party")
+            or str(part.get("costing_basis") or "") == "supplied_by_third_party"):
+        return True
+    try:
+        from bought_in_policy import is_bought_in
+        return bool(is_bought_in(dict(part)))
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def withdraw_stale_envelope_flags(parts: Any) -> int:
+    """Take "the size used is a fallback envelope" off every part a measured flat now sizes,
+    and off every part that uses no blank of its own.
+
+    The detail-sheet pass may run before a DXF, a model or a mirror lands; a flag about a size
+    that is no longer used is withdrawn once every reader has run (as D-291 does for the
+    mirror, here for all of them). Returns how many parts it cleared."""
+    cleared = 0
+    for part in parts or ():
+        if not isinstance(part, dict) or not (has_measured_flat(part)
+                                              or not_cut_from_a_blank(part)):
+            continue
+        flags = part.get("review_flags") or []
+        kept = [f for f in flags if _ENVELOPE_WORDS not in str(f)]
+        if len(kept) != len(flags):
+            part["review_flags"] = kept
+            cleared += 1
+    return cleared
+
+
 def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
     """Stamp each part's blank from the detail page it is bound to. Returns how many gained one.
 
@@ -103,6 +169,12 @@ def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
         # every structured part in the job, for nothing.
         if _num(part.get("blank_length_mm")) and str(
                 part.get("blank_length_mm_source") or "") not in ("", "geometry_inference"):
+            continue
+        # AND A MEASURED FLAT HELD UNDER THE GEOMETRY RECORD IS MEASURED TOO. A DXF or model
+        # flat lands in normalized_geometry, not at the top of the part, so 12527-22's riser
+        # and rail — both cut from their own DXFs — were told their size was "a fallback
+        # envelope".
+        if has_measured_flat(part):
             continue
 
         if len(bound) != 1:

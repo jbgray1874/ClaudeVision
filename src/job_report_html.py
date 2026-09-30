@@ -3056,10 +3056,20 @@ def _line_dimensions(line: Dict[str, Any], part: Dict[str, Any]) -> str:
     length = me.get("blank_length_mm") or part.get("blank_length_mm")
     width = me.get("blank_width_mm") or part.get("blank_width_mm")
     thk = line.get("thickness_mm") or part.get("normalized_thickness_mm")
+    # THE GAUGE THE SHEET COSTS, NOT THE ONE DRAWN, WHERE A PRODUCTION RULE STANDS BETWEEN
+    # THEM. 12527-22-01M is drawn 0.9 mm and bought and cut at 1.0; the Sheet Steel row says
+    # 1 and this column said 0.9, beside a flag saying "COSTED AT 1 mm". Both figures are
+    # true, so both are shown, in that order.
+    _ps = part.get("production_substitution") or line.get("production_substitution")
+    _drawn_note = ""
+    if isinstance(_ps, dict) and _ps.get("costed_thickness_mm"):
+        thk = _ps["costed_thickness_mm"]
+        if _ps.get("drawn_thickness_mm"):
+            _drawn_note = f"drawn {_ps['drawn_thickness_mm']:g} mm, costed at {thk:g} mm"
     if length and width:
         txt = f"{_num(length, 2).rstrip('0').rstrip('.')} × {_num(width, 2).rstrip('0').rstrip('.')}"
         if thk:
-            txt += f" × {thk} mm"
+            txt += f" × {thk:g} mm" if isinstance(thk, (int, float)) else f" × {thk} mm"
         src = str(part.get("geometry_source") or "")
         words = ""
         try:
@@ -3067,7 +3077,9 @@ def _line_dimensions(line: Dict[str, Any], part: Dict[str, Any]) -> str:
             words = _geom_source_words(src) if src and src != "pdf" else ""
         except Exception:                                        # noqa: BLE001
             words = ""
-        if words and words != "not recorded":
+        words = " · ".join(w for w in ((words if words != "not recorded" else ""),
+                                        _drawn_note) if w)
+        if words:
             return f"{_esc(txt)}<br><span class=\"mini\">{_esc(words)}</span>"
         return _esc(txt)
     if thk and line.get("kind") in ("leaf", "assembly"):

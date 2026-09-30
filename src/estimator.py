@@ -8901,6 +8901,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "material_priced_as": (dict(part["material_priced_as"])
                                if isinstance(part.get("material_priced_as"), dict) else None),
         "drawn_thickness_mm": part.get("drawn_thickness_mm"),
+        # What the part's own sheet showed of its welds (weld_symbols), carried so the costed
+        # record can say it joins members — the envelope sweep reads it.
+        "weld_symbols": (dict(part["weld_symbols"])
+                         if isinstance(part.get("weld_symbols"), dict) else None),
+        "spot_weld_count": part.get("spot_weld_count"),
         # Preserve the evidence which explains the route on the costed record. This nested
         # field is shadow-only during migration: no existing workbook consumer reads it, so
         # adding it cannot alter a price or labour row.
@@ -11635,6 +11640,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         "reverse_engineer": "Run: python src/extract_workbook_constants.py --workbook <path-to.xlsx>",
     }
     _merge_sheet_into_estimate_workbook_inputs(out_doc, summary)
+    # EVERY READER HAS RUN, SO A FLAG ABOUT A SIZE NOBODY USES COMES OFF — on the costed
+    # records and on the raw ones the report also reads (12527-22's DXF-cut riser and rail).
+    try:
+        from detail_page_geometry import withdraw_stale_envelope_flags
+        withdraw_stale_envelope_flags(part_estimates)
+        withdraw_stale_envelope_flags(parts)
+    except Exception:                                                # noqa: BLE001
+        pass
     mopts = out_doc["cost_breakdown"].get("margin_options")
     if bool(getattr(config, "OUTPUT_MANUFACTURING_COST_ONLY", False)) and isinstance(mopts, list):
         out_doc["cost_breakdown"]["margin_options"] = []
