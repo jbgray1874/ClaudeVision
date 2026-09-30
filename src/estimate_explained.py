@@ -2515,8 +2515,85 @@ def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dic
             "rows": len(labour_rows), "known": known}
 
 
-def do_not_send_note(stem: str, why: str) -> Dict[str, str]:
-    """The covering note for a pack whose money cannot be read — a refusal, not a summary.
+# WHAT THE REFUSAL SAYS FOR EACH REASON THE PRICE COULD NOT BE CHECKED (D-366). The keys are
+# the read-back's own cause codes (wep_readback_from_xlsx). "headline" ends the subject line.
+# "happened" takes the read-back's plain detail where it has one. "means" says what that does
+# and does not tell you about the figures. "steps" is the repair for THIS cause. The note used
+# to give the #DIV/0! repair for every cause, so an Excel that had merely been busy sent the
+# estimator looking for "a labour row with no throughput".
+_REFUSAL_BY_CAUSE: Dict[str, Dict[str, Any]] = {
+    "excel_busy": {
+        "headline": "Excel was busy, so the price was not checked",
+        "happened": ("The estimate was built and the workbook written, but when the engine "
+                     "went to read the calculated totals back, {detail}."),
+        "default_detail": "Excel was busy and would not answer",
+        "means": ("Nothing is known to be wrong with the figures. They are unchecked: the "
+                  "checks that compare the sheet's rows with its totals could not run."),
+        "steps": (
+            "Close Excel on the PC that runs the estimates, and end any EXCEL.EXE still "
+            "listed in Task Manager (a run stopped part-way can leave one behind).",
+            "Re-run the job. The new run reads the totals back, runs its checks and writes "
+            "the normal covering note.",
+            "If it happens again, open Excel by hand on that PC and clear anything it is "
+            "waiting on (a sign-in, licence, update or recovered-files message), then "
+            "re-run.",
+        ),
+    },
+    "excel_unavailable": {
+        "headline": "no Excel on this machine, so the price was not calculated",
+        "happened": ("The estimate was built and the workbook written, but {detail}, so "
+                     "nothing calculated its formulas and there was no total to read."),
+        "default_detail": "this machine cannot run Excel",
+        "means": ("The formulas are intact and calculate when the workbook is opened in "
+                  "Excel, but no check has been run on the result."),
+        "steps": ("Re-run the job on the estimating PC, which has Excel.",),
+    },
+    "excel_failed": {
+        "headline": "Excel failed while checking the price",
+        "happened": "The estimate was built and the workbook written, but {detail}.",
+        "default_detail": "Excel failed while opening or calculating the workbook",
+        "means": "Nothing is known to be wrong with the figures, but they are unchecked.",
+        "steps": (
+            "Open the workbook in Excel yourself. If it opens and shows its totals, re-run "
+            "the job: the failure was Excel's, not the estimate's.",
+            "If Excel reports a problem with the file, do not repair it by hand. Send this "
+            "note and the workbook to the engine team.",
+        ),
+    },
+    "totals_not_calculated": {
+        "headline": "the workbook's total did not calculate",
+        "happened": "The estimate was built and the workbook written, but {detail}.",
+        "default_detail": ("Excel calculated the workbook, but its Total Unit Cost Price came "
+                           "back blank or as an error"),
+        "means": "The workbook has no price until that error is cleared.",
+        "steps": (
+            "Open the workbook in Excel and find the total showing an error (#DIV/0!, "
+            "#VALUE!).",
+            "Run tools\\preflight_before_you_send_it.py against it. It names the rows that "
+            "stop the total.",
+            "Send that list to the engine team (the usual cause is a labour row with no "
+            "throughput) and re-run the job once it is fixed.",
+        ),
+    },
+}
+# Any other cause, or a record stamped before causes were recorded.
+_REFUSAL_UNKNOWN: Dict[str, Any] = {
+    "headline": "the price could not be checked",
+    "happened": "The engine could not read the calculated totals back from the workbook{detail}.",
+    "default_detail": "",
+    "means": "The figures are unchecked.",
+    "steps": (
+        "Open the workbook in Excel and check the totals calculate (no #DIV/0!).",
+        "Run tools\\preflight_before_you_send_it.py against it. It names the blocking rows.",
+        "Fix the cause and re-run the job.",
+    ),
+}
+
+
+def do_not_send_note(stem: str, why: str, *, cause: str = "", detail: str = "",
+                     quantity_why: str = "", recalculated_later: Optional[bool] = None,
+                     money_refused: Optional[bool] = None) -> Dict[str, str]:
+    """The covering note for a pack that must not go out. It is a refusal, not a summary.
 
     WHAT THIS REPLACES. A pack went out whose quantities were finally right and whose money
     was gone — #DIV/0! through the labour SUM, "not readable from the sheet" — under a
@@ -2525,37 +2602,77 @@ def do_not_send_note(stem: str, why: str) -> Dict[str, str]:
     detection without refusal is a comment.
 
     This note is what goes in the email's place. The subject leads with DO NOT SEND so no
-    mail client, preview, or skim can mistake it; the body names the reason the record
-    gives and what to do. The workbook itself still ships to the ESTIMATOR — repairing it
-    needs the file — but nothing that reads like a price accompanies it."""
+    mail client, preview, or skim can mistake it. The workbook itself still ships to the
+    ESTIMATOR, because repairing it needs the file, but nothing that reads like a price goes
+    with it.
+
+    IN WORDS AN ESTIMATOR CAN ACT ON (D-366). James Gray, 30 Sep, on the 14:12 M&S plywood
+    note: "the e-mail explanation is not great". Its only reason was the record's internal
+    sentence ("the workbook's accepted row grouping reached this record but its calculated
+    totals did not…"), and its repair was the #DIV/0! one, when Excel had simply been busy.
+    The note now says what happened, what it means for the figures and what to do for THIS
+    cause. The record's own words stay at the foot, for the engine team.
+
+    `why` is money_provenance's sentence. `cause` and `detail` are the read-back's code and
+    plain reason. `quantity_why` is set when the book was costed at the wrong quantity.
+    `recalculated_later` says whether Excel calculated the book later in the same run.
+    `money_refused` defaults to "yes" unless only a quantity reason was given."""
     _stem = str(stem or "this job").strip() or "this job"
-    _why = str(why or "the record carries no calculated totals").strip()
-    subject = f"DO NOT SEND — {_stem}: the money on this pack is not readable"
+    _why = str(why or "").strip()
+    if _why and _why[-1] not in ".!?":
+        _why += "."
+    _qty = str(quantity_why or "").strip()
+    _money = (bool(money_refused) if money_refused is not None
+              else bool(_why or cause or detail) or not _qty)
+
+    headlines: List[str] = []
+    happened: List[str] = []
+    means: List[str] = []
+    steps: List[str] = []
+    if _money:
+        spec = _REFUSAL_BY_CAUSE.get(str(cause or "").strip(), _REFUSAL_UNKNOWN)
+        _detail = str(detail or "").strip().rstrip(".")
+        if spec is _REFUSAL_UNKNOWN:
+            _said = f": {_detail}" if _detail else ""
+        else:
+            _said = _detail or spec["default_detail"]
+        headlines.append(spec["headline"])
+        _happened = spec["happened"].format(detail=_said)
+        if spec is _REFUSAL_BY_CAUSE["excel_busy"] and recalculated_later is not None:
+            _happened += (" Excel did open and calculate the workbook later in the same run, "
+                          "so this was a hold-up on the PC, not a fault in the estimate."
+                          if recalculated_later else
+                          " Excel could not calculate the workbook later in the run either.")
+        happened.append(_happened)
+        means.append(spec["means"])
+        steps.extend(spec["steps"])
+    if _qty:
+        headlines.append("costed at the wrong quantity")
+        happened.append(f"The job was costed at the wrong quantity: {_qty}.")
+        steps.append("Make sure the re-run is at the quantity that was asked for."
+                      if _money else "Re-run the job at the quantity that was asked for.")
+    means.append("No quote goes with this pack.")
+
+    subject = f"DO NOT SEND — {_stem}: {'; '.join(headlines)}"
+    closing = ("The workbook is attached so you can look at it. Do not send it or quote from "
+               "it. Nothing in it should be read as a price until a re-run has checked it.")
     text = (
         f"{subject}\n\n"
-        f"The estimate record for {_stem} cannot evidence a price:\n"
-        f"  {_why}\n\n"
-        f"The workbook is attached for repair, not for sending. To settle it:\n"
-        f"  1. Open the workbook in Excel and check the totals calculate (no #DIV/0!).\n"
-        f"  2. Run tools\\preflight_before_you_send_it.py against it — it names the "
-        f"blocking rows.\n"
-        f"  3. Fix the cause (usually a labour row with no throughput) and re-run the "
-        f"job.\n\n"
-        f"No quote accompanies this pack. Nothing in it should be read as a price."
+        f"What happened\n" + "".join(f"  {h}\n" for h in happened) + "\n"
+        f"What it means\n  {' '.join(means)}\n\n"
+        f"What to do\n" + "".join(f"  {n}. {s}\n" for n, s in enumerate(steps, 1)) + "\n"
+        f"{closing}"
+        + (f"\n\nFor the engine team: {_why}" if _why else "")
     )
     html = (
-        f"<h2 style='color:#7f2a2a'>{subject}</h2>"
-        f"<p>The estimate record for <b>{_stem}</b> cannot evidence a price:</p>"
-        f"<blockquote>{_why}</blockquote>"
-        f"<p>The workbook is attached <b>for repair, not for sending</b>. To settle it:</p>"
-        f"<ol><li>Open the workbook in Excel and check the totals calculate "
-        f"(no #DIV/0!).</li>"
-        f"<li>Run <code>tools\\preflight_before_you_send_it.py</code> against it — it "
-        f"names the blocking rows.</li>"
-        f"<li>Fix the cause (usually a labour row with no throughput) and re-run the "
-        f"job.</li></ol>"
-        f"<p><b>No quote accompanies this pack. Nothing in it should be read as a "
-        f"price.</b></p>"
+        f"<h2 style='color:#7f2a2a'>{_e(subject)}</h2>"
+        f"<h3>What happened</h3>" + "".join(f"<p>{_e(h)}</p>" for h in happened)
+        + f"<h3>What it means</h3><p>{_e(' '.join(means))}</p>"
+        f"<h3>What to do</h3><ol>" + "".join(f"<li>{_e(s)}</li>" for s in steps) + "</ol>"
+        f"<p><b>The workbook is attached so you can look at it. Do not send it or quote from "
+        f"it.</b> Nothing in it should be read as a price until a re-run has checked it.</p>"
+        + (f"<p style='color:#666;font-size:12px'>For the engine team: {_e(_why)}</p>"
+           if _why else "")
     )
     return {"subject": subject, "html": html, "text": text}
 

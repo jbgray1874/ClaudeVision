@@ -4766,6 +4766,13 @@ _STATED_SHOP_TIME_MARKERS = (
      "(config.PLATING_LOGISTICS)"),
     ("brush_before_plate_applied", ("brush_before_plate", "manual_labour_metal"),
      "the shop's stated brushing time before plating (config.BRUSH_BEFORE_PLATE)"),
+    # THE BENCH-FITTING RULE'S OWN TIME (D-364): Tony Ford's joinery bench rate inside its
+    # scope, the house allowance per part fitted outside it. The floor guard read it as a
+    # garbage derivation and put the department median in its place — 79 an hour, 45 seconds
+    # to fit a plywood bin together.
+    ("bench_work_applied", ("bench_work",),
+     "the bench-fitting rule for a board assembly (the joinery bench rate, or the house "
+     "allowance per part fitted)"),
 )
 
 

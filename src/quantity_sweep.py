@@ -271,9 +271,9 @@ def recache_workbooks(paths: List[Any]) -> int:
     todo = [Path(p) for p in (paths or []) if p and Path(p).is_file()]
     if not todo:
         return 0
-    from wep_readback_from_xlsx import _close_excel, _open_xlsx_excel_com
-    done = 0
-    for book in todo:
+    from wep_readback_from_xlsx import _close_excel, _open_xlsx_excel_com, with_busy_retry
+
+    def _refresh(book: Path) -> None:
         excel = com_wb = None
         try:
             excel, com_wb = _open_xlsx_excel_com(book, read_only=False)
@@ -282,11 +282,6 @@ def recache_workbooks(paths: List[Any]) -> int:
                 raise RuntimeError("Excel could only open this file read-only (is it open "
                                    "in Excel, or locked by another user?)")
             com_wb.Save()
-            done += 1
-        except Exception as exc:                                 # noqa: BLE001
-            print(f"   [qty-sweep] cache not refreshed for {book.name} "
-                  f"({type(exc).__name__}: {exc}) — totals compute when opened in Excel.",
-                  flush=True)
         finally:
             try:
                 if com_wb is not None:
@@ -298,6 +293,18 @@ def recache_workbooks(paths: List[Any]) -> int:
                     _close_excel(excel, None)
             except Exception:                                    # noqa: BLE001
                 pass
+
+    done = 0
+    for book in todo:
+        # A BUSY EXCEL IS WAITED FOR, NOT GIVEN UP ON (D-366). Each attempt opens, saves
+        # and closes its own Excel, so repeating one is safe.
+        try:
+            with_busy_retry(lambda: _refresh(book), f"refreshing {book.name}")
+            done += 1
+        except Exception as exc:                                 # noqa: BLE001
+            print(f"   [qty-sweep] cache not refreshed for {book.name} "
+                  f"({type(exc).__name__}: {exc}) — totals compute when opened in Excel.",
+                  flush=True)
     if done:
         print(f"   [qty-sweep] formula caches refreshed through Excel on {done} "
               f"workbook(s) — saved files now carry their own calculated totals.",

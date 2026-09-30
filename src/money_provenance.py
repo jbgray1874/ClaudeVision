@@ -58,17 +58,22 @@ def _rows(record: Mapping[str, Any], key: str, field: str) -> Optional[List[Any]
     return list(rows) if isinstance(rows, list) else None
 
 
-def describe(record: Mapping[str, Any], skip_reason: str = "") -> Dict[str, Any]:
+def describe(record: Mapping[str, Any], skip_reason: str = "",
+             cause: str = "") -> Dict[str, Any]:
     """The record's money provenance, with the evidence for it.
 
     `skip_reason` is what the run itself knows and the file cannot show: "Excel COM unavailable",
     "populate_workbook returned no path". Recording it turns "this record has no totals" into
     "this record has no totals BECAUSE", which is the difference between a mystery and a repair.
+
+    `cause` is the same fact as a code (wep_readback_from_xlsx's EXCEL_BUSY and the rest), so
+    the covering note can say what to DO. A busy Excel and a #DIV/0! call for different
+    repairs, and a note that cannot tell them apart gives the wrong one (D-366).
     """
     if not isinstance(record, Mapping):
         return {"schema": SCHEMA, "state": PRE_WORKBOOK,
                 "can_evidence_a_price": False,
-                "why": "not a record", "evidence": {}}
+                "why": "not a record", "cause": cause or "", "evidence": {}}
 
     final_estimate = _block(record, "final_estimate")
     totals = final_estimate.get("totals") if isinstance(
@@ -88,6 +93,8 @@ def describe(record: Mapping[str, Any], skip_reason: str = "") -> Dict[str, Any]
     }
     if skip_reason:
         evidence["workbook_stage_skipped_because"] = skip_reason
+    if cause:
+        evidence["workbook_stage_cause"] = cause
 
     if present:
         state = EXCEL_CALCULATED
@@ -100,6 +107,11 @@ def describe(record: Mapping[str, Any], skip_reason: str = "") -> Dict[str, Any]
         state = ACCEPTED_ROWS_ONLY
         why = ("the workbook's accepted row grouping reached this record but its calculated "
                "totals did not, so parts and operations are attributable and money is not")
+        # THE REASON WAS COLLECTED AND DROPPED HERE. Only the pre-workbook branch carried it,
+        # so on the 14:12 M&S run a busy Excel reached the covering note as this sentence
+        # alone, and the note guessed "usually a labour row with no throughput" (D-366).
+        if skip_reason:
+            why += f". The totals were not read back: {skip_reason}"
     else:
         state = PRE_WORKBOOK
         why = ("this record holds what the engine handed TO Excel, not what Excel produced. Its "
@@ -116,13 +128,14 @@ def describe(record: Mapping[str, Any], skip_reason: str = "") -> Dict[str, Any]
         # rule, and no surface can accidentally treat an engine sum as an accepted price.
         "can_evidence_a_price": state == EXCEL_CALCULATED and not missing,
         "why": why,
+        "cause": cause or "",
         "evidence": evidence,
     }
 
 
-def stamp(record: Dict[str, Any], skip_reason: str = "") -> Dict[str, Any]:
+def stamp(record: Dict[str, Any], skip_reason: str = "", cause: str = "") -> Dict[str, Any]:
     """Write the verdict into the record under `money_provenance` and return it."""
-    verdict = describe(record, skip_reason=skip_reason)
+    verdict = describe(record, skip_reason=skip_reason, cause=cause)
     if isinstance(record, dict):
         record["money_provenance"] = verdict
     return verdict

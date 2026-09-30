@@ -38,15 +38,17 @@ def test_the_subject_leads_with_do_not_send():
     note = do_not_send_note("12349-02_20260912", "final_estimate.totals is absent")
     assert note["subject"].startswith("DO NOT SEND — 12349-02_20260912")
     for body in (note["text"], note["html"]):
-        assert "final_estimate.totals is absent" in body
-        assert "repair" in body.lower()
+        # The record's own words are kept, at the foot, for whoever fixes the engine (D-366).
+        assert "For the engine team: final_estimate.totals is absent" in body
+        assert "Do not send it or quote from it" in body
         assert "Nothing in it should be read as a price" in body
 
 
 def test_an_empty_reason_still_produces_a_refusal():
     note = do_not_send_note("", "")
     assert note["subject"].startswith("DO NOT SEND")
-    assert "cannot evidence a price" in note["text"]
+    assert "the price could not be checked" in note["subject"]
+    assert "What to do" in note["text"]
 
 
 # ── the calculated values survive the close ──────────────────────────────────────────────

@@ -202,7 +202,7 @@ def test_the_run_stamps_money_provenance_unconditionally():
     must not sit inside `if xlsx_path:`."""
     source = (ROOT / "src" / "main.py").read_text(encoding="utf-8", errors="ignore")
     assert "import money_provenance as _mp" in source
-    assert "_mp.stamp(_mp_doc, skip_reason=_mp_skip)" in source
+    assert "_mp.stamp(_mp_doc, skip_reason=_mp_skip, cause=_mp_cause)" in source
     # the reason is collected for every way the stage can fail to produce totals
     for reason in ("populate_workbook returned no path",
                    "the read-back could not obtain the calculated totals",

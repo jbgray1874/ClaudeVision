@@ -1703,6 +1703,16 @@ OVERSIZE_SHEET_SIZES_MM = {
     "MILD STEEL": [(4000, 1830), (4000, 2000)],
 }
 
+# WHEN TWO STOCKED SHEETS NEST A BOARD OR PLASTIC BLANK ALMOST EQUALLY WELL (D-364).
+# The sheet is chosen by YIELD (the share of the sheet the parts use), because across sheet
+# sizes the count of parts is not the yield: M&S's 564 x 564 plywood base got 10 a sheet on
+# 3050 x 1525 (68% used) against 8 on 2440 x 1220 (86% used). But a yield difference smaller
+# than this many percentage points buys nothing worth changing sheet for. Inside it, the sheet
+# that holds more parts stands, as it always did (the 11650 door, 53.2% against 53.0%;
+# Howard's L-stand, 61.5% against 61.3%). Sheet steel is unaffected: it takes the smallest
+# stocked sheet it nests on.
+SHEET_CHOICE_YIELD_TIE_PCT = 1.0
+
 MATERIAL_DENSITY_KG_PER_M3 = {
     "MILD STEEL": 7850,
     "MILD_STEEL": 7850,

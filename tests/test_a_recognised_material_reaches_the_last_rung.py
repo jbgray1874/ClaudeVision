@@ -69,7 +69,11 @@ def test_a_recognised_plastic_is_nested_as_plastic_not_as_steel():
     """The half that was already right, kept honest: a 2mm PETG panel nests on the plastic
     sheet, not on 2500 x 1250 steel."""
     sheet = estimator.select_sheet_size("PETG", 1570.0, 525.0)
-    assert sheet["candidate_sheet_size_mm"] == [3050, 2050]
+    # 2050 x 1520, not 3050 x 2050, since D-364 chooses by yield: 2 a sheet using 52.9% of it
+    # beats 3 a sheet using 39.5% (1.56 m2 of PETG a panel against 2.08). Both are plastic
+    # sheets. Neither is the 2500 x 1250 steel sheet this test exists to keep it off.
+    assert sheet["candidate_sheet_size_mm"] == [2050, 1520]
+    assert sheet["candidate_sheet_size_mm"] != [2500, 1250]
     assert "steel" not in str(sheet.get("nesting_rule") or "").lower()
 
 

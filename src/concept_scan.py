@@ -59,7 +59,8 @@ from typing import Any, Dict, List, Mapping, Optional
 #   c1  first cut — "name the parts you can see"
 #   c2  the make list: an enclosure is its panels, and every made line names its work
 #   c3  banded edges must be NAMED before edging is charged — see EDGE_BASIS_FIELD
-CONCEPT_PROMPT_VERSION = "c3"
+#   c4  print is always its own graphic line, never folded into a board's material (D-365)
+CONCEPT_PROMPT_VERSION = "c4"
 
 SOURCE = "vision_concept"
 
@@ -188,6 +189,9 @@ THE DIFFERENCE MATTERS AND IT IS THE WHOLE TASK:
   each its own line with its own blank size. Never return a carcass as a single blank.
 - A printed face is TWO lines where it is a print applied to a board: the board, and the
   applied graphic.
+- PRINT IS ALWAYS ITS OWN LINE, even when it goes straight onto the board: one "graphic"
+  line per printed face (or per print set), with the printed size. Never fold the print into
+  a board's material ("printed plywood") — the board and its print are costed separately.
 - Fittings you can see the effect of are lines too: a lid that lifts has a hinge; a unit on
   wheels has castors; panels that meet are screwed or glued.
 - Give the quantity PER UNIT (4 castors = one line, quantity 4 — never 4 lines, never "a set").
@@ -233,7 +237,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "151638566ab8"
+_PROMPT_FINGERPRINT = "93eff7e3c858"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -446,6 +450,57 @@ def _slug(text: Any, fallback: str) -> str:
     return out[:24] or fallback
 
 
+_PRINT_WORDS = re.compile(r"\bPRINT(?:ED|S|ING)?\b|\bGRAPHICS?\b", re.IGNORECASE)
+
+
+def _with_print_lines(answer: Dict[str, Any]) -> Dict[str, Any]:
+    """The answer with a print line for every panel described as printed, when none came back.
+
+    PRINT FOLDED INTO A BOARD IS PRINT NOBODY PAYS FOR (D-365). The M&S plywood read, 14:12:
+    five panels came back as "green printed plywood" and not one graphic line, so the book
+    priced the board and charged nothing for the print Dave's brief asked for. The prompt now
+    says print is always its own line; this is the net under it. Only when the answer has NO
+    graphic line at all — so a model that did list the print is never double-counted — each
+    fabricated panel whose material names print gets one print line of its own face size,
+    marked as assumed, priced as a purchase and put to the estimator to confirm."""
+    parts = [p for p in (answer.get("parts") or []) if isinstance(p, dict)]
+    if not parts or any(_concept_kind(p.get("kind")) == "graphic" for p in parts):
+        return answer
+    added: List[Dict[str, Any]] = []
+    for p in parts:
+        if _concept_kind(p.get("kind")) != "fabricated":
+            continue
+        said = " ".join(str(p.get(k) or "") for k in ("sighted_material", "material_guess"))
+        if not _PRINT_WORDS.search(said):
+            continue
+        blank = p.get("assumed_blank_mm") or {}
+        panel = str(p.get("name") or "panel").strip()
+        added.append({
+            "name": f"PRINT — {panel}",
+            "kind": "graphic",
+            "sighted_material": "printed graphic",
+            "material_guess": "BOUGHT_IN",
+            "assumed_blank_mm": {"length": blank.get("length") or 0,
+                                 "width": blank.get("width") or 0, "thickness": 0},
+            "quantity": p.get("quantity") or 1,
+            "quantity_basis": f"one print per printed {panel} (assumed)",
+            "operations": [],
+            "from_brief": [],
+            "seen": str(p.get("seen") or ""),
+            "why_size": f"the face of {panel}",
+            "_minted_print_for": panel,
+            # What the model SAW, for the flag. The guess is a material code ("PLYWOOD") and
+            # joined to the sighting it read "green printed plywood PLYWOOD".
+            "_panel_said": (str(p.get("sighted_material") or "").strip()
+                            or str(p.get("material_guess") or "").strip()),
+        })
+    if not added:
+        return answer
+    out = dict(answer)
+    out["parts"] = list(answer.get("parts") or []) + added
+    return out
+
+
 def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
@@ -457,6 +512,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
     from source_precedence import apply_field                       # noqa: WPS433
 
     parts: List[Dict[str, Any]] = []
+    answer = _with_print_lines(answer)
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -726,6 +782,14 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
             # on top of it asks for a size before anybody has said what the thing is.
             record["review_flags"].append(
                 "CONCEPT: no size could be sighted — enter this part's dimensions")
+        if sighted.get("_minted_print_for"):
+            record["concept_print_assumed"] = True
+            record["review_flags"].append(
+                f"CONCEPT: print ASSUMED on {sighted['_minted_print_for']} — the panel came "
+                f"back as '{sighted.get('_panel_said') or 'printed'}' with no print line of "
+                f"its own, so one print of the panel's face is costed as a purchase. Confirm "
+                f"the print method (direct to board or applied), the faces printed and the "
+                f"price before release")
         record["concept_assumptions"] = assumed
         parts.append(record)
     return parts

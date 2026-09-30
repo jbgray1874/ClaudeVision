@@ -194,10 +194,14 @@ def test_his_pilot_rate_does_not_govern_plywood_or_timber():
     was one faced-board tray. Outside that family the line still EXISTS — the BOM's own
     structure says the children are fitted — but it takes the house bench allowance and
     says out loud that his pilot does not govern it."""
+    # PER PART FITTED (D-364): the allowance is min_per_part, and this tray has three
+    # children. Charged once for the whole assembly, M&S's eight-panel plywood bin was fitted
+    # in two minutes.
     house = float((config.LABOUR_RULES.get("bench_work") or {}).get("min_per_part", 2.0))
+    fitted = len(_assembly()["assembly_children"])
     for board in ("PLYWOOD", "BIRCH PLY", "TIMBER", "MDF"):
         est, mins = _bench(_assembly(normalized_material=board))
-        assert mins == house, f"{board}: {mins} — Tony's 30 min must not reach this"
+        assert mins == house * fitted, f"{board}: {mins} — Tony's 30 min must not reach this"
         f = _flag_text(est)
         assert "does NOT govern" in f, board
         assert "SCOPED PILOT" not in f, board

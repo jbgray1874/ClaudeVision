@@ -51,6 +51,124 @@ _EXCEL_ERROR_SENTINELS = frozenset({
 _IMPLAUSIBLE_TOTAL = 1e8
 
 
+# EXCEL SAYING "NOT NOW" IS NOT EXCEL SAYING "NO" (D-366). These are the two answers COM gives
+# a caller when Excel is busy: still calculating, still starting, or waiting behind a dialog.
+# RPC_E_SERVERCALL_RETRYLATER literally tells the caller to retry later. The M&S plywood run
+# at 14:12 on 30 Sep treated the first one as final. The read-back gave up, the record lost
+# its totals and the pack went out as DO NOT SEND, even though the same run's last pass
+# through Excel calculated and saved that workbook minutes later.
+_EXCEL_BUSY_HRESULTS = frozenset({
+    -2147417846,  # RPC_E_SERVERCALL_RETRYLATER  "The message filter indicated that the
+                  #                               application is busy."
+    -2147418111,  # RPC_E_CALL_REJECTED          "Call was rejected by callee."
+})
+
+# The waits between attempts, in seconds, on the house retry ladder: five attempts and 30 s
+# of waiting before a busy Excel counts as a failure.
+BUSY_RETRY_WAITS_S: Tuple[float, ...] = (2, 4, 8, 16)
+
+# WHY THE LAST READ-BACK CAME BACK EMPTY, so the run can put the reason on the record (D-366).
+# stamp_real_totals_into_json returns None for half a dozen different reasons, and the record
+# could only ever say "the read-back could not obtain the calculated totals". That is how a
+# busy Excel reached an estimator as "usually a labour row with no throughput".
+EXCEL_BUSY = "excel_busy"
+EXCEL_UNAVAILABLE = "excel_unavailable"
+EXCEL_FAILED = "excel_failed"
+TOTALS_NOT_CALCULATED = "totals_not_calculated"
+WORKBOOK_MISSING = "workbook_missing"
+RECORD_UNREADABLE = "record_unreadable"
+
+_LAST_FAILURE: Dict[str, Any] = {}
+
+
+def last_failure() -> Dict[str, Any]:
+    """Why the most recent read-back returned nothing: {"cause", "detail", ...}, or {}."""
+    return dict(_LAST_FAILURE)
+
+
+def _failed(cause: str, detail: str, **extra: Any) -> None:
+    _LAST_FAILURE.clear()
+    _LAST_FAILURE.update({"cause": cause, "detail": detail, **extra})
+
+
+class ExcelStayedBusy(RuntimeError):
+    """Excel answered busy on every attempt. It is a fault of the machine, not the workbook."""
+
+    def __init__(self, what: str, message: str, attempts: int, waited_s: float):
+        super().__init__(f"{what}: Excel stayed busy ({message}) through {attempts} "
+                         f"attempt(s) over {waited_s:g}s")
+        self.message, self.attempts, self.waited_s = message, attempts, waited_s
+
+
+def _com_message(exc: BaseException) -> str:
+    args = getattr(exc, "args", ()) or ()
+    if len(args) > 1 and isinstance(args[1], str) and args[1].strip():
+        return args[1].strip()
+    return str(exc).strip() or type(exc).__name__
+
+
+def excel_was_busy(exc: BaseException) -> bool:
+    """True when a COM failure is Excel saying "busy, try later" and not a real fault.
+
+    pywintypes.com_error carries the HRESULT as `.hresult` and as args[0]. A busy answer that
+    came through a dispatch call can also carry it as the scode in excepinfo (args[2][5]).
+    Only a COM error is read this way: any other exception is never "busy"."""
+    if not (hasattr(exc, "hresult") or type(exc).__name__ == "com_error"):
+        return False
+    codes: List[Any] = [getattr(exc, "hresult", None)]
+    args = getattr(exc, "args", ()) or ()
+    if args:
+        codes.append(args[0])
+        if len(args) > 2 and isinstance(args[2], tuple) and len(args[2]) > 5:
+            codes.append(args[2][5])
+    return any(isinstance(c, int) and not isinstance(c, bool) and c in _EXCEL_BUSY_HRESULTS
+               for c in codes)
+
+
+def with_busy_retry(fn, what: str, waits: Optional[Tuple[float, ...]] = None, sleep=None):
+    """Run fn(), waiting and running it again for as long as Excel answers busy.
+
+    Returns (result, attempts, waited_s). A failure that is NOT a busy answer is raised on the
+    first attempt, unchanged. Retrying a real fault only delays the report of it. A busy
+    answer on the last attempt raises ExcelStayedBusy, which says how long the engine
+    waited. fn must be safe to repeat: each caller opens, uses and closes its own Excel."""
+    import time
+    waits = BUSY_RETRY_WAITS_S if waits is None else tuple(waits)
+    sleep = time.sleep if sleep is None else sleep
+    waited = 0.0
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return fn(), attempt, waited
+        except Exception as exc:                                     # noqa: BLE001
+            if not excel_was_busy(exc):
+                raise
+            if attempt > len(waits):
+                raise ExcelStayedBusy(what, _com_message(exc), attempt, waited) from exc
+            wait = float(waits[attempt - 1])
+            print(f"   [excel] {what}: Excel is busy (\"{_com_message(exc)}\") — waiting "
+                  f"{wait:g}s and trying again (attempt {attempt + 1} of {len(waits) + 1})",
+                  flush=True)
+            sleep(wait)
+            waited += wait
+
+
+def _cell_value(com_ws, r: int, c: int) -> Any:
+    """One cell's value, or None when the cell cannot be read.
+
+    A BUSY EXCEL IS NOT A BLANK CELL (D-366). Every scan here reads a failed cell as empty,
+    which is right for one odd cell and wrong for an Excel that is not answering. That way a
+    busy Excel reads as a sheet with no totals, which is reported as a workbook fault. The
+    busy answer is raised instead, and with_busy_retry asks again."""
+    try:
+        return com_ws.Cells(r, c).Value
+    except Exception as exc:                                         # noqa: BLE001
+        if excel_was_busy(exc):
+            raise
+        return None
+
+
 def _is_excel_error(v: Any) -> bool:
     """True if a COM cell value is an Excel error sentinel (errored formula), not a real number."""
     return isinstance(v, int) and not isinstance(v, bool) and v in _EXCEL_ERROR_SENTINELS
@@ -186,10 +304,7 @@ def _scan_total_cell(com_ws, label_needles: Tuple[str, ...], max_row: int,
     for r in range(1, max_row + 1):
         _has = False
         for c in range(1, min(max_col, 16) + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                continue
+            v = _cell_value(com_ws, r, c)
             if isinstance(v, str) and any(n in v.lower() for n in label_needles):
                 _has = True
                 break
@@ -208,10 +323,7 @@ def _scan_total_cell(com_ws, label_needles: Tuple[str, ...], max_row: int,
         # and 0.0 for a zero, so the two are distinguishable at the source.
         best = best_zero = None
         for c in range(1, max_col + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                continue
+            v = _cell_value(com_ws, r, c)
             f = _safe_float(v)
             if f is None:
                 continue
@@ -332,10 +444,7 @@ def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: i
     for r in range(1, max_row + 1):
         row_has_label = False
         for c in range(1, min(max_col, 16) + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                v = None
+            v = _cell_value(com_ws, r, c)
             if isinstance(v, str):
                 low = v.lower()
                 if any(n in low for n in label_needles):
@@ -346,10 +455,7 @@ def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: i
         # rightmost numeric on this row = the computed subtotal
         best = None
         for c in range(1, max_col + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                v = None
+            v = _cell_value(com_ws, r, c)
             f = _safe_float(v)
             if f is not None and f != 0:
                 best = f
@@ -362,7 +468,9 @@ def _used_bounds(com_ws) -> Tuple[int, int]:
     try:
         ur = com_ws.UsedRange
         return int(ur.Rows.Count) + 5, int(ur.Columns.Count) + 2
-    except Exception:
+    except Exception as exc:
+        if excel_was_busy(exc):
+            raise
         return 240, 34
 
 
@@ -416,10 +524,7 @@ def _header_map(com_ws, header_row: int, keys: Dict[str, str],
     """{normalised field name: column index} by matching header text on one row."""
     found: Dict[str, int] = {}
     for c in range(1, max_col + 1):
-        try:
-            v = com_ws.Cells(header_row, c).Value
-        except Exception:
-            continue
+        v = _cell_value(com_ws, header_row, c)
         if not isinstance(v, str):
             continue
         t = " ".join(v.split()).strip().lower()
@@ -438,10 +543,7 @@ def _find_header_row(com_ws, first_data_row: int, needles: Tuple[str, ...],
     for r in range(max(1, first_data_row - 6), first_data_row + 1):
         row_text = ""
         for c in range(1, min(max_col, 24) + 1):
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                continue
+            v = _cell_value(com_ws, r, c)
             if isinstance(v, str):
                 row_text += " " + v.lower()
         if all(n in row_text for n in needles):
@@ -495,10 +597,7 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
                  header_row=hr, mapped=sorted(cols))
     out = []
     for r in range(first_row, last_row + 1):
-        try:
-            ident = com_ws.Cells(r, cols[id_field]).Value
-        except Exception:
-            continue
+        ident = _cell_value(com_ws, r, cols[id_field])
         if ident is None or not str(ident).strip():
             continue
         row: Dict[str, Any] = {"workbook_row": r}
@@ -522,10 +621,7 @@ def _read_block(com_ws, first_row: int, last_row: int, keys: Dict[str, str],
             except Exception:                                         # noqa: BLE001
                 pass
         for field, c in cols.items():
-            try:
-                v = com_ws.Cells(r, c).Value
-            except Exception:
-                v = None
+            v = _cell_value(com_ws, r, c)
             if _is_excel_error(v):
                 row[field] = None
             elif isinstance(v, str):
@@ -614,8 +710,8 @@ def read_final_rows(com_ws, max_col: int) -> Dict[str, list]:
     }
 
 
-def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
-    """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals."""
+def _read_totals_once(xlsx_path: Path, sheet_name: str) -> Optional[Dict[str, Any]]:
+    """One attempt: open the populated .xlsx via Excel COM, calc, read the totals, close."""
     excel = com_wb = None
     try:
         # READ-ONLY, AND DELIBERATELY SO. Caching the calculated values into the file is a
@@ -627,7 +723,9 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
         excel, com_wb = _open_xlsx_excel_com(xlsx_path, prime_sheet=sheet_name)
         try:
             com_ws = com_wb.Worksheets(sheet_name)
-        except Exception:
+        except Exception as _wexc:
+            if excel_was_busy(_wexc):
+                raise
             com_ws = com_wb.ActiveSheet
         max_row, max_col = _used_bounds(com_ws)
         out: Dict[str, Any] = {}
@@ -637,9 +735,14 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
                 out[key] = round(val, 4)
         # Same COM session, same calculated state: opening Excel twice would be slow and
         # could read a differently-calculated file. Failure here must not lose the totals.
+        # A BUSY answer is the exception: it is raised so the whole read is tried again.
+        # Totals kept without their rows never become a final_estimate, so the record would
+        # still read as "no money", just without saying why.
         try:
             out["_final_rows"] = read_final_rows(com_ws, max_col)
         except Exception as _rexc:
+            if excel_was_busy(_rexc):
+                raise
             print(f"   [wep-readback] calculated rows not read ({_rexc}) — totals kept.",
                   flush=True)
         # What the template adds between the subtotals and the price, read from the unit
@@ -649,14 +752,45 @@ def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[
                 com_ws, out.get("material"), out.get("labour"), out.get("unit"),
                 max_row, max_col)
         except Exception as _cexc:
+            if excel_was_busy(_cexc):
+                raise
             print(f"   [wep-readback] unit-price composition not read ({_cexc}).", flush=True)
         return out or None
-    except Exception as exc:
-        print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
-        return None
     finally:
         if excel is not None:
             _close_excel(excel, com_wb)
+
+
+def read_real_totals(xlsx_path: Path, sheet_name: str = "Estimate") -> Optional[Dict[str, float]]:
+    """Open the populated .xlsx via Excel COM, calc, read the three authoritative totals.
+
+    A busy Excel is waited for and asked again (with_busy_retry). Anything else is reported
+    once. Either way, last_failure() says what went wrong, in words the covering note can use."""
+    _LAST_FAILURE.clear()
+    try:
+        out, attempts, waited = with_busy_retry(
+            lambda: _read_totals_once(xlsx_path, sheet_name),
+            "reading the calculated totals")
+        if attempts > 1:
+            print(f"   [wep-readback] Excel answered on attempt {attempts}, after {waited:g}s "
+                  f"of waiting", flush=True)
+        return out
+    except ExcelStayedBusy as exc:
+        _failed(EXCEL_BUSY,
+                f"Excel was busy — it answered \"{exc.message}\" on all {exc.attempts} "
+                f"attempts, over {exc.waited_s:g} seconds",
+                attempts=exc.attempts, waited_s=exc.waited_s, excel_said=exc.message)
+        print(f"   [wep-readback] Excel stayed busy through {exc.attempts} attempts over "
+              f"{exc.waited_s:g}s (\"{exc.message}\") — JSON left unchanged.", flush=True)
+        return None
+    except Exception as exc:
+        if isinstance(exc, ImportError) or "only supported on Windows" in str(exc):
+            _failed(EXCEL_UNAVAILABLE, f"this machine cannot run Excel ({exc})")
+        else:
+            _failed(EXCEL_FAILED, f"Excel failed while opening or calculating the workbook "
+                                  f"({type(exc).__name__}: {_com_message(exc)})")
+        print(f"   [wep-readback] Excel COM read failed ({type(exc).__name__}: {exc}) — JSON left unchanged.", flush=True)
+        return None
 
 
 # ---- write the real totals into the JSON's WEP + cost_breakdown ----
@@ -776,15 +910,24 @@ def _explain_unpriced_rows(rows: List[Dict[str, Any]], es: Dict[str, Any]) -> in
 
 def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str = "Estimate") -> Optional[Dict[str, Any]]:
     xp, jp = Path(xlsx_path), Path(json_path)
+    _LAST_FAILURE.clear()
     if not xp.exists():
+        _failed(WORKBOOK_MISSING, f"the workbook was not found at {xp}")
         print(f"   [wep-readback] xlsx not found: {xp} — skipped.", flush=True)
         return None
     if not jp.exists():
+        _failed(RECORD_UNREADABLE, f"the estimate record was not found at {jp}")
         print(f"   [wep-readback] json not found: {jp} — skipped.", flush=True)
         return None
 
     totals = read_real_totals(xp, sheet_name=sheet_name)
     if not totals or "unit" not in totals:
+        if not _LAST_FAILURE:
+            # Excel opened and calculated the book and answered every question; the price
+            # cell was simply blank or an error. That one IS a fault in the workbook.
+            _failed(TOTALS_NOT_CALCULATED,
+                    "Excel calculated the workbook, but its Total Unit Cost Price came back "
+                    "blank or as an error (#DIV/0!, #VALUE!)")
         print("   [wep-readback] could not read authoritative unit cost — JSON left unchanged (old WEP retained).", flush=True)
         return None
 
@@ -797,11 +940,13 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     try:
         summary = json.loads(jp.read_text(encoding="utf-8"))
     except Exception as exc:
+        _failed(RECORD_UNREADABLE, f"the estimate record could not be read ({exc})")
         print(f"   [wep-readback] JSON read failed ({exc}) — skipped.", flush=True)
         return None
 
     es = summary.get("estimate_summary")
     if not isinstance(es, dict):
+        _failed(RECORD_UNREADABLE, "the estimate record has no estimate_summary to stamp")
         print("   [wep-readback] JSON has no estimate_summary — skipped.", flush=True)
         return None
 
@@ -897,6 +1042,7 @@ def stamp_real_totals_into_json(xlsx_path: str, json_path: str, sheet_name: str 
     try:
         jp.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     except Exception as exc:
+        _failed(RECORD_UNREADABLE, f"the estimate record could not be written ({exc})")
         print(f"   [wep-readback] JSON write failed ({exc}) — JSON left unchanged.", flush=True)
         return None
 

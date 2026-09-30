@@ -1264,6 +1264,16 @@ def main() -> None:
                 f"{scan_label}-"
                 f"{__import__('datetime').datetime.now():%Y%m%d-%H%M%S}"
                 + (f"-{_git_rev}" if _git_rev else ""))
+            # THE CUSTOMER THE RUN WAS GIVEN IS THE CUSTOMER (D-364). --customer is documented
+            # as authoritative, but only the deliverables read it: the workbook guessed from the
+            # job folder's path, which a portal run stages under the client and a run on a
+            # local folder does not — the 14:12 M&S plywood book was headed with its own
+            # drawing number as the customer. The name also selects the customer's commercial
+            # terms (config.CUSTOMER_COMMERCIAL_TERMS), so that book also lost M&S's 1.8%
+            # rebate and /0.92 absorption and went out at the template's 0 and /0.93, about
+            # 2.9% light. Every portal run of the same pack had them.
+            if getattr(args, "customer", None) and str(args.customer).strip():
+                summary["customer"] = str(args.customer).strip()
             xlsx_path = populate_workbook(summary, str(scan_label))
             if xlsx_path:
                 print(f"\nAI Estimate Sheet: {Path(xlsx_path).resolve()}")
@@ -1446,22 +1456,37 @@ def main() -> None:
         _recache_books: List[str] = [str(xlsx_path)] if xlsx_path else []
 
         _mp_skip = ""
+        # THE REASON AS A CODE TOO (D-366), so the covering note can name the repair: a busy
+        # Excel is re-run, a #DIV/0! is traced. One sentence for both sent the estimator
+        # hunting a labour row on the 14:12 M&S run, when Excel had simply been busy.
+        _mp_cause = ""
+        # Whether the last pass through Excel (the formula-cache refresh) managed to calculate
+        # and save the workbook. None = never attempted. The note uses it to tell a passing
+        # hold-up from an Excel that is unreachable.
+        _recached_n: Optional[int] = None
         if not xlsx_path:
             _mp_skip = ("populate_workbook returned no path, so no workbook was written and "
                         "nothing could be read back")
+            _mp_cause = "no_workbook"
         if xlsx_path:
             try:
                 from wep_readback_from_xlsx import stamp_real_totals_into_json as _stamp_wep
+                from wep_readback_from_xlsx import last_failure as _wep_last_failure
                 _canon_json = (summary.get("saved_output_paths") or {}).get("json")
                 if _canon_json and Path(_canon_json).exists():
                     if _stamp_wep(str(xlsx_path), str(_canon_json)) is None:
-                        _mp_skip = ("the read-back could not obtain the calculated totals from "
+                        _wep_fail = _wep_last_failure()
+                        _mp_skip = (_wep_fail.get("detail") or
+                                    "the read-back could not obtain the calculated totals from "
                                     "the workbook (see the [wep-readback] line above)")
+                        _mp_cause = str(_wep_fail.get("cause") or "")
                 else:
                     _mp_skip = "the canonical JSON path was not found when the read-back ran"
+                    _mp_cause = "record_unreadable"
                     print("   [wep-readback] canonical JSON path not found — readback skipped.", flush=True)
             except Exception as _wep_exc:
                 _mp_skip = f"the read-back raised {type(_wep_exc).__name__}: {_wep_exc}"
+                _mp_cause = "readback_raised"
                 print(f"   [wep-readback] skipped ({_wep_exc}) — JSON unchanged, run continues.", flush=True)
 
         # ── THE ACCEPTED ROWS REACH THE FILE EVEN WHEN EXCEL NEVER RAN ─────────────
@@ -1509,7 +1534,7 @@ def main() -> None:
             if _mp_json and Path(_mp_json).exists():
                 with open(_mp_json, encoding="utf-8") as _fh_mp:
                     _mp_doc = json.load(_fh_mp)
-                _mp_verdict = _mp.stamp(_mp_doc, skip_reason=_mp_skip)
+                _mp_verdict = _mp.stamp(_mp_doc, skip_reason=_mp_skip, cause=_mp_cause)
                 # WHAT THIS MACHINE COULD NOT DO, ON THE RECORD. Same principle: a console
                 # warning nobody kept is not a record. An estimate produced without pyodbc is
                 # costed from fallbacks, and a reader months later has no other way to know.
@@ -1929,7 +1954,7 @@ def main() -> None:
             if _recache_books:
                 try:
                     from quantity_sweep import recache_workbooks as _recache
-                    _recache(_recache_books)
+                    _recached_n = _recache(_recache_books)
                 except Exception as _rc_exc:                     # noqa: BLE001
                     print(f"   [workbook] formula caches not refreshed ({_rc_exc}) — the "
                           f"totals compute when opened in Excel, but the saved files read "
@@ -2288,6 +2313,20 @@ def main() -> None:
                 print(f"   [covering-note] DO NOT SEND — this record cannot evidence a "
                       f"price ({(_mp_block or {}).get('state')}); the covering email is "
                       f"replaced by a refusal and the quote is held", flush=True)
+            # THE CAUSE, NOT JUST THE STATE (D-366). The refusal used to be handed the record's
+            # one technical sentence, and it gave the #DIV/0! repair for every cause. It now
+            # gets the cause and the plain reason, and whether Excel calculated the book later
+            # in the run, so it can say what to do.
+            _mp_ev = (_mp_block or {}).get("evidence") or {}
+            _dns_args = {
+                "why": str((_mp_block or {}).get("why") or "") if _money_refused else "",
+                "cause": str((_mp_block or {}).get("cause") or "") if _money_refused else "",
+                "detail": (str(_mp_ev.get("workbook_stage_skipped_because") or "")
+                           if _money_refused else ""),
+                "quantity_why": _qty_why,
+                "recalculated_later": None if _recached_n is None else bool(_recached_n),
+                "money_refused": _money_refused,
+            }
 
             # ── WHAT A PERSON IS ACTUALLY SENT ───────────────────────────────────────
             #
@@ -2324,10 +2363,7 @@ def main() -> None:
                 from estimate_explained import covering_email as _covering_email
                 if _money_refused or _qty_refused:
                     from estimate_explained import do_not_send_note as _dns_note
-                    _why_bits = [b for b in
-                                 (str((_mp_block or {}).get("why") or "") if _money_refused
-                                  else "", _qty_why) if b]
-                    _note = _dns_note(Path(xlsx_path).stem, "; ".join(_why_bits))
+                    _note = _dns_note(Path(xlsx_path).stem, **_dns_args)
                 else:
                     _note = _covering_email(
                         Path(xlsx_path),

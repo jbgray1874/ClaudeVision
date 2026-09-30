@@ -3777,6 +3777,7 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
     _steel_rule = (_costed_facts.nesting_rule_for(material) == "workbook_sheet_steel_K38")
     if _steel_rule:
         sizes = sorted(sizes, key=lambda _s: float(_s[0]) * float(_s[1]))
+    _yield_tie = float(getattr(config, "SHEET_CHOICE_YIELD_TIE_PCT", 1.0) or 0.0)
     for sheet_length, sheet_width in sizes:
         if _steel_rule and best is not None:
             break
@@ -3798,8 +3799,24 @@ def select_sheet_size(material: Optional[str], blank_length: Optional[float], bl
             }
             # The better yield wins; on a tie the unturned blank stands, because turning is
             # a change somebody may have to explain and a tie buys nothing for it.
-            if best is None or qty > best["parts_per_sheet"]:
+            #
+            # YIELD, NOT COUNT (D-364). This compared parts-per-sheet across sheets of
+            # different sizes, so the bigger sheet always won on count: M&S's 564 x 564
+            # plywood base went on 3050 x 1525 (10 a sheet, 68% used) rather than 2440 x 1220
+            # (8 a sheet, 86% used) — 0.465 m2 of board per base instead of 0.372. On one
+            # sheet size the two tests agree (the blank's area is the same both ways round);
+            # across sizes only utilisation is the yield. A difference inside
+            # config.SHEET_CHOICE_YIELD_TIE_PCT buys nothing, so there the count decides as
+            # before, and a near-tie never moves a job to another sheet.
+            if best is None:
                 best = candidate
+            else:
+                _gain = candidate["utilisation_pct"] - best["utilisation_pct"]
+                if abs(_gain) >= _yield_tie:
+                    if _gain > 0:
+                        best = candidate
+                elif qty > best["parts_per_sheet"]:
+                    best = candidate
 
     # A BLANK NO STOCKED SHEET HOLDS IS BOUGHT ON A BIGGER ONE, PROVISIONALLY — NOT £0.
     # 12645's 3,020 mm covers: 20 mm past the largest stocked 3000 x 1500. The steel is priced
@@ -8248,8 +8265,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # throughput guard to correct a figure we already know. Tony's 2/hr is 30 minutes a
         # tray; the set-up is the department's own and is charged once per order, which is
         # why it is NOT added here.
+        # PER PART FITTED (D-364). The allowance is named min_per_part and was charged once
+        # for the whole assembly: M&S's plywood bin — eight panels, a lid on two hinges, four
+        # castors — was fitted in 2 minutes, and the floor guard then cut that to 45 seconds.
+        _fitted = len(part.get("assembly_children") or []) or 1
         _house_min = float((config.LABOUR_RULES.get("bench_work") or {}).get(
-            "min_per_part", 2.0))
+            "min_per_part", 2.0)) * _fitted
         _bench_rate = float((getattr(config, "SHOP_STATED", None) or {}).get(
             "joinery_bench_parts_per_hour") or 0.0)
         if _in_tony_scope and _bench_rate > 0:
@@ -8259,7 +8280,10 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                           f"a SCOPED PILOT measured on faced/laminated board")
         else:
             _bench_min = _house_min
-            _bench_why = (f"the house bench allowance — this assembly is {_mat_bench or 'board'}, "
+            _bench_why = (f"the house bench allowance "
+                          f"({float((config.LABOUR_RULES.get('bench_work') or {}).get('min_per_part', 2.0)):g}"
+                          f" min for each of {_fitted} part(s) fitted) — this assembly is "
+                          f"{_mat_bench or 'board'}, "
                           f"OUTSIDE the faced/laminated board the "
                           f"{config.SHOP_STATED.get('joinery_rates_measured_on_job')} pilot "
                           f"was measured on, so that rate does NOT govern it")
