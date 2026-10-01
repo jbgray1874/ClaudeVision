@@ -33,11 +33,15 @@ equally the authority on the route, which is why (1) exists.
 """
 from __future__ import annotations
 
+import os
 import re
 
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 __all__ = [
+    "review_signals",
+    "charges_behind_flag",
+    "document_level_gauges",
     "costed_operations",
     "has_operation",
     "parts_with_operation",
@@ -878,6 +882,12 @@ def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
         est = summary.get("estimate_summary")
         if isinstance(est, dict) and isinstance(est.get("part_estimates"), list):
             buckets.append(est["part_estimates"])
+        # THE LIST job_parts AND EVERY DELIVERABLE READ. wb_populate builds these as SHALLOW
+        # copies before this pass runs, and the pass rebinds `risk_flags`, so the copies kept
+        # the old list: on 12173-02 a ticket strip whose weld the route had ruled out was
+        # still counted under "Weld detected" by the report reading job_parts. Idempotent.
+        if isinstance(est, dict) and isinstance(est.get("canonical_part_estimates"), list):
+            buckets.append(est["canonical_part_estimates"])
         mw = summary.get("manufacturing_writeup")
         if isinstance(mw, dict) and isinstance(mw.get("parts"), list):
             buckets.append(mw["parts"])
@@ -903,12 +913,15 @@ def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
                 if _priced:
                     p["_learning_flag"] = " | ".join(
                         s for s in _lf.split(" | ") if "ZERO_COST_STEEL" not in s)
-                    p.setdefault("superseded_risk_flags", []).append({
+                    _zc = {
                         "flag": "ZERO_COST_STEEL",
                         "reason": ("raised before costing, when this part had no cost; the "
                                    "finished workbook prices its material and charges it on "
                                    "a labour row, so it is no longer a review item"),
-                    })
+                    }
+                    _sup = p.setdefault("superseded_risk_flags", [])
+                    if _zc not in _sup:
+                        _sup.append(_zc)
                     out["superseded"] += 1
             if not isinstance(p.get("risk_flags"), list):
                 continue
@@ -928,9 +941,121 @@ def reconcile_risk_flags(summary: Any) -> Dict[str, int]:
                     kept.append(flag)
             if gone:
                 p["risk_flags"] = kept
-                p.setdefault("superseded_risk_flags", []).extend(gone)
+                # A shallow copy can share this list with its original; never twice.
+                _sup = p.setdefault("superseded_risk_flags", [])
+                for _g in gone:
+                    if _g not in _sup:
+                        _sup.append(_g)
                 out["superseded"] += len(gone)
             out["kept"] += len(kept)
+    return out
+
+
+def _float_or_none(v: Any) -> Optional[float]:
+    try:
+        if v is None or v == "":
+            return None
+        f = float(v)
+        return f if f == f else None
+    except (TypeError, ValueError):
+        return None
+
+
+def review_signals(parts: Iterable[Any]) -> Dict[str, Any]:
+    """Risk flags and quantitative gates rolled up per part, so a person can review early.
+
+    MOVED HERE FROM THE ESTIMATOR, UNCHANGED, SO THE REPORT CAN BUILD IT FROM THE RECORD IT
+    PRINTS. The estimator calls it once, before the workbook exists, on its own part list;
+    that frozen copy is saved and the parity reports read it. On 12173-02 section 3 listed 29
+    parts under "Welding on the drawing" from that frozen copy while its own tally counted
+    27 from job_parts — three records describing one set of flags. Once the route is priced
+    the report calls this on job_parts (reconciled), and the rows, the tally and section 5's
+    group are one list (estimator._build_estimate_review_signals is this function).
+    """
+    conf_thr = float(os.getenv("ESTIMATE_PART_CONFIDENCE_REVIEW_BELOW", "0.65") or "0.65")
+    geom_thr = float(os.getenv("ESTIMATE_GEOMETRY_REVIEW_BELOW", "0.70") or "0.70")
+    parts_out: List[Dict[str, Any]] = []
+    for p in parts or []:
+        if not isinstance(p, Mapping):
+            continue
+        reasons: List[Dict[str, Any]] = []
+        for rf in p.get("risk_flags") or []:
+            reasons.append({"code": "risk_flag", "detail": str(rf)})
+        assump = (p.get("cost_breakdown") or {}).get("assumptions") or {}
+        pc_val = _float_or_none(assump.get("part_confidence_overall"))
+        if pc_val is not None and pc_val < conf_thr:
+            reasons.append({"code": "low_part_confidence", "detail": pc_val})
+        proc = p.get("process_estimate") or {}
+        gr = _float_or_none(proc.get("geometry_reliability"))
+        times_min = proc.get("times_min") or {}
+        if "powder_coating" in times_min and gr is not None and gr < geom_thr:
+            reasons.append({"code": "low_geometry_reliability_with_powder", "detail": gr})
+        if reasons:
+            # Carry a FALLBACK IDENTITY, not just the part_number. A part whose number was
+            # rejected as boilerplate (set to None upstream) still has a description and a
+            # source file — without them the review report can only show "?" in its Item
+            # column, a flag the estimator cannot tie to anything.
+            parts_out.append({"part_number": p.get("part_number"),
+                              "description": p.get("description"),
+                              "source_file": p.get("dxf_source_file") or p.get("source_file"),
+                              "reasons": reasons})
+    rec = "manual_review_recommended" if parts_out else "no_automatic_flags"
+    return {
+        "schema": "estimate_review_signals.v1",
+        "thresholds": {"part_confidence_below": conf_thr, "geometry_with_powder_below": geom_thr},
+        "parts_flagged": parts_out,
+        "flagged_part_count": len(parts_out),
+        "recommendation": rec,
+    }
+
+
+def charges_behind_flag(source: Any, part_number: Any, flag: Any) -> List[Dict[str, Any]]:
+    """The sheet rows a risk flag's operation became on this part — the join reconcile uses
+    to DEMOTE a flag, used here to REPORT a kept one.
+
+    12173-02 section 3 opened "None of the following change the arithmetic" over 29 parts
+    listed "Welding on the drawing", on a job charging £434.68 on 16 Weld (CO2) and Dress
+    Welds rows decided by "a note on the drawing" and "an SDI override rule". Each row comes
+    back with its Estimate row, its operation and who decided it in plain words
+    (source_precedence.display_name); a decision counts only where this part is its target
+    or a participant (decision_ids_for_part's rule). Money is not split per part: one Weld
+    row can cover eight parts. [] when the flag asserts no operation or no row is known.
+    """
+    needed = {str(n).lower() for n in _OP_ASSERTING_FLAGS.get(str(flag or ""), ())}
+    pn = canonical_identity(source, part_number)
+    if not needed or not pn:
+        return []
+    try:
+        from source_precedence import display_name as _display_name     # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        def _display_name(s):                                        # noqa: ANN001
+            return str(s or "").replace("_", " ")
+    known = _decisions_by_id(source)
+    out: List[Dict[str, Any]] = []
+    for r in priced_rows_for_part(source, part_number) or []:
+        if not isinstance(r, Mapping):
+            continue
+        ops = {str(o).lower() for o in (r.get("engine_operations") or [])}
+        ops.add(str(r.get("wb_operation") or "").lower())
+        if not ops & needed:
+            continue
+        ids = [str(d) for d in (r.get("decision_ids") or []) if d]
+        if not ids and r.get("decision_id"):
+            ids = [str(r["decision_id"])]
+        by: List[str] = []
+        for d in ids:
+            dec = known.get(d) or {}
+            if not dec:
+                continue
+            members = {canonical_identity(source, x)
+                       for x in [dec.get("target_id"), *(dec.get("participants") or [])] if x}
+            if pn not in members:
+                continue
+            name = _display_name(dec.get("source"))
+            if name and name not in by:
+                by.append(name)
+        out.append({"workbook_row": r.get("workbook_row"), "wb_operation": r.get("wb_operation"),
+                    "decided_by": by})
     return out
 
 
@@ -1343,8 +1468,10 @@ PRICE_ORIGIN_LABELS: Dict[str, str] = {
 _MARKET_AI_TOKENS = ("grok", "llm", "xai", "market")
 _CATALOGUE_TOKENS = ("udef", "pma", "erp", "bought_in_price", "price_book", "catalog",
                      "historical", "supplier_quote", "sheet_rate_live")
+# The fabricated block KEYS. The names are a fallback only: a block is named by
+# wb_populate.block_title, the template's own label ("tube" is its Wire block).
 _FABRICATED_BLOCKS = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
-                      "tube": "Tube", "wire": "Wire"}
+                      "tube": "Wire", "wire": "Wire"}
 
 
 def _final_estimate_of(source: Any) -> Dict[str, Any]:
@@ -1425,6 +1552,62 @@ def boilerplate_thickness_values(source: Any) -> Dict[float, List[str]]:
             if v and kept and abs(v - kept) > 0.05:
                 census.setdefault(round(v, 2), set()).add(_pn)
     return {v: sorted(pns) for v, pns in census.items() if len(pns) >= 3}
+
+
+def _gauge_is_alone_on_the_line(part: Mapping[str, Any]) -> bool:
+    """The part's Dimensions cell would print its gauge and nothing else: no cut length, no
+    section, no blank of its own (job_report_html._line_dimensions' last branch)."""
+    me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
+    se = me.get("stock_estimate") if isinstance(me.get("stock_estimate"), Mapping) else {}
+    if se.get("section_length_mm") or se.get("wire_length_mm"):
+        return False
+    if (me.get("blank_length_mm") or part.get("blank_length_mm")) and \
+            (me.get("blank_width_mm") or part.get("blank_width_mm")):
+        return False
+    return True
+
+
+def document_level_gauges(source: Any) -> Dict[float, Dict[str, List[str]]]:
+    """The census above, and where the same figure STAYED IN FORCE.
+
+    12173-02: the pack's 1.0 mm (a tolerance band and a spec legend on every sheet) was
+    refused on nine parts and grouped as one decision — but on the two meshes it WON, because
+    the model's 6 mm was refused, and the Dimensions cell printed a bare "1.0 mm" that nothing
+    tied to the document figure. boilerplate_thickness_values names only the parts that
+    refused it; this adds `kept_on`: parts whose kept gauge is that figure, held only by
+    drawing-class readers, and printed alone on their line. Its return shape is left alone
+    because thickness_conflict and the grouped decision consume it.
+    """
+    refused = boilerplate_thickness_values(source)
+    out: Dict[float, Dict[str, List[str]]] = {
+        v: {"refused_on": list(pns), "kept_on": []} for v, pns in refused.items()}
+    if not out or not isinstance(source, dict):
+        return out
+    try:
+        from source_precedence import source_of, support_for          # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        return out
+    seen: Set[str] = set()
+    for p in job_parts(source):
+        if not isinstance(p, Mapping):
+            continue
+        pn = str(p.get("part_number") or "").strip()
+        k = _num(p.get("normalized_thickness_mm"))
+        if not pn or pn.upper() in seen or not k:
+            continue
+        seen.add(pn.upper())
+        v = next((v for v in out if abs(v - k) <= 0.05), None)
+        if v is None or pn in out[v]["refused_on"] or not _gauge_is_alone_on_the_line(p):
+            continue
+        try:
+            sup = set(support_for(dict(p), "normalized_thickness_mm", k) or []) \
+                or {source_of(dict(p), "normalized_thickness_mm")}
+        except Exception:                                            # noqa: BLE001
+            sup = set()
+        sup = {str(s) for s in sup if str(s or "").strip()}
+        if sup and all("drawing" in s.lower() for s in sup):
+            out[v]["kept_on"].append(pn)
+    return out
 
 
 def thickness_conflict(part: Mapping[str, Any],
@@ -1653,9 +1836,19 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
         # reported on the fabricated line for the same part.
         pass
     if block in _FABRICATED_BLOCKS and money:
-        label = f"costed by nest on the {_FABRICATED_BLOCKS[block]} block"
+        # NAMED AS THE TEMPLATE NAMES IT. The key "tube" is the template's WIRE block; this
+        # said "the Tube block" on 12173-02's riser and hook arm beside sheet rows reading
+        # "costed in Wire below", and Tube is a labour department too. The name comes from
+        # the layout map that describes the template (wb_populate.block_title).
+        _name = _FABRICATED_BLOCKS[block]
+        try:
+            from wb_populate import block_title as _block_title          # noqa: PLC0415
+            _name = _block_title(block) or _name
+        except Exception:                                                # noqa: BLE001
+            pass
+        label = f"costed by nest on the {_name} block"
         if block in ("tube", "wire"):
-            label = f"costed by length on the {_FABRICATED_BLOCKS[block]} block"
+            label = f"costed by length on the {_name} block"
         if sheet_row:
             label += f" — Estimate!{int(sheet_row)}"
         return {"class": f"nest_{block}", "firmness": FIRM, "owner": None, "label": label}
@@ -2019,6 +2212,20 @@ def costed_job(source: Any) -> Dict[str, Any]:
         order_qty = None
 
     lines: List[Dict[str, Any]] = []
+    # Document-level gauges, once: a line whose gauge is one of them says so on its record.
+    try:
+        _doc_gauges = document_level_gauges(source)
+    except Exception:                                                # noqa: BLE001
+        _doc_gauges = {}
+    try:
+        from source_precedence import source_of as _source_of        # noqa: PLC0415
+    except Exception:                                                # noqa: BLE001
+        def _source_of(_p, _f):                                      # noqa: ANN001
+            return ""
+    # Every sheet row a line claims, by object: a row no part claims is still money on the
+    # sheet, and is put on the record below (a key-based dict would lose a second row that
+    # shares one key, so the claim is the row itself).
+    _claimed_rows: Set[int] = set()
     for part in job_parts(source):
         pn = str(part.get("part_number") or "").strip()
         if not pn:
@@ -2033,6 +2240,9 @@ def costed_job(source: Any) -> Dict[str, Any]:
 
         row = money_rows.get(identity)
         bom = bom_rows.get(identity)
+        for _r in (row, bom):
+            if isinstance(_r, dict):
+                _claimed_rows.add(id(_r))
         block = str(row.get("block")) if row else ("bom" if bom else None)
         cross_ref = bool(bom) and "costed in" in str(bom.get("description") or "").lower()
         charged_unit = charged_ext = None
@@ -2065,6 +2275,50 @@ def costed_job(source: Any) -> Dict[str, Any]:
             ss = part["section_stock"]
             profile = {k: ss.get(k) for k in ("a", "b", "t", "profile_form") if ss.get(k) is not None}
 
+        # ── "TREAT ANY £0 AS MISSING" IS TRUE ONLY WHILE THE LINE IS £0 ─────────────
+        # The SolidWorks connector writes it at ingest, before a wire length or a BOM price
+        # arrives. 12173-02: the hook arm's note said it beside £0.31 charged at Estimate!84,
+        # and sections 3 and 5 printed it against four lines carrying £0.31–£1.08. Computed
+        # here from the money this line holds: where it holds some, the sentence says what
+        # that money rests on; where it holds none, the warning stands. Money is not touched.
+        flags = _estimator_flags(part.get("review_flags"))
+        try:
+            from plain_english import NO_GEOMETRY_SENTENCE as _NO_GEO    # noqa: PLC0415
+        except Exception:                                            # noqa: BLE001
+            _NO_GEO = None
+        _money_here = charged_ext if charged_ext is not None else (round(engine_ext, 2) or None)
+        if _NO_GEO and _NO_GEO in flags and _money_here:
+            flags = [f for f in flags if f != _NO_GEO]
+            _cell = ((row or {}).get("charged_cell") or (bom or {}).get("charged_cell")
+                     or (f"Estimate!{int(sheet_row)}" if sheet_row else None))
+            _where = _cell or "the engine's figure, not yet the sheet's"
+            if kind == "bought_in":
+                flags.append(f"SolidWorks has no geometry for this part; none is needed for a "
+                             f"bought item — the £{_money_here:,.2f} ({_where}) is its "
+                             f"purchase price, see the price source")
+            else:
+                _basis = (f"a length of {length['mm']:,.0f} mm read by "
+                          f"{length.get('reader') or 'an unrecorded reader'}"
+                          if length and length.get("mm") else
+                          (str(origin.get("label") or "") or "the sheet row"))
+                flags.append(f"SolidWorks gave this part no usable geometry; the "
+                             f"£{_money_here:,.2f} charged ({_where}) rests on {_basis} — the "
+                             f"model does not corroborate it; confirm against the drawing")
+
+        # THE GAUGE'S BASIS, ON THE LINE. The Dimensions cell printed a bare "1.0 mm" on
+        # 12173-02's meshes — the pack's document-level figure, which won there only because
+        # the model's 6 mm was refused — and nothing said where it came from.
+        _thk = _num(part.get("normalized_thickness_mm"))
+        _hit = next((d for v, d in _doc_gauges.items()
+                     if _thk and abs(v - _thk) <= 0.05 and pn in (d.get("kept_on") or [])), None)
+        try:
+            _thk_src = str(_source_of(dict(part), "normalized_thickness_mm") or "")
+        except Exception:                                            # noqa: BLE001
+            _thk_src = ""
+        thickness_basis = ({"mm": _thk, "source": _thk_src, "document_level": bool(_hit),
+                            "also_on": list((_hit or {}).get("refused_on") or [])}
+                           if _thk else None)
+
         lines.append({
             "part_number": pn,
             "identity": identity,
@@ -2073,6 +2327,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "qty_per_unit": qty,
             "material_label": _material_label(part, kind),
             "thickness_mm": part.get("normalized_thickness_mm"),
+            "thickness_basis": thickness_basis,
             "block": block,
             "sheet_row": sheet_row,
             # The cell the read-back actually read this money from. Recorded at the point the
@@ -2094,10 +2349,74 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "route_operations": route_operations_for_part(source, pn),
             "length": length,
             "section_profile": profile,
-            "review_flags": _estimator_flags(part.get("review_flags")),
+            "review_flags": flags,
             "plating_members": list(part.get("_plating_members_costed") or []),
             "plating_excluded": list(part.get("_plating_members_deferred") or []),
         })
+
+    # ── EVERY SHEET ROW THAT CARRIES MONEY IS ON THE RECORD ─────────────────────
+    # 12173-02, 1 Oct: the hierarchy section ended "a difference of £2.88 on the sheet and on
+    # no line here" — exactly the sheet's POWDER row (0.69 kg × £4.00 × 1.04), which the
+    # writer mints inside the BOM block with no part record behind it, so no line was ever
+    # built for it. The same omission made the summary count 33 money rows against the
+    # sheet's 34, section 13 a third figure, and the material breakdown file £2.88 as an
+    # unreconciled residual. A row no part claimed — or a second row under a key another row
+    # already took — becomes a line of its own, named for the sheet row it is. It is firm
+    # (the sheet's own money, at its own cell), never "unpriced" or "market": the open
+    # question about powder coverage is the sheet's own outstanding item, not this line's.
+    # Only beside a part list: with none, there is no record of lines to complete, and every
+    # reader already reads the sheet's rows directly.
+    if calculated and lines:
+        for r in mat_rows:
+            if id(r) in _claimed_rows:
+                continue
+            gbp = _num(r.get("total_value_gbp"))
+            text = str(r.get("description") or "").strip()
+            if not gbp or "costed in" in text.lower():
+                continue
+            _wr = r.get("workbook_row") or r.get("row")
+            key = _material_row_key(r) or (f"ROW{int(_wr)}" if _wr else "")
+            if not key:
+                continue
+            _ids = {str(l.get("identity") or "").upper() for l in lines}
+            identity = key if key.upper() not in _ids else (
+                f"{key} (Estimate row {int(_wr)})" if _wr else f"{key} (second row)")
+            cell = (str(r.get("charged_cell") or "")
+                    or (f"Estimate!{int(_wr)}" if _wr else "")) or None
+            _code = str(r.get("part_code") or key).strip()
+            _q = _num(r.get("qty_per_unit")) or _num(r.get("quantity")) or 1.0
+            # THE ROW'S OWN TAG IS ITS WITNESS, as for any line: a row the sheet carries at a
+            # researched market figure (its supplier cell says so) is a market figure to
+            # replace; any other is the sheet's own money, firm at its own cell.
+            _supplier = str(r.get("supplier") or "").strip()
+            _rtok = " ".join(str(x or "") for x in (_supplier, r.get("source"),
+                                                    r.get("price_source"), text)).lower()
+            _origin = {"class": "sheet_row", "firmness": FIRM, "owner": None,
+                       "label": (f"the sheet's own {_code} row — {text[:80]}"
+                                 + (f", {cell}" if cell else ""))}
+            if any(t in _rtok for t in _MARKET_AI_TOKENS) or (
+                    "ai estimate" in _rtok and "indicative" in _rtok):
+                _origin = {"class": "market_ai", "firmness": INDICATIVE_MARKET,
+                           "owner": "estimator",
+                           "label": (f"researched market price ({_supplier or 'AI/market lookup'})"
+                                     f" — not a quotation, replace before quoting"
+                                     + (f"; {cell}" if cell else ""))}
+            lines.append({
+                "part_number": identity, "identity": identity, "description": text,
+                "kind": "sheet_row", "qty_per_unit": _q,
+                "material_label": _code.title() if _code else str(r.get("block") or "bom"),
+                "thickness_mm": None, "thickness_basis": None,
+                "block": str(r.get("block") or "bom"), "sheet_row": _wr,
+                "charged_cell": cell, "cross_reference": False,
+                "charged_unit_gbp": (_num(r.get("unit_price_gbp")) or round(gbp / _q, 4)),
+                "charged_ext_gbp": gbp,
+                "engine_unit_gbp": 0.0, "engine_ext_gbp": 0.0,
+                "money_basis": "excel_calculated",
+                "price_origin": _origin,
+                "operations": [], "route_operations": [], "length": None,
+                "section_profile": None, "review_flags": [],
+                "plating_members": [], "plating_excluded": [],
+            })
 
     # ── the gap lists, once ─────────────────────────────────────────────────────
     def _money_of(line: Dict[str, Any]) -> float:
@@ -2232,12 +2551,20 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # that state the same gauge, so a person confirms it once, not once per part.
     for _bv in sorted(_boiler):
         _bparts = _boiler[_bv]
+        # AND WHERE THE SAME FIGURE STAYED IN FORCE — a question, not a correction: on
+        # 12173-02 the meshes kept the 1.0 mm the frames refused, and the decision named
+        # only the refusals.
+        _kept = list(((_doc_gauges.get(_bv) or {}).get("kept_on")) or [])
         decisions.append({
             "part": ", ".join(_bparts), "kind": "manufacturing_decision",
             "issue": (f"{', '.join(_bparts)} each show {_bv:g} mm from the drawing "
                       f"against their own stronger gauges — one document figure "
                       f"repeated across {len(_bparts)} parts, or {len(_bparts)} real "
-                      f"specs"),
+                      f"specs"
+                      + (f"; and it is the gauge in force on {', '.join(_kept)}, which "
+                         f"{'has' if len(_kept) == 1 else 'have'} no measured gauge "
+                         f"{'of its own' if len(_kept) == 1 else 'of their own'}"
+                         if _kept else "")),
             "assumption": (f"each part priced on its own strongest source, not the "
                            f"repeated {_bv:g} mm"),
             "action": (f"confirm once whether {_bv:g} mm is a document-level note or "

@@ -4096,3 +4096,15 @@ CONSISTENCY_CHECK_OWNER = {
     "unknown_schema": "engine — re-run; report it if it repeats",
     "canonical_route_compiler_failed": "engine — re-run; report it if it repeats",
 }
+
+
+# ── THE WORDS THAT HEAD A PARTS-TABLE COLUMN ─────────────────────────────────────────
+# 12173-02, 1 Oct 2026: frame weld 12173-03-201 was titled "FRONT FRAME ASSEMBLY 1" — row 1
+# of its OWN parts list, with the quantity attached — because on SDI's template the word
+# DESCRIPTION is only ever that table's column header, and the title-block reader took the
+# value after it ("QTY 1 12173-03-202 FRONT FRAME ASSEMBLY 1 2 …"; on a cut list "LENGTH QTY
+# 1 30.00 x 30.00 …"). A value that BEGINS with another column header is a table head, not a
+# title field. The parts-list reader's own header words, plus a cut list's LENGTH (kept out of
+# that reader's set, which drives its own header detection). A customer whose title block
+# genuinely reads "DESCRIPTION: ITEM HOLDER" would lose that description — narrow the list.
+PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.", "LENGTH")

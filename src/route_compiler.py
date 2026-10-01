@@ -327,6 +327,13 @@ class PartNode:
     # the count one parent takes and the reader that said so, then the product. A part under
     # two parents has two lines, and they add up to qty_per_unit. See add_descendants.
     qty_trail: List[str] = field(default_factory=list)
+    # THE SAME CASCADE, AS NUMBERS PER IMMEDIATE PARENT: how many of this part, per quoted
+    # unit, arrive through each parent. It is qty_trail in structured form — the figures the
+    # BOMs & Routes trail prints — so a page that hangs this part under two parents can give
+    # each its share instead of the whole line twice (12173-02: the tab 12173-03-06M under
+    # frames 202 and 203, 8 + 8 = 16; the ticket strip under the pocket ×8 and the rack ×1).
+    # Empty for a root, and on a summary compiled before it existed.
+    qty_by_parent: Dict[str, float] = field(default_factory=dict)
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -2674,6 +2681,8 @@ def build_part_graph(
     #
     # A part reached by two paths gets two lines, and they sum to the costed figure.
     qty_trails: Dict[str, List[str]] = {}
+    # Each step's factor, filed under the parent that took it (PartNode.qty_by_parent).
+    qty_by_parent: Dict[str, Dict[str, float]] = {}
 
     def _step_source(child_id: str, used: float, edge_qty: float) -> str:
         _src = qty_own_source.get(child_id) or ""
@@ -2688,13 +2697,16 @@ def build_part_graph(
         return _display_source(_src) if _src else "the part's own record"
 
     def add_descendants(identity: str, factor: float, path: Set[str],
-                        chain: Tuple[str, ...] = ()) -> None:
+                        chain: Tuple[str, ...] = (), parent: Optional[str] = None) -> None:
         if identity in path:
             return
         quantities[identity] = quantities.get(identity, 0.0) + factor
         if len(chain) > 1:
             qty_trails.setdefault(identity, []).append(
                 f"{' -> '.join(chain)} = {factor:g}")
+        if parent is not None:
+            _bp = qty_by_parent.setdefault(identity, {})
+            _bp[parent] = _bp.get(parent, 0.0) + factor
         next_path = set(path)
         next_path.add(identity)
         for child_id, child_qty in (children.get(identity) or {}).items():
@@ -2702,7 +2714,8 @@ def build_part_graph(
             add_descendants(
                 child_id, factor * _each, next_path,
                 chain + (f"{child_id} x{_each:g} "
-                         f"({_step_source(child_id, _each, child_qty)})",))
+                         f"({_step_source(child_id, _each, child_qty)})",),
+                identity)
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
@@ -2923,6 +2936,7 @@ def build_part_graph(
             qty_own_source=qty_own_source.get(identity, ""),
             qty_note=qty_notes.get(identity, ""),
             qty_trail=list(qty_trails.get(identity) or []),
+            qty_by_parent=dict(qty_by_parent.get(identity) or {}),
             parents=sorted(parents.get(identity) or []),
             children=[
                 ChildEdge(part_number=child_id, qty=qty)
@@ -2969,6 +2983,29 @@ def build_part_graph(
                        f"they are one part and their kinds say they are not. A part we "
                        f"fabricate does not become one we purchase because their codes "
                        f"match, so both stay visible for a ruling."),
+        })
+    # NO TITLE IS INVENTED, AND THE GAP IS SAID. 12173-03-201 was titled with row 1 of its
+    # own parts list; that text is now refused as a table head (extractor_patterns, the
+    # description gate, part_index). Where nothing else describes an assembly — no parts-list
+    # row names it, no reader gave it words — it stays blank and this says so, with the text
+    # that was refused, so a person names it from its title block.
+    for node in nodes:
+        if node.kind != "assembly" or str(node.description or "").strip():
+            continue
+        _refused_words = [str(v) for v in ((records.get(node.part_number) or {})
+                                           .get("description_refused") or []) if v]
+        if not _refused_words:
+            continue
+        graph_issues.append({
+            "code": "no_description_from_any_reader",
+            "part_number": node.part_number,
+            "kind": node.kind,
+            "refused": _refused_words[:3],
+            "detail": (f"No reader gave {node.part_number} a title. The only text found where "
+                       f"a description sits was parts-table text (" + "; ".join(
+                           f"'{w[:60]}'" for w in _refused_words[:2])
+                       + "), which is a table's head, not this part's name. It is left blank "
+                       f"— name it from its title block."),
         })
     if top_ids:
         _roots = set(top_ids)

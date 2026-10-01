@@ -1890,10 +1890,16 @@ def build(workbook: Path, scan_json: Optional[Path],
             # block's "Rate Per Hour", which holds a throughput.
             line_total = _gbp_or((steel_calc.get(code) or {}).get("total_value_gbp"),
                                  "not read back")
-            _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
-                         "tube": "Tube"}.get(
-                str((steel_calc.get(code) or {}).get("block") or "steel"),
-                "its nested")
+            # The block as the template names it (wb_populate.block_title): "tube" is the
+            # Wire block, never "the Tube block" (12173-02).
+            _blk_key = str((steel_calc.get(code) or {}).get("block") or "steel")
+            try:
+                from wb_populate import block_title as _block_title      # noqa: PLC0415
+                _blk_word = _block_title(_blk_key) if _blk_key in (
+                    "steel", "other_sheet", "tube") else "its nested"
+            except Exception:                                            # noqa: BLE001
+                _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
+                             "tube": "Wire"}.get(_blk_key, "its nested")
             add(f"| ↳ `Estimate!{steel_row['row']}` "
                 f"| the same part, on the {_blk_word} block "
                 f"| {_fmt(steel_row.get('qty'))} "

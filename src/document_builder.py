@@ -193,7 +193,17 @@ def _is_good_description(value: Any) -> bool:
         "SHEET SIZE:",
         "SCALE:",
     ]
-    return not any(token in upper for token in bad_tokens)
+    if any(token in upper for token in bad_tokens):
+        return False
+    # THE GATE EVERY READER'S DESCRIPTION PASSES. A value beginning with a parts-table column
+    # header ("QTY 1 12173-03-202 FRONT FRAME ASSEMBLY 1 …", 12173-02) is the table's head
+    # read as a title, whichever reader produced it — the title block, the layout zones or
+    # the model's extract. The column vocabulary is config (PARTS_TABLE_COLUMN_WORDS).
+    try:
+        from extractor_patterns import starts_with_a_table_column
+    except Exception:                                            # noqa: BLE001
+        return True
+    return not starts_with_a_table_column(normalized)
 
 
 def _is_reference_like_part(part_number: Any) -> bool:

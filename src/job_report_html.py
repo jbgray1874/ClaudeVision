@@ -329,13 +329,38 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
         _gone_ids = set()
     parts = [p for p in parts
              if str(p.get("part_number") or "").strip().upper() not in _gone_ids]
-    review = {"flagged_parts": [], "risk_flag_tally": {}, "provisional": []}
+    review = {"flagged_parts": [], "risk_flag_tally": {}, "provisional": [], "not_on_sheet": []}
 
     ers = _get(summary, "estimate_summary", "estimate_review_signals", default={}) or {}
     flagged = [f for f in (ers.get("parts_flagged") or [])
                if not (isinstance(f, dict)
                        and str(f.get("part_number") or f.get("part") or "")
                        .strip().upper() in _gone_ids)]
+
+    # ── ONE RECORD FOR EVERY FLAG COUNT ON THE PAGE ─────────────────────────────
+    # 12173-02 listed 29 parts "Welding on the drawing" in section 3 and section 5 and
+    # tallied 27 two lines below: the rows read the signals the estimator froze before the
+    # workbook existed, the tally read job_parts — and a ticket strip whose weld the route
+    # had ruled out was in both. Once the route is priced, the signals are rebuilt from
+    # job_parts (reconciled against the route) and the rows, the tally and section 5 all
+    # read that one list. A frozen entry with no line on the sheet (a nameless record, one
+    # canonicalisation dropped) is not dropped silently: it is named once, uncounted.
+    _canon = None
+    try:
+        from costed_facts import (canonical_identity as _canon, priced_route_known,
+                                  review_signals)
+        if priced_route_known(summary):
+            _live = {(_canon(summary, p.get("part_number"))
+                      or str(p.get("part_number") or "").strip().upper())
+                     for p in parts if isinstance(p, dict)}
+            _live.discard("")
+            review["not_on_sheet"] = [
+                f for f in flagged if isinstance(f, dict)
+                and not ((_canon(summary, f.get("part_number") or f.get("part"))
+                          or "") in _live)]
+            flagged = review_signals(parts)["parts_flagged"]
+    except Exception:                                            # noqa: BLE001
+        pass
 
     # ── THE FINDINGS, KEPT APART ────────────────────────────────────────────────
     #
@@ -384,26 +409,60 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
             bits.append(f"{_lbl(f['code'])}{note}")
         return "; ".join(bits)
 
+    try:
+        from costed_facts import charges_behind_flag as _charges
+    except Exception:                                            # noqa: BLE001
+        _charges = None
+
+    def _named(f: Dict[str, Any]) -> str:
+        # A findable name, not "?". part_number may be None (rejected as boilerplate); fall
+        # back through the description and the source filename so Tim can locate the part the
+        # review flag is about, instead of a bare "?" he cannot act on.
+        _src = f.get("source_file")
+        _label = (f.get("part_number") or f.get("part") or f.get("description")
+                  or (str(_src).rsplit("\\", 1)[-1].rsplit("/", 1)[-1] if _src else None)
+                  or "unidentified (no part number)")
+        # A code too short to identify anything ("//", "P/P") carries its words beside it.
+        _pn = str(f.get("part_number") or "")
+        _d = str(f.get("description") or "").strip()
+        if _pn and _d and len(re.sub(r"[^A-Za-z0-9]", "", _pn)) < 4:
+            _label = f"{_pn} ({_d[:40]})"
+        return str(_label)
+
     for f in flagged:
         if isinstance(f, dict):
-            # A findable name, not "?". part_number may be None (rejected as boilerplate); fall
-            # back through the description and the source filename so Tim can locate the part the
-            # review flag is about, instead of a bare "?" he cannot act on.
-            _src = f.get("source_file")
-            _label = (f.get("part_number") or f.get("part") or f.get("description")
-                      or (str(_src).rsplit("\\", 1)[-1].rsplit("/", 1)[-1] if _src else None)
-                      or "unidentified (no part number)")
+            _fnd = _findings(f.get("reasons") or [])
+            # WHAT EACH CUE BECAME ON THE SHEET, by the join reconcile uses to demote a flag:
+            # the rows its operation was charged on and who decided it (12173-02's weld cue
+            # drove 16 Weld and Dress rows while section 3 called the list arithmetic-free).
+            _charged: List[Dict[str, Any]] = []
+            if _charges is not None and f.get("part_number"):
+                _seen_rows = set()
+                for x in _fnd:
+                    for c in _charges(summary, f.get("part_number"), x["code"]) or []:
+                        if c.get("workbook_row") in _seen_rows:
+                            continue
+                        _seen_rows.add(c.get("workbook_row"))
+                        _charged.append(dict(c, flag=x["code"]))
             review["flagged_parts"].append({
-                "part": _label,
+                "part": _named(f),
+                "part_number": f.get("part_number"),
                 "reason": _reason_text(f.get("reasons") or []),
-                "findings": _findings(f.get("reasons") or []),
+                "findings": _fnd,
                 "cost": f.get("unit_total_cost_gbp") or f.get("cost"),
+                "charged": _charged,
             })
 
-    # risk flag tally across parts
-    for p in parts:
-        for rf in (p.get("risk_flags") or []):
-            review["risk_flag_tally"][rf] = review["risk_flag_tally"].get(rf, 0) + 1
+    # THE TALLY FROM THE SAME LIST the rows above were built from — never a second walk over
+    # a different record, which is how one page said 29 and 27 for one flag.
+    for f in flagged:
+        if not isinstance(f, dict):
+            continue
+        for r in f.get("reasons") or []:
+            if isinstance(r, dict) and r.get("code") == "risk_flag" and r.get("detail"):
+                rf = str(r["detail"])
+                review["risk_flag_tally"][rf] = review["risk_flag_tally"].get(rf, 0) + 1
+    review["not_on_sheet"] = [_named(f) for f in review["not_on_sheet"]]
 
     # provisional rate signals
     pc = _get(summary, "estimate_summary", "powder_coating_summary", default={}) or {}
@@ -435,21 +494,41 @@ def _extract_review_items(summary: Dict[str, Any]) -> Dict[str, Any]:
     # The NOT PRICED lines are deliberately left out: they are the Decisions-required section's
     # subject, that section is the one that gates sending, and the same item in two places on
     # one page reads as two problems.
-    review["part_notes"] = part_review_notes(parts)
+    #
+    # AND FROM THE LINE WHERE THERE IS ONE. A sentence written at ingest can be made false by
+    # the money that arrives later ("treat any £0 as MISSING" beside £0.31 charged, 12173-02);
+    # the costed record rewrites it from the line's own money, so these notes read the line.
+    review["part_notes"] = part_review_notes(parts, (_record_for(summary) or {}).get("lines"))
     return review
 
 
-def part_review_notes(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def part_review_notes(parts: List[Dict[str, Any]],
+                      lines: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """Every sentence the costing rules wrote onto a part, deduplicated, with who it was about.
 
     Split out so it can be exercised directly: a gatherer buried inside a 90-line builder is a
     gatherer that gets tested through the thing it feeds, which is how this one went unnoticed.
+
+    A part with a costed line speaks through the line's `review_flags` (the record's form of
+    the same sentences, computed against the money); a part with none through its own.
     """
+    by_line: Dict[str, Dict[str, Any]] = {}
+    for l in lines or []:
+        if not isinstance(l, dict):
+            continue
+        for key in (l.get("part_number"), l.get("identity")):
+            k = str(key or "").strip().upper()
+            if k:
+                by_line.setdefault(k, l)
     seen: Dict[str, List[str]] = {}
     for p in parts or []:
         if not isinstance(p, dict):
             continue
-        for flag in (p.get("review_flags") or []):
+        _l = by_line.get(str(p.get("part_number") or "").strip().upper())
+        _flags = (_l.get("review_flags") if _l is not None else None)
+        if _flags is None:
+            _flags = p.get("review_flags") or []
+        for flag in _flags:
             text = str(flag or "").strip()
             if not text or "NOT PRICED" in text.upper() or "NOT YET PRICED" in text.upper():
                 continue
@@ -1299,11 +1378,22 @@ def _render_review_items(review: Dict[str, Any]) -> str:
         elif reason:
             low_conf_only.append(fp)
 
+    def _impact(fp: Dict[str, Any]) -> str:
+        # A CUE THAT BECAME A CHARGE SAYS SO, naming the rows and who decided them — never
+        # their money split per part: one Weld row can cover eight parts.
+        ch = fp.get("charged") or []
+        if not ch:
+            return "Review against the drawing."
+        return ("CHARGED on the sheet — " + "; ".join(
+            f"{c.get('wb_operation')}, Estimate row {c.get('workbook_row')}"
+            + (f", decided by {', '.join(c.get('decided_by') or [])}" if c.get("decided_by") else "")
+            for c in ch) + ". Confirming or striking the cue moves the price.")
+
     for fp in specific:
         cost = _money(fp["cost"]) if fp.get("cost") is not None else ""
         rows += (f'<tr><td><b>{_esc(fp["part"])}</b> {cost} <span class="tag t-warn">Verify</span></td>'
                  f'<td>{_esc(fp["reason"])}</td>'
-                 f'<td>Review against the drawing.</td></tr>')
+                 f'<td>{_esc(_impact(fp))}</td></tr>')
 
     if low_conf_only:
         names = ", ".join(_esc(fp["part"]) for fp in low_conf_only[:10])
@@ -1329,8 +1419,24 @@ def _render_review_items(review: Dict[str, Any]) -> str:
                      f'<td>Add the rate so the operation is costed.</td></tr>')
         elif flag in RISK_LABEL:
             lbl, imp = RISK_LABEL[flag]
+            # The tally's impact from the same join as the rows: charged on N of them.
+            _n_ch = sum(1 for fp in flagged
+                        if any(c.get("flag") == flag for c in (fp.get("charged") or [])))
+            if _n_ch:
+                imp = (f"Charged on the sheet on {_n_ch} of these part(s) — confirming or "
+                       f"striking the cue moves the price.")
             rows += (f'<tr><td><b>{_esc(lbl)}</b> <span class="tag t-warn">Verify</span> ×{count}</td>'
                      f'<td>{count} part(s) flagged.</td><td>{_esc(imp)}</td></tr>')
+
+    # FLAGS ON LINES THAT ARE NOT ON THE SHEET — named once, never counted above.
+    _off = [str(x) for x in (review.get("not_on_sheet") or []) if x]
+    if _off:
+        rows += (f'<tr><td><b>Flags on lines that are not on the sheet</b> '
+                 f'<span class="tag t-info">Not costed</span></td>'
+                 f'<td>{_esc(", ".join(_off[:10]))}'
+                 + (f" (+{len(_off) - 10} more)" if len(_off) > 10 else "")
+                 + '</td><td>Raised before costing on records the sheet does not carry; '
+                   'confirm nothing is missing from the bill.</td></tr>')
 
     for pv in review.get("provisional", []):
         rows += (f'<tr><td><b>{_esc(pv["item"])}</b> <span class="tag t-info">Provisional</span></td>'
@@ -1348,10 +1454,25 @@ def _render_review_items(review: Dict[str, Any]) -> str:
     if not rows:
         rows = '<tr><td colspan="3" class="mini">No provisional or low-confidence items flagged for this job.</td></tr>'
 
+    # ── NO BLANKET CLAIM ABOUT THE ARITHMETIC ───────────────────────────────────
+    # This opened "None of the following change the arithmetic" on 12173-02 above 29 weld
+    # cues that had become 16 charged Weld and Dress rows, and above part notes that state
+    # charges themselves ("is CHARGED", "costed from the STATED 3.19 kg"). The lead now says
+    # what the list is, and adds — computed from the same join as the rows — how many of the
+    # cues drove a charge and on how many Estimate rows (each row counted once).
+    _hit = {c.get("workbook_row"): c for fp in specific for c in (fp.get("charged") or [])}
+    _n_cue = sum(1 for fp in specific if fp.get("charged"))
+    _ops = sorted({str(c.get("wb_operation") or "") for c in _hit.values()} - {""})
+    lead = ("Each item below is a point where a value is <b>provisional</b> or <b>derived with "
+            "limited confidence</b>, listed so an estimator can review it deliberately. "
+            + (f"<b>{_n_cue} of them drove a charge on the sheet</b> ({_esc(', '.join(_ops))}; "
+               f"{len(_hit)} Estimate row{'s' if len(_hit) != 1 else ''}) — confirming or "
+               f"striking those moves the price. " if _n_cue else "")
+            + "Whether the estimate can go out is answered under Decisions required at the top "
+              "of the page, not here.")
+
     return f"""{_h2('review')}
-<p>None of the following change the arithmetic. They are points where a value is <b>provisional</b> or
-<b>derived with limited confidence</b>, listed so an estimator can review them deliberately. Whether the
-estimate can go out is answered under Decisions required at the top of the page, not here.</p>
+<p>{lead}</p>
 <table>
   <thead><tr><th>Item</th><th>Nature</th><th>Impact</th></tr></thead>
   <tbody>{rows}</tbody>
@@ -2551,8 +2672,12 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
         _probe = dict(r)
         _probe["part_number"] = code
         _fab = not _bi(_probe)
+        # THE REASON THE COST DECISION RECORDED, passed whole: where it names the missing
+        # input (`missing`, from estimate_material's `unpriced_inputs`) the heading follows
+        # it and the computed detail prints beside it (12173-02's MFC back: gauge and blank
+        # known, no price for the board — not "a gauge, a blank size or a labour rate").
         _cat, _why_txt, _supersedes = _why(str(reason.get("category") or ""),
-                                           part_is_fabricated=_fab)
+                                           part_is_fabricated=_fab, reason=reason)
         if not _cat:
             _cat, _why_txt = str(reason.get("category") or ""), str(reason.get("why") or "")
         # ONE SENTENCE, NOT THE SAME ONE TWICE, AND NEVER THE CORRECTED ONE BESIDE THE WRONG
@@ -2586,8 +2711,9 @@ def _unpriced_section(summary: Dict[str, Any]) -> str:
             f'(costed elsewhere, a duplicate article, or an assembly whose material is its '
             f'children\'s), <b>{gaps}</b> the engine cannot price. Worst first.</p>'
             '<p class="mini">A part SDI makes has no catalogue price and never will &mdash; its '
-            'cost is material plus labour, so a blank on one of those lines means a gauge, a '
-            'blank size or a labour rate is missing, not that a supplier could not be found.</p>'
+            'cost is material plus labour, so a blank on one of those lines is not a supplier '
+            'that could not be found. Each row says which input its material cost was missing '
+            'where the cost decision recorded it, and says so where it did not.</p>'
             + _elsewhere_note + _lead +
             '<table><thead><tr><th>Line</th><th>Make or buy</th><th>Why it is blank</th>'
             '<th>Who acts</th></tr></thead><tbody>'
@@ -3300,7 +3426,25 @@ def _line_dimensions(line: Dict[str, Any], part: Dict[str, Any]) -> str:
             return f"{_esc(txt)}<br><span class=\"mini\">{_esc(words)}</span>"
         return _esc(txt)
     if thk and line.get("kind") in ("leaf", "assembly"):
-        return f"{thk} mm"
+        # A GAUGE ALONE STATES ITS BASIS. 12173-02's meshes printed a bare "1.0 mm" — the
+        # pack's document-level figure (a tolerance band and a spec legend on every sheet),
+        # in force there only because the model's 6 mm was refused — beside a flag saying
+        # "the gauge comes from the drawing". The record says whether the kept figure is one
+        # the census found repeated across parts; the cell says so, or names its source.
+        txt = f"{thk:g} mm" if isinstance(thk, (int, float)) else f"{thk} mm"
+        tb = line.get("thickness_basis") if isinstance(line.get("thickness_basis"), dict) else {}
+        note = ""
+        if tb.get("document_level"):
+            _n = len(tb.get("also_on") or [])
+            note = (f"drawing text only — the same figure is on {_n} other part"
+                    f"{'s' if _n != 1 else ''}; no measured gauge — confirm")
+        elif tb.get("source"):
+            try:
+                from source_precedence import display_name as _dn      # noqa: PLC0415
+                note = f"from {_dn(tb['source']) or tb['source']}"
+            except Exception:                                    # noqa: BLE001
+                note = f"from {tb['source']}"
+        return _esc(txt) + (f'<br><span class="mini">{_esc(note)}</span>' if note else "")
     return "—"
 
 
@@ -3365,16 +3509,76 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         except (TypeError, ValueError):
             return 0.0
 
-    def subtotal(pn: str, seen: set) -> float:
-        if pn in seen:
+    # ── A LINE UNDER TWO PARENTS IS ONE LINE, SHARED — NOT TWO LINES ─────────────────
+    #
+    # 12173-02, 1 Oct: the tab 12173-03-06M hangs under frames 202 and 203 and printed
+    # "16 / £0.33" under EACH, so each frame's "members charged" was £7.30 and their parent's
+    # £14.27 — siblings that did not add up to their parent. The ticket strip WINDMILL: WSF45
+    # did the same under the pocket (×8) and the rack (×1). The sheet charges each line once
+    # (Estimate!93). So each parent shows its SHARE: the cascade's own per-parent figure
+    # (node.qty_by_parent — the numbers the BOMs & Routes trail prints, after precedence and
+    # any printed-total override), or on a summary compiled before that existed, the parent's
+    # count × the raw edge. Shares are normalised, so they always add up to the whole line.
+    # Where neither gives a count, money is not split on a guess: the whole line goes under
+    # the first parent and the others say it is charged there.
+    parents_of: Dict[str, List[str]] = {}
+    for _p, _ks in children.items():
+        for _k in _ks:
+            if _p not in _gone and _p not in parents_of.get(_k, []):
+                parents_of.setdefault(_k, []).append(_p)
+
+    def _edge_count(parent: str, child: str) -> float:
+        for e in (nodes.get(parent) or {}).get("children") or []:
+            if isinstance(e, dict) and str(e.get("part_number") or "").strip().upper() == child:
+                try:
+                    return float(e.get("qty") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+        return 0.0
+
+    def share(parent: Optional[str], child: str) -> Tuple[Optional[float], float]:
+        """(the quantity under this parent, the fraction of the line it carries)."""
+        ps = sorted(parents_of.get(child) or [])
+        if parent is None or len(ps) <= 1 or parent not in ps:
+            return None, 1.0
+        node = nodes.get(child) or {}
+        byp: Dict[str, float] = {}
+        for k, v in (node.get("qty_by_parent") or {}).items():
+            try:
+                byp[str(k).strip().upper()] = float(v or 0)
+            except (TypeError, ValueError):
+                continue
+        w = {p: byp.get(p, 0.0) for p in ps}
+        if sum(w.values()) <= 0:
+            def _pq(p: str) -> float:
+                try:
+                    return float((nodes.get(p) or {}).get("qty_per_unit") or 0)
+                except (TypeError, ValueError):
+                    return 0.0
+            w = {p: _pq(p) * _edge_count(p, child) for p in ps}
+        tot = sum(w.values())
+        if tot <= 0:
+            return None, (1.0 if parent == ps[0] else 0.0)
+        frac = w[parent] / tot
+        _l = by_pn.get(child) or {}
+        try:
+            q_all = float(_l.get("qty_per_unit") if _l.get("qty_per_unit") not in (None, "")
+                          else node.get("qty_per_unit") or 0)
+        except (TypeError, ValueError):
+            q_all = 0.0
+        return (q_all * frac if q_all else w[parent]), frac
+
+    def subtotal(pn: str, stack: Tuple[str, ...] = ()) -> float:
+        if pn in stack:
             return 0.0
-        seen.add(pn)
         total = money_of(by_pn.get(pn) or {})
         for k in children.get(pn, []):
-            total += subtotal(k, seen)
+            total += share(pn, k)[1] * subtotal(k, stack + (pn,))
         return total
 
-    def row(pn: str) -> str:
+    shared_any = [False]
+
+    def row(pn: str, parent: Optional[str] = None) -> str:
         l = by_pn.get(pn) or {"part_number": pn, "description": (nodes.get(pn) or {}).get("description", ""),
                               "kind": (nodes.get(pn) or {}).get("kind", ""), "qty_per_unit": (nodes.get(pn) or {}).get("qty_per_unit")}
         part = parts.get(pn) or {}
@@ -3414,6 +3618,24 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             money = "—"
         qty = l.get("qty_per_unit")
         qty_txt = _num(qty, 2).rstrip("0").rstrip(".") if qty not in (None, "") else "—"
+        q_here, frac = share(parent, pn)
+        if frac < 1.0:
+            # THIS PARENT'S SHARE, AND THE WHOLE LINE IT IS A SHARE OF. The £ here is derived
+            # (the sheet's amount × the share), so the note names the cell and the full amount.
+            shared_any[0] = True
+            others = [p for p in sorted(parents_of.get(pn) or []) if p != parent]
+            _whole = (_money(_shown["amount"]) if _shown["basis"] == "workbook" else "")
+            _cell = str(l.get("charged_cell") or "").strip()
+            note = ("of " + qty_txt + (f" / {_whole}" if _whole else "")
+                    + (f" at {_cell}" if _cell else "")
+                    + f" — also under {', '.join(others)}; "
+                    + ("the sheet charges this line once" if frac > 0 else "charged there"))
+            if _shown["basis"] == "workbook" and frac > 0:
+                money = _money(float(_shown["amount"] or 0) * frac)
+            elif frac <= 0:
+                money = "—"
+            money += f'<br><span class="mini">{_esc(note)}</span>'
+            qty_txt = (_num(q_here, 2).rstrip("0").rstrip(".") if q_here is not None else "—")
         src = str(origin.get("label") or "")
         flags = [f for f in (l.get("review_flags") or []) if f][:2]
         return (f'<tr><td><code>{_esc(l.get("part_number") or pn)}</code></td>'
@@ -3429,27 +3651,60 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             '<th>Material</th><th>Dimensions</th><th>Price source</th>'
             '<th class="n">Charged £</th></tr></thead>')
 
-    def render(pn: str, seen: set, depth: int = 0) -> str:
+    rendered_under: Dict[str, str] = {}
+
+    def reference_row(pn: str, parent: str) -> str:
+        """A shared sub-assembly drawn in full elsewhere: this parent's share, in one row."""
+        shared_any[0] = True
+        l = by_pn.get(pn) or {}
+        node = nodes.get(pn) or {}
+        q_here, frac = share(parent, pn)
+        where = rendered_under.get(pn) or ", ".join(
+            p for p in sorted(parents_of.get(pn) or []) if p != parent)
+        _amt = subtotal(pn) * frac
+        qty_txt = _num(q_here, 2).rstrip("0").rstrip(".") if q_here is not None else "—"
+        note = (f"rendered in full under {where}; this parent's share "
+                + (f"{_money(_amt)}" if frac > 0 else "is none — charged there"))
+        return (f'<tr><td><code>{_esc(l.get("part_number") or pn)}</code></td>'
+                f'<td>{_esc(l.get("description") or node.get("description") or "")}'
+                f'<br><span class="mini">{_esc(note)}</span></td>'
+                f'<td class="n">{qty_txt}</td><td></td><td></td><td>sub-assembly</td>'
+                f'<td class="n">{_money(_amt) if frac > 0 else "—"}</td></tr>')
+
+    def render(pn: str, seen: set, depth: int = 0, parent: Optional[str] = None) -> str:
         if pn in seen:
             return ""
         seen.add(pn)
+        if parent is not None:
+            rendered_under.setdefault(pn, parent)
         kids = children.get(pn, [])
         if not kids:
-            return f'<table>{head}<tbody>{row(pn)}</tbody></table>' if depth == 0 else row(pn)
+            return f'<table>{head}<tbody>{row(pn)}</tbody></table>' if depth == 0 else row(pn, parent)
         l = by_pn.get(pn) or {}
         node = nodes.get(pn) or {}
-        leaf_rows = "".join(row(k) for k in kids if not children.get(k))
-        sub = "".join(render(k, seen, depth + 1) for k in kids if children.get(k))
+        leaf_rows = "".join(row(k, pn) for k in kids if not children.get(k))
+        # A SHARED SUB-ASSEMBLY IS DRAWN ONCE. Its other parents carry one row: where it is
+        # drawn and their share of it — so a heading's figure never includes a member twice.
+        refs = "".join(reference_row(k, pn) for k in kids if children.get(k) and k in seen)
+        sub = "".join(render(k, seen, depth + 1, pn) for k in kids
+                      if children.get(k) and k not in seen)
         for k in kids:
             seen.add(k)
         own = row(pn) if money_of(l) else ""
+        _ps = sorted(parents_of.get(pn) or [])
+        split = ""
+        if len(_ps) > 1:
+            shared_any[0] = True
+            _whole = subtotal(pn)
+            split = (" &middot; shared: " + ", ".join(
+                f"{_money(_whole * share(p, pn)[1])} under {_esc(p)}" for p in _ps))
         return (f'<details class="asm" open><summary><code>{_esc(l.get("part_number") or pn)}</code> '
                 f'{_esc(l.get("description") or node.get("description") or "")} &middot; '
                 f'{_esc(str(node.get("kind") or l.get("kind") or "assembly"))} &middot; '
                 f'qty/unit {_esc(node.get("qty_per_unit") or l.get("qty_per_unit") or 1)} &middot; '
                 f'{len(kids)} member{"s" if len(kids) != 1 else ""} &middot; '
-                f'members charged {_money(subtotal(pn, set()))}</summary>'
-                f'<div class="scroll"><table>{head}<tbody>{own}{leaf_rows}</tbody></table></div>{sub}</details>')
+                f'members charged {_money(subtotal(pn))}{split}</summary>'
+                f'<div class="scroll"><table>{head}<tbody>{own}{leaf_rows}{refs}</tbody></table></div>{sub}</details>')
 
     seen: set = set()
     blocks = [render(r, seen) for r in roots if children.get(r)]
@@ -3480,7 +3735,12 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
             f'<p>Every line the sheet carries, under the assembly it belongs to. <b>Charged £</b> is '
             f"the sheet's own figure for the line — a nested part's share of a whole sheet, a "
             f'section by length, a bought-in at its unit price. Where the engine\'s own net-part '
-            f'figure differs it is shown beneath, as not charged.</p>'
+            f'figure differs it is shown beneath, as not charged.'
+            + (" A line under more than one parent shows, under each, that parent's share — "
+               "Qty/unit is per quoted unit through that parent, and the £ is the sheet's "
+               "amount for the whole line times the share; the note beneath names the whole "
+               "line and its cell, which the sheet charges once." if shared_any[0] else "")
+            + '</p>'
             + "".join(blocks) + recon)
 
 

@@ -321,22 +321,30 @@ CELL_MAP = {
     # BOM / Standard Materials block. Engine writes desc, code, PRICE, qty, scrap.
     # Columns from the dump: C=desc, H=code, I=supplier, J=price, K=qty, L=scrap.
     "bom": {
-        "first_row": 11, "last_row": 50,          # 40 slots  (_CELLMAP_WIDENED_BOM40: was 11..25 = 15; widened in Excel 2026-07-13 after 1282 silently dropped its 16th BOM part)
+        "title": "Bill of Materials",
+        "first_row": 11, "last_row": 50,         # 40 slots  (_CELLMAP_WIDENED_BOM40: was 11..25 = 15; widened in Excel 2026-07-13 after 1282 silently dropped its 16th BOM part)
         "col_desc": 3, "col_code": 8, "col_supplier": 9,
         "col_price": 10, "col_qty": 11, "col_scrap": 12,
     },
 
     # Tube / Wire block. Engine writes desc, qty, gauge, length.
     # Header row 27: C=desc, E=qty, F=gauge, G=length (H..M are formula-driven).
+    # THE KEY IS "tube"; THE TEMPLATE CALLS THE BLOCK "Wire" (its label two rows above the
+    # span, which derive_cellmap_from_template checks and now keeps as the title). 12173-02's
+    # notes said "costed by length on the Tube block" for the riser and the hook arm, beside
+    # rows the sheet labels "costed in Wire below" — and Tube is also a LABOUR department.
+    # Every surface names a block by block_title(key), never from the key.
     "tube": {
-        "first_row": 53, "last_row": 60,          # 8 slots (+25: BOM widened)
+        "title": "Wire",
+        "first_row": 53, "last_row": 60,         # 8 slots (+25: BOM widened)
         "col_desc": 3, "col_qty": 5, "col_gauge": 6, "col_length": 7,
     },
 
     # Sheet Steel block. Engine writes desc, qty, length, width, gauge.
     # Header row 37: C=desc, E=qty, F=len, G=wid, H=gauge, I=sheetL, J=sheetW (K..=formula).
     "steel": {
-        "first_row": 63, "last_row": 81,          # 19 slots (+25: BOM widened 2026-07-13)
+        "title": "Sheet Steel",
+        "first_row": 63, "last_row": 81,         # 19 slots (+25: BOM widened 2026-07-13)
         "col_desc": 3, "col_qty": 5, "col_length": 6, "col_width": 7, "col_gauge": 8,
         "col_sheet_l": 9, "col_sheet_w": 10,      # optional; WB defaults if blank
         "col_holes": 19, "col_internal_cut": 20,  # S/T: laser-calc inputs (No of holes / Internal Cutting Distance)
@@ -346,7 +354,8 @@ CELL_MAP = {
     # Other Sheet Material (board/acrylic/HIPS). desc, qty, length, width, thickness.
     # Header row 50: C=desc, D=qty, E=len, F=wid, G=thick, H=sheetL, I=sheetW.
     "other_sheet": {
-        "first_row": 84, "last_row": 91,          # 8 slots (+25: BOM widened 2026-07-13)
+        "title": "Other Sheet Material",
+        "first_row": 84, "last_row": 91,         # 8 slots (+25: BOM widened 2026-07-13)
         "col_desc": 3, "col_qty": 4, "col_length": 5, "col_width": 6, "col_thick": 7,
         "col_sheet_l": 8, "col_sheet_w": 9, "col_cost_per_sheet": 12,
         # J, ONE LEFT OF SHEET STEEL'S. Other Sheet has no gauge column, so its whole
@@ -3559,6 +3568,15 @@ def fill_missing_block_totals(ws, cm, flags=None) -> Dict[str, List[int]]:
     return filled
 
 
+def block_title(key: Any) -> str:
+    """What the Estimate sheet calls a material block — the template's own label, never the
+    engine's internal key ('tube' is the template's Wire block)."""
+    blk = CELL_MAP.get(str(key or "").strip()) if isinstance(CELL_MAP, dict) else None
+    if isinstance(blk, dict) and str(blk.get("title") or "").strip():
+        return str(blk["title"]).strip()
+    return str(key or "")
+
+
 def derive_cellmap_from_template(ws, cm, flags=None) -> Dict[str, Any]:
     """Read every block's rows from the template itself, and update the map in place.
 
@@ -3599,10 +3617,20 @@ def derive_cellmap_from_template(ws, cm, flags=None) -> Dict[str, Any]:
         expect = (("bom", 1, "bill of materials"), ("tube", 2, "wire"),
                   ("steel", 2, "sheet steel"), ("other_sheet", 2, "other sheet material"))
         found: Dict[str, Tuple[int, int]] = {}
+        titles: Dict[str, str] = {}
         for (key, above, label), (fr, lr) in zip(expect, spans):
             if not rows_c.get(fr - above, "").startswith(label):
                 return moved                   # the formula and the labels disagree: keep the map
             found[key] = (fr, lr)
+            # THE BLOCK'S NAME IS THE TEMPLATE'S OWN LABEL, read from the cell just checked —
+            # what every surface calls the block (block_title), so a note never names it by
+            # the engine's internal key.
+            _t = ws.cell(fr - above, 3).value
+            if isinstance(_t, str) and _t.strip():
+                titles[key] = _t.strip()
+        for key, _t in titles.items():
+            if isinstance(cm.get(key), dict):
+                cm[key]["title"] = _t
         lab = next((r for r, v in sorted(rows_c.items())
                     if r > found["other_sheet"][1] and v == "labour"), None)
         op_row = next((r for r, v in sorted(rows_c.items())
@@ -5539,9 +5567,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # at a row that isn't there.
     _spilled_from_blocks: List[Dict[str, Any]] = []
     _board_spill: List[Dict[str, Any]] = []
-    for _blk_name, _blk_list, _blk_key in (("Sheet Steel", steel_parts, "steel"),
-                                           ("Other Sheet Material", board_parts, "other_sheet"),
-                                           ("Wire", wire_parts, "tube")):
+    for _blk_list, _blk_key in ((steel_parts, "steel"), (board_parts, "other_sheet"),
+                                (wire_parts, "tube")):
+        _blk_name = str((cm.get(_blk_key) or {}).get("title") or block_title(_blk_key))
         _cap_map = cm.get(_blk_key) or {}
         _cap = int(_cap_map.get("last_row", 0)) - int(_cap_map.get("first_row", 0)) + 1
         if _cap > 0 and len(_blk_list) > _cap:
@@ -5585,8 +5613,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _list_xrefs = bool(getattr(_cfg_x, "BOM_LISTS_PARTS_COSTED_IN_BLOCKS", False))
     except Exception:                                                # noqa: BLE001
         _list_xrefs = False
-    for _blk_name, _blk in ((("Sheet Steel", steel_parts), ("Other Sheet Material", board_parts),
-                             ("Wire", wire_parts)) if _list_xrefs else ()):
+    for _blk_key, _blk in ((("steel", steel_parts), ("other_sheet", board_parts),
+                            ("tube", wire_parts)) if _list_xrefs else ()):
+        _blk_name = str((cm.get(_blk_key) or {}).get("title") or block_title(_blk_key))
         for _xp in _blk:
             if not isinstance(_xp, dict) or not _xp.get("part_number"):
                 continue

@@ -572,7 +572,33 @@ def _extract_sheet_size_candidates(text: str) -> List[str]:
     return _dedupe_strings(cleaned)
 
 
-def _extract_description_candidates(text: str) -> List[str]:
+def _table_column_words() -> set:
+    """The parts-table column headers (config PARTS_TABLE_COLUMN_WORDS; the parts-list
+    reader's own header words when config does not say)."""
+    words = None
+    try:
+        import config as _cfg
+        words = getattr(_cfg, "PARTS_TABLE_COLUMN_WORDS", None)
+    except Exception:                                            # noqa: BLE001
+        words = None
+    if not words:
+        try:
+            from _bom_words_reader import HEADER_TOKENS as words
+        except Exception:                                        # noqa: BLE001
+            words = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.")
+    return {str(w).strip().upper() for w in words if str(w).strip()}
+
+
+def starts_with_a_table_column(value: Any) -> bool:
+    """True when a value begins with a parts-table column header — the head of a table read
+    as if it were a title field ("QTY 1 <code> FRONT FRAME ASSEMBLY 1 …")."""
+    tokens = str(value or "").strip().split()
+    if not tokens:
+        return False
+    return tokens[0].upper().rstrip(":") in _table_column_words()
+
+
+def _extract_description_candidates(text: str, refused: Optional[List[str]] = None) -> List[str]:
     values = _extract_labeled_value(
         text,
         r"DESCRIPTION\s*[:\-]?",
@@ -583,6 +609,17 @@ def _extract_description_candidates(text: str) -> List[str]:
         if len(value) < 3:
             continue
         if "PROJECT TITLE" in value.upper():
+            continue
+        # A DESCRIPTION LABEL FOLLOWED BY ANOTHER COLUMN HEADER IS A TABLE HEAD, NOT A TITLE.
+        # 12173-02: on SDI's template "DESCRIPTION" is only the parts list's column, so the
+        # value after it began "QTY 1 12173-03-202 FRONT FRAME ASSEMBLY 1 …" and frame weld
+        # 201 was titled with row 1 of its own parts list. Every DESCRIPTION candidate on the
+        # four sheets read was parts-table text. Refused here; nothing invented in its place —
+        # the refused text is kept (title block `descriptions_refused`) so the graph can say
+        # that no reader titled the part.
+        if starts_with_a_table_column(value):
+            if refused is not None:
+                refused.append(value)
             continue
         cleaned.append(value)
     return cleaned
@@ -936,8 +973,9 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     if revision_updates:
         ordered_thicknesses = revision_updates + [value for value in thicknesses if value not in revision_updates]
         thicknesses = ordered_thicknesses
-    descriptions = _extract_description_candidates(raw_text)
-    colours = _extract_colour_candidates(raw_text) or _findall_unique(COLOUR_PATTERN, normalized_text, flags=re.IGNORECASE)
+    descriptions_refused: List[str] = []
+    descriptions = _extract_description_candidates(raw_text, descriptions_refused)
+    colours =_extract_colour_candidates(raw_text) or _findall_unique(COLOUR_PATTERN, normalized_text, flags=re.IGNORECASE)
     drawn_by = _extract_drawn_by_candidates(raw_text)
     modified_by = _extract_modified_by_candidates(raw_text)
     clients = _extract_client_candidates(raw_text)
@@ -961,6 +999,7 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "sheet_sizes": sheet_sizes,
         "scale": scale,
         "descriptions": descriptions,
+        "descriptions_refused": descriptions_refused,
         "clients": clients,
         "project_titles": project_titles,
         "quantities": _findall_unique(QUANTITY_PATTERN, normalized_text, flags=re.IGNORECASE),
@@ -1006,6 +1045,7 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "sheet_sizes": _pick_preferred(primary, fallback, "sheet_sizes"),
         "scale": _pick_preferred(primary, fallback, "scale"),
         "descriptions": _pick_preferred(primary, fallback, "descriptions"),
+        "descriptions_refused": _pick_preferred(primary, fallback, "descriptions_refused"),
         "clients": _pick_preferred(primary, fallback, "clients"),
         "project_titles": _pick_preferred(primary, fallback, "project_titles"),
         "quantities": _pick_preferred(primary, fallback, "quantities"),
