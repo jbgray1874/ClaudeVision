@@ -57,16 +57,30 @@ def test_only_the_selected_drawings_are_staged(staging, tmp_path):
     assert res["copied_count"] == 3
 
 
-def test_a_folder_is_walked_so_adding_a_job_folder_still_works(staging, tmp_path):
+def test_a_job_folder_stages_its_own_files_and_never_a_sub_folder(staging, tmp_path):
+    """"We should never tackle sub directories / folders" — James Gray, 1 Oct 2026, on 12173-02,
+    whose job folder holds two directories that are not the job. The sub-folder is named in
+    what was skipped, so a drawing that does belong can be selected by name."""
     pack = tmp_path / "11650-04"
     _pdf(pack / "ga.pdf")
     _pdf(pack / "PDFs" / "detail.pdf")
     (pack / "notes.docx").write_bytes(b"x")
 
     res = staging.stage([str(pack)], client="MandS", drawing="11650-04")
-    assert sorted(p.name for p in Path(res["folder"]).iterdir()) == ["detail.pdf", "ga.pdf"]
+    assert sorted(p.name for p in Path(res["folder"]).iterdir()) == ["ga.pdf"]
     assert any("notes.docx" in s["path"] for s in res["skipped"]), \
         "a non-drawing is named, not silently dropped"
+    assert any(s["path"].endswith("PDFs") and "sub-folder" in s["reason"]
+               for s in res["skipped"]), "the sub-folder is named as never read"
+
+
+def test_a_file_in_a_sub_folder_selected_by_name_is_staged(staging, tmp_path):
+    pack = tmp_path / "11650-04"
+    _pdf(pack / "ga.pdf")
+    _pdf(pack / "PDFs" / "detail.pdf")
+    res = staging.stage([str(pack), str(pack / "PDFs" / "detail.pdf")],
+                        client="MandS", drawing="11650-04")
+    assert sorted(p.name for p in Path(res["folder"]).iterdir()) == ["detail.pdf", "ga.pdf"]
 
 
 def test_two_sources_merge_into_one_pack(staging, tmp_path):

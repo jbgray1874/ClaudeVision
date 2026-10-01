@@ -1384,8 +1384,15 @@ def main() -> None:
             _sdd_dxfs = []
             try:
                 if job_folder is not None:
-                    _sdd_dxfs = [p for p in Path(job_folder).rglob("*")
-                                 if p.suffix.lower() == ".dxf"]
+                    # The job folder's own DXFs — never a sub-folder's.
+                    _sdd_dxfs = [p for p in sorted(Path(job_folder).iterdir())
+                                 if p.is_file() and p.suffix.lower() == ".dxf"]
+                    # And the DXFs the engine itself converted from the job's DWGs — its own
+                    # output folder, named, not a sub-folder of the customer's.
+                    _conv = Path(job_folder) / "_dxf_from_dwg"
+                    if _conv.is_dir():
+                        _sdd_dxfs += [p for p in sorted(_conv.iterdir())
+                                      if p.is_file() and p.suffix.lower() == ".dxf"]
             except Exception:
                 _sdd_dxfs = []
             # ONE SNAPSHOT, TWO OUTPUTS. The spreadsheet estimating works from and the page

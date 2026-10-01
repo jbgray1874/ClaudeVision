@@ -55,10 +55,10 @@ def test_a_job_folder_is_walked_because_that_is_what_a_pack_is(tmp_path):
     _pdf(pack / "sub" / "a.pdf")
 
     printable, skipped = drawings_print.collect([str(pack)])
-    assert [p.name for p in printable] == ["b.pdf", "a.pdf"], \
-        "top-level drawings first, then each sub-folder's, in path order"
+    # A job folder's own drawings only — its sub-folders are never read (1 Oct 2026).
+    assert [p.name for p in printable] == ["b.pdf"]
     assert printable == drawings_print.collect([str(pack)])[0], "and stable across calls"
-    assert not skipped
+    assert [p.name for p, _ in skipped] == ["sub"]
 
 
 def test_a_model_is_named_as_unprintable_not_dropped(tmp_path):

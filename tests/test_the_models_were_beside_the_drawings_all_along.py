@@ -139,10 +139,20 @@ def test_a_cad_folder_is_not_an_old_one(staging, tmp_path):
     comparison, and the consumer's list has the same bug fixed the same way."""
     pack = tmp_path / "12349-02"
     _pdf(pack / "ga.pdf")
-    _model(pack / "CAD Folder" / "12349-02-69-03M.SLDPRT")
+    _model(pack / "12349-02-69-03M CAD Folder.SLDPRT")
 
     res = staging.stage([str(pack / "ga.pdf")], client="Fanatics", drawing="12349-02")
     assert res["native_unselected_count"] == 1
+
+
+def test_a_model_in_a_sub_folder_is_not_counted(staging, tmp_path):
+    """Sub-folders are never read (1 Oct 2026), so a model one directory down is not "a
+    model beside the drawings"."""
+    pack = tmp_path / "12349-02"
+    _pdf(pack / "ga.pdf")
+    _model(pack / "CAD" / "12349-02-69-03M.SLDPRT")
+    res = staging.stage([str(pack / "ga.pdf")], client="Fanatics", drawing="12349-02")
+    assert res["native_unselected_count"] == 0
 
 
 def test_the_two_exclusion_lists_have_not_drifted(staging):

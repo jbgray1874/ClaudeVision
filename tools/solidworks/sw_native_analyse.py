@@ -1956,6 +1956,11 @@ def find_sw_files(root: str, skip_archive: bool = True) -> List[str]:
     root_path = Path(root)
     found = []
     for dirpath, dirs, files in os.walk(root):
+        # THE JOB FOLDER ONLY, NEVER ITS SUB-FOLDERS — "we should never tackle sub directories /
+        # folders" (James Gray, 1 Oct 2026). An assembly's own references are resolved by
+        # SolidWorks when it opens the assembly; nothing here needs to find them by walking.
+        # Same scope as the consumer's native_files_state.
+        dirs[:] = []
         if skip_archive:
             # Prune archive/superseded subfolders so os.walk does not descend into them.
             # ONE RULE, shared with the fingerprint and the consumer — see _is_excluded_dir.
@@ -1989,9 +1994,9 @@ def explain_no_files(root: str) -> str:
     """
     everything = find_sw_files(root, skip_archive=False)
     if not everything:
-        return ("There are no .SLDPRT/.SLDASM/.SLDDRW files anywhere under that folder. A "
-                "job's *-Technical folder is often 2D only (DXF/PDF) — the native models "
-                "usually live elsewhere under the job root.")
+        return ("There are no .SLDPRT/.SLDASM/.SLDDRW files directly in that folder, and "
+                "sub-folders are never read. If the job's models are in a sub-folder, put "
+                "them beside the drawings or select them by name.")
     kept = set(find_sw_files(root, skip_archive=True))
     dropped = [p for p in everything if p not in kept]
     if not dropped:                                  # pragma: no cover — caller checked
@@ -2255,7 +2260,7 @@ def _fingerprint_native_files(target: str) -> str:
     try:
         root = _fingerprint_scope(target)
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if not _is_excluded_dir(d)]
+            dirnames[:] = []                 # the job folder only, as find_sw_files reads it
             for fn in filenames:
                 if os.path.splitext(fn)[1].lower() in exts and not fn.startswith("~$"):
                     try:

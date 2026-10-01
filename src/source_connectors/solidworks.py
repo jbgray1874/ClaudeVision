@@ -876,7 +876,10 @@ def native_files_state(folder: str | Path) -> Dict[str, Any]:
             return out
         out["folder_reachable"] = True
         found = []
-        for p in sorted(root.rglob("*")):
+        # THE JOB FOLDER'S OWN MODELS, NEVER A SUB-FOLDER'S (James Gray, 1 Oct 2026: "we should
+        # never tackle sub directories / folders"). The analyser reads the same scope —
+        # sw_native_analyse.find_sw_files — so the two still agree on what was there to read.
+        for p in sorted(root.iterdir()):
             if not p.is_file() or p.suffix.lower() not in _NATIVE_EXTS:
                 continue
             # SCOPE MUST MATCH THE ANALYSER'S. Counting files it does not read produces the

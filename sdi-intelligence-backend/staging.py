@@ -167,8 +167,11 @@ def _clear_folder(folder: Path) -> int:
 def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
     """The page's list, turned into the actual files to copy.
 
-    Folders are walked, because the Drawings panel holds a job folder as often as it holds
-    files. Order is by full path so the same list stages identically twice.
+    A folder contributes the files directly in it — NEVER its sub-folders. "We should never
+    tackle sub directories / folders" — James Gray, 1 Oct 2026, on 12173-02, whose job folder
+    holds two directories that are not part of the job (old issues, a supplier's set). A
+    sub-folder is named in what was skipped, so a drawing that really is wanted can be added
+    by selecting it. Order is by full path so the same list stages identically twice.
     """
     found: List[Path] = []
     skipped: List[Tuple[str, str]] = []
@@ -209,9 +212,13 @@ def _expand(paths: Iterable[str]) -> Tuple[List[Path], List[Tuple[str, str]]]:
     for raw in paths:
         p = Path(str(raw))
         if p.is_dir():
-            for child in sorted(p.rglob("*")):
+            for child in sorted(p.iterdir()):
                 if child.is_file():
                     consider(child)
+                elif child.is_dir():
+                    skipped.append((str(child), "a sub-folder — never read; select a "
+                                                "file in it by name if it belongs to "
+                                                "the job"))
         elif p.is_file():
             consider(p, explicit=True)
         else:
@@ -248,7 +255,8 @@ def _sidecars_for(paths: Iterable[str]) -> List[Path]:
             # therefore never finds it, and the run reads as a job with no models at all.
             # Upward is one level and an exact filename: no rglob of a parent, which on an
             # estimating share could be the whole client.
-            for cand in (folder / name, folder.parent / name, *sorted(folder.rglob(name))):
+            # And never DOWN into a sub-folder: those are not part of the job.
+            for cand in (folder / name, folder.parent / name):
                 try:
                     if cand.is_file() and str(cand).lower() not in seen:
                         seen.add(str(cand).lower())
@@ -276,7 +284,8 @@ def _native_models_beside(paths: Iterable[str]) -> List[Path]:
     seen: set = set()
     for folder in folders:
         try:
-            children = sorted(folder.rglob("*"))
+            # The selection's own folder only — a sub-folder is not part of the job.
+            children = sorted(folder.iterdir())
         except OSError:
             continue
         for cand in children:

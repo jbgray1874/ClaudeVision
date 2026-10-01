@@ -83,7 +83,14 @@ def inventory(folder: Path, *, converted: Optional[Sequence[Path]] = None) -> Di
     # The same filename can exist in two places under one job folder. Reporting only the
     # name makes two copies look like one file listed twice, which reads as a bug in the
     # listing rather than as what it is — a duplicate that may or may not be identical.
-    _files = [p for p in sorted(folder.rglob("*")) if p.is_file() and not _is_noise(p)]
+    # THE JOB FOLDER'S OWN FILES, NEVER ITS SUB-FOLDERS — they are not part of the job
+    # (James Gray, 1 Oct 2026). Two copies of one name can therefore no longer arise from a
+    # sub-folder; the duplicate check below stays for the case that remains.
+    _files = [p for p in sorted(folder.iterdir()) if p.is_file() and not _is_noise(p)]
+    # The DXFs WE produced from the job's DWGs sit in the converter's own output folder. They
+    # are the engine's output, not a sub-folder of the customer's, so they are listed by name.
+    _have = {p.resolve() for p in _files}
+    _files += [Path(m) for m in sorted(made) if Path(m).is_file() and Path(m) not in _have]
     _seen: Dict[str, int] = {}
     for p in _files:
         _seen[p.name] = _seen.get(p.name, 0) + 1
@@ -610,7 +617,7 @@ def convert_dwgs(
     DWGs were not used.
     """
     folder = Path(folder)
-    _all_dwgs = [p for p in sorted(folder.rglob("*"))
+    _all_dwgs = [p for p in sorted(folder.iterdir())        # never a sub-folder
                  if p.is_file() and p.suffix.lower() in CONVERTIBLE and not _is_noise(p)]
 
     # ── A GENERAL ARRANGEMENT IS NOT WORTH A COM CALL ──────────────────────────────────

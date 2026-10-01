@@ -85,17 +85,21 @@ def _num(v: Any) -> Optional[int]:
 
 
 def _drawings_under(folder: str) -> List[str]:
-    """Every readable drawing inside a job folder, at any depth.
+    """Every readable drawing directly in a job folder — never in its sub-folders.
 
-    A job's flats often sit in a sub-folder ("flats/", "DXF/") beside the GA, so the search is
-    recursive WITHIN the job — but the job boundary itself is the enquiry's immediate child, set
-    by the caller, never crossed here.
+    "We should never tackle sub directories / folders" — James Gray, 1 Oct 2026. A job folder's
+    sub-folders hold things that are not the job (old issues, a supplier's set); a drawing that
+    belongs is put beside the GA or selected by name.
     """
     found: List[str] = []
-    for root, _dirs, files in os.walk(folder):
-        for name in files:
-            if os.path.splitext(name)[1].lower() in DRAWING_EXTENSIONS:
-                found.append(os.path.join(root, name))
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    for name in names:
+        path = os.path.join(folder, name)
+        if os.path.isfile(path) and os.path.splitext(name)[1].lower() in DRAWING_EXTENSIONS:
+            found.append(path)
     return sorted(found)
 
 

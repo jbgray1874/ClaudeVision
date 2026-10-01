@@ -190,9 +190,12 @@ def collect(paths: List[str], ignored: Optional[List[Path]] = None
     for raw in paths:
         p = Path(raw)
         if p.is_dir():
-            for child in sorted(p.rglob("*")):
+            # The folder's own files; a sub-folder is not part of the job.
+            for child in sorted(p.iterdir()):
                 if child.is_file():
                     consider(child)
+                elif child.is_dir():
+                    skipped.append((child, "a sub-folder — never read"))
         elif p.is_file():
             consider(p)
         else:

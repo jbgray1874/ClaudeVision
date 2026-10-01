@@ -43,12 +43,15 @@ def test_each_sub_folder_is_one_job_named_by_the_folder(tmp_path):
     assert ids == {"11650-00-GA", "11650-04-SA01"}
 
 
-def test_drawings_are_found_at_any_depth_within_a_job(tmp_path):
+def test_a_jobs_sub_folders_are_never_read(tmp_path):
+    """Reversed 1 Oct 2026 by James Gray: "we should never tackle sub directories / folders".
+    12173-02's job folder holds two directories that are not the job; only the files beside
+    the GA are."""
     root = str(tmp_path / "11650")
-    _job(root, "11650-04", "ga.pdf", "flats/dxf/left.dxf", "flats/dxf/right.dxf")
+    _job(root, "11650-04", "ga.pdf", "flat.dxf", "old issue/ga_revA.pdf", "flats/dxf/left.dxf")
     m = enquiry.read_enquiry(root)
     card = m["jobs"][0]
-    assert card["drawing_count"] == 3, "a flat in a nested sub-folder was not counted"
+    assert card["drawing_count"] == 2, "a drawing in a sub-folder was counted"
 
 
 def test_dwg_only_job_is_not_empty(tmp_path):

@@ -127,12 +127,13 @@ def test_an_empty_folder_and_an_excluded_folder_get_different_answers(sw, tmp_pa
     (empty / "11650-01.PDF").write_bytes(b"")
     assert "no .SLDPRT" in sw["explain_no_files"](str(empty))
 
+    # A job folder's sub-folders are never read (James Gray, 1 Oct 2026), so models that sit
+    # only in one are not found — and the message says so rather than "look elsewhere".
     job = tmp_path / "11650"
     _models(job / "Superseded", "a.SLDPRT", "b.SLDPRT")
     told = sw["explain_no_files"](str(job))
-    assert "2 of 2 model file(s) were EXCLUDED" in told
-    assert "Superseded" in told, "the message does not name the folder that did the excluding"
-    assert "point me directly at the subfolder" in told
+    assert "sub-folders are never read" in told
+    assert sw["find_sw_files"](str(job), skip_archive=False) == []
 
 
 def test_the_diagnostic_names_a_file_name_exclusion_too(sw, tmp_path):
