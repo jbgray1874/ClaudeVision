@@ -238,6 +238,17 @@ def clean_part_number(value: Any) -> str:
     return text
 
 
+def spelling_key(value: Any) -> str:
+    """Two spellings of one printed code compare equal here, and nowhere looser: the graph's
+    own join rule (whitespace off the cleaned code). A report may call two codes one only
+    where the graph would — "FIXING 1180" and "FIXING1180" yes, "FIXING-1180" no.
+
+    12173-02: the top of the report said "Not linked to 12173-02-GA, so not priced: FIXING
+    1180" about a bolt the sheet carries and charges as FIXING1180 — the space was the only
+    difference, and the cross-kind refusal that kept the two apart was printed nowhere."""
+    return re.sub(r"\s+", "", clean_part_number(value))
+
+
 def clean_operation(value: Any) -> str:
     cleaned = re.sub(
         r"_+", "_",
@@ -316,6 +327,13 @@ class PartNode:
     # the count one parent takes and the reader that said so, then the product. A part under
     # two parents has two lines, and they add up to qty_per_unit. See add_descendants.
     qty_trail: List[str] = field(default_factory=list)
+    # THE SAME CASCADE, AS NUMBERS PER IMMEDIATE PARENT: how many of this part, per quoted
+    # unit, arrive through each parent. It is qty_trail in structured form — the figures the
+    # BOMs & Routes trail prints — so a page that hangs this part under two parents can give
+    # each its share instead of the whole line twice (12173-02: the tab 12173-03-06M under
+    # frames 202 and 203, 8 + 8 = 16; the ticket strip under the pocket ×8 and the rack ×1).
+    # Empty for a root, and on a summary compiled before it existed.
+    qty_by_parent: Dict[str, float] = field(default_factory=dict)
     parents: List[str] = field(default_factory=list)
     children: List[ChildEdge] = field(default_factory=list)
     evidence: Dict[str, Any] = field(default_factory=dict)
@@ -713,7 +731,9 @@ def _drawing_code_aliases(identities: Iterable[str],
     # one, because "11350-01-02 MIR" is what the drawing prints and a code the estimator
     # cannot find on the GA is worse than one with an extra space.
     def _squash(value: str) -> str:
-        return re.sub(r"\s+", "", value)
+        # The module's spelling_key is this rule; a code-column placeholder keeps its own
+        # spelling here so two placeholders never index together.
+        return spelling_key(value) or re.sub(r"\s+", "", value)
 
     _by_squash: Dict[str, str] = {}
     for _i in sorted(known, key=lambda v: (-len(v), v)):
@@ -2349,9 +2369,21 @@ def build_part_graph(
                     _via[_n] = _other
                     _stack.extend((children.get(_n) or {}).keys())
             _universe = set(raw) | set(extracted) | set(children) | set(parents) | set(records)
+            # A SECOND SPELLING OF A PART THE PRODUCT REACHES IS NOT AN UNLINKED LINE. An
+            # identity nothing else roots, with no children of its own, whose spelling_key
+            # matches exactly ONE reached identity is that part written another way — kept
+            # apart only because the two readings disagree on its kind. It is still set
+            # aside (never charged twice); it is named for what it is, not as a missing link.
+            _reach_by_key: Dict[str, List[str]] = {}
+            for _r in _reach:
+                _reach_by_key.setdefault(spelling_key(_r), []).append(_r)
+            _second: Dict[str, str] = {}
             for _n in sorted(_universe):
                 if not _n or _n in _reach or _is_generated_line(_n, records.get(_n)):
                     continue
+                _tw = _reach_by_key.get(spelling_key(_n)) or []
+                if not _via.get(_n) and len(_tw) == 1 and not children.get(_n):
+                    _second[_n] = _tw[0]
                 outside_product[_n] = _via.get(_n, "")
             # Read BEFORE the set-aside nodes lose their edges: which of the product's parts
             # each set-aside GA takes — the tell that the wrong drawing was named.
@@ -2400,7 +2432,28 @@ def build_part_graph(
                       f"{_via_root} is detail, not a second product — set aside "
                       f"{len(_members)} line(s) it alone reaches: {', '.join(_members)}",
                       flush=True)
-            _unlinked = sorted(k for k, v in outside_product.items() if not v)
+            _unlinked = sorted(k for k, v in outside_product.items() if not v
+                               and k not in _second)
+            for _n, _tw in sorted(_second.items()):
+                _ref = next((r for r in _refused_cross_kind
+                             if {r.get("identity"), r.get("target")} == {_n, _tw}), None)
+                _kinds = ({_ref["identity"]: _ref["identity_kind"],
+                           _ref["target"]: _ref["target_kind"]} if _ref else {})
+                _product_issues.append({
+                    "code": "second_spelling_of_a_reached_part",
+                    "root": "",
+                    "product": product_root,
+                    "identities": [_n],
+                    "identity": _n,
+                    "target": _tw,
+                    "kinds": _kinds,
+                    "detail": (f"{_n} is another spelling of {_tw}, which {product_root} "
+                               f"reaches; it is not charged as a line of its own"
+                               + ("; the two readings disagree whether it is made or "
+                                  "bought — rule which" if _kinds else "")),
+                })
+                print(f"   [graph] {_n} is another spelling of {_tw} (reached) — not a "
+                      f"separate line", flush=True)
             if _unlinked:
                 _product_issues.append({
                     "code": "not_linked_to_the_product",
@@ -2659,6 +2712,8 @@ def build_part_graph(
     #
     # A part reached by two paths gets two lines, and they sum to the costed figure.
     qty_trails: Dict[str, List[str]] = {}
+    # Each step's factor, filed under the parent that took it (PartNode.qty_by_parent).
+    qty_by_parent: Dict[str, Dict[str, float]] = {}
 
     def _step_source(child_id: str, used: float, edge_qty: float) -> str:
         _src = qty_own_source.get(child_id) or ""
@@ -2673,13 +2728,16 @@ def build_part_graph(
         return _display_source(_src) if _src else "the part's own record"
 
     def add_descendants(identity: str, factor: float, path: Set[str],
-                        chain: Tuple[str, ...] = ()) -> None:
+                        chain: Tuple[str, ...] = (), parent: Optional[str] = None) -> None:
         if identity in path:
             return
         quantities[identity] = quantities.get(identity, 0.0) + factor
         if len(chain) > 1:
             qty_trails.setdefault(identity, []).append(
                 f"{' -> '.join(chain)} = {factor:g}")
+        if parent is not None:
+            _bp = qty_by_parent.setdefault(identity, {})
+            _bp[parent] = _bp.get(parent, 0.0) + factor
         next_path = set(path)
         next_path.add(identity)
         for child_id, child_qty in (children.get(identity) or {}).items():
@@ -2687,7 +2745,8 @@ def build_part_graph(
             add_descendants(
                 child_id, factor * _each, next_path,
                 chain + (f"{child_id} x{_each:g} "
-                         f"({_step_source(child_id, _each, child_qty)})",))
+                         f"({_step_source(child_id, _each, child_qty)})",),
+                identity)
 
     # Each root cascades at one per unit: two GAs on one enquiry are two things that ship,
     # not two halves of one. A part under both accumulates, which is what the += above is for.
@@ -2908,6 +2967,7 @@ def build_part_graph(
             qty_own_source=qty_own_source.get(identity, ""),
             qty_note=qty_notes.get(identity, ""),
             qty_trail=list(qty_trails.get(identity) or []),
+            qty_by_parent=dict(qty_by_parent.get(identity) or {}),
             parents=sorted(parents.get(identity) or []),
             children=[
                 ChildEdge(part_number=child_id, qty=qty)
@@ -2954,6 +3014,29 @@ def build_part_graph(
                        f"they are one part and their kinds say they are not. A part we "
                        f"fabricate does not become one we purchase because their codes "
                        f"match, so both stay visible for a ruling."),
+        })
+    # NO TITLE IS INVENTED, AND THE GAP IS SAID. 12173-03-201 was titled with row 1 of its
+    # own parts list; that text is now refused as a table head (extractor_patterns, the
+    # description gate, part_index). Where nothing else describes an assembly — no parts-list
+    # row names it, no reader gave it words — it stays blank and this says so, with the text
+    # that was refused, so a person names it from its title block.
+    for node in nodes:
+        if node.kind != "assembly" or str(node.description or "").strip():
+            continue
+        _refused_words = [str(v) for v in ((records.get(node.part_number) or {})
+                                           .get("description_refused") or []) if v]
+        if not _refused_words:
+            continue
+        graph_issues.append({
+            "code": "no_description_from_any_reader",
+            "part_number": node.part_number,
+            "kind": node.kind,
+            "refused": _refused_words[:3],
+            "detail": (f"No reader gave {node.part_number} a title. The only text found where "
+                       f"a description sits was parts-table text (" + "; ".join(
+                           f"'{w[:60]}'" for w in _refused_words[:2])
+                       + "), which is a table's head, not this part's name. It is left blank "
+                       f"— name it from its title block."),
         })
     if top_ids:
         _roots = set(top_ids)
@@ -3254,7 +3337,8 @@ def outside_product_identities(issues: Any) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for issue in issues or []:
         if isinstance(issue, Mapping) and issue.get("code") in (
-                "outside_the_product", "not_linked_to_the_product"):
+                "outside_the_product", "not_linked_to_the_product",
+                "second_spelling_of_a_reached_part"):
             for ident in issue.get("identities") or []:
                 out[clean_part_number(ident)] = str(issue.get("root") or "")
     out.pop("", None)
@@ -3295,20 +3379,35 @@ def set_aside_outside_product(part_lists: Any, issues: Any,
         print(f"   [graph] set aside {len(removed)} record(s) outside the declared product: "
               f"{', '.join(_names)}", flush=True)
         if isinstance(summary, dict):
+            # THE REASON IS THE ISSUE'S OWN CODE. A record under a second spelling of a
+            # reached part was stored as "not linked", and the scope line then re-printed
+            # it as a missing price (12173-02's FIXING 1180). Exact on identities, as ever.
+            _code_of: Dict[str, str] = {}
+            _same_as: Dict[str, str] = {}
+            for _i in (issues or []):
+                if isinstance(_i, Mapping):
+                    for _x in (_i.get("identities") or []):
+                        _code_of[clean_part_number(_x)] = str(_i.get("code") or "")
+                        if _i.get("target"):
+                            _same_as[clean_part_number(_x)] = str(_i.get("target"))
             _store = summary.setdefault("set_aside_outside_product", [])
             _stored = {str(e.get("part_number") or "") for e in _store if isinstance(e, dict)}
             for p in removed:
                 _pn = str(p.get("part_number") or "")
                 if _pn not in _stored:
                     _stored.add(_pn)
-                    _store.append({
+                    _key = clean_part_number(_pn)
+                    _entry = {
                         "part_number": _pn,
                         "description": str(p.get("description") or ""),
-                        "root": idents.get(clean_part_number(_pn), ""),
-                        "reason": ("outside_the_product"
-                                   if idents.get(clean_part_number(_pn)) else
-                                   "not_linked_to_the_product"),
-                    })
+                        "root": idents.get(_key, ""),
+                        "reason": (_code_of.get(_key)
+                                   or ("outside_the_product" if idents.get(_key) else
+                                       "not_linked_to_the_product")),
+                    }
+                    if _same_as.get(_key):
+                        _entry["same_as"] = _same_as[_key]
+                    _store.append(_entry)
     return removed
 
 
@@ -3344,6 +3443,40 @@ def product_scope(summary: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                    for e in (summary.get("set_aside_outside_product") or [])
                    if isinstance(e, Mapping) and e.get("reason") == "not_linked_to_the_product"}
                   - set(unlinked) - {""})
+    # A SECOND SPELLING IS NOT AN UNLINKED LINE (12173-02: "not linked, so not priced:
+    # FIXING 1180" beside FIXING1180 charged on the sheet). Read from the graph's own issue,
+    # from a late line set aside as one, and — for a record made before the issue existed —
+    # by the same spelling_key the graph joins on, against the nodes and their aliases.
+    spelled: Dict[str, Dict[str, Any]] = {}
+    for i in issues:
+        if i.get("code") == "second_spelling_of_a_reached_part" and i.get("identity"):
+            spelled[str(i.get("identity"))] = {"spelling": str(i.get("identity")),
+                                               "carried_as": str(i.get("target") or ""),
+                                               "kinds": dict(i.get("kinds") or {})}
+    for e in (summary.get("set_aside_outside_product") or []):
+        if (isinstance(e, Mapping) and e.get("reason") == "second_spelling_of_a_reached_part"
+                and e.get("part_number")):
+            spelled.setdefault(str(e.get("part_number")),
+                               {"spelling": str(e.get("part_number")),
+                                "carried_as": str(e.get("same_as") or ""), "kinds": {}})
+    _by_key: Dict[str, Set[str]] = {}
+    for _node in payload.get("nodes") or []:
+        _npn = (_node.get("part_number") if isinstance(_node, Mapping)
+                else getattr(_node, "part_number", None))
+        _nev = ((_node.get("evidence") if isinstance(_node, Mapping)
+                 else getattr(_node, "evidence", None)) or {})
+        _id = clean_part_number(_npn)
+        if not _id:
+            continue
+        for _s in [_id] + list(_nev.get("raw_aliases") or []):
+            if clean_part_number(_s):
+                _by_key.setdefault(spelling_key(_s), set()).add(_id)
+    for _x in unlinked + late:
+        _t = _by_key.get(spelling_key(_x)) or set()
+        if len(_t) == 1 and clean_part_number(_x) not in _t:
+            spelled.setdefault(_x, {"spelling": _x, "carried_as": next(iter(_t)), "kinds": {}})
+    unlinked = [x for x in unlinked if x not in spelled]
+    late = [x for x in late if x not in spelled]
     unresolved = next((i for i in issues if i.get("code") == "declared_product_not_resolved"),
                       None)
     title = ""
@@ -3374,6 +3507,7 @@ def product_scope(summary: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                  if r["uses"]), "")
     return {"declared": declared, "product": product, "title": title,
             "other_roots": other_roots, "unlinked": unlinked + late,
+            "spelled_twice": [spelled[k] for k in sorted(spelled)],
             "unresolved": str((unresolved or {}).get("detail") or ""), "hint": hint}
 
 
@@ -3399,6 +3533,13 @@ def product_scope_sentences(summary: Optional[Mapping[str, Any]]) -> List[str]:
     if sc["unlinked"]:
         out.append(f"Not linked to {sc['product'] or 'the product'}, so not priced: "
                    f"{', '.join(sc['unlinked'])}. If one belongs, its BOM link is missing.")
+    # 'On the bill of materials', not 'priced': the twin may itself be unpriced, and the
+    # BOM table and the gap list say which.
+    for d in sc.get("spelled_twice") or []:
+        out.append(f"Not a separate line: {d['spelling']} is another spelling of "
+                   f"{d['carried_as']}, which is on the bill of materials."
+                   + (" The two readings disagree whether it is made or bought — rule which."
+                      if d.get("kinds") else ""))
     return out
 
 
@@ -3413,42 +3554,82 @@ def set_aside_late_lines(part_estimates: List[Dict[str, Any]], payload: Any,
     product, and it is set aside with that reason. No declared product: nothing changes."""
     if not isinstance(payload, Mapping) or not str(payload.get("product_root") or "").strip():
         return []
+    # Every spelling the graph holds (node and raw aliases) -> its node, and the graph's own
+    # join key -> the nodes it names.
     known: Set[str] = set()
+    node_of: Dict[str, str] = {}
+    by_key: Dict[str, Set[str]] = {}
     for node in payload.get("nodes") or []:
         pn = node.get("part_number") if isinstance(node, Mapping) else getattr(
             node, "part_number", None)
         ev = (node.get("evidence") if isinstance(node, Mapping)
               else getattr(node, "evidence", None)) or {}
-        known.add(clean_part_number(pn))
-        known.update(clean_part_number(a) for a in (ev.get("raw_aliases") or []))
-    known.discard("")
+        ident = clean_part_number(pn)
+        if not ident:
+            continue
+        for s in [pn] + list(ev.get("raw_aliases") or []):
+            c = clean_part_number(s)
+            if c:
+                known.add(c)
+                node_of.setdefault(c, ident)
+                by_key.setdefault(spelling_key(c), set()).add(ident)
     if not known:
         return []
+
+    def _pn_of(p: Any) -> str:
+        return clean_part_number(p.get("part_number") or p.get("item_number")) \
+            if isinstance(p, dict) else ""
+    # A NODE THAT ALREADY HAS ITS LINE. A late line spelled differently from a node only by
+    # whitespace (spelling_key, the graph's own rule) is that node's line when the node has
+    # none — re-pointed to the node, the printed spelling kept — and a duplicate when it has
+    # one, set aside so nothing is charged twice. Anything else has no path, as before.
+    held = {node_of[_pn_of(p)] for p in part_estimates if _pn_of(p) in known}
     kept: List[Dict[str, Any]] = []
-    removed: List[Dict[str, Any]] = []
+    removed: List[Tuple[Dict[str, Any], str, str]] = []
+    joined: List[str] = []
     for part in part_estimates:
-        pn = clean_part_number(part.get("part_number") or part.get("item_number")) \
-            if isinstance(part, dict) else ""
-        if (not pn or pn in known or _is_generated_line(pn, part)):
+        pn = _pn_of(part)
+        if not pn or pn in known or _is_generated_line(pn, part):
             kept.append(part)
-        else:
-            removed.append(part)
+            continue
+        cands = by_key.get(spelling_key(pn)) or set()
+        if len(cands) == 1:
+            twin = next(iter(cands))
+            if twin not in held:
+                held.add(twin)
+                part.setdefault("printed_code", part.get("part_number"))
+                part["part_number"] = twin
+                kept.append(part)
+                joined.append(twin)
+                continue
+            removed.append((part, "second_spelling_of_a_reached_part", twin))
+            continue
+        removed.append((part, "not_linked_to_the_product", ""))
+    if joined and isinstance(summary, dict):
+        summary.setdefault("late_lines_joined_by_spelling", []).extend(joined)
+        print(f"   [graph] {len(joined)} line(s) created after the graph are a reached part "
+              f"spelled another way, and stand as its line: {', '.join(joined)}", flush=True)
     if removed:
         part_estimates[:] = kept
-        _names = sorted({str(p.get("part_number") or "?") for p in removed})
+        _names = sorted({str(p.get("part_number") or "?") for p, _w, _s in removed})
         print(f"   [graph] set aside {len(removed)} line(s) created after the graph with no "
               f"path to {payload.get('product_root')}: {', '.join(_names)}", flush=True)
         if isinstance(summary, dict):
             _store = summary.setdefault("set_aside_outside_product", [])
             _stored = {str(e.get("part_number") or "") for e in _store if isinstance(e, dict)}
-            for p in removed:
+            for p, why, same in removed:
                 _pn = str(p.get("part_number") or "")
                 if _pn not in _stored:
                     _stored.add(_pn)
-                    _store.append({"part_number": _pn,
-                                   "description": str(p.get("description") or ""),
-                                   "root": "", "reason": "not_linked_to_the_product"})
-    return removed
+                    _entry = {"part_number": _pn,
+                              "description": str(p.get("description") or ""),
+                              "root": "", "reason": why}
+                    if same:
+                        _entry["same_as"] = same
+                    _store.append(_entry)
+    elif joined:
+        part_estimates[:] = kept
+    return [p for p, _w, _s in removed]
 
 
 def quarantine_interleave_artefacts(part_lists: Any, issues: Any,

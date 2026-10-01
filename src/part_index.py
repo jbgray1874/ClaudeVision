@@ -64,6 +64,28 @@ def _clean_bom_description(desc: Any) -> Any:
     return cleaned if cleaned else text[:80]
 
 
+def _own_row_bleed(description: Any, summary: Dict[str, Any], page_number: Any) -> bool:
+    """True when a description is '<row words> <row qty>' of a parts-list row read off the
+    same page — the table's first row bled into a title field."""
+    text = " ".join(str(description or "").upper().split())
+    if not text or page_number is None:
+        return False
+    for r in (summary.get("document_analysis", {}) or {}).get("bom_rows", []) or []:
+        if not isinstance(r, dict) or r.get("source_page") != page_number:
+            continue
+        words = " ".join(str(r.get("description") or "").upper().split())
+        qty = r.get("quantity")
+        if not words or qty in (None, ""):
+            continue
+        try:
+            qty_txt = f"{float(qty):g}"
+        except (TypeError, ValueError):
+            qty_txt = str(qty).strip()
+        if text == f"{words} {qty_txt}":
+            return True
+    return False
+
+
 @dataclass(frozen=True)
 class PartIndexDeps:
     dedupe: Callable[..., Any]
@@ -293,10 +315,30 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             if part["description"] is None and pn in document_bom_lookup:
                 part["description"] = _clean_bom_description(document_bom_lookup[pn].get("description"))
             if part["description"] is None:
+                _refused = [str(v) for v in (title_block.get("descriptions_refused") or []) if v]
                 for description in title_block.get("descriptions", []):
-                    if is_good_description(description):
-                        part["description"] = _clean_bom_description(description)
-                        break
+                    if not is_good_description(description):
+                        _refused.append(str(description))
+                        continue
+                    _cleaned = _clean_bom_description(description)
+                    # A PARTS-LIST ROW OF THIS SAME PAGE, WITH ITS QUANTITY, IS NOT THIS
+                    # PART'S TITLE. 12173-03-201 was "FRONT FRAME ASSEMBLY 1": row 1 of its
+                    # own parts list (202 FRONT FRAME ASSEMBLY ×1) once the cleaner had cut
+                    # the table's head away. That exact signature — a row's words then its
+                    # count, read off the same page — is refused; a weldment titled like one
+                    # of its members (no count after it) is not touched. Left blank rather
+                    # than invented.
+                    if _own_row_bleed(_cleaned, summary, page.get("page_number")):
+                        _refused.append(str(description))
+                        continue
+                    part["description"] = _cleaned
+                    break
+                if part["description"] is None and _refused:
+                    # WHAT WAS READ AND REFUSED, so the graph can say no reader titled it.
+                    _have = part.setdefault("description_refused", [])
+                    for _v in _refused:
+                        if _v not in _have:
+                            _have.append(_v)
 
             # No "is it None or 1" test. That treated a quantity of ONE as an empty slot, so
             # a part the model says there is one of was open to replacement by whatever a

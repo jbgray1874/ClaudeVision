@@ -392,40 +392,12 @@ def _build_estimate_policy_manifest() -> Dict[str, Any]:
 def _build_estimate_review_signals(part_estimates: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Rolls up heuristic risk_flags and quantitative gates so dashboards can queue human review early.
+
+    ONE BUILDER. It lives in costed_facts.review_signals so the report can build the same
+    signals from the reconciled part list it prints; this is that function, called here
+    once, before the workbook exists, for the frozen copy the summary keeps.
     """
-    conf_thr = float(os.getenv("ESTIMATE_PART_CONFIDENCE_REVIEW_BELOW", "0.65") or "0.65")
-    geom_thr = float(os.getenv("ESTIMATE_GEOMETRY_REVIEW_BELOW", "0.70") or "0.70")
-    parts_out: List[Dict[str, Any]] = []
-    for p in part_estimates:
-        reasons: List[Dict[str, Any]] = []
-        for rf in p.get("risk_flags") or []:
-            reasons.append({"code": "risk_flag", "detail": str(rf)})
-        assump = (p.get("cost_breakdown") or {}).get("assumptions") or {}
-        pc_val = _safe_float(assump.get("part_confidence_overall"))
-        if pc_val is not None and pc_val < conf_thr:
-            reasons.append({"code": "low_part_confidence", "detail": pc_val})
-        proc = p.get("process_estimate") or {}
-        gr = _safe_float(proc.get("geometry_reliability"))
-        times_min = proc.get("times_min") or {}
-        if "powder_coating" in times_min and gr is not None and gr < geom_thr:
-            reasons.append({"code": "low_geometry_reliability_with_powder", "detail": gr})
-        if reasons:
-            # Carry a FALLBACK IDENTITY, not just the part_number. A part whose number was
-            # rejected as boilerplate (set to None upstream) still has a description and a source
-            # file — without them the review report can only show "?" in its Item column, a flag
-            # the estimator cannot tie to anything. Same nameless-part gap the blocking flags fixed.
-            parts_out.append({"part_number": p.get("part_number"),
-                              "description": p.get("description"),
-                              "source_file": p.get("dxf_source_file") or p.get("source_file"),
-                              "reasons": reasons})
-    rec = "manual_review_recommended" if parts_out else "no_automatic_flags"
-    return {
-        "schema": "estimate_review_signals.v1",
-        "thresholds": {"part_confidence_below": conf_thr, "geometry_with_powder_below": geom_thr},
-        "parts_flagged": parts_out,
-        "flagged_part_count": len(parts_out),
-        "recommendation": rec,
-    }
+    return _costed_facts.review_signals(part_estimates)
 
 
 def _mfg_lookup(parts: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
@@ -5938,6 +5910,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "unit_material_mass_kg": None,
             "unit_material_cost_gbp": None,
             "extended_material_cost_gbp": None,
+            # WHICH INPUT THE COST LACKED, said where it is known (plain_english.MISSING_INPUT
+            # words it). Section 11 guessed "a gauge, a blank size or a labour rate" for every
+            # fabricated blank; 12173-02's MFC back had its gauge and blank and lacked a price.
+            "unpriced_inputs": [k for k, ok in (
+                ("material_spec", bool(material)), ("thickness", thickness is not None),
+                ("blank", blank_length is not None and blank_width is not None)) if not ok],
             "stock_estimate": select_sheet_size(material, blank_length, blank_width),
             "price_source": _build_price_source_metadata(
                 external_result,
@@ -6034,6 +6012,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 "unit_material_mass_kg": None,
                 "unit_material_cost_gbp": None, "cost_per_part_gbp": None,
                 "extended_material_cost_gbp": None,
+                "unpriced_inputs": ["sheet_price"],
                 "stock_estimate": select_sheet_size(_faced_family, blank_length,
                                                     blank_width),
                 "cost_method": "faced_board_unpriced",
@@ -6352,6 +6331,12 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         "extended_sheet_material_cost_gbp": sheet_ext,
         "powder_consumable": powder_block if powder_block else None,
         "extended_material_cost_gbp": combined_ext,
+        # THE PRICE INPUT THE MASS PATH LACKED, where the material went uncosted: no density
+        # (nothing to mass) and/or no rate per kg (the steel-sheet route needs none).
+        "unpriced_inputs": ([] if material_cost is not None else
+                            (["density"] if density is None else [])
+                            + (["rate_per_kg"] if price_per_kg is None
+                               and not _steel_sheet_route else [])),
         "stock_estimate": sheet_estimate,
         # SET ONLY WHERE A SHEET WAS ACTUALLY DIVIDED. The mass path charges kg at a rate and
         # never touches parts_per_sheet, so claiming a sheet fraction for it would be an
@@ -9066,7 +9051,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     ):
         risk_flags.append("section_or_wire_stock_pricing_review")
 
-    if material.get("extended_material_cost_gbp") is None:
+    # NOT ON A BOUGHT-IN. A purchased item has no gauge or material spec to read off a
+    # drawing; 12173-02's section 5 told the estimator to "ask the drawing office for the
+    # gauge" of a lazy-susan bearing the sheet prices at £12.43. Its missing price, when it
+    # has one, is Decisions required's subject.
+    if material.get("extended_material_cost_gbp") is None and not bought_in_candidate:
         if not material.get("material"):
             risk_flags.append("missing_material_spec")
         elif material.get("thickness_mm") is None:

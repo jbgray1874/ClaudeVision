@@ -61,8 +61,9 @@ def test_the_intro_no_longer_sends_the_reader_to_section_14_for_it():
     for the early return when no part reached the costed pool — and the first pass at this
     updated one of them. Two records of one sentence, which is the same defect in prose."""
     import re as _re
+    # The heading is written from the section registry (_h2), not as a literal (12173-02).
     intros = [SRC[m.start():m.start() + 400] for m in
-              _re.finditer(r"<h2>9 &nbsp;Where the bill of materials came from</h2>", SRC)]
+              _re.finditer(r"_h2\('bom_source'\)", SRC)]
     assert len(intros) == 2, "the section heading is written a different number of times now"
     for intro in intros:
         assert "which drawing file it" in intro

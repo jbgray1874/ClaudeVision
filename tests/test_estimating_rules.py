@@ -2952,30 +2952,24 @@ def test_the_report_does_not_call_a_guess_a_catalogue_price():
 
     The first version of this fixture checked whether a helper existed and passed when it did
     not, asserting nothing at all. The row builder was extracted so this can drive it."""
+    # 12173-02: the row now reads the record's tally (costed_facts.bought_in_tally) — the
+    # banner's firmness, not its own stamp count — so it is driven with the tally's shape.
     from job_report_html import bought_in_strength_row
 
-    def _bi(pn, price, ai=False):
-        src = {"source_name": "llm_market_estimate" if ai else "udef_sqlserver",
-               "applied": True, "affects_total": True, "source_rank": 0,
-               "selected": {"source": "llm_market_estimate" if ai else "udef_sqlserver",
-                            "price": price}}
-        return {"part_number": pn, "unit_cost_gbp": price,
-                "cost_breakdown": {"system_cost": {"unit_cost_gbp": price,
-                                                   "applied_to_total": True, "source": src}}}
-
-    clean = bought_in_strength_row([_bi("BI-SELFCLINCHNUT", 0.03)])
+    clean = bought_in_strength_row({"bought_in": ["BI-SELFCLINCHNUT"]})
     ok("Sound" in clean, "catalogue-priced bought-ins still read as sound")
-    ok("AI market estimate" not in clean, "with nothing to warn about")
+    ok("researched market price" not in clean, "with nothing to warn about")
 
-    mixed = bought_in_strength_row([_bi("BI-SELFCLINCHNUT", 0.03),
-                                    _bi("BI-KNURLEDKNOB", 9.52, ai=True),
-                                    _bi("BI-PEMSTUD", 0.0)])
+    mixed = bought_in_strength_row({
+        "bought_in": ["BI-SELFCLINCHNUT", "BI-KNURLEDKNOB", "BI-PEMSTUD"],
+        "bought_in_market": ["BI-KNURLEDKNOB"], "bought_in_unpriced": ["BI-PEMSTUD"]})
     ok("Sound" not in mixed, "a mixed set is not reported as sound")
-    ok("1 priced by an AI market estimate" in mixed, "the guessed line is counted and named")
+    ok("1 on a researched market price, not a catalogue (BI-KNURLEDKNOB)" in mixed,
+       "the guessed line is counted and named")
     ok("1 carrying no price at all" in mixed, "and so is the unpriced one")
     ok("Identification is not pricing" in mixed, "with the distinction spelled out")
 
-    eq(bought_in_strength_row([]), "", "and no bought-ins says nothing at all")
+    eq(bought_in_strength_row({}), "", "and no bought-ins says nothing at all")
 
 
 def test_the_report_counts_bought_ins_the_same_way_the_checks_do():

@@ -69,13 +69,18 @@ def test_a_bought_castor_is_not_a_free_material():
 
 
 def test_the_banner_names_assumed_sizes_and_failing_checks():
+    # A record saved before costed_job.v2 (no schema, counts kept beside the rows): the
+    # phrase still names both, now in the checks' own unit, and the headline adds them
+    # (12173-02: "25 to settle" over a phrase that added to 36).
     import costed_facts as cf
     job = {"decisions_required": [{"kind": "market_figure", "part": "CASTOR",
                                    "gbp_at_stake": 45.76}],
            "release": {"status": "provisional", "blocking_checks": 7, "sizes_assumed": 4}}
-    ph = cf.outstanding_summary(job)["phrase"]
+    out = cf.outstanding_summary(job)
+    ph = out["phrase"]
     assert "1 market figure to replace" in ph
-    assert "4 sizes assumed from a render" in ph and "7 consistency checks failing" in ph
+    assert "4 sizes assumed from a render" in ph and "7 consistency findings failed" in ph
+    assert out["total"] == 12
 
 
 def test_render_sizes_are_counted_once_per_part():

@@ -2578,9 +2578,15 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         if (part.get("normalized_material") and not _has_costable_geometry(part)
                 and not part.get("is_assembly_parent")):
             part["native_material_without_geometry"] = True
-            flags.append("SolidWorks gave this part a material but NO usable geometry "
-                         "(no flat pattern, mass or section) — material cost cannot be "
-                         "derived; treat any £0 on this line as MISSING, not free")
+            # The one sentence, from the one vocabulary: costed_facts recognises it and
+            # replaces it with what the line's money rests on once a price has arrived.
+            try:
+                from plain_english import NO_GEOMETRY_SENTENCE as _NO_GEO
+            except Exception:                                    # noqa: BLE001
+                _NO_GEO = ("SolidWorks gave this part a material but NO usable geometry "
+                           "(no flat pattern, mass or section) — material cost cannot be "
+                           "derived; treat any £0 on this line as MISSING, not free")
+            flags.append(_NO_GEO)
             out["no_geometry_flagged"] += 1
 
     return out

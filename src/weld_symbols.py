@@ -468,6 +468,9 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
             # these on the part, with those rows' money; otherwise the flag below stands alone.
             "subject": "welding",
             "charged_operations": ["welding", "spot_welding", "dress_welds"],
+            # The operations it asks about, as fields: a consistency check's ruling on the
+            # same assembly and operation is this question, netted onto it (costed_facts).
+            "operations": ["welding", "dress_welds"],
         }
         qs = part.setdefault("manufacturing_questions", [])
         if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == _q["issue"]

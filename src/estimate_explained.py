@@ -1502,6 +1502,55 @@ def _gather(workbook: Path, scan_json: Optional[Path]) -> Dict[str, Any]:
     }
 
 
+def _report_section(key: str) -> str:
+    """'section N' as the job report numbers it — read from the report's one registry, so a
+    document written before the report exists cannot cite a different number."""
+    try:
+        from job_report_html import section_number                  # noqa: PLC0415
+        return f"section {section_number(key)}"
+    except Exception:                                                # noqa: BLE001
+        return "the matching section"
+
+
+def _settle_block(record: Any, o: Optional[Dict[str, Any]] = None) -> List[str]:
+    """'What a person still has to settle' — every row of the record, in the record's order.
+
+    THE COUNT AND ITS LIST FROM ONE RECORD (12173-02). This section printed "25 to settle"
+    and then listed seventeen: the manufacturing decisions and the read-back's market lines.
+    The two missing prices, the stated row not carried, five quantity checks and every failing
+    check were counted and listed nowhere, and a job whose only open items were quantity
+    checks printed no list at all under its "No — N to settle". The table is now the record's
+    decisions_required, one row each, with the kind words and order the report's Decisions
+    table uses; gated on the tally, not on the read-back's lists."""
+    if not isinstance(record, dict):
+        return []
+    from costed_facts import decision_kind, outstanding_summary
+    o = o if isinstance(o, dict) else outstanding_summary(record)
+    if not o.get("total"):
+        return []
+    ds = [d for d in (record.get("decisions_required") or []) if isinstance(d, dict)]
+
+    def _cell(v: Any) -> str:
+        return str(v if v is not None else "").replace("|", "/").replace("\n", " ").strip()
+    out = ["## What a person still has to settle", "",
+           f"{o['total']} to settle: {o['phrase']}. Until these are answered the estimate is "
+           f"not a quote, and the banner on the sheet says so."]
+    if o.get("legacy"):
+        out.append(f"{o['legacy']} of them (failing checks or sizes assumed) were counted on a "
+                   f"record saved before they were listed as rows, so they are not itemised.")
+    out.append("")
+    if ds:
+        out += ["| # | Kind | Decision | Part | Current assumption | Action | £ at stake |",
+                "|---|---|---|---|---|---|---|"]
+        for i, d in enumerate(ds, 1):
+            _at = d.get("gbp_at_stake")
+            out.append(f"| {i} | {decision_kind(d.get('kind'))[1]} | **{_cell(d.get('issue'))}** "
+                       f"| {_cell(d.get('part')) or '—'} | {_cell(d.get('assumption'))} "
+                       f"| {_cell(d.get('action'))} | {_gbp(_at) if _at else '—'} |")
+        out.append("")
+    return out
+
+
 def build(workbook: Path, scan_json: Optional[Path],
           totals_override: Optional[Dict[str, Any]] = None) -> str:
     g = _gather(workbook, scan_json)
@@ -1693,33 +1742,27 @@ def build(workbook: Path, scan_json: Optional[Path],
     # true and an estimator cannot act on it: they want the codes, the money each one is
     # worth, the page to look at and whether it is waiting on them or on us. This is the list
     # that has been retyped into every covering email so far.
-    if _unpriced or _indicative or _mfg:
+    # THE ONE TALLY AND ITS ROWS — the record's decisions, every one, in its order; the same
+    # list the report's Decisions table prints (12173-02: "25 to settle" over seventeen).
+    _settle = _settle_block(record) if record else []
+    for _ln in _settle:
+        add(_ln)
+    if not _settle and (_unpriced or _indicative or _mfg):
+        # No costed record to read (a book explained without its run JSON): the read-back's
+        # own lines, counted as they are listed.
         add("## What a person still has to settle")
         add("")
-        # THE ONE TALLY — the same phrase the report banner and the quote's draft strip
-        # print, from outstanding_summary, so this section cannot count the same five
-        # things a third way.
-        from costed_facts import outstanding_summary as _osum
-        _o = _osum(record) if record else None
-        add((f"{_o['total']} to settle: {_o['phrase']}" if _o and _o["total"] else
-             f"{len(_unpriced) + len(_indicative)} line(s)"
-             + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else ""))
+        add(f"{len(_unpriced) + len(_indicative)} line(s)"
+            + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else "")
             + ". Until these are answered the estimate is not a quote, and the banner on the "
               "sheet says so.")
         add("")
-    if _mfg:
-        # THE DECISIONS THE REPORT LISTS FIRST, listed here too. Plating scope and a
-        # transcribed cut length are not lines to price; they are the calls Tim makes, and
-        # a tab that lists only the prices reads as if there were nothing else to decide.
-        add("| Decision | Part | Current assumption | Action | £ at stake |")
-        add("|---|---|---|---|---|")
-        for d in _mfg:
-            _at = d.get("gbp_at_stake")
-            add(f"| **{d.get('issue') or ''}** | {d.get('part') or '—'} "
-                f"| {d.get('assumption') or ''} | {d.get('action') or ''} "
-                f"| {_gbp(_at) if _at else '—'} |")
-        add("")
     if _unpriced or _indicative:
+        if _settle:
+            # DETAIL, NOT A SECOND COUNT: the sheet cells behind the price rows above.
+            add("**The sheet cells behind the price rows above** — what each line costs on "
+                "the sheet and where to check it.")
+            add("")
         add("| Line | What it is | Qty | On the sheet | What it needs | Which file and page |")
         add("|---|---|---|---|---|---|")
         _todo = ([(r, "market") for r in _market] + [(r, "house") for r in _house]
@@ -1870,10 +1913,16 @@ def build(workbook: Path, scan_json: Optional[Path],
             # block's "Rate Per Hour", which holds a throughput.
             line_total = _gbp_or((steel_calc.get(code) or {}).get("total_value_gbp"),
                                  "not read back")
-            _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
-                         "tube": "Tube"}.get(
-                str((steel_calc.get(code) or {}).get("block") or "steel"),
-                "its nested")
+            # The block as the template names it (wb_populate.block_title): "tube" is the
+            # Wire block, never "the Tube block" (12173-02).
+            _blk_key = str((steel_calc.get(code) or {}).get("block") or "steel")
+            try:
+                from wb_populate import block_title as _block_title      # noqa: PLC0415
+                _blk_word = _block_title(_blk_key) if _blk_key in (
+                    "steel", "other_sheet", "tube") else "its nested"
+            except Exception:                                            # noqa: BLE001
+                _blk_word = {"steel": "Sheet Steel", "other_sheet": "Other Sheet Material",
+                             "tube": "Wire"}.get(_blk_key, "its nested")
             add(f"| ↳ `Estimate!{steel_row['row']}` "
                 f"| the same part, on the {_blk_word} block "
                 f"| {_fmt(steel_row.get('qty'))} "
@@ -3465,7 +3514,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     add(f'<p style="color:#5b6b7d;font-size:12px;margin-top:18px">Produced by SDI '
         f'Intelligence{" for " + _e(client) if client else ""}. '
         f'The full line-by-line document is the <b>AI Explanation</b> tab in the attached '
-        f'workbook and section 14 of the report — every row with the drawing page it came '
+        f'workbook and {_report_section("explained")} of the report — every row with the drawing page it came '
         f'from, which reader decided it, and what it charges.</p>')
     # ── WHAT NEEDS YOUR EYE ───────────────────────────────────────────────────────
     #

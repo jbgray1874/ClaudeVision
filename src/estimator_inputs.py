@@ -318,6 +318,45 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
             price_provenance.POLICY_WITHHELD,
             f"an AI market estimate of £{float(part['_ai_indicative_gbp']):,.2f} was kept "
             f"off the price column because it is not a catalogue rate")
+    # THE INPUT THE COST DECISION SAYS IT LACKED. estimate_material stamps `unpriced_inputs`
+    # where it gave up; every caller here passes a part estimate, which carries it under
+    # material_estimate, so the blank is explained by what was actually missing rather than
+    # falling through to "no catalogue row … was found" — a category error for a part SDI
+    # makes (12173-02's MFC back: 18 mm, 1470 × 288, labour charged; no price for the board).
+    # The CATEGORY and OWNER stay what they were for a price gap (NO_PRICE_SOURCE, the
+    # estimator); a geometry gap is NOT_MEASURED. Whether a density-known, rate-less plastic
+    # is an engine gap (NO_VOCABULARY) is a separate ruling and is not changed here.
+    _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), Mapping) else {}
+    _gaps = [str(g) for g in (_me.get("unpriced_inputs") or []) if g]
+    if _gaps:
+        try:
+            from bought_in_policy import is_bought_in as _is_bought_in   # noqa: PLC0415
+        except Exception:                                              # noqa: BLE001
+            def _is_bought_in(_p):                                     # noqa: ANN001
+                return False
+        try:
+            _bought = bool(_is_bought_in(dict(part)))
+        except Exception:                                              # noqa: BLE001
+            _bought = False
+        if not _bought:
+            from plain_english import GEOMETRY_INPUTS, MISSING_INPUT   # noqa: PLC0415
+            _what = "; ".join(MISSING_INPUT.get(g, g) for g in _gaps)
+            if set(_gaps) & set(GEOMETRY_INPUTS):
+                _r = price_provenance.unpriced_reason(
+                    price_provenance.NOT_MEASURED,
+                    f"{_what} — read it off the drawing or enter it")
+            else:
+                _m = str(_me.get("material") or part.get("normalized_material") or "").strip()
+                _t = _num(_me.get("thickness_mm"))
+                _L, _W = _num(_me.get("blank_length_mm")), _num(_me.get("blank_width_mm"))
+                _size = (f", blank {_L:g} x {_W:g} mm" if _L and _W else "")
+                _r = price_provenance.unpriced_reason(
+                    price_provenance.NO_PRICE_SOURCE,
+                    f"{_m or 'the material'}{f' {_t:g} mm' if _t else ''}{_size}: the size "
+                    f"and gauge are known, but {_what} for {_m or 'it'}, so its material "
+                    f"cannot be costed — supply a sheet price or a supplier quote")
+            _r["missing"] = _gaps
+            return _r
     # MEASURED EVERYTHING AND STILL COULD NOT COST IT. 11650's door is the case: the model
     # gave its material as ABS, which outranked a drawing and a DXF filename that both said
     # POLYCARBONATE, and config carries a sheet size and a density for ABS but no rate. So a

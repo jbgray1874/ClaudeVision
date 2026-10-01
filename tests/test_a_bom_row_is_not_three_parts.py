@@ -1014,7 +1014,8 @@ def test_the_estimate_banner_carries_the_shared_tally():
     import os as _os
     src = open(_os.path.join(_os.path.dirname(__file__), "..", "src", "main.py"),
                encoding="utf-8").read()
-    i = src.index("PROVISIONAL — to settle:")
+    # 12173-02: the banner carries the headline count too ("PROVISIONAL — N to settle: ...").
+    i = src.index("to settle: {_phrase_b}")
     assert "outstanding_summary" in src[i - 2500:i], \
         "the banner phrase must be the record's, not a new count"
     assert i < src.index("from estimate_explanation_tab import write_tab"), \
@@ -1691,8 +1692,9 @@ def test_pack_shortfalls_speak_from_evidence_on_both_surfaces():
     assert cf.pack_shortfalls({}) == []
     # Structural: both writers read the one list.
     import os as _os
+    # The report's heading is written from its section registry (_h2), not as a literal.
     for fname, anchor in (("estimate_explained.py", "7. The drawing pack"),
-                          ("job_report_html.py", "6 &nbsp;Design recommendations")):
+                          ("job_report_html.py", "_h2('design')")):
         src = open(_os.path.join(_os.path.dirname(__file__), "..", "src", fname),
                    encoding="utf-8").read()
         i = src.index(anchor)

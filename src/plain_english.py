@@ -37,7 +37,33 @@ from __future__ import annotations
 import re
 from typing import Dict, Optional, Tuple
 
-__all__ = ["explain", "action", "label", "explain_full", "SOURCE_NOTES", "why_no_price"]
+__all__ = ["explain", "action", "label", "explain_full", "SOURCE_NOTES", "why_no_price",
+           "NO_GEOMETRY_SENTENCE", "MISSING_INPUT"]
+
+
+# THE MODEL HAS A MATERIAL AND NO GEOMETRY. Written at ingest by the SolidWorks connector,
+# where it is true: nothing has priced the line yet. A wire length or a BOM price can arrive
+# later, and then "treat any £0 on this line as MISSING" stands beside a charged £0.31
+# (12173-02: the hook arm at Estimate!84, the meshes and the riser). Kept here, in the one
+# vocabulary, so the connector writes it and costed_facts can recognise it and replace it
+# with a sentence computed from the line's money — without either importing the other.
+NO_GEOMETRY_SENTENCE = ("SolidWorks gave this part a material but NO usable geometry "
+                        "(no flat pattern, mass or section) — material cost cannot be "
+                        "derived; treat any £0 on this line as MISSING, not free")
+
+
+# WHICH INPUT A FABRICATED BLANK IS MISSING, in words. estimator.estimate_material stamps
+# `unpriced_inputs` on every no-cost return with these keys; every surface that explains a
+# blank material row reads them from there rather than guessing a list of causes.
+MISSING_INPUT: Dict[str, str] = {
+    "material_spec": "the material was never identified",
+    "thickness": "the gauge was never read",
+    "blank": "the blank size was never measured",
+    "sheet_price": "no sheet price is held",
+    "density": "no density is held",
+    "rate_per_kg": "no rate per kg is held",
+}
+GEOMETRY_INPUTS = ("material_spec", "thickness", "blank")
 
 
 # code -> (short label for a table cell, what it means, what to do about it)
@@ -237,7 +263,8 @@ SOURCE_NOTES: Dict[str, str] = {
 }
 
 
-def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str, bool]:
+def why_no_price(code: str, part_is_fabricated: bool = False,
+                 reason: Optional[Dict[str, object]] = None) -> Tuple[str, str, bool]:
     """The blank-price reasons, which needed the most work of anything here.
 
     WHAT THE REPORT SAID, for 10575-01-001 — a folded mild-steel bracket SDI makes itself:
@@ -258,14 +285,31 @@ def why_no_price(code: str, part_is_fabricated: bool = False) -> Tuple[str, str,
     "no catalogue row, price file or quote was found for this item", printed under an
     explanation that has just said the catalogue was never the place to look. Correcting the
     heading and leaving the original underneath argues with itself in one cell.
+
+    THE CAUSE IS READ, NOT GUESSED. This used to add "which almost always means the
+    thickness, the blank size or a labour rate is missing … listed in section 5". On
+    12173-02's MFC back panel the gauge (18 mm) and the blank (1470 × 288) were both on the
+    record and its labour was charged on five rows; what was missing was the material's
+    price. A missing labour rate never blanks a material row at all. Where the cost decision
+    recorded which input it lacked (`reason['missing']`, from the estimator's
+    `unpriced_inputs`), the heading names that kind of gap and the computed detail is kept
+    (third value False). Where it did not, nothing is guessed: the record does not say.
     """
     c = str(code or "").strip()
+    missing = [str(m) for m in ((reason or {}).get("missing") or [])] \
+        if isinstance(reason, dict) else []
+    if part_is_fabricated and missing:
+        geo = set(missing) & set(GEOMETRY_INPUTS)
+        return (("An input to its material cost was never read" if geo
+                 else "Its material has no price"),
+                "This is a part SDI makes; its cost is material plus labour, and the "
+                "material could not be costed.",
+                False)
     if c == "no_price_source" and part_is_fabricated:
         return ("Could not be costed from material and labour",
                 "This is a part SDI makes, so it has no catalogue price and never will — its "
-                "cost is material plus labour. One of those could not be worked out, which "
-                "almost always means the thickness, the blank size or a labour rate is "
-                "missing. The specific gap is listed against this part in section 5.",
+                "cost is material plus labour. Its material could not be costed, and the "
+                "record does not say which input was missing.",
                 True)
     if c == "no_price_source":
         return ("Nothing we can query holds a price for it",
