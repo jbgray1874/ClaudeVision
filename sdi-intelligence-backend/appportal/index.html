@@ -77,8 +77,13 @@
      the full width so the grouping still reads on a laptop. */
   #list{display:grid;grid-template-columns:1fr;gap:9px;align-content:start}
   #list .grp{grid-column:1/-1}
-  @media (min-width:680px){ #list{grid-template-columns:1fr 1fr} }
-  @media (min-width:1040px){ #list{grid-template-columns:repeat(3,1fr)} }
+  /* TWO ACROSS, NEVER THREE. Five apps in threes left one card alone on its row and the
+     estimating card alone under its own heading — "randomly scattered". Two columns read as
+     a tidy grid at any width, and the list is held to a readable width on a wide screen. */
+  @media (min-width:680px){ #list{grid-template-columns:1fr 1fr;max-width:980px} }
+  /* The first app under a heading takes the full row — Estimating, the one the rest of the
+     programme hangs off — so five apps read one, two, two rather than leaving one alone. */
+  @media (min-width:680px){ #list .grp + .card{grid-column:1/-1} }
 
   .card{
     display:flex;flex-direction:column;width:100%;text-align:left;background:var(--surface);
@@ -221,12 +226,15 @@ function renderList(filter){
     || (s.status||'').toLowerCase().includes(f));
   if(!hits.length){ $('list').innerHTML='<div class="msg">No apps match “'+esc(f)+'”.</div>'; return; }
 
-  const cats=[...new Set(hits.map(s=>s.category))]
+  // The launcher's own heading where an app names one (app_category), so every app can sit
+  // under one heading here while the intranet portal keeps its programme categories.
+  const catOf=s=>s.app_category||s.category;
+  const cats=[...new Set(hits.map(catOf))]
     .sort((a,b)=>(ORDER.indexOf(a)+1||99)-(ORDER.indexOf(b)+1||99));
   let h='';
   cats.forEach(cat=>{
     h+='<div class="grp">'+esc(cat)+'</div>';
-    hits.filter(s=>s.category===cat).forEach(s=>{
+    hits.filter(s=>catOf(s)===cat).forEach(s=>{
       h+='<button class="card" data-open="'+esc(s.id)+'">'
         +'<div class="ch"><span class="nm">'+esc(s.name)+'</span>'
         +'<span class="chip '+esc(s.cls||'c-plan')+'">'+esc(s.status||'')+'</span></div>'

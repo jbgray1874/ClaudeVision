@@ -7,7 +7,7 @@
  * Deliberately NOT cached: anything under /api/files or /api/file. Those serve
  * real company documents from the shares and must never sit in a device cache.
  */
-const VERSION = 'sdi-app-v1';
+const VERSION = 'sdi-app-v2';   // v2: two-column launcher (1 Oct 2026)
 const SHELL = [
   './',
   './index.html',

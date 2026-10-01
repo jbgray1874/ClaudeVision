@@ -38,7 +38,8 @@
       "phase": "Phase 1 · GO-LIVE END OCT 2026, WITH THE SERVER",
       "invoke": "Run from the estimating page on this portal: pick the pack, set the quantities, name the recipients, attach the manual sheet if there is one. The finished estimate is e-mailed on completion. See <b>AI Tools</b> for the command-line equivalent.",
       "next": "Reviews back on the seven packs awaiting them (12552, 12312-01, 12633-10, 12633-00, 12614-01, 12567-01 and 12645), and the go-live date restated against them. Packaging and delivery are now carried as market figures for the estimator to replace. Then two pieces of engineering: run time on large packs (time each stage, re-run only what a change affects), and the move from the laptop onto the SDI Intelligence server, in service w/c 26 Oct 2026.",
-      "app_url": "/estimating"
+      "app_url": "/estimating",
+      "app_category": "Apps"
     },
     {
       "id": "hr-inventry",
