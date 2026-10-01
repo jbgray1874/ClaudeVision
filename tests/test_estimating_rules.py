@@ -4233,9 +4233,16 @@ def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     ok(_csa("RHS") / _csa("CHS") > 1.25,
        f"and the gap is real: {_csa('RHS') / _csa('CHS'):.2f}x, not a rounding difference")
 
+    # D-383 moved the one section-mass formula to section_profile so the cut-list mass check
+    # and the estimator weigh a section the same way; the estimator passes the form to it.
     _src = open(__import__("estimator").__file__, encoding="utf-8").read()
-    ok('_ss.get("profile_form") or "").upper() == "CHS"' in _src,
+    _sec = open(__import__("section_profile").__file__, encoding="utf-8").read()
+    ok('str(profile_form or "").upper() == "CHS"' in _sec
+       and '_ss.get("profile_form"), density)' in _src,
        "the estimator actually branches on it — a formula nothing selects is not a fix")
+    import section_profile as _sp_mod
+    ok(abs(_sp_mod.section_kg_per_m(D, D, t, "CHS", 7850.0) * 1e6 / 7850.0 - round_) < 1e-6,
+       "and the shared formula is the circular one for CHS")
 
 
 def test_the_top_assembly_is_not_a_second_bill_of_materials():

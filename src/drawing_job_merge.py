@@ -2834,15 +2834,17 @@ def merge_truncated_part_codes(parts: List[Dict[str, Any]],
     `claimed_codes` is any iterable of codes named as a child by some assembly. Omitted, the
     length rule stands unchanged — this only ever adds a reason to prefer one over the other.
     """
-    from part_identity import (normalize_part_code, strip_code_label,
-                               stem_duplicate_target)
+    from part_identity import (is_engine_derived_identity, normalize_part_code,
+                               strip_code_label, stem_duplicate_target)
 
     merged: List[Dict[str, Any]] = []
     if not isinstance(parts, list) or len(parts) < 2:
         return merged
 
     for part in parts:
-        if isinstance(part, dict):
+        # An identity the engine derived (printed_code / identity_source) is ours, not a
+        # labelled cell, and is never label-stripped (D-383).
+        if isinstance(part, dict) and not is_engine_derived_identity(part):
             _raw = str(part.get("part_number") or "")
             _clean = strip_code_label(_raw)
             if _clean and _clean != _raw.strip():

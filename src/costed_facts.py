@@ -2007,6 +2007,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
         lines.append({
             "part_number": pn,
             "identity": identity,
+            # Who wrote the code (D-383): a minted or split identity is recognised by its
+            # record, so a report never calls the engine's code "the code the drawing printed".
+            "identity_source": str(part.get("identity_source") or ""),
+            "printed_code": str(part.get("printed_code") or ""),
             "description": str(part.get("description") or ""),
             "kind": kind,
             "qty_per_unit": qty,

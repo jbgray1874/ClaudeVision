@@ -1033,6 +1033,7 @@ def _lookup_catalogue_tube_price(
     wall_t_mm: Optional[float],
     length_mm: Optional[float],
     own_part_number: Optional[str] = None,
+    refused: Optional[List[Dict[str, Any]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Find a genuine catalogued price for a detected hollow section by matching its
     PROFILE (and length, when available) against priced rows in UDEF
@@ -1079,13 +1080,17 @@ def _lookup_catalogue_tube_price(
             pass
 
     return _select_catalogue_section_row(rows, side_a_mm, side_b_mm, wall_t_mm, length_mm,
-                                         own_part_number)
+                                         own_part_number, refused=refused)
 
 
 # Words in a catalogue description that name a MADE thing, not a stock section. Config may
 # extend the list (SECTION_CATALOGUE_MADE_FORM_WORDS); the length suffix "@ 1125mm" is NOT one —
 # that is how a bought-in cut piece (SLOTTEDTUBE01) is described.
 _MADE_FORM_WORDS_DEFAULT = ("FRAME", "ASSEMBLY", "ASSY", "WELDMENT", "FABRICATION")
+_STANDARD_PREFIXES_DEFAULT = ("EN", "BS", "ISO", "DIN", "ASTM", "AISI")
+_GRADE_TOKEN_RE_DEFAULT = r"^\d{3,5}-(?:T\d+|\d?[A-Z]{1,2}|\d)$"
+# The nouns a made-form word can qualify and still describe stock ("SHS 30x30x2 FRAME TUBE").
+_STOCK_NOUN_RE = r"(?:TUBE|TUBING|SHS|RHS|CHS|BOX|SECTION|BAR|ANGLE|CHANNEL|PIPE)"
 
 
 def _catalogue_row_is_a_made_part(code: Any, desc: Any,
@@ -1097,7 +1102,12 @@ def _catalogue_row_is_a_made_part(code: Any, desc: Any,
     length within 10% (D-380). A row coded with a drawing number, or naming a drawing or a
     made form, is that part's price and nothing else's (the no-near-match rule). The part's
     own code is the exact item and is always allowed.
-    """
+
+    NARROWER, AND SAID (D-383). A material grade or a standard shares the hyphenated shape of
+    a drawing number — "6063-T6", "304-2B", "EN 10219-2", "BS 6323-4" — and FRAME qualifying a
+    stock noun ("SHS 30x30x2 FRAME TUBE") is tube. Those no longer refuse a stock row. The
+    CODE column test is unchanged: a code shaped like a drawing number is somebody's part.
+    The caller records every refusal and its reason on the part."""
     try:
         import part_code_conventions as _pcc
     except Exception:                                            # noqa: BLE001
@@ -1109,17 +1119,28 @@ def _catalogue_row_is_a_made_part(code: Any, desc: Any,
     if code_s and _pcc.looks_like_a_drawing_number(code_s):
         return f"its code {code_s} is a drawing number"
     du = str(desc or "").upper()
-    for tok in re.split(r"[\s,;/()]+", du):
-        if tok and _pcc.looks_like_a_drawing_number(tok) and _pcc.bare_code(tok) != own:
-            return f"its description names drawing {tok}"
     try:
         import config as _cfg
-        words = tuple(getattr(_cfg, "SECTION_CATALOGUE_MADE_FORM_WORDS",
-                              _MADE_FORM_WORDS_DEFAULT))
     except Exception:                                            # noqa: BLE001
-        words = _MADE_FORM_WORDS_DEFAULT
+        _cfg = None
+    _std = {str(w).upper() for w in (getattr(_cfg, "SECTION_CATALOGUE_STANDARD_PREFIXES", None)
+                                     or _STANDARD_PREFIXES_DEFAULT)}
+    try:
+        _grade = re.compile(str(getattr(_cfg, "SECTION_CATALOGUE_GRADE_TOKEN_RE", None)
+                                or _GRADE_TOKEN_RE_DEFAULT))
+    except re.error:
+        _grade = re.compile(_GRADE_TOKEN_RE_DEFAULT)
+    toks = [t for t in re.split(r"[\s,;/()]+", du) if t]
+    for i, tok in enumerate(toks):
+        if not _pcc.looks_like_a_drawing_number(tok) or _pcc.bare_code(tok) == own:
+            continue
+        if (i and toks[i - 1] in _std) or _grade.match(tok):
+            continue
+        return f"its description names drawing {tok}"
+    words = tuple(getattr(_cfg, "SECTION_CATALOGUE_MADE_FORM_WORDS", None)
+                  or _MADE_FORM_WORDS_DEFAULT)
     for w in words:
-        if re.search(rf"\b{re.escape(str(w).upper())}\b", du):
+        if re.search(rf"\b{re.escape(str(w).upper())}\b(?!\s+{_STOCK_NOUN_RE}\b)", du):
             return f"its description names a made form ({w})"
     return ""
 
@@ -1127,9 +1148,14 @@ def _catalogue_row_is_a_made_part(code: Any, desc: Any,
 def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
                                   side_b_mm: Optional[float], wall_t_mm: Optional[float],
                                   length_mm: Optional[float],
-                                  own_part_number: Optional[str] = None
+                                  own_part_number: Optional[str] = None,
+                                  refused: Optional[List[Dict[str, Any]]] = None
                                   ) -> Optional[Dict[str, Any]]:
-    """The catalogue row that is this section at this length, or None. Pure: rows in, row out."""
+    """The catalogue row that is this section at this length, or None. Pure: rows in, row out.
+
+    `refused`, when given, collects every row of this profile turned away as another drawing's
+    made part, with the reason (D-383), so the caller can say why the catalogue was not used —
+    and an estimator can confirm a wrongly refused stock row."""
     if not (side_a_mm and side_b_mm and wall_t_mm):
         return None
     _lo, _hi = sorted([round(side_a_mm), round(side_b_mm)])
@@ -1139,8 +1165,6 @@ def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
     len_re = re.compile(r"(?:@|x|X)\s*(\d{2,5})\s*MM", re.IGNORECASE)
     for r in rows:
         code, desc, cost, supplier, uom = r[0], str(r[1] or ""), r[2], r[3], r[4]
-        if _catalogue_row_is_a_made_part(code, desc, own_part_number):
-            continue
         pm = prof_re.search(desc.upper())
         if not pm:
             continue
@@ -1149,6 +1173,12 @@ def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
         cat_wall, cat_lo, cat_hi = d[0], round(d[1]), round(d[2])
         if not (cat_lo == _lo and cat_hi == _hi and abs(cat_wall - wall_t_mm) < 0.3):
             continue  # profile must match
+        _why = _catalogue_row_is_a_made_part(code, desc, own_part_number)
+        if _why:
+            if refused is not None:
+                refused.append({"code": str(code or ""), "description": desc.strip(),
+                                "why": _why})
+            continue
         # Length proximity (if the catalogue row and the part both state a length).
         lm = len_re.search(desc.upper())
         cat_len = float(lm.group(1)) if lm else None
@@ -1177,9 +1207,18 @@ def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
     # differ by length). So when the PART length is known, only accept the catalogue price if
     # the catalogue length is within tolerance; otherwise return None so the caller costs by
     # the length-sensitive mass path (kg/m x length x £/kg) — honest, repeatable, per-length.
+    #
+    # THE EXACT ITEM, NOT A NEAR ONE (D-383). The tolerance was max(10%, 75 mm), which is how a
+    # 1,395 mm row priced a 1,532 mm piece — against this gate's own words and Dave Wright's
+    # no-near-match rule. It is now a measurement tolerance from config
+    # (SECTION_CATALOGUE_LENGTH_TOLERANCE_MM, 1 mm by default).
     if best is not None and length_mm:
         _cat_len = best.get("catalogue_length_mm")
-        _tol = max(0.10 * length_mm, 75.0)
+        try:
+            import config as _cfg_tol
+            _tol = float(getattr(_cfg_tol, "SECTION_CATALOGUE_LENGTH_TOLERANCE_MM", 1.0))
+        except Exception:                                        # noqa: BLE001
+            _tol = 1.0
         if not (_cat_len and abs(float(_cat_len) - length_mm) <= _tol):
             return None
     return best
@@ -1195,12 +1234,11 @@ _SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
 _RESEARCHED_BOARD_RATE_CACHE: Dict[Tuple[str, Optional[float]], Optional[Dict[str, Any]]] = {}
 
 # Words that qualify a sheet rather than name it. "3MM CLEAR PETG SHEET" is PETG; searching
-# the catalogue for CLEAR or SHEET would match half of it.
-_NOT_A_MATERIAL_WORD = frozenset({
-    "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
-    "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
-    "TEXTURED", "SMOOTH", "MR", "FR", "EXT", "INT", "STD", "THK", "NOM",
-})
+# the catalogue for CLEAR or SHEET would match half of it. ONE VOCABULARY (D-383): the list
+# is config (MATERIAL_QUALIFIER_WORDS), because the parts-list row classifier asks the same
+# question of "18mm MR MDF, 626 x 626" — is anything here but a material and its qualifiers.
+_NOT_A_MATERIAL_WORD = frozenset(str(w).upper() for w in getattr(
+    config, "MATERIAL_QUALIFIER_WORDS", ()) or ())
 
 
 # Premium / finished items. A rate built from printed, mirrored or vac-formed stock is a
@@ -2437,6 +2475,11 @@ def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
     if len(_pieces) > 1:
         part["_section_length_source"] = "section_stock"
         part["_section_length_reader"] = "cut_list_sum"
+        # WHOSE cut list (D-383): the part's own parts table (drawing_deterministic) or the
+        # LLM extract. Kept beside the reader rather than folded into it, so "cut_list_sum"
+        # still names the method on every record.
+        part["_section_length_reader_from"] = str(
+            _ss.get("cut_lengths_mm_source") or _ss.get("source") or "")
         return round(sum(_pieces), 2)
     _ss_len = _safe_float(_ss.get("length_mm"))
     if _ss_len is not None and _ss_len > 0:
@@ -5416,8 +5459,15 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                 part.setdefault("review_flags", []).append(
                     f"section length not stated — taken as largest dimension "
                     f"{length_mm:,.0f}mm (INDICATIVE); confirm the cut length off the GA")
+        # A cut list whose summed mass disagrees with the sheet's stated weight is held
+        # INDICATIVE by the cut-list reader (bom_pipeline, D-383); the flag says why.
+        if length_mm and _len_src == "section_stock" \
+                and (part.get("section_stock") or {}).get("length_indicative"):
+            _len_indicative = True
         _len_stamp = {"section_length_source": _len_src or "none",
                       "section_length_reader": _len_reader or "none",
+                      "section_length_reader_from": str(
+                          part.get("_section_length_reader_from") or ""),
                       "section_length_indicative": _len_indicative}
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
@@ -5479,8 +5529,21 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # (SLOTTEDTUBE01/02 etc. in UDEF). If the detected profile+length matches a priced
             # catalogue row, use that real per-piece price + supplier instead of a mass*£/kg
             # estimate. Falls through to the mass estimate (flagged) if no catalogue match.
+            _refused: List[Dict[str, Any]] = []
             _cat = _lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm,
-                                                own_part_number=part.get("part_number"))
+                                                own_part_number=part.get("part_number"),
+                                                refused=_refused)
+            # A CATALOGUE ROW TURNED AWAY IS SAID, NOT DROPPED (D-383). Each refused row of
+            # this profile is named on the part with its reason, so an estimator can see why
+            # the catalogue was not used and confirm a stock row that was refused wrongly.
+            if _refused:
+                part["_catalogue_rows_refused"] = _refused
+                for _rf in _refused:
+                    _msg = (f"catalogue row {_rf['code']} '{_rf['description']}' was not used to "
+                            f"price this section: {_rf['why']} — another drawing's made part "
+                            f"prices only that item. If it is plain stock, confirm it")
+                    if _msg not in (part.get("review_flags") or []):
+                        part.setdefault("review_flags", []).append(_msg)
             if _cat and _cat.get("unit_price_gbp"):
                 _cat_unit = float(_cat["unit_price_gbp"])
                 _cat_ext = round(_cat_unit * quantity, 2)
@@ -5519,13 +5582,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # tube carries its outside diameter in a and b, so a 12.7 x 1.2 CHS computed as
             # 12.7 x 12.7 square gives 55.2mm2 against a true 43.4mm2 — 27% heavy on every
             # metre of every round tube we buy, which is most of the tube we buy.
-            inner_a = max(0.0, side_a_mm - (2.0 * wall_t_mm))
-            inner_b = max(0.0, side_b_mm - (2.0 * wall_t_mm))
-            if str(_ss.get("profile_form") or "").upper() == "CHS":
-                area_mm2 = max(0.0, _PI / 4.0 * ((side_a_mm ** 2) - (inner_a ** 2)))
-            else:
-                area_mm2 = max(0.0, (side_a_mm * side_b_mm) - (inner_a * inner_b))
-            kg_per_m = (area_mm2 * (density or 7850.0)) / 1_000_000.0
+            # One formula for every reader that weighs a section (section_profile, D-383): the
+            # cut-list reader's mass check uses the same one.
+            from section_profile import section_kg_per_m as _section_kg_per_m
+            kg_per_m = _section_kg_per_m(side_a_mm, side_b_mm, wall_t_mm,
+                                         _ss.get("profile_form"), density) or 0.0
             unit_length_m = length_mm / 1000.0
             unit_mass_kg = kg_per_m * unit_length_m
             applied_price_per_kg = external_price.get("applied_price_per_kg")
@@ -6684,7 +6745,16 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # that bench time is real work that must keep being charged.
     try:
         from bought_in_policy import (bought_in_conflict, is_bought_in,
-                                      strip_fabrication_ops)
+                                      make_buy_question, strip_fabrication_ops)
+        # MAKE OR BUY, WHERE A STOCK-PRODUCT NAME LEAVES IT OPEN (D-383). "MESH" names what
+        # 12173-04-04M looks like, not who makes it, and the 04 pack does not say; a compound
+        # product word (WELDMESH) rules it bought, but with nothing on the pack stating the
+        # purchase. Either way the question is the estimator's, beside the route it left —
+        # worded below from the operations this stage actually keeps or removes.
+        _mbq = make_buy_question(part)
+        if _mbq:
+            part["_make_buy_question"] = _mbq
+        _mbq_ops = sorted({str(o) for o in ops if str(o).lower() not in ("handling", "assembly")})
         if is_bought_in(part):
             _bi_removed = strip_fabrication_ops(part)
             _bi_ops = set(part.get("textual_operations") or [])
@@ -6694,12 +6764,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                     f"bought-in part — fabrication operations removed "
                     f"({', '.join(_bi_removed)}). We buy this item; only handling/assembly "
                     f"time applies. Price it from the catalogue, not from a route")
+            if _mbq and _mbq.get("ruled") == "bought":
+                from source_precedence import raise_manufacturing_question as _ask
+                _ask(part,
+                     f"Is {part.get('part_number')} bought ready-made or made here? It is "
+                     f"ruled bought: {_mbq['why']}",
+                     (f"bought — {', '.join(_bi_removed) or 'no fabrication'} not charged; "
+                      f"it is priced as a purchase"),
+                     ("if SDI makes it, say so and the route's cutting, forming and welding "
+                      "return; if it is bought, give the supplier or catalogue code"),
+                     "bought_in_policy.make_buy_question")
             if bought_in_conflict(part):
                 # Identity says buy, geometry says make. Do not let the engine pick a side.
                 part.setdefault("review_flags", []).append(
                     "CONFLICT: classified bought-in, but the part also carries its own "
                     "measured flat pattern. One of the two is wrong — confirm whether this "
                     "is a purchased item or one we fabricate")
+        elif _mbq and not _mbq.get("ruled"):
+            from source_precedence import raise_manufacturing_question as _ask
+            _why = str(_mbq.get("why") or "")
+            _ask(part,
+                 (f"Is {part.get('part_number')} bought ready-made or made here? "
+                  f"{_why[:1].upper()}{_why[1:]}"),
+                 (f"made here — the route's operations ({', '.join(_mbq_ops) or 'none'}) are "
+                  f"charged as computed; nothing is removed on the word {_mbq['word']}"),
+                 ("if it is bought ready-made, rule the fabrication off and price it as a "
+                  "purchase (supplier or catalogue code); if it is made here, confirm the "
+                  "route"),
+                 "bought_in_policy.make_buy_question")
     except Exception:
         pass
 
@@ -7490,6 +7582,24 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         sec_per_mm = float(eb_rule.get("sec_per_mm_edge", 0.08))
         run_sec = max(float(eb_rule.get("min_run_min", 4.0)) * 60.0, edge_mm * sec_per_mm)
         run_times_min["edge_banding"] = round(run_sec / 60.0, 2)
+    elif ((_safe_float(part.get("stated_banded_length_mm")) or 0.0) > 0
+          or part.get("stated_banding_rows")):
+        # A STATED EDGING ROW ON A PART THAT IS NOT BANDED (D-383). The row was read as this
+        # part's banding (bom_pipeline.apply_stated_edging_to_parts) and so was not made a
+        # line; the route bands nothing here. The sentence is written by the stage that
+        # timed the banding — or did not — from the same record, never at stamp time.
+        from source_precedence import raise_manufacturing_question as _ask
+        _stated_mm = _safe_float(part.get("stated_banded_length_mm")) or 0.0
+        _ask(part,
+             (f"A parts-list row states "
+              + (f"{_stated_mm:g} mm of edging" if _stated_mm > 0 else
+                 f"edging ('{'; '.join(str(x) for x in part.get('stated_banding_rows') or [])}')")
+              + f" on {part.get('part_number')}, which is not edge-banded on its route; the row "
+                f"was read as its banding and not made a line"),
+             "no edging is charged on this part, and the row is not a purchased line",
+             ("confirm what the row is: if the part is banded, add the banding; if the row is "
+              "a bought item (an edging strip or trim), give it a code so it becomes a line"),
+             "estimator.estimate_process_times")
 
     if "bench_work" in ops:
         bw = LABOUR_RULES.get("bench_work") or {}

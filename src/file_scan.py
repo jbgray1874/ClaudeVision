@@ -643,12 +643,16 @@ def _merge_truncated_bom_codes(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
     A labelled cell — "VITAL PARTS: LOW068" — has its label stripped here too, so the code
     that reaches UDEF is the one the supplier would recognise.
     """
-    from part_identity import normalize_part_code, strip_code_label, stem_duplicate_target
+    from part_identity import (is_engine_derived_identity, normalize_part_code,
+                               strip_code_label, stem_duplicate_target)
 
     if not rows:
         return rows
     for row in rows:
         if not isinstance(row, dict):
+            continue
+        if is_engine_derived_identity(row):
+            # FIXING-<article> / BI-<word>: an identity we derived, not a labelled cell (D-383).
             continue
         _raw = row.get("part_number") or row.get("part_code") or ""
         _clean = strip_code_label(_raw)
@@ -2303,6 +2307,15 @@ def _finalize_scan_summary(
                         print(f"   [bom-identity] {_n_mint} uncoded parts-list row(s) named "
                               f"by their words (BI-<word>) so they reach the bill",
                               flush=True)
+                    _roles: Dict[str, int] = {}
+                    for _r in _dp["rows"]:
+                        if isinstance(_r, dict) and _r.get("row_role") \
+                                and _r.get("row_role") != "part":
+                            _roles[_r["row_role"]] = _roles.get(_r["row_role"], 0) + 1
+                    if _roles:
+                        print(f"   [bom-identity] uncoded rows that are the parent's, not "
+                              f"parts: {', '.join(f'{k} {v}' for k, v in sorted(_roles.items()))}",
+                              flush=True)
                     if _n_split:
                         print(f"   [bom-identity] {_n_split} row(s) under a shared category "
                               f"code (P/P, FIXING...) given one identity per article",
@@ -3762,15 +3775,33 @@ def _finalize_scan_summary(
         # The readers keep material/thickness/mass per BOM row and the flatten preserves
         # them; this is where they become PART evidence — through source_precedence, so a
         # DXF or model still outranks a table cell and a blanket document figure does not.
-        from bom_pipeline import apply_bom_row_evidence_to_parts, apply_stated_edging_to_parts
+        from bom_pipeline import (apply_bom_row_evidence_to_parts,
+                                  apply_stated_cut_list_to_parts,
+                                  apply_stated_edging_to_parts,
+                                  raise_unread_parts_list_rows)
         _rows_ev = (summary.get("document_analysis") or {}).get("bom_rows") or []
         _n_ev = apply_bom_row_evidence_to_parts(
             summary["manufacturing_writeup"]["parts"], _rows_ev)
+        # A PART'S OWN CUT LIST, READ OFF ITS OWN TABLE (D-383): the codeless section rows the
+        # minter classed parent_cut_list are the frame's pieces, not bought-in tube. After the
+        # LLM overlay above, and through source_precedence, so the table outranks the
+        # transcription whichever runs last.
+        _n_cut = apply_stated_cut_list_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_cut:
+            print(f"   [bom-evidence] {_n_cut} part(s) take their section cut list from "
+                  f"their own parts table", flush=True)
         _n_edg = apply_stated_edging_to_parts(
             summary["manufacturing_writeup"]["parts"], _rows_ev)
         if _n_edg:
             print(f"   [bom-evidence] {_n_edg} part(s) take their edging length from the "
                   f"edging row of their own parts list", flush=True)
+        # WHAT NO READER TOOK IS ASKED, NEVER DROPPED (D-383).
+        _n_unread = raise_unread_parts_list_rows(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_unread:
+            print(f"   [bom-evidence] {_n_unread} codeless parts-list row(s) no reader took "
+                  f"— raised as questions on their parents", flush=True)
         if _n_ev:
             print(f"   [bom-evidence] {_n_ev} part(s) took material/thickness/mass from "
                   f"their own BOM row (bom_tree rank — a measured source still wins)",

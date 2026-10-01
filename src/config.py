@@ -3361,6 +3361,67 @@ SECTION_STOCK_POLICY = {
     "section_keywords": ["TUBE", "RHS", "SHS", "BOX SECTION", "ANGLE", "CHANNEL", "WIRE MESH"],
 }
 
+# ── A CATALOGUE SECTION ROW PRICES ONLY ITS EXACT ITEM (D-380, narrowed D-383) ─────────────
+#
+# 12173-03-04M / 05M, 30x30x2 tube frames cut to 3,704 mm, took UDEF 11248-14 "L FRAME 30x30x2
+# @ 1395mm" — another job's made frame, inside a 10% length window. A row coded with a drawing
+# number, naming a drawing, or naming a made form is that part's price and nothing else's.
+#
+# A made-form word counts only as a word that is not qualifying a stock noun: "SIDE FRAME
+# 30x30x2" is a made part, "SHS 30x30x2 FRAME TUBE" is tube.
+SECTION_CATALOGUE_MADE_FORM_WORDS = ("FRAME", "ASSEMBLY", "ASSY", "WELDMENT", "FABRICATION")
+# Material grades and standards are not drawing numbers, though they share the hyphenated
+# shape: "6063-T6", "304-2B", "EN 10219-2", "BS 6323-4". A token after a standards prefix, or
+# shaped like a grade, is skipped when the row's description is read for a drawing reference.
+SECTION_CATALOGUE_STANDARD_PREFIXES = ("EN", "BS", "ISO", "DIN", "ASTM", "AISI")
+SECTION_CATALOGUE_GRADE_TOKEN_RE = r"^\d{3,5}-(?:T\d+|\d?[A-Z]{1,2}|\d)$"
+# Dave Wright's exact-item rule, as a measurement tolerance: a catalogue cut piece prices a
+# part of THAT length, within the drawing's own rounding — not within 10% or 75 mm.
+SECTION_CATALOGUE_LENGTH_TOLERANCE_MM = 1.0
+
+# ── A PART'S OWN CUT LIST (D-383) ──────────────────────────────────────────────────────────
+# The parts table of a tube frame's own sheet lists every piece ("30.00 x 30.00 x 2.00mm TUBE
+# 1532"). Their summed mass is held against the sheet's stated WEIGHT; outside this fraction
+# the length is flagged INDICATIVE for a person (slots, drain holes and notches take mass out,
+# so the cut list legitimately reads a little heavy).
+CUT_LIST_MASS_TOLERANCE = 0.15
+
+# ── WHAT A CODELESS PARTS-LIST ROW IS (D-383) ──────────────────────────────────────────────
+# Words that qualify a sheet or board rather than name it ("3mm CLEAR PETG SHEET" is PETG;
+# "18mm MR MDF" is MDF). The estimator's catalogue sheet-rate search and the parts-list row
+# classifier read this one list.
+MATERIAL_QUALIFIER_WORDS = (
+    "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
+    "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
+    "TEXTURED", "SMOOTH", "MR", "FR", "EXT", "INT", "STD", "THK", "NOM",
+)
+# Words a finish statement uses beside the finish itself ("POWDER COAT RAL9005", "WET SPRAY
+# MATT BLACK"). A row whose every word is a finish word or one of these states a finish and
+# is not a part; "CHROME HANDLE" names a thing and stays a part.
+PARTS_LIST_FINISH_QUALIFIER_WORDS = (
+    "COAT", "COATED", "COATING", "FINISH", "FINISHED", "COLOUR", "COLOR", "COLOURED", "RAL",
+    "MATT", "MATTE", "GLOSS", "GLOSSY", "SATIN", "SEMI", "TEXTURED", "SMOOTH", "FINE", "WET",
+    "SELF", "MILL", "DIAMOND", "FLAME", "ALL", "OVER", "BOTH", "SIDES", "SIDE", "FACE",
+    "FACES", "TOP", "ONLY", "AFTER", "BEFORE", "JET", "BLACK", "WHITE", "GREY", "GRAY",
+    "CLEAR", "SILVER", "MICRON", "MICRONS", "BZP",
+)
+# The banding nouns a parts-list row uses. Whole words on both sides; EDGE on its own is never
+# one (WEDGE, LEDGE, EDGE TRIM, EDGE PROTECTOR, KNIFE EDGE LED STRIP are not banding).
+EDGE_BANDING_ROW_WORDS = ("EDGE BANDING", "EDGEBANDING", "EDGE BAND", "EDGEBAND", "EDGE TAPE",
+                          "ABS EDGE", "EDGING", "LIPPING")
+
+# ── A STOCK PRODUCT, AND WHO MAKES IT (D-381, corrected D-383) ─────────────────────────────
+# Compound terms that name a product sold ready-made. A part named by one, with no flat, no
+# wire or bar schedule and no bend callouts of its own sheet, is ruled bought; unless the
+# pack also states the purchase (a -X suffix, a supplier or catalogue code) a make-or-buy
+# question is raised beside the ruling.
+PURCHASED_STOCK_PRODUCT_WORDS = ("WELDMESH", "WELD MESH", "WELDED MESH", "WIRE MESH PANEL",
+                                 "EXPANDED METAL")
+# Words that can only ASK. "MESH" alone names what a part looks like, not who makes it: a
+# welded grid is bought as weldmesh or welded here on the Robomac, and the word cannot say
+# which. A part described by one keeps its route and carries a make-or-buy question.
+STOCK_PRODUCT_QUESTION_WORDS = ("MESH",)
+
 # --- Spreadsheet parity (Estimate / Material Price Break). Refresh via extract_workbook_constants.py ---
 # Default assumed order quantity for unit-cost roll-ups (Estimate!D6).
 # Override without code edits: ESTIMATE_DEFAULT_JOB_QUANTITY=400

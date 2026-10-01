@@ -1145,8 +1145,10 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
         # drawing's. An estimator can act on either sentence; neither is "needs a rate".
         try:
             from part_identity import is_engine_minted_code as _is_minted
+            from part_identity import is_engine_minted_record as _is_minted_rec
         except Exception:                                        # noqa: BLE001
             _is_minted = None                                    # type: ignore[assignment]
+            _is_minted_rec = None                                # type: ignore[assignment]
         # A SIGHTED LINE HAS A THIRD ANSWER, AND IT IS NOT ABOUT CODES AT ALL.
         #
         # The castor on the first concept book was not short of a catalogue row; it was
@@ -1165,7 +1167,28 @@ def _price_source(bom_row: Dict[str, Any], provenance: Dict[str, Dict[str, Any]]
                     "can be matched to it and no supplier can be asked for a real price. "
                     "Name the item — a code, a manufacturer reference, or the specification "
                     "you would order by — and the ordinary price chain answers it")
-        if _is_minted is not None and code and _is_minted(code):
+        # BY THE RECORD WHERE IT IS IN HAND (D-383): a minted code that keeps a row's figures
+        # ("BI-DOWEL8MMX30MM") is not recognisable by its shape, and calling it "a real code"
+        # sends an estimator to look for a catalogue row that could never exist.
+        _minted_by_record = bool(_line0 is not None and _is_minted_rec is not None
+                                 and _is_minted_rec(_line0))
+        # A SPLIT IDENTITY IS DERIVED FROM A CLASS WORD, NOT PRINTED (D-383). 12173-03-GA
+        # prints "FIXING" against its pan-head screws; "FIXING-3.5-X12MM-PAN-HEAD" is the
+        # engine's per-article identity, and "a real code ... asked of the catalogue" is not
+        # true of it.
+        try:
+            from part_identity import is_category_split_identity as _is_split
+        except Exception:                                        # noqa: BLE001
+            _is_split = None                                     # type: ignore[assignment]
+        if _line0 is not None and _is_split is not None and _is_split(_line0):
+            return ("**NOT PRICED — the drawing printed only the class word "
+                    f"'{_line0.get('printed_code')}' for this line.** "
+                    f"'{bom_row['code']}' is an identity derived from that class word and the "
+                    "row's own words, so the lines stay apart — it is not a code anything "
+                    "holds a rate against. The description was matched against the purchasing "
+                    "catalogue instead and no priced row carried its words and sizes. Put the "
+                    "SDI code on the pack and the price follows, or price this one by hand")
+        if (_is_minted is not None and code and _is_minted(code)) or _minted_by_record:
             return ("**NOT PRICED — this line has no part code, and the one shown is ours.** "
                     f"'{bom_row['code']}' was minted by the engine from the description so "
                     "the line could be carried and counted; nothing can look a rate up "

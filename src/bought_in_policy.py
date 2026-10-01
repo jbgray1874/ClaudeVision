@@ -43,6 +43,8 @@ __all__ = [
     "bought_in_conflict",
     "strip_fabrication_ops",
     "strip_leaf_operations",
+    "purchased_stock_product",
+    "make_buy_question",
     "is_assembly",
     "assembly_reason",
     "FABRICATION_OPS",
@@ -131,39 +133,118 @@ _CONSUMABLE_RE = re.compile(
 
 
 # A STOCK PRODUCT BOUGHT READY-MADE (D-381). 12173-04-04M / 05M, "LOWER / UPPER TIER MESH",
-# are panels of 3 mm welded mesh bought to size; with no flat and no wire schedule of their own
-# they were lasered as 1 mm sheet and put on the Robomac off the pack's "WIRE TO WIRE" note.
-# The words are config (PURCHASED_STOCK_PRODUCT_WORDS); this is the default.
-_STOCK_PRODUCT_WORDS_DEFAULT = ("WELDMESH", "WELD MESH", "WELDED MESH", "WIRE MESH",
-                                "MESH PANEL", "MESH", "EXPANDED METAL")
+# had no flat and no wire schedule of their own, and were lasered as 1 mm sheet and put on the
+# Robomac. The words are config (PURCHASED_STOCK_PRODUCT_WORDS); this is the default.
+#
+# WHO MAKES IT IS A SEPARATE QUESTION FROM WHAT IT IS CALLED (D-383). D-381's list held bare
+# "MESH", so any part named MESH lost its laser, Robomac, weld, dress and deburr on a word,
+# and "MDF MESH INFILL" and "MESH FRAME" were ruled bought as well. A welded grid is bought as
+# weldmesh or welded here, and neither the word nor a wire gauge says which: a bought weldmesh
+# is specified by gauge ("50x50x3") and is welded. So:
+#   * a COMPOUND product word (WELDMESH, EXPANDED METAL ...) still rules the part bought, and
+#     unless the pack states the purchase (a -X suffix, a supplier or catalogue code) a
+#     make-or-buy question is raised beside the ruling;
+#   * a QUESTION word (config STOCK_PRODUCT_QUESTION_WORDS: MESH) never rules — the route
+#     stays as computed and the question is raised;
+#   * bend callouts on the part's own sheet (not copied from a mirrored base) say we form it.
+# Weld, wire gauge, wire family and wire_forming ops are not "made" signals here: the pack's
+# "RESISTANCE WELDING WIRE TO WIRE" is border legend on every M&S sheet (stock_form_rules,
+# D-338), and 12173-04-04M's own FINISH: WELDED is how a bought weldmesh is described too.
+_STOCK_PRODUCT_WORDS_DEFAULT = ("WELDMESH", "WELD MESH", "WELDED MESH", "WIRE MESH PANEL",
+                                "EXPANDED METAL")
+_STOCK_QUESTION_WORDS_DEFAULT = ("MESH",)
 
 # The coats a purchased panel can still take here: a bought mesh is powder coated with the
 # frame it sits in when its own sheet says so.
 _COAT_OPS = {"powder_coating": "powder", "wet_spray": "wet_spray"}
 
 
-def purchased_stock_product(part: Dict[str, Any]) -> str:
-    """The stock-product word this part's own description names, or "" (D-381).
-
-    Never for a part with measured flat geometry, an assembly, or a wire or bar schedule of
-    its own — those are things we cut or form, whatever they are called."""
-    if not isinstance(part, dict) or has_fabrication_evidence(part):
-        return ""
-    if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
-            or part.get("assembly_children"):
-        return ""
-    if part.get("_bar_recognised") or part.get("wire_schedule") or part.get("bar_schedule"):
-        return ""
+def _config_words(key: str, default: tuple) -> tuple:
     try:
         import config as _cfg
-        words = getattr(_cfg, "PURCHASED_STOCK_PRODUCT_WORDS", None)
+        words = getattr(_cfg, key, None)
     except Exception:                                            # noqa: BLE001
         words = None
-    text = " ".join(_upper(part.get(k)) for k in ("description", "name"))
-    for w in (words or _STOCK_PRODUCT_WORDS_DEFAULT):
+    return tuple(words) if words else default
+
+
+def _first_word(words: Any, text: str) -> str:
+    for w in words or ():
         if re.search(rf"\b{re.escape(str(w).upper())}\b", text):
             return str(w).upper()
     return ""
+
+
+def _made_on_its_own_sheet(part: Dict[str, Any]) -> bool:
+    """Bend callouts printed on the part's OWN sheet — not copied from a mirrored base."""
+    if not part.get("drawing_bend_callouts"):
+        return False
+    try:
+        import source_precedence as _sp
+        return _sp.source_of(part, "drawing_bend_callouts") != "mirror_of_measured"
+    except Exception:                                            # noqa: BLE001
+        return True
+
+
+def _purchase_stated(part: Dict[str, Any]) -> bool:
+    """The pack itself says we buy it: SDI's purchased suffix, a supplier or a catalogue code."""
+    return bool(part_code_conventions.purchased_suffix(_upper(part.get("part_number")))
+                or str(part.get("supplier") or "").strip()
+                or str(part.get("catalogue_code") or "").strip()
+                or str(part.get("supplier_code") or "").strip())
+
+
+def _stock_product_candidate(part: Dict[str, Any]) -> bool:
+    """No measured flat, not an assembly, no wire or bar schedule, no bend callouts of its own."""
+    if not isinstance(part, dict) or has_fabrication_evidence(part):
+        return False
+    if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
+            or part.get("assembly_children"):
+        return False
+    if part.get("_bar_recognised") or part.get("wire_schedule") or part.get("bar_schedule"):
+        return False
+    return not _made_on_its_own_sheet(part)
+
+
+def purchased_stock_product(part: Dict[str, Any]) -> str:
+    """The stock-product word this part's own description names, or "" (D-381, D-383).
+
+    Never for a part with measured flat geometry, an assembly, a wire or bar schedule, or bend
+    callouts on its own sheet — those are things we cut or form, whatever they are called. A
+    QUESTION word (MESH) never rules; see make_buy_question."""
+    if not _stock_product_candidate(part):
+        return ""
+    text = " ".join(_upper(part.get(k)) for k in ("description", "name"))
+    return _first_word(_config_words("PURCHASED_STOCK_PRODUCT_WORDS",
+                                     _STOCK_PRODUCT_WORDS_DEFAULT), text)
+
+
+def make_buy_question(part: Dict[str, Any]) -> Dict[str, Any]:
+    """The make-or-buy question a stock-product name leaves open, or {} when none (D-383).
+
+    {"word", "ruled" ("bought" or ""), "why"}. A compound product word with nothing on the
+    pack stating the purchase is ruled bought AND asked; a question word is only asked. A part
+    whose purchase is stated, or that we evidently make, raises nothing."""
+    if not _stock_product_candidate(part):
+        return {}
+    text = " ".join(_upper(part.get(k)) for k in ("description", "name"))
+    w = _first_word(_config_words("PURCHASED_STOCK_PRODUCT_WORDS",
+                                  _STOCK_PRODUCT_WORDS_DEFAULT), text)
+    if w:
+        if _purchase_stated(part):
+            return {}
+        return {"word": w, "ruled": "bought",
+                "why": (f"its description names a stock product ({w}) and it has no flat, "
+                        f"wire schedule or bend callouts of its own; nothing on the pack "
+                        f"(a -X suffix, a supplier, a catalogue code) says it is bought")}
+    q = _first_word(_config_words("STOCK_PRODUCT_QUESTION_WORDS",
+                                  _STOCK_QUESTION_WORDS_DEFAULT), text)
+    if q:
+        return {"word": q, "ruled": "",
+                "why": (f"it is described as {q}, with no flat, wire schedule or bend callouts "
+                        f"of its own; the pack does not say whether it is bought ready-made "
+                        f"or made here")}
+    return {}
 
 
 def keeps_its_coat(part: Dict[str, Any], op: Any) -> bool:

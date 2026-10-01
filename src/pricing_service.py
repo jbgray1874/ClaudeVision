@@ -310,8 +310,8 @@ def code_column_words(part: Dict[str, Any], tokenize) -> set:
         return set()
     try:
         from part_code_conventions import is_category_not_a_code      # noqa: PLC0415
-        from part_identity import is_engine_minted_code, is_placeholder_identity  # noqa: PLC0415
-        if (is_category_not_a_code(code) or is_engine_minted_code(code)
+        from part_identity import is_engine_minted_record, is_placeholder_identity  # noqa: PLC0415
+        if (is_category_not_a_code(code) or is_engine_minted_record(part)
                 or supplier_reference.is_synthesised_key(code) or is_placeholder_identity(code)):
             return set()
     except ImportError:                                               # pragma: no cover

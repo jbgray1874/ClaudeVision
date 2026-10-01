@@ -912,22 +912,53 @@ def _raw_identity_aliases(
 
     # THE PRINTED CODE SURVIVES A CODE WE MINTED (D-379). Where the extract read a parts-list
     # row without its code it was given a stand-in (BI-SCREW); the same row read with its
-    # code is that item, and the code the drawing printed is the one a catalogue and an
+    # code is that item, and the code the record carries is the one a catalogue and an
     # estimator can look up. One printed code onto one stand-in only: two would be two
     # items the stand-in cannot tell apart, and they stay as they were.
+    #
+    # ONLY THE EXACT SAME ITEM IS FLIPPED (D-383). The pass above joins on a description-token
+    # SUBSET with no count check, so "CASTOR WHEEL" x2 joins "50mm BRAKED CASTOR WHEEL" x2.
+    # Before D-379 such a near match landed on the stand-in and showed NOT PRICED; flipped,
+    # it takes the printed code's catalogue price — the no-near-match rule broken one level
+    # down. So the flip needs equal normalised token sets (estimator._bought_in_token_set,
+    # which folds "Ø3.5x12mm" and "3.5 x 12mm" into one size) and stated counts that do not
+    # disagree. Otherwise the pre-D-379 direction stands, no money moves to the printed code,
+    # and both records say they may be one item.
     try:
         from part_identity import is_engine_minted_code as _minted
     except Exception:                                            # noqa: BLE001
         _minted = None
+    try:
+        from estimator import _bought_in_token_set as _item_tokens    # lazy, as below
+    except Exception:                                            # noqa: BLE001
+        _item_tokens = None
+
+    def _one_item(rs: Mapping[str, Any], rd: Mapping[str, Any]) -> bool:
+        if _item_tokens is None:
+            return False
+        ta = _item_tokens({"description": rs.get("description")})
+        tb = _item_tokens({"description": rd.get("description")})
+        return ta is not None and ta == tb and _quantities_do_not_disagree(
+            number(rs.get("quantity"), None), number(rd.get("quantity"), None))
+
     if _minted is not None:
         _onto: Dict[str, List[str]] = {}
         for _src, _dst in aliases.items():
             if _minted(_dst) and not _minted(_src):
                 _onto.setdefault(_dst, []).append(_src)
         for _dst, _srcs in _onto.items():
-            if len(_srcs) == 1 and _dst not in aliases:
-                del aliases[_srcs[0]]
-                aliases[_dst] = _srcs[0]
+            if len(_srcs) != 1 or _dst in aliases:
+                continue
+            _s = _srcs[0]
+            if _one_item(raw.get(_s) or {}, extracted.get(_dst) or {}):
+                del aliases[_s]
+                aliases[_dst] = _s
+                continue
+            _note = (f"{_s} and {_dst} may be one item — their descriptions or counts differ, "
+                     f"so they were not made one priced line under {_s}; confirm")
+            for _rec in (raw.get(_s), extracted.get(_dst)):
+                if isinstance(_rec, dict) and _note not in (_rec.get("review_flags") or []):
+                    _rec.setdefault("review_flags", []).append(_note)
 
     # ── ONE PART, TWO SPELLINGS, TWO SOURCES ──────────────────────────────────────────
     # Prefix-related codes carrying the SAME description and the SAME quantity are one item

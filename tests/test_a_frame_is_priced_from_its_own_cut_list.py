@@ -56,5 +56,7 @@ def test_the_extract_carries_every_piece_onto_the_section():
     assert '"cut_lengths_mm": []' in src and "one number per piece" in src
     assert '"cut_lengths_mm": row.get("cut_lengths_mm") or None' in src
     js = (ROOT / "src" / "source_connectors" / "llm_full_job.py").read_text(encoding="utf-8")
-    assert 'ss["cut_lengths_mm"] = _pieces' in js
+    # D-383: the pieces are submitted through source_precedence, field by field, so a cut
+    # list read off the part's own table is never clobbered by the transcription.
+    assert '_fields.append(("cut_lengths_mm", _pieces))' in js
     assert lj is not None

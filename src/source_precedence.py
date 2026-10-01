@@ -44,6 +44,7 @@ __all__ = [
     "SOURCE_TIEBREAK", "tiebreak_priority", "FIELD_TIEBREAK",
     "field_rank", "FIELD_RANK_OVERRIDE",
     "evidence_family", "EVIDENCE_FAMILY", "QUORUM_BY_FAMILY_FIELDS",
+    "raise_manufacturing_question",
 ]
 
 
@@ -1301,3 +1302,25 @@ def settle_companion_facts(part: Dict[str, Any]) -> List[str]:
                 "displaced_source": _was_src, "because_of": sorted(overruled)}
             moved.append(field)
     return moved
+
+
+# ── WHAT A READER CANNOT SETTLE, IT ASKS ─────────────────────────────────────────────────
+
+def raise_manufacturing_question(part: Dict[str, Any], issue: str, assumption: str,
+                                 action: str, source: str) -> bool:
+    """Put a question a reader cannot settle on the part, once (D-382's channel, D-383).
+
+    costed_facts counts every part's manufacturing_questions as manufacturing decisions, beside
+    the money of the part's line, so a question raised here is never silent and never moves
+    money on its own. The same issue is held once however many passes raise it. Returns True
+    when the question was added."""
+    if not isinstance(part, dict) or not str(issue or "").strip():
+        return False
+    qs = part.setdefault("manufacturing_questions", [])
+    if not isinstance(qs, list):
+        return False
+    if any(isinstance(q, dict) and q.get("issue") == issue for q in qs):
+        return False
+    qs.append({"issue": str(issue), "assumption": str(assumption or ""),
+               "action": str(action or ""), "source": str(source or "")})
+    return True

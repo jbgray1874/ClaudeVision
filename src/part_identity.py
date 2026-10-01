@@ -14,6 +14,8 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 __all__ = [
     "normalize_part_code", "is_placeholder_identity", "dxf_alias_target",
     "resolve_estimate_code", "synthesise_bought_in_code", "is_engine_minted_code",
+    "is_engine_minted_record", "is_category_split_identity", "is_engine_derived_identity",
+    "parts_list_row_role",
 ]
 
 # DXF filename / legacy drawing numbers -> BOM detail part
@@ -140,16 +142,28 @@ _PLACEHOLDER_CODES = frozenset({
 # and a code, and the label travelled with it all the way to UDEF, which was asked for a
 # part called "VITAL PARTS: LOW068" and had nothing. The code is on the right of the colon.
 #
-# A HYPHEN INSIDE A CODE IS NOT A LABEL (D-379). "FIXING-3.5-X12MM-PAN-HEAD" is the code
-# 12173-03-GA prints; "FIXING-" was read as a label and stripped to "3.5-X12MM-PAN-HEAD",
-# while the parts-list edge kept the printed code — so one screw became two lines and the
+# A HYPHEN INSIDE A CODE IS NOT A LABEL (D-379). 12173-03-GA prints "FIXING" in the code
+# cell of its two pan-head screw rows (items 5 and 6); "FIXING-3.5-X12MM-PAN-HEAD" is the
+# identity category_code_identities gives the x12 row, not a code the drawing printed
+# (corrected, D-383). "FIXING-" was read as a label and stripped to "3.5-X12MM-PAN-HEAD",
+# while the parts-list edge kept the split identity — so one screw became two lines and the
 # ×16 screw's own row read as "stated and not carried". A label is set off by a colon, or
 # by a hyphen with space on both sides ("BOUGHT IN - LOW068"); a hyphen joining two parts
-# of a code is the code.
+# of a code is the code ("FIXING-125", "PART-01", "ITEM-12" stay whole). An identity the
+# engine derived (printed_code / identity_source on the row) is never label-stripped at all —
+# see is_engine_derived_identity.
 _CODE_LABEL_PREFIX = re.compile(
     r"^\s*(?:VITAL\s+PARTS?|STD\s+PARTS?|STANDARD\s+PARTS?|BOUGHT[\s-]?IN|PART\s*(?:NO|CODE)?"
     r"|ITEM|SUPPLIER|FIXINGS?|HARDWARE)(?:\s*:\s*|\s+-\s+)(?=\S)",
     re.IGNORECASE)
+
+
+def is_engine_derived_identity(row: Any) -> bool:
+    """True when a row's code was written by this engine — a category split
+    ("FIXING-<article>", printed_code set) or a minted identity (identity_source set) — rather
+    than read off a code cell. Such a code is ours, not a labelled cell, and the label
+    stripper must never rewrite it (D-383)."""
+    return isinstance(row, dict) and bool(row.get("printed_code") or row.get("identity_source"))
 
 
 def strip_code_label(raw: Any) -> str:
@@ -415,6 +429,161 @@ def category_code_identities(rows: Iterable[Any], code_key: str = "part_number",
 # Words in a description that do not name a thing: units and dimension markers.
 _NOT_A_THING = frozenset({"MM", "X", "DIA", "THK", "THICK", "OD", "ID", "LG", "LONG", "L"})
 
+# The roles a codeless parts-list row can play, in the order they are asked (D-383).
+ROW_ROLE_CUT_LIST = "parent_cut_list"      # a piece of the parent's own section cut list
+ROW_ROLE_BANDING = "parent_banding"        # the parent's edging, with or without a length
+ROW_ROLE_INSTRUCTION = "instruction"       # a note, process or finish instruction, or "TBC"
+ROW_ROLE_MATERIAL = "parent_material"      # the parent's own stock, named as a material
+ROW_ROLE_SIZE = "parent_size"              # figures only: the parent's blank ("626 x 626")
+ROW_ROLE_PART = "part"                     # words that name a thing we buy
+
+_NOTE_LEAD = re.compile(r"^\s*(?:NOTES?|SEE|REFER)\b")
+
+
+def _leads_with(pattern: Any, text: str) -> bool:
+    """Does the row OPEN with this reader's pattern? A process word that leads the row is an
+    instruction ("WELD ALL ROUND"); the same word later in it qualifies a thing."""
+    if not pattern:
+        return False
+    try:
+        return bool(re.match(rf"\s*(?:{pattern})", text))
+    except re.error:
+        return False
+
+
+# Words a finish statement uses besides the finish itself. Config may replace the list
+# (PARTS_LIST_FINISH_QUALIFIER_WORDS); this is the default.
+_FINISH_QUALIFIERS_DEFAULT = (
+    "COAT", "COATED", "COATING", "FINISH", "FINISHED", "COLOUR", "COLOR", "COLOURED", "RAL",
+    "MATT", "MATTE", "GLOSS", "GLOSSY", "SATIN", "SEMI", "TEXTURED", "SMOOTH", "FINE", "WET",
+    "SELF", "MILL", "DIAMOND", "FLAME", "ALL", "OVER", "BOTH", "SIDES", "SIDE", "FACE",
+    "FACES", "TOP", "ONLY", "AFTER", "BEFORE", "JET", "BLACK", "WHITE", "GREY", "GRAY",
+    "CLEAR", "SILVER", "MICRON", "MICRONS", "BZP")
+_FINISH_SUFFIX = r"(?:ED|ING|S|E|D|ISED|IZED|ISE|IZE)?"
+
+
+def _is_finish_statement(up: str, cfg: Any = None) -> bool:
+    """A row that only states a finish ("POWDER COAT RAL9005", "WET SPRAY MATT BLACK").
+
+    The finish reader names a family, and every word of three letters or more is a finish
+    word or a word finish statements use. A row that also names a thing is that thing:
+    "CHROME HANDLE" and "GALVANISED BRACKET" are bought parts, and "RAWLPLUG" is not RAW."""
+    try:
+        from finish_rules import FINISH_FAMILIES, finish_families
+    except Exception:                                            # noqa: BLE001
+        return False
+    if not finish_families(up):
+        return False
+    stems = [t for toks in FINISH_FAMILIES.values() for t in toks if " " not in t and "-" not in t]
+    quals = {str(w).upper() for w in (getattr(cfg, "PARTS_LIST_FINISH_QUALIFIER_WORDS", None)
+                                      or _FINISH_QUALIFIERS_DEFAULT)}
+    for w in re.findall(r"[A-Z]+", up):
+        if len(w) < 3 or w in _NOT_A_THING or w in quals:
+            continue
+        if any(re.fullmatch(re.escape(t) + _FINISH_SUFFIX, w) for t in stems):
+            continue
+        return False
+    return True
+
+
+def _is_material_statement(up: str, cfg: Any = None) -> bool:
+    """A row that names only a material, its qualifiers and figures ("18mm MDF, 626 x 626",
+    "MILD STEEL"). The material normaliser reads it, and every word of three letters or more
+    is part of a material it reads (a word, or a pair such as MILD STEEL) or a qualifier from
+    config MATERIAL_QUALIFIER_WORDS. A row that also names a thing is that thing: "ACRYLIC
+    LEAFLET HOLDER A4", "EDGE TRIM, ALUMINIUM" and "CAM LOCK ASSEMBLY" are parts."""
+    try:
+        from json_normaliser import normalise_material
+    except Exception:                                            # noqa: BLE001
+        return False
+    try:
+        if not normalise_material(up):
+            return False
+    except Exception:                                            # noqa: BLE001
+        return False
+    quals = {str(w).upper() for w in (getattr(cfg, "MATERIAL_QUALIFIER_WORDS", None) or ())}
+    words = [w for w in re.findall(r"[A-Z]+", up) if len(w) >= 3 and w not in _NOT_A_THING]
+    if not words:
+        return False
+    covered = [w in quals for w in words]
+    try:
+        alone = [normalise_material(w) for w in words]
+        for i, w in enumerate(words):
+            if alone[i]:
+                covered[i] = True
+            if i + 1 < len(words):
+                # A PAIR counts only when it reads as something neither word reads alone
+                # (MILD STEEL, OAK VENEER) — so a material word cannot cover its neighbour.
+                pair = normalise_material(f"{w} {words[i + 1]}")
+                if pair and pair != alone[i] and pair != alone[i + 1]:
+                    covered[i] = covered[i + 1] = True
+    except Exception:                                            # noqa: BLE001
+        return False
+    return all(covered)
+
+
+def parts_list_row_role(description: Any) -> str:
+    """What a parts-list row with no code IS, asked of the readers the engine already has.
+
+    D-381 named every codeless row with a word of three letters as a bought-in part. On
+    12173-03 the two tube frames' own cut lists ("30.00 x 30.00 x 2.00mm TUBE 1532", four
+    rows each, BOMs & Routes rows 38-45) became BI-TUBE and two BI-3000X3000... lines hung
+    under both frames, and the rail's section row ("10 x 30 x 1.50mm TUBE", 12173-05-01M)
+    became BI-10X30X150MMTUBE — tube D-380 already costs as the frames' 3,704 mm, on the bill
+    a second time. A note ("SEE NOTE 3"), a process ("WELD ALL ROUND"), a finish, a
+    material ("18mm MDF, 626 x 626") and an edging row would all have been named the same way.
+    So the row is asked, in order:
+
+      (a) the section reader (section_profile) reads a canonical profile  -> the parent's
+          cut list, consumed by bom_pipeline.apply_stated_cut_list_to_parts
+      (b) a banding noun (edge_banding.is_banding_row)                    -> the parent's edging
+      (c) the shared hardware vocabulary, or a stock-product word (config
+          PURCHASED_STOCK_PRODUCT_WORDS)                                   -> a part
+      (d) a placeholder, a NOTE/SEE/REFER row, or a row that OPENS with the weld, fold,
+          hole or slot reader's pattern (config) or a finish word        -> an instruction
+      (e) the material normaliser reads a material                        -> the parent's stock
+      (f) anything else with a word                                       -> a part (BI-DOWEL)
+
+    Nothing in (a), (b), (d) or (e) is minted; bom_pipeline raises what no reader consumed
+    as a question on the parent. No money moves on a word here."""
+    desc = " ".join(str(description or "").split())
+    up = desc.upper()
+    if not up:
+        return ROW_ROLE_SIZE
+    try:
+        from section_profile import detect_section_stock
+        _sec = detect_section_stock(desc)
+    except Exception:                                            # noqa: BLE001
+        _sec = None
+    if _sec and _sec.get("detection_path") == "canonical_profile":
+        return ROW_ROLE_CUT_LIST
+    try:
+        from edge_banding import is_banding_row
+        if is_banding_row(desc):
+            return ROW_ROLE_BANDING
+    except Exception:                                            # noqa: BLE001
+        pass
+    if synthesise_bought_in_code(desc, ""):
+        return ROW_ROLE_PART
+    try:
+        import config as _cfg
+    except Exception:                                            # noqa: BLE001
+        _cfg = None
+    _stock_words = getattr(_cfg, "PURCHASED_STOCK_PRODUCT_WORDS", None) or ()
+    if any(re.search(rf"\b{re.escape(str(w).upper())}\b", up) for w in _stock_words):
+        return ROW_ROLE_PART
+    if is_placeholder_identity(desc) or _NOTE_LEAD.match(up):
+        return ROW_ROLE_INSTRUCTION
+    if any(_leads_with(getattr(_cfg, k, None), up)
+           for k in ("WELD_PATTERN", "FOLD_PATTERN", "HOLE_PATTERN", "SLOT_PATTERN")):
+        return ROW_ROLE_INSTRUCTION
+    if _is_finish_statement(up, _cfg):
+        return ROW_ROLE_INSTRUCTION
+    if _is_material_statement(up, _cfg):
+        return ROW_ROLE_MATERIAL
+    words = [w for w in re.findall(r"[A-Z]+", up) if len(w) >= 3 and w not in _NOT_A_THING]
+    return ROW_ROLE_PART if words else ROW_ROLE_SIZE
+
 
 def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_number",
                                 desc_key: str = "description") -> int:
@@ -427,14 +596,11 @@ def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_numbe
     ("BI-DOWEL"), so every reader derives the same code, and kept visibly ours — a minted code
     is never put to the catalogue as if the drawing had printed it.
 
-    Only a row whose table names its drawing (bom_parent_known) and whose words name a thing:
-    "626 x 626 x 25 mm" is a size, and an edging row with a length is the parent's banding
-    (edge_banding.stated_edging_length_mm), not a part. A row with a code is untouched."""
-    try:
-        from edge_banding import stated_edging_length_mm
-    except Exception:                                            # noqa: BLE001
-        def stated_edging_length_mm(_d):                         # type: ignore
-            return None
+    Only a row whose table names its drawing (bom_parent_known) and whose words name a PART
+    (parts_list_row_role, D-383): a cut-list row, an edging row, an instruction, a material and
+    a size are the parent's, not things we buy, and each row carries the role it was given
+    (row_role) so the readers that consume them, and the question for any they do not, can
+    find it. A row with a code is untouched."""
     listed = [r for r in (rows or []) if isinstance(r, dict)]
     taken: Dict[str, str] = {}
     for r in listed:
@@ -449,14 +615,20 @@ def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_numbe
         if r.get("bom_parent_known") is False or not str(r.get("bom_parent") or "").strip():
             continue
         desc = " ".join(str(r.get(desc_key) or "").split())
+        role = parts_list_row_role(desc)
+        r["row_role"] = role
+        if role != ROW_ROLE_PART:
+            continue
         words = [w for w in re.findall(r"[A-Z]+", desc.upper())
                  if len(w) >= 3 and w not in _NOT_A_THING]
-        if not words or stated_edging_length_mm(desc):
+        if not words:
             continue
         ident = synthesise_bought_in_code(desc, code) or f"BI-{words[0]}"
         _held = taken.get(ident.upper())
         if _held is not None and _held != desc.upper():
-            # Two different rows under one word: the figures are what tell them apart.
+            # Two different rows under one word: the figures are what tell them apart. The
+            # code then carries digits, so it is recognised as ours by its record
+            # (identity_source, is_engine_minted_record), never by its shape.
             ident = "BI-" + re.sub(r"[^A-Z0-9]", "", desc.upper())[:24]
         r.setdefault("printed_code", code)
         r[code_key] = ident
@@ -495,6 +667,47 @@ def is_engine_minted_code(identity: Any) -> bool:
     """
     return bool(_MINTED_CODE.match(str(identity or "").strip())) \
         or is_sighted_code(identity)
+
+
+# The identity sources this module and the graph write for a code the drawing did not print.
+_MINTED_IDENTITY_SOURCES = frozenset({"uncoded_row", "description_bought_in"})
+
+
+def is_engine_minted_record(record: Any) -> bool:
+    """True when a RECORD's code was minted by the engine — by its shape, or by the record
+    saying so (D-383).
+
+    The shape test above is deliberately narrow (letters only after BI-), and a clash in
+    mint_uncoded_row_identities keeps the row's figures to tell two rows apart
+    ("BI-DOWEL8MMX30MM"). By shape that reads as somebody's code, and the explainer told an
+    estimator it was "a real code ... put to the purchasing catalogue". The record carries
+    identity_source from the row it was minted for, and that is the answer wherever the
+    record is in hand."""
+    if not isinstance(record, dict):
+        return is_engine_minted_code(record)
+    if str(record.get("identity_source") or "") in _MINTED_IDENTITY_SOURCES:
+        return True
+    return any(is_engine_minted_code(record.get(k)) for k in ("part_number", "identity")
+               if record.get(k))
+
+
+def is_category_split_identity(record: Any) -> bool:
+    """True when a record's identity was derived from a CLASS word the drawing printed
+    ("FIXING", "P/P") plus its article's words — category_code_identities' split — rather
+    than printed whole (D-383).
+
+    12173-03-GA prints "FIXING" against both pan-head screws; "FIXING-3.5-X12MM-PAN-HEAD" is
+    the split. A report that calls it "the code the drawing printed" sends an estimator to
+    look for a code that is not on the sheet."""
+    if not isinstance(record, dict):
+        return False
+    try:
+        from part_code_conventions import bare_code, is_category_not_a_code
+    except Exception:                                            # noqa: BLE001
+        return False
+    pc = str(record.get("printed_code") or "").strip()
+    return bool(pc) and is_category_not_a_code(pc) \
+        and bare_code(str(record.get("part_number") or "")) != bare_code(pc)
 
 
 def dxf_alias_target(part_number: str) -> Optional[str]:

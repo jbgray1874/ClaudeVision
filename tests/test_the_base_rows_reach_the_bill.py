@@ -113,16 +113,21 @@ def _mesh(**kw):
     return p
 
 
+# D-383 RESTATED THESE: bare "MESH" no longer rules a part bought (it only asks — see
+# test_a_row_is_read_for_what_it_is_before_it_is_named.py); a compound stock-product word still rules.
+_WELDMESH = "LOWER TIER WELDMESH PANEL"
+
+
 def test_a_mesh_panel_with_no_flat_is_bought_not_lasered():
-    p = _mesh()
-    assert "purchased stock product (MESH)" in bip.bought_in_reason(p)
+    p = _mesh(description=_WELDMESH)
+    assert "purchased stock product (WELDMESH)" in bip.bought_in_reason(p)
     removed = set(bip.strip_fabrication_ops(p))
     assert {"laser_cutting", "wire_forming", "welding", "deburring"} <= removed
     assert {"powder_coating", "handling"} <= set(p["textual_operations"])
 
 
 def test_a_raw_mesh_loses_the_coat_too():
-    p = _mesh(surface_finishes=["RAW"])
+    p = _mesh(description=_WELDMESH, surface_finishes=["RAW"])
     bip.strip_fabrication_ops(p)
     assert "powder_coating" not in p["textual_operations"]
 
@@ -150,7 +155,7 @@ def test_the_route_gate_rules_the_laser_out_and_keeps_the_coat():
         return NS(target_id="12173-04-04M", operation=op, scope="part", status=rc.REQUIRED,
                   reason="", field_provenance={})
     ds = {op: _d(op) for op in ("laser_cutting", "wire_forming", "powder_coating")}
-    rec = {"12173-04-04M": {"part_number": "12173-04-04M", "description": "LOWER TIER MESH",
+    rec = {"12173-04-04M": {"part_number": "12173-04-04M", "description": _WELDMESH,
                             "normalized_material": "MILD_STEEL",
                             "surface_finishes": ["POWDER COATED"]}}
     rc._family_gate(list(ds.values()), {}, rec)

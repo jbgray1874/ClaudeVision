@@ -70,7 +70,9 @@ from typing import Any, Dict, List, Optional, Tuple
 __all__ = [
     "EDGE_LAYER_WORDS",
     "banded_length_mm",
+    "is_banding_row",
     "layer_means_edging",
+    "stated_edging_length_mm",
 ]
 
 # A layer name means edging when it says so. Matched on the letters, so EDGE-BAND,
@@ -105,10 +107,26 @@ _NAMED_EDGES = (
     (r"\bEXPOSED\s+EDGES?\b", None, None),
 )
 
+# THE BANDING NOUNS A PARTS-LIST ROW CAN USE (D-383). Config (EDGE_BANDING_ROW_WORDS), and
+# never EDGE on its own: D-381's row reader had no left word boundary and took EDGE alone, so
+# WEDGE, LEDGE, EDGE TRIM, EDGE PROTECTOR, "KNIFE EDGE LED STRIP" and "EDGE LIT ACRYLIC" rows
+# with a length all read as their parent's banding, and were then never made lines.
+_ROW_WORDS_DEFAULT = ("EDGE BANDING", "EDGEBANDING", "EDGE BAND", "EDGEBAND", "EDGE TAPE",
+                      "ABS EDGE", "EDGING", "LIPPING")
+try:
+    import config as _cfg
+    _ROW_WORDS = tuple(str(w).upper() for w in (
+        getattr(_cfg, "EDGE_BANDING_ROW_WORDS", None) or _ROW_WORDS_DEFAULT))
+except Exception:                                                # noqa: BLE001
+    _ROW_WORDS = _ROW_WORDS_DEFAULT
+
 # The word has to be about banding, not about any edge. "EDGE OF PLINTH" is not a banding
-# instruction; "ABS EDGE" and "EDGE BANDED" are.
-_BANDING_WORDS = ("EDGE BAND", "EDGEBAND", "EDGE-BAND", "ABS EDGE", "ABS EDGING",
-                  "EDGING", "LIPPING", "EDGE TAPE", "BANDED", "EDGED")
+# instruction; "ABS EDGE" and "EDGE BANDED" are. ONE VOCABULARY: the note words are the row
+# nouns above plus the two past participles a note uses ("BANDED", "EDGED"), so the parts-list
+# reader and the note reader cannot drift apart.
+_BANDING_WORDS = tuple(dict.fromkeys(_ROW_WORDS + ("EDGE BAND", "EDGEBAND", "ABS EDGE",
+                                                   "EDGING", "LIPPING", "EDGE TAPE",
+                                                   "BANDED", "EDGED")))
 
 
 def _clean(value: Any) -> str:
@@ -133,8 +151,10 @@ def _text_of(part: Dict[str, Any]) -> str:
     bits: List[str] = []
     for key in ("description", "normalized_finish", "finish", "note", "notes"):
         bits.append(_clean(part.get(key)))
+    # stated_banding_rows: an edging row on the part's own parts list that gives no length
+    # (D-383) — the drawing says the part is banded, and the extent is still to be stated.
     for key in ("drawing_notes", "textual_notes", "notes_text", "surface_finishes",
-                "callouts"):
+                "callouts", "stated_banding_rows"):
         _v = part.get(key)
         if isinstance(_v, (list, tuple)):
             bits.extend(_clean(x) for x in _v)
@@ -188,9 +208,24 @@ def _named_edge_length(text: str, part: Dict[str, Any]) -> Tuple[Optional[float]
 # "3  EDGING, L: 1979mm  1" and 12173-03-02J's "2  EDGING. L:1759mm  1"; the timing took the
 # blank's square perimeter (2,520 / 2,224 mm) because nothing read the row. A banding word and
 # an explicit length are both required — "626 x 626 x 25 mm" is a size, not an edging.
+#
+# A WHOLE WORD, ON BOTH SIDES, ANYWHERE IN THE ROW (D-383). The noun is bounded by non-letters
+# so WEDGE and LEDGE are not EDGE, and it may sit after a thickness or a material ("2mm ABS
+# EDGING WHITE, L: 2400mm", "22 x 2mm EDGING, L: 1979mm"), which a first-word anchor would miss.
+_ROW_ALT = "|".join(re.escape(w).replace(r"\ ", r"[\s-]*")
+                    for w in sorted(_ROW_WORDS, key=len, reverse=True))
+_BANDING_ROW_RE = re.compile(rf"(?<![A-Z])(?:{_ROW_ALT})(?![A-Z])", re.IGNORECASE)
 _STATED_EDGING_RE = re.compile(
-    r"(?:EDG(?:E|ING)|LIPPING|EDGE\s*BAND\w*)\b.*?\bL(?:ENGTH)?\s*[:=.]?\s*"
-    r"(\d+(?:\.\d+)?)\s*MM", re.IGNORECASE)
+    rf"(?<![A-Z])(?:{_ROW_ALT})(?![A-Z]).*?\bL(?:ENGTH)?\s*[:=.]?\s*(\d+(?:\.\d+)?)\s*MM\b",
+    re.IGNORECASE)
+
+
+def is_banding_row(description: Any) -> bool:
+    """True when a parts-list row names edge banding (with or without a length) (D-383).
+
+    The minter asks this before it names a row: a banding row is the parent's edging, not a
+    bought-in part, whatever else the row says."""
+    return bool(_BANDING_ROW_RE.search(str(description or "")))
 
 
 def stated_edging_length_mm(description: Any) -> Optional[float]:

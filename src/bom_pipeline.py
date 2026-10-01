@@ -250,6 +250,32 @@ def reconciled_bom_rows_for_job(
     }
 
 
+def _row_is_codeless(r: Dict[str, Any]) -> bool:
+    """A row the drawing printed without a code (or with a placeholder), and that no reader
+    has given an identity of its own — the only kind a parent's reader may claim."""
+    from part_identity import is_placeholder_identity
+    if r.get("identity_source"):
+        return False
+    code = str(r.get("part_number") or "").strip()
+    return not code or is_placeholder_identity(code)
+
+
+def _row_parent(r: Any) -> str:
+    """The bare code of the drawing whose table printed this row, or "" when unnamed."""
+    from part_code_conventions import bare_code
+    if not isinstance(r, dict) or r.get("bom_parent_known") is False:
+        return ""
+    return bare_code(str(r.get("bom_parent") or ""))
+
+
+def _row_role(r: Dict[str, Any]) -> str:
+    """The role the minter gave a codeless row, or the same classifier's answer now. Not
+    written back: only a reader that consumes the row stamps it, so a row the minter never
+    saw is not questioned on a role nobody acted on."""
+    from part_identity import parts_list_row_role
+    return str(r.get("row_role") or "") or parts_list_row_role(r.get("description"))
+
+
 def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
     """An edging row on a part's own parts list states that part's banded length (D-381).
 
@@ -257,18 +283,39 @@ def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
     and never evidence; edging was timed on the 630 x 630 blank's perimeter, 2,520 mm. The row
     belongs to the drawing whose table printed it (bom_parent), and its length x quantity is
     that part's banded length, as a drawing reading. Rows of a table whose drawing was not
-    named are left alone — nothing can say whose edge they are. Returns parts stamped."""
-    import source_precedence as sp
-    from edge_banding import stated_edging_length_mm
-    from part_code_conventions import bare_code
+    named are left alone — nothing can say whose edge they are. Returns parts stamped.
 
+    THE DRAWING FACT, NOT A SENTENCE (D-383). The stamp records stated_banded_length_mm at
+    drawing_deterministic and nothing else: whether the part is banded at all, and on what
+    basis, is the estimator's to say when it times the banding (or raises a question when the
+    part is not banded), from the same record. A banding row with no length
+    ("ABS EDGING 22mm WHITE") is kept on the part as stated_banding_rows, so the banding
+    reader's "stated, extent unknown" rung sees it. Rows read here are marked consumed."""
+    import source_precedence as sp
+    from edge_banding import is_banding_row, stated_edging_length_mm
+
+    by_pn = {}
+    from part_code_conventions import bare_code
+    for p in parts or []:
+        if isinstance(p, dict):
+            by_pn.setdefault(bare_code(str(p.get("part_number") or "")), p)
     totals: Dict[str, float] = {}
     for r in bom_rows or []:
-        if not isinstance(r, dict) or r.get("bom_parent_known") is False:
+        if not isinstance(r, dict):
             continue
-        mm = stated_edging_length_mm(r.get("description"))
-        _parent = bare_code(str(r.get("bom_parent") or ""))
-        if not mm or not _parent:
+        _parent = _row_parent(r)
+        desc = str(r.get("description") or "")
+        if not _parent or not is_banding_row(desc):
+            continue
+        mm = stated_edging_length_mm(desc)
+        part = by_pn.get(_parent)
+        if part is None:
+            continue
+        r["row_role"], r["consumed"] = "parent_banding", True
+        if not mm:
+            _rows = part.setdefault("stated_banding_rows", [])
+            if isinstance(_rows, list) and desc not in _rows:
+                _rows.append(" ".join(desc.split()))
             continue
         try:
             qty = float(r.get("quantity") or 1) or 1.0
@@ -276,16 +323,227 @@ def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
             qty = 1.0
         totals[_parent] = totals.get(_parent, 0.0) + mm * qty
     n = 0
+    for pn, mm in totals.items():
+        p = by_pn.get(pn)
+        if p is not None and mm and sp.apply_field(p, "stated_banded_length_mm", round(mm, 1),
+                                                   "drawing_deterministic"):
+            n += 1
+    return n
+
+
+def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
+    """A part's own parts table that lists its section pieces IS its cut list (D-383).
+
+    12173-03-04M's sheet prints "ITEM DESCRIPTION LENGTH QTY / 30.00 x 30.00 x 2.00mm TUBE 1532
+    1 / 1532 1 / 290 1 / 350 1" (and 05M's the same), and both table readers carried those four
+    rows into bom_rows. D-380 summed the pieces only from the LLM's cut_lengths_mm, so the
+    frame's length rested on one transcription nothing deterministic checked — while the rows
+    themselves were being minted as bought-in tube (D-381). Here the rows a parent's own table
+    prints with no code, which the section reader reads as a canonical profile
+    (part_identity.parts_list_row_role -> parent_cut_list), are that parent's pieces:
+
+      * one profile: section_stock {a, b, t, profile_form, cut_lengths_mm, length_mm} is
+        written through source_precedence at drawing_deterministic, so it outranks the LLM
+        extract (the LLM's list becomes corroboration, and a disagreement is flagged with both
+        lists); the summed mass is held against the sheet's stated weight within config
+        CUT_LIST_MASS_TOLERANCE, and outside it the length is marked INDICATIVE;
+      * several profiles under one part: a question, never a sum of different sections;
+      * a profile row with no length ("10 x 30 x 1.50mm TUBE" on 12173-05-01M): it confirms a
+        section the part already holds; otherwise it is left for the unread-row question.
+
+    Each row read is marked consumed (row_role parent_cut_list), so it is never minted and
+    never dropped silently. Returns parts whose cut list was read."""
+    import config
+    import source_precedence as sp
+    from part_code_conventions import bare_code
+    from section_profile import detect_section_stock, section_kg_per_m
+
+    pieces: Dict[str, Dict[tuple, List[float]]] = {}
+    rows_of: Dict[str, List[Dict[str, Any]]] = {}
+    no_len: Dict[str, List[tuple]] = {}
+    for r in bom_rows or []:
+        if not isinstance(r, dict):
+            continue
+        par = _row_parent(r)
+        if not par or not _row_is_codeless(r) or _row_role(r) != "parent_cut_list":
+            continue
+        s = detect_section_stock(str(r.get("description") or ""))
+        if not s or s.get("detection_path") != "canonical_profile":
+            continue
+        key = (min(float(s["a"]), float(s["b"])), max(float(s["a"]), float(s["b"])),
+               float(s["t"]), str(s.get("profile_form") or ""))
+        if not s.get("length_mm"):
+            no_len.setdefault(par, []).append((key, r))
+            continue
+        try:
+            q = max(1, int(round(float(r.get("quantity") or 1))))
+        except (TypeError, ValueError):
+            q = 1
+        pieces.setdefault(par, {}).setdefault(key, []).extend([float(s["length_mm"])] * q)
+        rows_of.setdefault(par, []).append(r)
+
+    def _fmt(k: tuple) -> str:
+        return "x".join(f"{v:g}" for v in k[:3])
+
+    n = 0
     for p in parts or []:
         if not isinstance(p, dict):
             continue
-        mm = totals.get(bare_code(str(p.get("part_number") or "")))
-        if mm and sp.apply_field(p, "stated_banded_length_mm", round(mm, 1),
-                                 "drawing_deterministic"):
-            p.setdefault("review_flags", []).append(
-                f"edging {mm:g} mm stated by the edging row of this part's own parts list — "
-                f"used for the banding in place of the blank's perimeter")
+        pn = bare_code(str(p.get("part_number") or ""))
+        # A profile row with no length confirms the section the part already holds.
+        for key, r in no_len.get(pn, []):
+            ss = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
+            try:
+                held = (min(float(ss["a"]), float(ss["b"])), max(float(ss["a"]), float(ss["b"])),
+                        float(ss["t"]))
+            except (KeyError, TypeError, ValueError):
+                held = None
+            if held is not None and all(abs(h - k) < 0.05 for h, k in zip(held, key[:3])):
+                r["row_role"], r["consumed"] = "parent_cut_list", True
+        prof = pieces.get(pn)
+        if not prof:
+            continue
+        for r in rows_of.get(pn, []):
+            r["row_role"], r["consumed"] = "parent_cut_list", True
+        if len(prof) > 1:
+            sp.raise_manufacturing_question(
+                p,
+                (f"{p.get('part_number')}'s own parts table lists pieces of {len(prof)} "
+                 f"different sections ({', '.join(_fmt(k) for k in prof)}); no single section "
+                 f"length was taken from it"),
+                "the section and length the part already carries stand; the pieces are not summed",
+                "say which section the part is costed as, or cost each section as its own line",
+                "bom_pipeline.apply_stated_cut_list_to_parts")
+            continue
+        # A PARENT'S TABLE OF PIECES IS NOT ITS OWN STOCK WHEN IT IS AN ASSEMBLY, OR SHEET WE
+        # MEASURED: the pieces are its members, and costing them on the parent as one section
+        # would put the tube on the bill beside whatever its members already carry.
+        _asm = bool(p.get("is_assembly_parent") or p.get("is_sub_assembly")
+                    or str(p.get("canonical_kind") or "").lower() == "assembly")
+        try:
+            from bought_in_policy import has_fabrication_evidence as _measured
+            _sheet = bool(_measured(p))
+        except Exception:                                        # noqa: BLE001
+            _sheet = False
+        if _asm or _sheet:
+            sp.raise_manufacturing_question(
+                p,
+                (f"{p.get('part_number')}'s own parts table lists uncoded section pieces "
+                 f"({', '.join(_fmt(k) for k in prof)}), but it is "
+                 f"{'an assembly' if _asm else 'a part with a measured flat'}; the pieces were "
+                 f"not costed as its stock"),
+                "nothing is costed for the listed pieces",
+                ("say whether the pieces are cut here as members (give them codes or a cut "
+                 "list on a part) or are already in a member's cost"),
+                "bom_pipeline.apply_stated_cut_list_to_parts")
+            continue
+        (lo, hi, t, form), pcs = next(iter(prof.items()))
+        _ss_now = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
+        _held = [float(x) for x in (_ss_now.get("cut_lengths_mm") or [])
+                 if isinstance(x, (int, float)) or str(x).replace(".", "", 1).isdigit()]
+        _held_by = sp.display_name(sp.source_of(p, "section_stock.cut_lengths_mm")
+                                   or _ss_now.get("source") or "an earlier reading")
+        for field, value in (("a", lo), ("b", hi), ("t", t), ("profile_form", form or None),
+                             ("cut_lengths_mm", list(pcs)), ("length_mm", max(pcs))):
+            if value is not None:
+                sp.apply_field(p, f"section_stock.{field}", value, "drawing_deterministic")
+        ss = p["section_stock"]
+        ss.setdefault("detection_path", "canonical_profile")
+        if sp.source_of(p, "section_stock.cut_lengths_mm") != "drawing_deterministic":
+            # A stronger reader (the model's own cut list) holds the section; apply_field has
+            # put the refusal on the part, and the table's mass is not this section's to check.
             n += 1
+            continue
+        ss["source"] = "drawing_deterministic"
+        if _held and sorted(_held) != sorted(pcs):
+            p.setdefault("review_flags", []).append(
+                f"cut list: the drawing's own parts table reads "
+                f"{', '.join(f'{v:g}' for v in sorted(pcs))} mm; {_held_by} read "
+                f"{', '.join(f'{v:g}' for v in sorted(_held))} mm — the table is used")
+        # THE MASS CHECK. The pieces' steel against the sheet's own WEIGHT. Slots, drains and
+        # notches take mass out, so the cut list reads a little heavy; far outside the
+        # tolerance the length is held INDICATIVE for a person.
+        try:
+            from estimator import _parse_stated_weight_kg
+            stated = _parse_stated_weight_kg(p)
+        except Exception:                                        # noqa: BLE001
+            stated = None
+        _dens_tab = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
+        _mat = str(p.get("normalized_material") or "").upper()
+        _dens = _dens_tab.get(_mat) or _dens_tab.get(_mat.replace("_", " ")) or None
+        _kgm = section_kg_per_m(lo, hi, t, form, _dens)
+        if stated and _kgm:
+            kg = sum(pcs) / 1000.0 * _kgm
+            tol = float(getattr(config, "CUT_LIST_MASS_TOLERANCE", 0.15) or 0.15)
+            ss["cut_list_mass_check"] = {"kg": round(kg, 3), "stated_kg": stated,
+                                         "tolerance": tol}
+            if abs(kg - stated) / stated > tol:
+                ss["length_indicative"] = True
+                p.setdefault("review_flags", []).append(
+                    f"cut list {sum(pcs):g} mm of {_fmt((lo, hi, t))} weighs about {kg:.2f} kg; "
+                    f"the drawing states {stated:g} kg — the length is INDICATIVE until the "
+                    f"pieces or the weight are confirmed")
+        n += 1
+    return n
+
+
+def raise_unread_parts_list_rows(parts: Any, bom_rows: Any) -> int:
+    """A codeless parts-list row no reader consumed is a question on its parent (D-383).
+
+    part_identity.parts_list_row_role names a codeless row a cut-list piece, the parent's
+    edging, an instruction, the parent's material or a size — none of which are minted. The
+    readers consume what they can (apply_stated_cut_list_to_parts, apply_stated_edging_to_parts).
+    What is left is asked, never dropped: a material row, a placeholder ("TBC"), and a
+    cut-list or edging row nobody read become one manufacturing question on the parent each;
+    an instruction is noted on the parent. No money is added or removed. Returns questions
+    raised."""
+    import source_precedence as sp
+    from part_code_conventions import bare_code
+    from part_identity import is_placeholder_identity
+    by_pn = {}
+    for p in parts or []:
+        if isinstance(p, dict):
+            by_pn.setdefault(bare_code(str(p.get("part_number") or "")), p)
+    n = 0
+    for r in bom_rows or []:
+        if not isinstance(r, dict) or r.get("consumed"):
+            continue
+        role = str(r.get("row_role") or "")
+        if role not in ("parent_material", "parent_cut_list", "parent_banding", "instruction"):
+            continue
+        part = by_pn.get(_row_parent(r))
+        if part is None or not _row_is_codeless(r):
+            continue
+        desc = " ".join(str(r.get("description") or "").split())
+        pn = part.get("part_number")
+        if role == "instruction" and not is_placeholder_identity(desc):
+            _note = (f"parts-list row '{desc}' reads as an instruction, not a part — it was "
+                     f"not made a line")
+            if _note not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_note)
+            continue
+        if role == "instruction":
+            issue = (f"{pn}'s parts list carries a row that reads only '{desc}' — no part, no "
+                     f"code and no quantity basis")
+            action = "say what the row is: a part to buy (give its code) or nothing to cost"
+        elif role == "parent_material":
+            issue = (f"{pn}'s parts list carries a row that names a material, '{desc}', with no "
+                     f"code — it was not made a purchased line")
+            action = ("confirm it is the part's own stock (already costed on the part), or a "
+                      "separate item to buy (give it a code)")
+        elif role == "parent_cut_list":
+            issue = (f"{pn}'s parts list carries a section row, '{desc}', that no cut-list "
+                     f"reading took (no length, or a section the part does not carry)")
+            action = ("confirm the part's section and cut length, or give the row a code if it "
+                      "is a bought cut piece")
+        else:
+            issue = (f"{pn}'s parts list carries an edging row, '{desc}', that was not read as "
+                     f"its banding")
+            action = "confirm whether the part is banded and the length, or give the row a code"
+        if sp.raise_manufacturing_question(part, issue, "nothing is costed for this row",
+                                           action, "bom_pipeline.raise_unread_parts_list_rows"):
+            n += 1
+        r["consumed"] = "question"
     return n
 
 

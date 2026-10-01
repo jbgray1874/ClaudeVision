@@ -397,20 +397,32 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         if _pieces and not (cut and cut > 0):
             cut = max(_pieces)
         if a and b and t and cut and cut > 0 and not _dxf_backed:  # DXF geometry wins; LLM drives no-DXF
-            ss = part.get("section_stock")
-            ss = dict(ss) if isinstance(ss, dict) else {}
-            _before_len = _num(ss.get("length_mm"))
-            ss.update({"a": a, "b": b, "t": t, "length_mm": cut})
+            # THROUGH THE ARBITER, FIELD BY FIELD (D-383). This used to replace section_stock
+            # wholesale, so whichever pass ran last won: a cut list read deterministically off
+            # the part's own parts table (bom_pipeline.apply_stated_cut_list_to_parts,
+            # drawing_deterministic) would be clobbered by the transcription whenever this ran
+            # after it. An engine-stamped section with no source of its own (the generic @1100
+            # or garbled page length) still ranks below the extract and is replaced as before.
+            import source_precedence as _sp
+            _ss_src = _src(jp, "tube_section")
+            _prev = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+            _before_len = _num(_prev.get("length_mm"))
+            _wrote = False
+            _fields = [("a", a), ("b", b), ("t", t), ("length_mm", cut)]
             if len(_pieces) > 1:
-                ss["cut_lengths_mm"] = _pieces
-            ss["source"] = _src(jp, "tube_section")
-            part["section_stock"] = ss
-            if ss["source"] == "inference":
+                _fields.append(("cut_lengths_mm", _pieces))
+            for _f, _v in _fields:
+                if _sp.apply_field(part, f"section_stock.{_f}", _v, _ss_src):
+                    _wrote = True
+            ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+            if _sp.source_of(part, "section_stock.length_mm") == _ss_src:
+                ss["source"] = _ss_src
+            if _ss_src == "inference" and _wrote:
                 part.setdefault("review_flags", []).append(
                     f"section {a}x{b}x{t} @ {cut}mm INFERRED from the views — not printed as a "
                     f"section callout; verify the stock size before quoting firm")
                 out["inferred"] += 1
-            if _before_len != cut:
+            if _num(ss.get("length_mm")) != _before_len:
                 _flagged = True
                 out["tube"] += 1
 
