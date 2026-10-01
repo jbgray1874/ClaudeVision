@@ -375,8 +375,13 @@ def test_the_section_says_so_when_every_line_has_a_real_key():
 
 def test_a_job_with_no_purchased_parts_renders_nothing():
     """Distinct from the case above: there is genuinely no question to answer here, and a
-    heading over an empty table on a fabrication-only job is noise."""
-    assert jrh._purchased_key_section(_job([("11650-01-01M", "SIDE PANEL")])) == ""
+    heading over an empty table on a fabrication-only job is noise.
+
+    12173-02: an empty return left the numbering jumping 9 to 11, so the section keeps its
+    heading and says in one sentence why there is nothing to show — still no table."""
+    html = jrh._purchased_key_section(_job([("11650-01-01M", "SIDE PANEL")]))
+    assert html.startswith(jrh._h2("keys")) and "<table" not in html
+    assert "no lookup key to show" in html
 
 
 def test_the_section_is_wired_into_the_report_and_not_merely_defined():

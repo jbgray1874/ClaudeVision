@@ -829,11 +829,19 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
                  if isinstance(v, dict) and v.get("severity") == "blocking"]
     _unver = [v for v in (inv.get("violations") or [])
               if isinstance(v, dict) and v.get("severity") == "unverified"]
+    # FINDINGS, NOT CHECKS, AND A RULING IS NOT A CHECK THAT DID NOT RUN (12173-02: the
+    # report counted twenty rulings as "could not be run"). The same split, in the same
+    # unit, as the report's section 13 and the record's release block.
+    _rulings = [v for v in _unver if isinstance(v.get("detail"), dict)
+                and v["detail"].get("needs_ruling")]
+    _not_run = [v for v in _unver if v not in _rulings]
     _bits = []
     if _blocking:
-        _bits.append(f"{len(_blocking)} consistency check(s) FAILED")
-    if _unver:
-        _bits.append(f"{len(_unver)} check(s) could not be run, so those figures are "
+        _bits.append(f"{len(_blocking)} consistency finding(s) FAILED")
+    if _rulings:
+        _bits.append(f"{len(_rulings)} finding(s) need an estimator's ruling")
+    if _not_run:
+        _bits.append(f"{len(_not_run)} could not be run, so those figures are "
                      f"unverified")
     _detail = "; ".join(_esc(str(v.get("message") or "")) for v in (_blocking + _unver)[:3])
     return ('    <div class="prov">PROVISIONAL — ' + _esc(" and ".join(_bits)) +
@@ -2009,9 +2017,14 @@ def generate_quote_files(json_path: str, out_dir: Optional[str] = None, job_stem
         # same fault as the filename one directly below, in the other place a document is
         # identified without opening it: a run that writes `_quote_PORTAL.html` and reports a
         # client quote has told the operator the release gate passed when it did not.
+        try:
+            from job_report_html import _sub as _report_sub    # the report's own numbering
+            _readers_at = f"section {_report_sub('drawings', 1)}"
+        except Exception:                                        # noqa: BLE001
+            _readers_at = "the drawing analysis"
         print(f"   [deliverables] {'client quote' if _releasable else 'portal estimate'} "
               "written. This run read the pack with the vision model alone — the page says so "
-              "in its Basis row, and section 4.1 of the job report names which readers ran.",
+              f"in its Basis row, and {_readers_at} of the job report names which readers ran.",
               flush=True)
     out_dir_p.mkdir(parents=True, exist_ok=True)
     safe = re.sub(r"[^\w\- ]", "", str(stem)).strip() or "quote"

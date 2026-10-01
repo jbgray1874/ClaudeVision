@@ -327,6 +327,9 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
                        "slotted or only welded within themselves, rule the weld and dressing "
                        "off this assembly; if they are welded to each other, confirm it"),
             "source": "weld_symbols.apply_finish_welds",
+            # The operations it asks about, as fields: a consistency check's ruling on the
+            # same assembly and operation is this question, netted onto it (costed_facts).
+            "operations": ["welding", "dress_welds"],
         }
         qs = part.setdefault("manufacturing_questions", [])
         if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == _q["issue"]

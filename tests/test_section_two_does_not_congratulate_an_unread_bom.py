@@ -132,10 +132,17 @@ def test_double_counting_is_looked_for_rather_than_asserted():
     mode was a constant standing in for a check, which no amount of output inspection on a
     clean job would reveal."""
     assert "dup = 0" not in CODE, "the double-counting claim is a hard-coded zero again"
+    # The check moved into costed_facts.double_count_status (12173-02), which section 2 and
+    # the verdict both read; the all-clear must sit behind that call, and the call must
+    # really compare the two streams.
     at = CODE.index("No double-counting")
-    window = CODE[max(0, at - 1500):at]
-    assert "_fab_nums" in window and "_bi_nums" in window, (
-        "nothing computes the two streams, so the row cannot be reporting a real check")
+    window = CODE[max(0, at - 4000):at]
+    assert "double_count_status(" in window, (
+        "nothing computes the streams, so the row cannot be reporting a real check")
+    import costed_facts as cf
+    import inspect
+    body = inspect.getsource(cf.double_count_status)
+    assert "_fab" in body and "_bi" in body and "cross" in body
 
 
 def test_a_part_in_both_streams_is_reported_as_counted_twice():

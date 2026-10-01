@@ -315,14 +315,23 @@ def _print_enquiry_plan(folder: str, qty_spec: Optional[str],
 def _rewrite_estimate_banner(xlsx_path, summary) -> None:
     """Write the shared tally into every PROVISIONAL banner cell of the Estimate sheet.
 
-    Called after the read-back and AGAIN after the consistency checks (D-359): the first
-    call is made before the checks run, so the M&S 12:21 book's banner said "5 market
-    figures + 4 sizes assumed" while its report added "+ 7 consistency checks failing"."""
+    Called ONCE, after the read-back and BEFORE the consistency checks run (D-361 removed
+    D-359's second call: an openpyxl save after Excel calculated the book stripped its
+    cached values). So the record it reads has no check results, and the tally says so in
+    its own words rather than reading as complete (12173-02: the book said "25 to settle"
+    and the report, built after the checks, added eleven failing ones).
+
+    AND IT POINTS AT THE LIST THAT CARRIES THE SAME COUNT. It said "see OUTSTANDING
+    ESTIMATOR INPUTS below" — a block of 60 drawing questions, a different set from the 25.
+    The AI Explanation tab lists every one of the 25; the inputs block keeps its own count
+    and now says what it is."""
     try:
         from costed_facts import outstanding_summary as _osum_b
-        _phrase_b = str((_osum_b(summary) or {}).get("phrase") or "").strip()
+        _o_b = _osum_b(summary) or {}
+        _phrase_b = str(_o_b.get("phrase") or "").strip()
         if not _phrase_b:
             return
+        _total_b = int(_o_b.get("total") or 0)
         import openpyxl as _b_opxl
         _bwb = _b_opxl.load_workbook(str(xlsx_path))
         try:
@@ -331,8 +340,16 @@ def _rewrite_estimate_banner(xlsx_path, summary) -> None:
             for _brow in _bws.iter_rows():
                 for _bcell in _brow:
                     if isinstance(_bcell.value, str) and _bcell.value.startswith("PROVISIONAL —"):
-                        _bcell.value = (f"PROVISIONAL — to settle: {_phrase_b} "
-                                        f"(see OUTSTANDING ESTIMATOR INPUTS below)")
+                        _bcell.value = (f"PROVISIONAL — {_total_b} to settle: {_phrase_b} "
+                                        f"(every one is listed on the AI Explanation tab)")
+                        _bhits += 1
+                    elif (isinstance(_bcell.value, str)
+                          and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
+                          and "questions from the drawings" not in _bcell.value):
+                        _head_b = _bcell.value.split(")", 1)[0] + ")"
+                        _bcell.value = (f"{_head_b} — questions from the drawings, read with "
+                                        f"the {_total_b} to settle on the AI Explanation tab; "
+                                        f"this sheet is NOT a price until they are answered")
                         _bhits += 1
             if _bhits:
                 _bwb.save(str(xlsx_path))
@@ -2046,9 +2063,12 @@ def main() -> None:
                 # Said once, plainly, at the point a person is watching. The deliverables
                 # below read the same record and mark themselves provisional; this is so the
                 # console does not look like a clean run.
+                # Findings in their own units, a ruling apart from a check that did not run
+                # (12173-02: twenty rulings were announced as "could not be run").
                 print("   [invariants] THIS ESTIMATE IS NOT A FIRM PRICE — "
-                      f"{_inv.get('blocking', 0)} check(s) failed, "
-                      f"{_inv.get('unverified', 0)} could not be run. "
+                      f"{_inv.get('blocking', 0)} finding(s) failed, "
+                      f"{_inv.get('rulings', 0)} need a ruling, "
+                      f"{_inv.get('not_run', _inv.get('unverified', 0))} could not be run. "
                       "Deliverables will be marked provisional; do not release to a customer "
                       "or an ERP export until resolved.", flush=True)
             if isinstance(_doc, dict) and _canon_json3:

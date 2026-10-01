@@ -4078,3 +4078,21 @@ POWDER_HANGING = {
     "stated_on": "22 Sep 2026",
     "source_job": "1176-02",
 }
+
+
+# ── WHO CLEARS A FAILING CHECK ────────────────────────────────────────────────────────
+# 12173-02, 1 Oct 2026: the banner said "25 to settle" over a phrase adding to 36, because
+# eleven failing checks were counted in the phrase and listed nowhere a person works from.
+# Each blocking check the Decisions table does not already carry is now a row of its own,
+# and a row names who acts on it. Most are the estimator's call. A few say the ENGINE broke
+# its own contract — a removed identity back on the sheet, a priced identity the graph never
+# published, a schema it cannot read, a route compiler that failed — and no estimator can
+# answer those: the run is repeated and a repeat is reported. Code -> owner words; any code
+# not listed here is the estimator's.
+CONSISTENCY_CHECK_OWNER_DEFAULT = "estimator"
+CONSISTENCY_CHECK_OWNER = {
+    "removed_identity_on_the_sheet": "engine — re-run; report it if it repeats",
+    "priced_identity_outside_published_graph": "engine — re-run; report it if it repeats",
+    "unknown_schema": "engine — re-run; report it if it repeats",
+    "canonical_route_compiler_failed": "engine — re-run; report it if it repeats",
+}

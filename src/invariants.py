@@ -62,6 +62,22 @@ UNVERIFIED = "unverified"  # the check could not run — it has proved NOTHING
 # JSON exactly like a job that reconciled. FAIL CLOSED: an unevaluated check is recorded as
 # UNVERIFIED, and a job with any unverified check cannot be released as a firm price.
 
+# WHAT "COUNTED TWICE" MEANS TO THESE CHECKS, owned here and read by the report. 12173-02's
+# section 2 said "No double-counting found" beside twenty unsettled parent-and-child charges
+# whose own message ends "or the same item is being charged twice". A finding with one of
+# these codes at BLOCKING or WARNING is a double count the checks FOUND; at UNVERIFIED it is
+# one they could not rule out. A crash counts only when the crashed check is one of these.
+DOUBLE_COUNT_CODES = frozenset({
+    "operation_charged_on_a_parent_and_its_child", "two_roots_price_the_same_members",
+    "canonical_decision_rendered_more_than_once", "decision_joined_to_multiple_priced_rows",
+    "priced_row_with_ambiguous_identity", "assembly_charged_as_a_blank",
+    "identity_gate_did_not_enforce"})
+DOUBLE_COUNT_CHECKS = frozenset({
+    "check_an_operation_is_not_charged_on_a_parent_and_its_child",
+    "check_two_roots_do_not_price_the_same_members", "check_canonical_route_shadow",
+    "check_priced_rows_join_once", "check_an_assembly_is_not_charged_as_a_blank",
+    "check_the_identity_gate_actually_ran"})
+
 
 def _num(v: Any) -> Optional[float]:
     if v is None or isinstance(v, bool):
@@ -2603,7 +2619,12 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
                 f"twice. An estimator must rule; the engine cannot.",
                 operation=decision.get("operation"),
                 assembly=candidate, descendants=overlap,
-                decision_id=decision.get("decision_id")))
+                decision_id=decision.get("decision_id"),
+                # A FINDING THAT NEEDS A RULING, SAID BY THE CHECK THAT FOUND IT. 12173-02's
+                # report printed these twenty as "20 could not be run" — the check DID run;
+                # what it found is a question only an estimator can answer. Marked here,
+                # positively, so nothing downstream has to guess it from a code's spelling.
+                needs_ruling=True))
     return out
 
 
@@ -4195,8 +4216,11 @@ def check_every_reached_bom_item_is_accounted_for(summary: Any) -> List[Dict[str
         return out
     return out + [_violation(
         "reached_bom_item_unaccounted", BLOCKING,
-        f"{len(unaccounted)} item(s) the product reaches carry no charge, no free-issue "
-        f"ruling and no open question: {', '.join(unaccounted[:6])}"
+        # NO CLAIM ABOUT WHAT THE REPORT DOES WITH IT. This said "and no open question" —
+        # false on 12173-02's page, which lists '//' as open item #2: since D-324 every
+        # unaccounted item becomes a missing-price decision. The check states what it saw.
+        f"{len(unaccounted)} item(s) the product reaches carry no charge and no free-issue "
+        f"ruling: {', '.join(unaccounted[:6])}"
         f"{f' (+{len(unaccounted) - 6} more)' if len(unaccounted) > 6 else ''}. Either a "
         f"record was never made for the row, or its price was lost after it was found. "
         f"Money missing in silence understates the unit by exactly what nobody can see — "
@@ -4329,16 +4353,29 @@ def check_job(summary: Any, write_back: bool = True) -> Dict[str, Any]:
     ran: List[str] = []
     for check in CHECKS:
         try:
-            violations.extend(check(summary) or [])
+            got = list(check(summary) or [])
         except Exception as exc:                       # a broken check must not stop a run
-            violations.append(_violation(
+            got = [_violation(
                 "check_failed", UNVERIFIED,
                 f"invariant {check.__name__} could not run ({exc}); it has verified nothing.",
-                check=check.__name__))
+                check=check.__name__)]
+        # WHICH CHECK FOUND IT, ON THE FINDING. 12173-02's section 13 said "12 check(s)
+        # failed and 20 could not be run, out of 45": violations counted against check
+        # functions. The 12 came from 3 checks and the 20 from 1. Stamped here, exactly,
+        # so a count of checks is a count of checks.
+        for v in got:
+            if isinstance(v, dict):
+                v.setdefault("check", check.__name__)
+        violations.extend(got)
         ran.append(check.__name__)
 
     blocking = [v for v in violations if v.get("severity") == BLOCKING]
     unverified = [v for v in violations if v.get("severity") == UNVERIFIED]
+    # A RULING IS NOT A CHECK THAT COULD NOT RUN. Both are UNVERIFIED — neither lets the
+    # price go out firm — but one asks an estimator a question the check found, and the
+    # other has verified nothing. Told apart by the marker the raising check sets.
+    rulings = [v for v in unverified if (v.get("detail") or {}).get("needs_ruling")]
+    not_run = [v for v in unverified if not (v.get("detail") or {}).get("needs_ruling")]
     result = {
         "schema": SCHEMA,
         # ok        — nothing we checked came back wrong
@@ -4354,6 +4391,12 @@ def check_job(summary: Any, write_back: bool = True) -> Dict[str, Any]:
         "blocking": len(blocking),
         "unverified": len(unverified),
         "warnings": len(violations) - len(blocking) - len(unverified),
+        # Findings and checks, each in its own unit. `unverified` = rulings + not_run.
+        "rulings": len(rulings),
+        "not_run": len(not_run),
+        "checks_failed": sorted({str(v.get("check")) for v in blocking}),
+        "checks_not_run": sorted({str(v.get("check")) for v in not_run}),
+        "checks_with_findings": len({str(v.get("check")) for v in blocking + rulings}),
     }
     if write_back and isinstance(summary, dict):
         summary["invariants"] = result
