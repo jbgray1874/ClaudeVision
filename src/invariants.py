@@ -4088,6 +4088,13 @@ def _reached_unaccounted_core(summary: Any) -> Dict[str, Any]:
     def _asked_or_ruled(rec: Dict[str, Any]) -> bool:
         if rec.get("_price_explicitly_withheld") or rec.get("_bom_cross_reference"):
             return True
+        # SUPPLIED BY ANOTHER PARTY IS A RULING. 12527-22-03X, "TICKET-SUPPLIED BY OTHERS",
+        # sat on the sheet at £0 marked free-issue, and this check asked for its price as
+        # "on the bill the product reaches and has no line on the sheet" — it knew the word
+        # FREE-ISSUE and not the marking the record carries.
+        if rec.get("supplied_by_third_party") or str(
+                rec.get("costing_basis") or "") == "supplied_by_third_party":
+            return True
         flags = " ".join(str(f) for f in (rec.get("review_flags") or []))
         if _ASKED_RE.search(flags) or _ASKED_RE.search(str(rec.get("description") or "")):
             return True

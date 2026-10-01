@@ -76,3 +76,22 @@ def test_dressing_does_not_follow_a_ruled_out_arc_weld():
     block = src.split("NOT AFTER A WELD THE DRAWING RULED OUT")[1][:900]
     assert '_arc_ruled_out = "welding" in (part.get("operations_ruled_out") or {})' in block
     assert "and not _arc_ruled_out" in block
+
+
+def test_a_line_another_party_supplies_is_accounted_for():
+    """The 08:30 book's only "missing price" was the customer's own ticket, on the sheet at £0."""
+    import invariants
+    payload = {"product_root": "R-GA", "nodes": [
+        {"part_number": "R-GA", "children": [{"part_number": "R-03X"}, {"part_number": "R-01M"}]},
+        {"part_number": "R-03X", "kind": "leaf", "children": []},
+        {"part_number": "R-01M", "kind": "leaf", "children": []}]}
+    pes = [{"part_number": "R-01M", "unit_total_cost_gbp": 1.0},
+           {"part_number": "R-03X", "supplied_by_third_party": "OTHERS",
+            "costing_basis": "supplied_by_third_party", "unit_total_cost_gbp": 0.0}]
+    got = invariants._reached_unaccounted_core(
+        {"estimate_summary": {"canonical_route_shadow": payload, "part_estimates": pes}})
+    assert "R-03X" not in got["unaccounted"]
+    pes[1].pop("supplied_by_third_party"); pes[1].pop("costing_basis")
+    got = invariants._reached_unaccounted_core(
+        {"estimate_summary": {"canonical_route_shadow": payload, "part_estimates": pes}})
+    assert "R-03X" in got["unaccounted"]
