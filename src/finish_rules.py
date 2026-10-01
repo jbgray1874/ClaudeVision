@@ -32,6 +32,10 @@ __all__ = [
     "stated_finish",
     "finish_is_powder",
     "finish_contradiction",
+    "process_statements",
+    "states_only_a_process",
+    "names_one_face",
+    "own_or_mirror_finish",
 ]
 
 # A finish that defers to another drawing states nothing about THIS part. Treating one as a
@@ -79,6 +83,63 @@ _OPERATION_FAMILY = {
 }
 
 
+# ── A FINISH FIELD THAT STATES A PROCESS ─────────────────────────────────────────────────
+# 12173-03-202 / 203, 06-01M / 03M and the mesh 04-04M print "FINISH: WELDED". That says how
+# the part is MADE, not what it is coated with, and the vocabulary is config's
+# (FINISH_FIELD_PROCESS_STATEMENTS: token -> the operations that discharge it). Two readers
+# share it: weld_symbols (the sheet states the weld) and the finish census in invariants
+# (a statement is fabrication, not an unknown coat).
+_PROCESS_STATEMENTS_DEFAULT = {
+    "SPOT WELDED": ("spot_welding", "spotweld", "spot_weld", "resistance_welding"),
+    "WELDED": ("welding", "weld", "spot_welding", "spotweld", "spot_weld",
+               "resistance_welding"),
+}
+
+
+def _process_statement_vocab() -> Mapping[str, Any]:
+    try:
+        import config as _cfg
+        vocab = getattr(_cfg, "FINISH_FIELD_PROCESS_STATEMENTS", None)
+    except Exception:                                                # noqa: BLE001
+        vocab = None
+    return vocab if isinstance(vocab, Mapping) and vocab else _PROCESS_STATEMENTS_DEFAULT
+
+
+def process_statements(finish_text: Any) -> tuple:
+    """({token: {ops that discharge it}}, the finish text with every statement taken out).
+
+    LONGEST TOKEN FIRST, WHOLE WORDS, EACH MATCH CONSUMED. "SPOT WELDED" is one statement; a
+    shorter token matching inside it would leave "SPOT" behind to be read as an unknown
+    finish. WELDMENT and WELD ASSEMBLY are not WELDED (whole words), so a description that
+    names a weldment is not a statement."""
+    vocab = _process_statement_vocab()
+    upper = str(finish_text or "").upper()
+    hits: dict = {}
+    for token in sorted(vocab, key=lambda t: len(str(t)), reverse=True):
+        pat = r"\b" + re.escape(str(token).upper()).replace(r"\ ", r"\s+") + r"\b"
+        if re.search(pat, upper):
+            hits[str(token).upper()] = {str(o).strip().lower() for o in (vocab[token] or ())}
+            upper = re.sub(pat, " ", upper)
+    rest = re.sub(r"\s+", " ", upper).strip(" -,/&:;+.")
+    return hits, rest
+
+
+def names_one_face(text: Any) -> bool:
+    """True when a finish note names ONE face ("PAINTED TOP FACE", "TOP FACE ONLY").
+
+    12173-03-02J is sprayed on its top face only; costed both faces, the spray time doubles.
+    The pattern is config's (SINGLE_FACE_FINISH_PATTERN). A plural ("PAINTED FACES/AREA")
+    names no single face."""
+    try:
+        import config as _cfg
+        pat = getattr(_cfg, "SINGLE_FACE_FINISH_PATTERN", "") or ""
+    except Exception:                                                # noqa: BLE001
+        pat = ""
+    if not pat:
+        return False
+    return bool(re.search(pat, str(text or "").upper()))
+
+
 def finish_families(finish_text: str) -> set:
     """The finish families the drawing's words name, or an empty set when none are
     recognised. Empty means unread, never "no finish" — "RAW" is how a drawing says that,
@@ -101,6 +162,25 @@ def finish_families(finish_text: str) -> set:
         if any(re.search(r"\b" + re.escape(token).replace(r"\ ", r"\s+"), upper)
                for token in tokens)
     }
+
+
+def states_only_a_process(finish_text: Any) -> bool:
+    """True when the finish field holds a process statement and nothing that names a coat.
+
+    A FIELD THAT ONLY STATES A PROCESS STATES NO COAT. "FINISH: WELDED" says the part leaves
+    its own sheet welded; read as an unread finish, the document's powder stamp and the
+    route's coat gate had nothing to weigh, so 12173's hook members (06-01M / 03M) and the
+    pocket mesh (04-04M) were coated beside the weldments that hold them. For the COAT gates
+    such a field reads as bare — the parent that is coated says so on its own sheet.
+    finish_families itself is unchanged: the plating census still reads a WELDED member of a
+    plated weldment as stating no finish of its own, which is what it always did."""
+    upper = str(finish_text or "").upper()
+    if not upper.strip() or finish_families(upper):
+        return False
+    _stated, _rest = process_statements(upper)
+    # Only the statement and words that qualify nothing (a sheen, "FINISH:") remain.
+    return bool(_stated) and not re.search(r"[A-Z]{3,}", re.sub(
+        r"\b(?:FINISH|FINISHED|AS|ONLY|MATT|MATTE|GLOSS|SATIN)\b", " ", _rest))
 
 
 def stated_finish(record: Mapping[str, Any]) -> str:
@@ -142,6 +222,8 @@ def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
         return None
 
     named = finish_families(finish)
+    if not named and states_only_a_process(finish):
+        named = {"bare"}
     if not named:
         # The drawing says SOMETHING and we do not recognise it. That is an unread finish,
         # not a contradiction, and work must not be removed on the strength of it.
@@ -154,5 +236,49 @@ def finish_contradiction(operation: str, finish_text: str) -> Optional[str]:
     if family == "polish" and "powder" in named:
         return (f"the drawing states {finish!r} — a diamond-polished edge does not survive "
                 f"a powder finish")
+    if named == {"bare"} and states_only_a_process(finish):
+        return (f"the part's own sheet states {finish!r} — how it is made, and no coat; a "
+                f"coat on the assembly it goes into is that assembly's, not this part's")
     return (f"the drawing states {finish!r}, which is "
             f"{', '.join(sorted(named))}, not {op.replace('_', ' ')}")
+
+
+def mirror_base_number(record: Mapping[str, Any]) -> str:
+    """The part this record is the other hand of, or "" — the code's own marker (-H, MIR,
+    Mirror<code>), else the sheet's note (mirror_of), else the mirror pass's stamp."""
+    if not isinstance(record, Mapping):
+        return ""
+    try:
+        from part_code_conventions import mirror_base
+        base = mirror_base(str(record.get("part_number") or ""))
+    except Exception:                                                # noqa: BLE001
+        base = ""
+    return (base or str(record.get("mirror_of") or "").strip()
+            or str(((record.get("normalized_geometry") or {}) if isinstance(
+                record.get("normalized_geometry"), Mapping) else {}).get("mirrored_from")
+                   or "").strip())
+
+
+def own_or_mirror_finish(record: Mapping[str, Any], lookup: Any) -> str:
+    """The finish this part's own sheet states, or — for a mirrored hand that states none —
+    the finish its base's sheet states.
+
+    A HAND IS ITS BASE, OPPOSITE. 12173-04-02M-H and 07-1-02M-H have no sheet of their own;
+    their bases (04-02M, 07-1-02M) state RAW. Read on their own records they stated nothing,
+    so the document's powder stamp coated them while their bases were correctly bare — one
+    pair of identical flats, one coated and one not. A hand takes no finish its base's sheet
+    does not state, and loses none it does. `lookup(part_number)` returns a record or None."""
+    own = stated_finish(record)
+    if own:
+        return own
+    base_pn = mirror_base_number(record)
+    if not base_pn or not callable(lookup):
+        return ""
+    try:
+        base = lookup(base_pn)
+    except Exception:                                                # noqa: BLE001
+        base = None
+    if not isinstance(base, Mapping) or base is record:
+        return ""
+    return stated_finish(base)
+

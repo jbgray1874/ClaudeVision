@@ -86,6 +86,10 @@ _ACTION = {
     "stated_finish_not_costed": "Price the finish, or add a £/m² to "
                                 "config.APPLIED_FINISH_RATES_GBP_PER_M2 so every job carries it.",
     "short_run_pays_for_sheet_it_does_not_use": "Charge the offcut, or decide it goes to stock.",
+    "stated_process_not_charged": "The finish field states how the part is made (e.g. "
+                                  "WELDED) and no row charges it on the part or its "
+                                  "assembly: confirm it is charged elsewhere, or add or "
+                                  "rule out the operation.",
     "two_sources_disagree_about_the_gauge": "Confirm which gauge the part is made from.",
     "two_sources_disagree_about_the_material": "Confirm which material the part is made from.",
     "handed_pair_disagrees": "The two hands read differently and the evidence is even. "

@@ -340,6 +340,80 @@ def check_priced_rows_join_once(summary: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# ── who covers an operation on a part: ONE answer for every check that asks ─────────
+def _route_coverage(summary: Any) -> Dict[str, Any]:
+    """The per-part coverage record the operation checks share.
+
+    Lifted out of check_no_unpriced_operations_named so the finish census asks the SAME
+    question of the same record: is THIS operation charged on a row that names THIS part, or
+    an assembly it is in, or ruled out there. Two copies of this walk is how two sections of
+    one report came to disagree about whether a weld on 12173-03-202 was charged.
+
+    {"siblings": op -> department aliases, "by_part": pn -> ops charged on its rows,
+     "job_wide": ops on rows that name no part, "decided_against": pn -> ruled-out ops,
+     "ancestors": fn(pn) -> ancestor identities, "rows": the rows or None}."""
+    try:
+        from costed_facts import _dept_to_engine_ops
+        _siblings: Dict[str, set] = {}
+        for _ops in (_dept_to_engine_ops() or {}).values():
+            _low = {str(x).strip().lower() for x in _ops}
+            for _o in _low:
+                _siblings.setdefault(_o, set()).update(_low)
+    except Exception:
+        _siblings = {}
+    _by_part: Dict[str, set] = {}
+    _job_wide: set = set()
+    try:
+        from costed_facts import _workbook_rows as _wb_rows, _row_engine_ops as _row_ops
+        _rows = _wb_rows(summary)
+    except Exception:
+        _rows = None
+    for _r in (_rows or []):
+        _ops = {str(o).strip().lower() for o in (_row_ops(_r) or [])}
+        for _o in set(_ops):
+            _ops |= _siblings.get(_o, set())
+        _pns = [str(x or "").strip().upper() for x in (_r.get("part_numbers") or []) if x]
+        if _pns:
+            for _pn in _pns:
+                _by_part.setdefault(_pn, set()).update(_ops)
+        else:
+            # A row naming no parts can only be judged job-wide.
+            _job_wide |= _ops
+    _decided_against: Dict[str, set] = {}
+    _canon = (((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+               or summary.get("canonical_route_shadow") or {})
+              if isinstance(summary, dict) else {})
+    for _d in (_canon.get("decisions") or []):
+        if not isinstance(_d, dict) or str(_d.get("status") or "") == "required":
+            continue
+        _op = str(_d.get("operation") or "").strip().lower()
+        if not _op:
+            continue
+        for _pn in ([_d.get("target_id")] + list(_d.get("participants") or [])):
+            _k = str(_pn or "").strip().upper()
+            if _k:
+                _decided_against.setdefault(_k, set()).add(_op)
+    _parents: Dict[str, List[str]] = {}
+    for _node in (_canon.get("nodes") or []):
+        if isinstance(_node, dict) and _node.get("part_number"):
+            _parents[str(_node["part_number"]).strip().upper()] = [
+                str(x).strip().upper() for x in (_node.get("parents") or []) if x]
+
+    def _ancestors(_pn: str) -> set:
+        seen: set = set()
+        frontier = list(_parents.get(str(_pn or "").strip().upper(), []))
+        while frontier:
+            _a = frontier.pop()
+            if _a in seen:
+                continue
+            seen.add(_a)
+            frontier.extend(_parents.get(_a, []))
+        return seen
+
+    return {"siblings": _siblings, "by_part": _by_part, "job_wide": _job_wide,
+            "decided_against": _decided_against, "ancestors": _ancestors, "rows": _rows}
+
+
 # ── 4. reports cannot name an unpriced operation ─────────────────────────────────────
 def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
     """Every filter wb_populate applies — spurious ops, the finish gate, the material gates —
@@ -380,15 +454,7 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
     # no-op in the case its fixture tested, and it would have excused a genuinely uncharged
     # handling operation on any part an assembly event touched. This is the actual cause,
     # and it fixes every alias pair rather than one.
-    try:
-        from costed_facts import _dept_to_engine_ops
-        _siblings: Dict[str, set] = {}
-        for _ops in (_dept_to_engine_ops() or {}).values():
-            _low = {str(x).strip().lower() for x in _ops}
-            for _o in _low:
-                _siblings.setdefault(_o, set()).update(_low)
-    except Exception:
-        _siblings = {}
+    #
     # COVERAGE IS PER PART, NOT JOB-WIDE.
     #
     # Expanding aliases across the whole job excused `handling` on EVERY part the moment any
@@ -398,79 +464,38 @@ def check_no_unpriced_operations_named(summary: Any) -> List[Dict[str, Any]]:
     #
     # A row names the parts it covers, so ask the question where it belongs: is THIS part's
     # operation charged on a row that includes THIS part.
-    _by_part: Dict[str, set] = {}
-    _job_wide: set = set()
-    try:
-        from costed_facts import _workbook_rows as _wb_rows, _row_engine_ops as _row_ops
-        _rows = _wb_rows(summary)
-    except Exception:
-        _rows = None
-    for _r in (_rows or []):
-        _ops = {str(o).strip().lower() for o in (_row_ops(_r) or [])}
-        for _o in set(_ops):
-            _ops |= _siblings.get(_o, set())
-        _pns = [str(x or "").strip().upper() for x in (_r.get("part_numbers") or []) if x]
-        if _pns:
-            for _pn in _pns:
-                _by_part.setdefault(_pn, set()).update(_ops)
-        else:
-            # A row naming no parts can only be judged job-wide.
-            _job_wide |= _ops
-
-    # Fallback when no workbook rows are available (a quote built from JSON alone): the
-    # job-wide set is all there is, and saying so beats inventing per-part precision.
-    _fallback = {str(o).strip().lower() for o in costed}
-    for _o in list(_fallback):
-        _fallback |= _siblings.get(_o, set())
-    if not _rows:
-        _by_part, _job_wide = {}, _fallback
-
+    #
     # AN OPERATION THE COMPILER DECIDED AGAINST IS NOT AN OPERATION NOBODY CHARGED FOR.
     #
     # 2085's tube records still carry laser_cutting -- inherited from the shared assembly
     # page the plate's route was read off -- and the canonical route correctly rules it
     # not_applicable: a tube has no flat blank to profile. Reading the raw part field and
     # reporting it as unpriced resurrects the very word the compiler rejected, and invites
-    # someone to add the laser row back.
+    # someone to add the laser row back. Only a REQUIRED decision, or no decision at all,
+    # leaves an operation answerable to this check.
     #
-    # Decided-against is not the same as uncharged. Only a REQUIRED decision, or no decision
-    # at all, leaves an operation answerable to this check.
-    _decided_against: Dict[str, set] = {}
-    _canon = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
-              or summary.get("canonical_route_shadow") or {})
-    for _d in (_canon.get("decisions") or []):
-        if not isinstance(_d, dict) or str(_d.get("status") or "") == "required":
-            continue
-        _op = str(_d.get("operation") or "").strip().lower()
-        if not _op:
-            continue
-        for _pn in ([_d.get("target_id")] + list(_d.get("participants") or [])):
-            _k = str(_pn or "").strip().upper()
-            if _k:
-                _decided_against.setdefault(_k, set()).add(_op)
-
     # A ROW ON THE PARENT COVERS THE MEMBERS. Welding is charged once, on the weldment
     # 7332-01-101, as an assembly-scoped event; its five members carry the word "welding"
     # on their own records and were reported as work nobody charged for. The compiled
     # hierarchy says which parts sit under which assembly, so a part's coverage is its own
     # rows and its ancestors' rows — and its ancestors' ruled-out operations, because a
     # powder decided against on the weldment is decided against on its members.
-    _parents: Dict[str, List[str]] = {}
-    for _node in (_canon.get("nodes") or []):
-        if isinstance(_node, dict) and _node.get("part_number"):
-            _parents[str(_node["part_number"]).strip().upper()] = [
-                str(x).strip().upper() for x in (_node.get("parents") or []) if x]
+    #
+    # ONE RECORD (_route_coverage), shared with the finish census, so the two cannot answer
+    # "is this charged on this part" differently.
+    _cov = _route_coverage(summary)
+    _siblings = _cov["siblings"]
+    _by_part, _job_wide = _cov["by_part"], _cov["job_wide"]
+    _decided_against = _cov["decided_against"]
+    _ancestors = _cov["ancestors"]
 
-    def _ancestors(_pn: str) -> set:
-        seen: set = set()
-        frontier = list(_parents.get(_pn, []))
-        while frontier:
-            _a = frontier.pop()
-            if _a in seen:
-                continue
-            seen.add(_a)
-            frontier.extend(_parents.get(_a, []))
-        return seen
+    # Fallback when no workbook rows are available (a quote built from JSON alone): the
+    # job-wide set is all there is, and saying so beats inventing per-part precision.
+    _fallback = {str(o).strip().lower() for o in costed}
+    for _o in list(_fallback):
+        _fallback |= _siblings.get(_o, set())
+    if not _cov["rows"]:
+        _by_part, _job_wide = {}, _fallback
 
     named: Dict[str, List[str]] = {}
     for p in _parts(summary):
@@ -693,6 +718,25 @@ def check_geometry_is_reconciled(summary: Any) -> List[Dict[str, Any]]:
             # Resolved, not unresolved: the model superseded an incomplete DXF and the part
             # is costed from a complete measurement. Worth seeing, not worth blocking.
             rejected.append({"part_number": p.get("part_number"), "reason": _v.get("reason")})
+    # A HAND RIDES ON ITS BASE'S BLANK. 12173-04-02M's DXF is 113% of its model and is
+    # unreconciled; its mirrored hand 02M-H took the same 280.97 x 159.24 blank (Estimate rows
+    # 91-92) before the model arbitration flagged the base, so only one of the two lines that
+    # ride on the unconfirmed size was counted. Read on the read side, so the order the passes
+    # run in cannot decide it: a part whose geometry was mirrored from an unreconciled part
+    # is unreconciled too, and says whose blank it carries.
+    _bad = {str(u.get("part_number") or "").strip().upper() for u in unreconciled}
+    if _bad:
+        for p in _parts(summary):
+            _pn = str(p.get("part_number") or "").strip().upper()
+            _src = str(((p.get("normalized_geometry") or {}) if isinstance(
+                p.get("normalized_geometry"), dict) else {}).get("mirrored_from") or ""
+                       ).strip().upper()
+            if _src and _src in _bad and _pn and _pn not in _bad:
+                _bad.add(_pn)
+                unreconciled.append({
+                    "part_number": p.get("part_number"),
+                    "reason": (f"blank mirrored from {_src}, whose own blank is unreconciled "
+                               f"— the same unconfirmed size is costed on this hand")})
     out = []
     if unreconciled:
         out.append(_violation(
@@ -2497,113 +2541,53 @@ def check_an_operation_is_not_charged_on_a_parent_and_its_child(
     """
     if not isinstance(summary, dict):
         return []
-    # THE TREE, FROM WHEREVER IT WAS READ. The native extract stamps its own; the parts carry
-    # whatever every hierarchy source agreed on. Unioned, because this asks only "is one of
-    # these the ancestor of another", which no single source has to answer alone.
-    children: Dict[str, set] = {}
-    _sw = (summary.get("solidworks_native") or {}).get("hierarchy") or {}
-    for parent, kids in _sw.items():
-        for kid in (kids or []):
-            code = kid[0] if isinstance(kid, (list, tuple)) and kid else kid
-            if str(code or "").strip():
-                children.setdefault(str(parent).upper(), set()).add(str(code).upper())
-    for part in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
-        if not isinstance(part, dict):
-            continue
-        for kid in (part.get("assembly_children") or []):
-            if str(kid or "").strip():
-                children.setdefault(
-                    str(part.get("part_number") or "").upper(), set()).add(str(kid).upper())
-    if not children:
+    # THE TREE, FROM WHEREVER IT WAS READ, AND THE CHARGES AS EVENTS — one helper, shared
+    # with the decision tally (costed_facts.parent_child_overlaps), so what this reports and
+    # what the estimator is asked cannot drift apart.
+    #
+    # ACROSS EVERY ROW OF ONE OPERATION, NOT WITHIN A SINGLE ROW. The first version of this
+    # tested participants inside one decision, and 12422-24 is precisely the case it
+    # therefore missed: P.Coat is TWO rows — 102 grouped with three brackets, and 05M on its
+    # own — so the parent and its child never appeared in the same list.
+    #
+    # A DECISION IS NOT A CHARGE. Ruled-out decisions, and required ones no priced row joined
+    # to, are not money (12392's folding and laser "charged on 201").
+    #
+    # AND ONE EVENT IS NOT TWO CHARGES (12173-02). Pooling every decision's participants
+    # reported the pocket's single weld event — 04-201 with its members as participants — as
+    # "charged on 04-201 and separately on its members", printed six decision ids that were
+    # the operation's first six rather than the pair's, and flagged nested assembly builds.
+    try:
+        from costed_facts import parent_child_overlaps
+        found = parent_child_overlaps(summary)
+    except Exception as exc:                                         # noqa: BLE001
+        return _unevaluated("operation_charged_on_a_parent_and_its_child",
+                            f"the charges could not be read as events ({exc}).")
+    if not found:
         return []
-
-    def _descendants(code: str, seen: Optional[set] = None) -> set:
-        seen = seen if seen is not None else set()
-        out: set = set()
-        for kid in children.get(code, set()):
-            if kid in seen:
-                continue
-            seen.add(kid)
-            out.add(kid)
-            out |= _descendants(kid, seen)
-        return out
-
-    # ACROSS EVERY ROW OF ONE OPERATION, NOT WITHIN A SINGLE ROW.
-    #
-    # The first version of this tested participants inside one decision, and 12422-24 is
-    # precisely the case it therefore missed: P.Coat is TWO rows — 102 grouped with three
-    # brackets, and 05M on its own — so the parent and its child never appeared in the same
-    # list. The check reported nothing on the job it was written for.
-    #
-    # The question is "is this operation charged on an item and on something that item
-    # contains", and an operation is the set of all its rows. Grouped by operation name,
-    # which is what the workbook prices by.
-    shadow = _node(summary, "canonical_route_shadow")
-
-    # A DECISION IS NOT A CHARGE. This bucketed EVERY decision on the job, whatever its
-    # status and whether or not it ever produced a priced row — so on 12392 it reported
-    # folding and laser_cutting as "charged on 12392-02-201" against a workbook whose Fold
-    # and Laser rows list only (01M, 02M) and (04-01M, 04-02M). 201 appears in one
-    # Assemble/pack row and nowhere else.
-    #
-    # Ruled-out decisions are the point of the ruling: a NOT_APPLICABLE powder claim exists
-    # precisely so the reason survives, and counting it as money undoes that. Same defect
-    # class as check_an_assembly_is_not_charged_as_a_blank had, one check along, and the same
-    # answer: ask the priced rows.
-    _priced_ids = {str(r.get("decision_id") or "")
-                   for r in (shadow.get("priced_route_rows") or [])
-                   if isinstance(r, dict)}
-    _priced_ids.discard("")
-
-    by_operation: Dict[str, Dict[str, Any]] = {}
-    for decision in (shadow.get("decisions") or []):
-        if not isinstance(decision, dict):
-            continue
-        # A decision that STATES a status other than required is ruled out. One that states
-        # none is not: some writers do not set the field, and requiring it would silently
-        # blind this check on those paths — the failure direction that matters here, because
-        # the thing it guards is metal through the oven twice.
-        _status = str(decision.get("status") or "").strip().lower()
-        if _status and _status != "required":
-            continue
-        # Where priced rows exist, a decision counts only if one of them joined to it. Where
-        # none exist at all — a run that never reached the workbook — required status is the
-        # best evidence available, and that is still narrower than counting everything.
-        if _priced_ids and str(decision.get("decision_id") or "") not in _priced_ids:
-            continue
-        op = str(decision.get("operation") or "").strip()
-        if not op:
-            continue
-        bucket = by_operation.setdefault(op, {"parts": set(), "ids": []})
-        bucket["parts"] |= {str(p).upper() for p in (decision.get("participants") or []) if p}
-        if decision.get("decision_id"):
-            bucket["ids"].append(str(decision.get("decision_id")))
-
     out: List[Dict[str, Any]] = []
-    for op, bucket in sorted(by_operation.items()):
-        parts_in = bucket["parts"]
-        if len(parts_in) < 2:
-            continue
-        for candidate in sorted(parts_in):
-            overlap = sorted(_descendants(candidate) & (parts_in - {candidate}))
-            if not overlap:
-                continue
-            decision = {"operation": op, "decision_id": ", ".join(bucket["ids"][:6])}
-            out.append(_violation(
-                # UNVERIFIED, NOT A WARNING. Pricing both is a decision the engine cannot
-                # defend, and a warning lets it be quoted firm anyway. Unverified says the
-                # check could not settle it — the figures stand, the quote does not.
-                # Not BLOCKING: staged finishing is a real process, and refusing to price a
-                # job that legitimately coats twice would be a wrong answer of its own.
-                "operation_charged_on_a_parent_and_its_child", UNVERIFIED,
-                f"{decision.get('operation') or 'An operation'} is charged on "
-                f"{candidate} and separately on {', '.join(overlap)}, which the job "
-                f"hierarchy says {candidate} contains. Either the shop does this before AND "
-                f"after assembly — two real events — or the same item is being charged "
-                f"twice. An estimator must rule; the engine cannot.",
-                operation=decision.get("operation"),
-                assembly=candidate, descendants=overlap,
-                decision_id=decision.get("decision_id")))
+    for rec in found:
+        _asked = str(rec.get("asked") or "")
+        out.append(_violation(
+            # A WARNING, AND A DECISION. This was UNVERIFIED, which means "the check could
+            # not run — it has proved nothing", and the report duly printed "20 could not be
+            # run" for a check that ran on complete data. It did run; what it cannot do is
+            # rule. That is a person's call, so the overlap is asked under Decisions required
+            # (the compiler's own question where it raised one, otherwise costed_job asks it),
+            # and the decision is what keeps the quote a draft until it is answered. Not
+            # BLOCKING: staged finishing is a real process.
+            "operation_charged_on_a_parent_and_its_child", WARNING,
+            f"{rec.get('operation') or 'An operation'} is charged on {rec.get('assembly')} "
+            f"and separately on {', '.join(rec.get('descendants') or [])}, which the job "
+            f"hierarchy says {rec.get('assembly')} contains. Either the shop does this before "
+            f"AND after assembly — two real events — or the same item is being charged "
+            f"twice. An estimator must rule; the engine cannot — listed under Decisions "
+            f"required.",
+            operation=rec.get("operation"),
+            assembly=rec.get("assembly"), descendants=list(rec.get("descendants") or []),
+            decision_id=", ".join(rec.get("decision_ids") or []),
+            decision_ids=list(rec.get("decision_ids") or []),
+            asked_by=_asked or "costed_job"))
     return out
 
 
@@ -3020,14 +3004,6 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     """
     try:
         parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
-        # THE KEY THIS READS MUST BE ONE SOMETHING WRITES. The first version asked for
-        # "workbook_route_rows", which nothing in the engine produces -- so `priced` was
-        # ALWAYS empty, finish_is_costed was ALWAYS False, and the check fired on every
-        # stated finish whether or not the sheet charged for it. Built is not wired, in the
-        # check written to catch exactly that. The readback stamps the priced route at
-        # final_estimate.labour_rows, which is where the unpriced-line check already looks.
-        priced = (((summary.get("estimate_summary") or {}).get("final_estimate") or {})
-                  .get("labour_rows") or [])
     except AttributeError:
         return [_violation(
             "stated_finish_not_costed", UNVERIFIED,
@@ -3035,11 +3011,6 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     if not parts:
         return []
 
-    costed_ops = " ".join(
-        str(r.get("operation") or r.get("op") or r.get("operation_name")
-            or r.get("description") or "")
-        for r in priced if isinstance(r, dict)).lower()
-    finish_is_costed = any(op in costed_ops for op in _COSTABLE_FINISH_OPS)
     # PLATING IS CHARGED AS A SUBCONTRACT LINE, NOT AN OPERATION. 7332-01's back panel and
     # frame state PLATED; the sheet carries £15.83 of subcontract plating for exactly that
     # finish; this check reported the finish as supplied free and said powder was the only
@@ -3051,7 +3022,54 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
     except Exception:                                            # noqa: BLE001
         _plating_costed = False
 
-    uncosted, unrecognised = [], []
+    # THE PRICED ROWS, JOINED TO THE PART — THE RECORD SECTION 14 READS. 12173-03-01J and
+    # -02J state WET SPRAYED - MATT and the sheet charges Wet Spray against exactly those two
+    # parts (Estimate rows 216, 217), while this check told the estimator the sheet charged
+    # nothing for it: it asked a word list ("SPRAY is a process with no rate" — stale since
+    # wet_spray got its SPRY rate), section 14 asked the rows, and the two sections of one
+    # report contradicted each other. Now a stated process whose finish FAMILY is charged on
+    # the part's own rows, or an assembly it is in, is charged. The words the families do
+    # not cover (vinyl, laminate, print, foil, film, veneer, etch) still fire, so a vinyl
+    # beside a charged spray is not hidden by it. Before the workbook is read there is no
+    # join, and the check behaves as it always did.
+    try:
+        import costed_facts as _cf
+        _known = bool(_cf.priced_route_known(summary))
+    except Exception:                                                # noqa: BLE001
+        _cf, _known = None, False
+    from finish_rules import finish_families as _ff, process_statements as _stmts
+    _cov = _route_coverage(summary) if isinstance(summary, dict) else {}
+    try:
+        from costed_facts import costed_operations as _costed_ops
+        _job_costed = {str(o).strip().lower() for o in (_costed_ops(summary) or {})}
+    except Exception:                                                # noqa: BLE001
+        _job_costed = set()
+
+    def _charged_families(pn: str) -> set:
+        if not (_known and _cf is not None and pn):
+            return set()
+        try:
+            return set(_cf.charged_finish_families(summary, pn, _cov["ancestors"](pn)))
+        except Exception:                                            # noqa: BLE001
+            return set()
+
+    def _statement_covered(pn: str, ops: set) -> bool:
+        """The coverage check_no_unpriced_operations_named uses: own rows, an ancestor's
+        rows (department aliases expanded), a row naming no part, or ruled out there."""
+        if not _cov:
+            return False
+        if not _cov.get("rows"):
+            _fb = set(_job_costed)
+            for _o in list(_fb):
+                _fb |= _cov["siblings"].get(_o, set())
+            return bool(ops & _fb)
+        _c = set(_cov["by_part"].get(pn, set())) | _cov["job_wide"] \
+            | _cov["decided_against"].get(pn, set())
+        for _a in _cov["ancestors"](pn):
+            _c |= _cov["by_part"].get(_a, set()) | _cov["decided_against"].get(_a, set())
+        return bool(ops & _c)
+
+    uncosted, unrecognised, unstated = [], [], []
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -3066,17 +3084,56 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
             continue        # not a finish statement; check_a_finish_field_holds_drawing_text
                             # reports it, and claiming an uncosted finish here would be a
                             # warning raised on a word that is not a finish at all
+        _pn = str(part.get("part_number") or "").strip().upper()
+        # A STATEMENT OF HOW THE PART IS MADE IS FABRICATION, NOT A FINISH. 12173-03-202,
+        # -203, 06-01M, 06-03M and the mesh 04-04M state FINISH: WELDED, and every one sits
+        # on a Weld (CO2) row; this check called it "a finish this engine has no vocabulary
+        # for, neither costed nor questioned". The statement is taken out (config
+        # FINISH_FIELD_PROCESS_STATEMENTS, shared with the weld reader) and settled against
+        # the coverage the operation check uses; whatever finish text remains is judged
+        # exactly as before, so "WELDED & POWDER COATED" still has its powder checked.
+        #   * a bought part, or a stock product bought ready-made (or asked as make-or-buy):
+        #     WELDED describes the product, not work here;
+        #   * the op on the part's own lists: check_no_unpriced_operations_named already
+        #     asks when no row covers it — one gap, one sentence;
+        #   * a row on the part or an assembly it is in charges it.
+        # Only otherwise is it asked: a WARNING that adds and removes no money.
+        _stated, _rest = _stmts(text)
+        if _stated:
+            _own_ops = {str(o).strip().lower() for f in (
+                "operations", "textual_operations", "inferred_operations")
+                for o in (part.get(f) or []) if isinstance(o, str)}
+            try:
+                import bought_in_policy as _bip
+                _bought = bool(_bip.is_bought_in(part) or _bip.purchased_stock_product(part)
+                               or _bip.make_buy_question(part))
+            except Exception:                                        # noqa: BLE001
+                _bought = False
+            for _tok, _ops in _stated.items():
+                if _bought or (_ops & _own_ops) or _statement_covered(_pn, set(_ops)):
+                    continue
+                unstated.append({"part_number": part.get("part_number"), "statement": _tok,
+                                 "finish": text[:80]})
+            text = _rest
+            # What is left once the statement is out: "FINISH:" or a sheen alone is nothing.
+            if not re.search(r"[A-Z]{3,}", re.sub(r"\b(?:FINISH|FINISHED|AS)\b", " ", text)):
+                continue
         named = [w for w in _FINISH_PROCESS_WORDS if w in text]
+        # A STATED PROCESS THE SHEET CHARGES ON THIS PART IS CHARGED. Each word is dropped
+        # only where its own family is on the part's rows; a word with no family (vinyl,
+        # wrap, film ...) stays, so "WET SPRAYED, VINYL WRAPPED" still reports the vinyl.
+        _ch = _charged_families(_pn)
+        if named and _ch:
+            _kept = [w for w in named if not (_ff(w) & _ch)]
+            if not _kept:
+                continue
+            named = _kept
         if not named and any(w in text for w in _FINISH_SHEEN_WORDS):
             continue        # a sheen with no process word names no work of its own
         # PER PART, NOT PER JOB. This asked "is ANY costable finish on this route?" and
         # went silent for the whole job if one was. 11650's cabinet costs P.Coat on its
         # steel, so the vinyl on its PETG panels got a free pass -- the under-charge this
         # check exists to find, hidden by a different part being finished properly.
-        #
-        # _FINISH_PROCESS_WORDS is already the set of processes this engine has NO rate
-        # for; powder and diamond polish are deliberately absent. So naming one is
-        # sufficient on its own and the job-level flag is not consulted.
         if named and _plating_costed and all(w in _PLATING_WORDS for w in named):
             continue        # the plate finish the sheet charges as a subcontract line
         # LAMINATE BOUGHT ON THE BOARD IS CHARGED IN THE BOARD. A laminated-MDF part
@@ -3113,21 +3170,44 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
             continue
         if any(w in text for w in _COSTABLE_FINISH_OPS_UPPER):
             continue                    # costable and costed, or costable and caught above
+        # A RECOGNISED FAMILY THE PART'S ROWS CHARGE. VARNISHED and ENAMEL are wet spray to
+        # the route's gates but not words in the list above, and fell here even with a Wet
+        # Spray row on the part.
+        if (_ff(text) - {"bare"}) & _ch:
+            continue
         unrecognised.append({"part_number": part.get("part_number"), "finish": text[:80]})
-    if not uncosted and not unrecognised:
+    if not uncosted and not unrecognised and not unstated:
         return []
 
     out: List[Dict[str, Any]] = []
     if uncosted:
         listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in uncosted[:4])
+        # THE COSTABLE FINISHES ARE COMPUTED, not typed: the sentence said "powder, diamond
+        # polish and subcontract plating" for a sheet with a Wet Spray rate on it.
+        try:
+            from costed_facts import costable_finish_labels as _labels
+            _can = [l for l in _labels() if l != "plating"]
+        except Exception:                                            # noqa: BLE001
+            _can = ["powder", "diamond polish"]
+        _words = sorted({w for u in uncosted for w in (u.get("words") or [])})
         out.append(_violation(
             "stated_finish_not_costed", WARNING,
             f"{len(uncosted)} part(s) state a finish the sheet charges nothing for: {listed}. "
-            f"Powder, diamond polish and subcontract plating are the finishes this engine can "
-            f"cost, and none of them is charged against these parts. Paint, vinyl, laminate, "
-            f"print and foil are real work on board and plastic and are being supplied free. "
+            f"{', '.join(_can).capitalize()} and subcontract plating are the finishes this "
+            f"engine can cost, and none that covers {', '.join(_words) or 'these words'} is "
+            f"charged against these parts' rows or the rows of an assembly they are in. That "
+            f"work is real on board and plastic and is being supplied free. "
             f"ESTIMATOR TO PRICE THE FINISH.",
             count=len(uncosted), parts=uncosted[:20]))
+    if unstated:
+        listed = "; ".join(f"{u['part_number']} ({u['statement']})" for u in unstated[:4])
+        out.append(_violation(
+            "stated_process_not_charged", WARNING,
+            f"{len(unstated)} part(s) state how they are made in the finish field and no row "
+            f"charges it on the part or the assembly it is in: {listed}. That is fabrication, "
+            f"not a coat — charged elsewhere, supplied free, or not done? Nothing has been "
+            f"added or removed. ESTIMATOR TO CONFIRM.",
+            count=len(unstated), parts=unstated[:20]))
     if unrecognised:
         listed = "; ".join(f"{u['part_number']} ({u['finish']})" for u in unrecognised[:4])
         out.append(_violation(

@@ -1648,6 +1648,26 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}",
 ]
 
+# ── A FINISH NOTE THAT NAMES ONE FACE ─────────────────────────────────────────────────────
+# 12173-03-02J's sheet says "PAINTED TOP FACE": one face is sprayed, not both. A finish verb
+# followed by ONE named face ("PAINTED TOP FACE", "SPRAY THE FRONT FACE"), or a named face
+# followed by ONLY ("TOP FACE ONLY"), sprays/coats one face. A plural ("PAINTED FACES/AREA",
+# a hatch legend) names no single face and is not read.
+SINGLE_FACE_FINISH_FACE_WORDS = ("TOP", "BOTTOM", "FRONT", "BACK", "REAR", "UPPER", "UNDER",
+                                 "OUTER", "OUTSIDE", "INNER", "INSIDE", "VISIBLE", "EXPOSED",
+                                 "FACE")
+SINGLE_FACE_FINISH_VERBS = ("PAINTED", "PAINT", "SPRAYED", "SPRAY", "LACQUERED", "LACQUER",
+                            "COATED", "COAT", "FINISHED", "FINISH")
+# The same words, as the one pattern every reader uses (finish_rules.names_one_face reads it
+# for the coated area; the process-note reader keeps the sentence so the area can see it).
+_SF_FACES = "|".join(SINGLE_FACE_FINISH_FACE_WORDS)
+_SF_VERBS = "|".join(sorted(SINGLE_FACE_FINISH_VERBS, key=len, reverse=True))
+SINGLE_FACE_FINISH_PATTERN = (
+    rf"\b(?:{_SF_VERBS})\s+(?:TO\s+|ON\s+)?(?:THE\s+)?(?:{_SF_FACES})\s+(?:FACE|SIDE)\b(?![S/])"
+    rf"|\b(?:{_SF_VERBS})\s+(?:TO\s+|ON\s+)?(?:THE\s+)?FACE\b(?![S/])"
+    rf"|\b(?:{_SF_FACES})\s+(?:FACE|SIDE)\s+ONLY\b"
+)
+
 PROCESS_NOTE_PATTERNS = {
     "deburr": DEBURR_PATTERN,
     "break_sharp_edges": BREAK_EDGE_PATTERN,
@@ -1659,6 +1679,9 @@ PROCESS_NOTE_PATTERNS = {
     "drilling": DRILL_PATTERN,
     "punching": PUNCH_PATTERN,
     "mirror_hand": MIRROR_PATTERN,
+    # Not an operation: kept so a sheet's "PAINTED TOP FACE" reaches the part's notes, where
+    # the coated-area reader finds it (12173-03-02J).
+    "finish_one_face": SINGLE_FACE_FINISH_PATTERN,
 }
 
 STANDARD_SHEET_SIZES_MM = {
@@ -3460,6 +3483,29 @@ PURCHASED_STOCK_PRODUCT_WORDS = ("WELDMESH", "WELD MESH", "WELDED MESH", "WIRE M
 # welded grid is bought as weldmesh or welded here on the Robomac, and the word cannot say
 # which. A part described by one keeps its route and carries a make-or-buy question.
 STOCK_PRODUCT_QUESTION_WORDS = ("MESH",)
+
+# ── A FINISH FIELD THAT SAYS HOW THE PART IS MADE, NOT HOW IT IS COATED ────────────────────
+# 12173-03-202/203, the hook members 06-01M/03M and the pocket mesh 04-04M each print
+# "FINISH: WELDED" in the title block. That is a statement of fabrication — the part leaves
+# its own sheet welded — and names no coat. Read as a finish it was "a finish this engine has
+# no vocabulary for", on five parts every one of which sits on a Weld (CO2) row.
+#   token -> the operations that DISCHARGE the statement (any one of them charged covers it).
+# Matched on whole words, longest token first, each match consumed, so "SPOT WELDED" is one
+# statement and never leaves a stray "SPOT" behind to be read as an unknown finish. A field
+# holding ONLY such statements states no coat (finish_rules reads it as bare for the coat
+# gates); "WELDED & POWDER COATED" still states the powder.
+FINISH_FIELD_PROCESS_STATEMENTS = {
+    "SPOT WELDED": ("spot_welding", "spotweld", "spot_weld", "resistance_welding"),
+    "WELDED": ("welding", "weld", "spot_welding", "spotweld", "spot_weld",
+               "resistance_welding"),
+}
+
+# ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
+# An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two
+# builds, not one build charged twice. Only these are exempt from the parent-and-child
+# overlap question; a coat or a weld on a parent and again on its child is still asked.
+OPERATIONS_REPEATED_PER_LEVEL = ("assembly", "assemble", "handling", "packing")
+
 
 # --- Spreadsheet parity (Estimate / Material Price Break). Refresh via extract_workbook_constants.py ---
 # Default assumed order quantity for unit-cost roll-ups (Estimate!D6).

@@ -3009,8 +3009,14 @@ _TOLERANCE_TABLE_SEQUENCE = {0.5, 1.0, 1.5, 2.0, 3.0}
 
 
 def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
+    """The gauge this part is costed at, or None. See _safe_thickness_and_stage."""
+    return _safe_thickness_and_stage(part)[0]
+
+
+def _safe_thickness_and_stage(part: Dict[str, Any]) -> Tuple[Optional[float], str]:
     """
-    Pick the first plausible thickness from the part.
+    Pick the first plausible thickness from the part, and say which reading gave it
+    ("dxf_filename", "normalized", "thicknesses_mm_list", or "" for none).
 
     Priority order (most reliable first):
       1. DXF filename thickness — "part_2mm_PETG.DXF" -> 2.0  (MOST RELIABLE
@@ -3066,14 +3072,19 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         else "MAX_SHEET_THICKNESS_MM",
         75.0 if (_is_board_thk or _is_timber_thk) else 25.0))
 
+    # A FLOOR IS A REJECTION THRESHOLD, NEVER A GAUGE (12173-03-01J, 17:34 book). _ok used to
+    # write "Thickness left unset; confirm the board gauge" every time it refused a sub-floor
+    # value — and then this function went on to return 3.0 from the same drawing's
+    # tolerance table, so the base was nested and cut at 3 mm beside a flag saying its gauge
+    # was unset, and the 3 was labelled "the drawing". A refusal is only recorded here; the
+    # one sentence is written where nothing is returned.
+    _rejected: List[float] = []
+
     def _ok(v: Optional[float]) -> bool:
         if v is None or v <= 0:
             return False
         if _min_t and v < _min_t:
-            part.setdefault("review_flags", []).append(
-                f"thickness {v:g}mm rejected: below the {_min_t:g}mm minimum for a "
-                f"board/timber part — that is tolerance-table text, not a stock thickness. "
-                f"Thickness left unset; confirm the board gauge from the drawing")
+            _rejected.append(v)
             return False
         return True
 
@@ -3083,7 +3094,7 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         if _tm:
             _tv = _safe_float(_tm.group(1))
             if _tv and 0.3 <= _tv <= _max_t_for_part and _ok(_tv):
-                return _tv
+                return _tv, "dxf_filename"
 
     # Already-normalised thickness — skip tolerance-table noise when DXF exists
     raw = part.get("normalized_thickness_mm")
@@ -3092,7 +3103,7 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
         _max_t = _max_t_for_part
         if v and 0.4 <= v <= _max_t and not (1900 <= v <= 2100) and _ok(v):
             if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE or not _dfn:
-                return v
+                return v, "normalized"
 
     # thicknesses_mm list with tolerance-table stripping
     _max_t = _max_t_for_part
@@ -3100,8 +3111,20 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
     # A6: reject implausible sheet thickness (e.g. a 500mm dimension misparsed as gauge)
     candidates = [v for v in candidates
                   if v and 0.3 <= v <= _max_t and not (1900 <= v <= 2100)]
+
+    def _unset(why: str) -> Tuple[Optional[float], str]:
+        _flag = f"{why}. Thickness left unset — confirm the board gauge"
+        _fl = part.setdefault("review_flags", [])
+        if isinstance(_fl, list) and _flag not in _fl:
+            _fl.append(_flag)
+        return None, ""
+
     if not candidates:
-        return None
+        if _min_t and _rejected:
+            return _unset(f"no board gauge: {', '.join(f'{r:g}' for r in sorted(set(_rejected)))}"
+                          f" mm rejected below the {_min_t:g} mm floor for a board/timber "
+                          f"part, and no other thickness was read")
+        return None, ""
 
     # Tolerance-table strip runs FIRST, on the unfiltered set. The board floor below would
     # otherwise remove 0.5/1.0/1.5/2.0 itself, break this subset test, and leave the 3.0
@@ -3121,19 +3144,41 @@ def _safe_thickness_mm(part: Dict[str, Any]) -> Optional[float]:
             part.setdefault("review_flags", []).append(
                 "no board thickness on the drawing - the only values found were the "
                 "tolerance table. Thickness left unset; confirm the board gauge")
-            return None
+            return None, ""
     if not candidates:
-        return None
+        return None, ""
 
     # Material-aware floor, applied after the table strip.
     candidates = [v for v in candidates if _ok(v)]
+    # FOR BOARD, A TABLE VALUE NEVER OUTVOTES A REAL GAUGE, AND IS NEVER THE GAUGE BESIDE THE
+    # TABLE'S OWN REJECTED TEXT. The full-table strip above needs every one of 0.5..3.0
+    # present; 12173's pages carry "1.0, 3" and nothing else, so the 3.0 survived and was
+    # charged. And a Counter tie broke by order, so [3, 18] costed 3 mm and [18, 3] costed 18.
+    #   * a surviving value that is not a table value is the board's gauge: the table goes;
+    #   * only table values left, and a table value below the floor was refused beside them:
+    #     the list is the table's text, not a gauge — nothing is returned, and it is said;
+    #   * a lone 3.0 with nothing refused is a real 3 mm board and stands.
+    # Metal (no floor) is untouched: 0.5..3.0 are ordinary sheet gauges.
+    if _min_t and candidates:
+        _real = [v for v in candidates if round(v, 1) not in _TOLERANCE_TABLE_SEQUENCE]
+        if _real:
+            candidates = _real
+        elif any(round(r, 1) in _TOLERANCE_TABLE_SEQUENCE for r in _rejected):
+            return _unset(
+                f"no board gauge: {', '.join(f'{r:g}' for r in sorted(set(_rejected)))} mm "
+                f"rejected below the {_min_t:g} mm floor and nothing but the tolerance "
+                f"table's {', '.join(f'{v:g}' for v in sorted(set(candidates)))} mm beside it")
     if not candidates:
-        return None
+        if _min_t and _rejected:
+            return _unset(f"no board gauge: {', '.join(f'{r:g}' for r in sorted(set(_rejected)))}"
+                          f" mm rejected below the {_min_t:g} mm floor for a board/timber "
+                          f"part, and no other thickness was read")
+        return None, ""
 
     from collections import Counter
     rounded = [round(v, 2) for v in candidates]
     _best = Counter(rounded).most_common(1)[0][0]
-    return _best or None
+    return (_best or None), ("thicknesses_mm_list" if _best else "")
 
 
 def _title_block_blank_mm(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
@@ -3341,6 +3386,17 @@ def _effective_coated_faces_multiplier(part: Dict[str, Any]) -> Tuple[float, str
         k = str(kw).upper().strip()
         if k and k in blob:
             return float(policy.get("coated_faces_multiplier_single_face", 1.0)), "single_face_keyword"
+    # A FINISH NOTE THAT NAMES ONE FACE. 12173-03-02J's sheet says "PAINTED TOP FACE" and was
+    # sprayed on both. The note is read wherever the part carries it — its notes, its stated
+    # finish — through the one pattern config holds (finish_rules.names_one_face).
+    try:
+        from finish_rules import names_one_face as _one_face
+        if _one_face(" ".join([blob, str(part.get("normalized_finish") or ""),
+                               str(part.get("finish_notes") or "")])):
+            return (float(policy.get("coated_faces_multiplier_single_face", 1.0)),
+                    "finish_note_names_one_face")
+    except Exception:                                                # noqa: BLE001
+        pass
     for kw in policy.get("partial_exterior_keywords") or []:
         k = str(kw).upper().strip()
         if k and k in blob:
@@ -3373,6 +3429,17 @@ def _powder_coated_area_m2(
     L, W = float(blank_length), float(blank_width)
     faces_m, faces_reason = _effective_coated_faces_multiplier(part)
     flat_m2 = (L * W) / 1_000_000.0 * faces_m
+    # A DISC'S FACE IS THE CIRCLE, NOT THE SQUARE IT NESTS IN. 12173-03-02J's DXF measures a
+    # 556 mm circle; its paint was figured on 556 x 556, 27% more face than the part has.
+    # Only where the measured outline says circle and its diameter fits the blank.
+    _ng_c = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                           dict) else {}
+    _od = _safe_float(_ng_c.get("outline_diameter_mm")) \
+        if str(_ng_c.get("outline_shape") or "") == "circle" else None
+    _round_face = bool(_od and _od <= max(L, W) + 0.5)
+    if _round_face:
+        import math as _m
+        flat_m2 = (_m.pi * (_od / 2.0) ** 2) / 1_000_000.0 * faces_m
     strip_mm = float(policy.get("bend_coating_strip_mm", 40.0))
     bends, bends_from = _bends_for_coating(part)
     fold_vals = part.get("fold_values_mm") or []
@@ -3391,6 +3458,8 @@ def _powder_coated_area_m2(
         "bend_lines_source": bends_from,
         "coated_faces_multiplier": faces_m,
         "coated_faces_reason": faces_reason,
+        **({"coated_face_shape": "circle", "coated_face_diameter_mm": _od}
+           if _round_face else {}),
     }
     return total, detail
 
@@ -9017,6 +9086,27 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     for op in sorted(labour.get("missing_rate_operations") or []):
         risk_flags.append(f"missing_labour_rate:{op}")
 
+    # THE GAUGE CHARGED SAYS WHICH READING GAVE IT. The source spread below copies the raw
+    # record's thickness_source, so a gauge this costing pass took from the part's
+    # thicknesses list (or its DXF name) over a refused raw reading went out labelled with
+    # the refused reading's source — 12173-03-01J's 3 mm read "the drawing" while the
+    # drawing's own figure (1 mm) had been thrown out. Where the gauge charged differs from
+    # the raw reading, the stage that produced it is the source, and the raw reading is
+    # recorded as displaced, so the gauge advisory and the grouped boilerplate question see it.
+    _t_kept, _t_stage = _safe_thickness_and_stage(part)
+    _t_raw = _safe_float(part.get("normalized_thickness_mm"))
+    _t_override: Dict[str, Any] = {}
+    if _t_kept and _t_raw and abs(_t_kept - _t_raw) > 0.05 and _t_stage \
+            and _t_stage != "normalized":
+        _t_override["thickness_source"] = _t_stage   # precedence: direct-write ok — names the stage that produced the gauge already charged; the costed record, not the part
+        try:
+            source_precedence._observe(
+                part, "normalized_thickness_mm", _t_raw,
+                part.get("thickness_source") or "drawing", applied=False,
+                displaced_by=_t_stage)
+        except Exception:                                            # noqa: BLE001
+            pass
+
     return {
         "part_number": part.get("part_number"),
         "description": part.get("description"),
@@ -9025,7 +9115,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # level so xlsx_output Sheet Steel / Other Sheet Material sections can
         # find them (they read pe.get("normalized_material") directly).
         "normalized_material": part.get("normalized_material") or material.get("material"),
-        "normalized_thickness_mm": _safe_thickness_mm(part) or material.get("thickness_mm"),
+        "normalized_thickness_mm": _t_kept or material.get("thickness_mm"),
         # WHERE THOSE TWO NUMBERS CAME FROM TRAVELS WITH THEM.
         #
         # THE THIRD AND FOURTH TIME A FACT STOPPED AT THIS BOUNDARY. geometry_rollup and
@@ -9044,6 +9134,7 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # the boundary as a value with no source and look like a guess.
         **{_k: part.get(_k) for _k in source_precedence._SOURCE_FIELDS.values()
            if part.get(_k) is not None},
+        **_t_override,
         # WHAT THE WINNER BEAT. displaced_values is the whole evidence base for asking
         # whether independent lower-ranked sources agreed against a lone higher-ranked one
         # -- the door's ABS-over-polycarbonate, the side panel's ABS-over-PETG. Left behind
@@ -11310,6 +11401,16 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _coat_op = "powder_coating" if _doc_powder else "wet_spray"
             _coat_metals = {"MILD_STEEL", "MILD STEEL", "STAINLESS_STEEL", "STAINLESS STEEL",
                             "ALUMINIUM", "ALUMINUM", "ZINTEC", "BRIGHT_DRAWN"}
+            # A MIRRORED HAND IS ITS BASE, OPPOSITE. 12173-04-02M-H and 07-1-02M-H have no
+            # sheet of their own and their bases state RAW; read on their own records they
+            # stated nothing, so this stamp coated the hands beside their bare bases. The
+            # finish a hand is gated on is its base's (finish_rules.own_or_mirror_finish).
+            _by_pn_fin = {str(_q.get("part_number") or "").strip().upper(): _q
+                          for _q in parts if isinstance(_q, dict)}
+
+            def _fin_lookup(_k: Any) -> Any:
+                return _by_pn_fin.get(str(_k or "").strip().upper())
+
             for _p in parts:
                 if str(_p.get("normalized_material") or "").upper() not in _coat_metals:
                     continue
@@ -11329,8 +11430,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # own coat down and was then ruled out itself: nothing of the door was coated
                 # (D-320). The member's own words win, by the finish gate's rule.
                 try:
-                    from finish_rules import finish_contradiction as _fc, stated_finish as _sf
-                    if not _p.get("finish_inherited_from") and _fc(_coat_op, _sf(_p)):
+                    from finish_rules import finish_contradiction as _fc, own_or_mirror_finish
+                    if not _p.get("finish_inherited_from") and _fc(
+                            _coat_op, own_or_mirror_finish(_p, _fin_lookup)):
                         continue
                 except Exception:                                  # noqa: BLE001
                     pass

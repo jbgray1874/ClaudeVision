@@ -426,6 +426,54 @@ def operations_for_part(source: Any, part_number: Any,
     return []
 
 
+def charged_finish_families(source: Any, part_number: Any,
+                            ancestors: Iterable[Any] = ()) -> Set[str]:
+    """The finish FAMILIES (finish_rules vocabulary) the sheet charges on this part's own
+    rows or on the rows of an assembly it is in.
+
+    One vocabulary and one record. 12173-03-01J and -02J state WET SPRAYED - MATT and the
+    sheet charges Wet Spray against exactly those parts (Estimate rows 216, 217), while the
+    consistency check said the sheet charged nothing for it: the check asked a word list,
+    and section 14 asked the priced rows. This is the priced rows, joined to the part, read
+    through the finish families the route's own gates use. Rows naming no part are not
+    coverage — a row charged somewhere is not a row charged here (the 11650 per-part
+    lesson)."""
+    try:
+        from finish_rules import _OPERATION_FAMILY
+    except Exception:                                                # noqa: BLE001
+        return set()
+    _siblings: Dict[str, Set[str]] = {}
+    for _ops in (_dept_to_engine_ops() or {}).values():
+        _low = {str(x).strip().lower() for x in _ops}
+        for _o in _low:
+            _siblings.setdefault(_o, set()).update(_low)
+    fams: Set[str] = set()
+    for who in (part_number, *(ancestors or ())):
+        for r in priced_rows_for_part(source, who):
+            _ops = {str(o).strip().lower() for o in _row_engine_ops(r)}
+            for _o in set(_ops):
+                _ops |= _siblings.get(_o, set())
+            fams |= {_OPERATION_FAMILY[o] for o in _ops if o in _OPERATION_FAMILY}
+    return fams
+
+
+def costable_finish_labels() -> List[str]:
+    """The finishes this engine can charge as an operation, in words, from the finish
+    families that have a workbook department — computed, so the sentence that names them
+    cannot fall behind a department added to the sheet (it said powder and diamond polish
+    while Wet Spray had a rate)."""
+    try:
+        from finish_rules import _OPERATION_FAMILY
+    except Exception:                                                # noqa: BLE001
+        return []
+    _with_dept = {str(o).strip().lower() for ops in (_dept_to_engine_ops() or {}).values()
+                  for o in ops}
+    _words = {"powder": "powder", "wet_spray": "wet spray (paint, lacquer)",
+              "polish": "diamond polish", "anodise": "anodising", "plate": "plating"}
+    fams = sorted({fam for op, fam in _OPERATION_FAMILY.items() if op in _with_dept})
+    return [_words.get(f, f.replace("_", " ")) for f in fams]
+
+
 def priced_route_known(source: Any) -> bool:
     """True once the workbook has told us which operations this job actually charges.
 
@@ -1925,6 +1973,158 @@ def stated_rows_not_carried(source: Any) -> List[Dict[str, Any]]:
     return out
 
 
+# ── ONE OPERATION ON AN ASSEMBLY AND AGAIN ON SOMETHING IT CONTAINS ─────────────────────
+_REPEATED_PER_LEVEL_DEFAULT = ("assembly", "assemble", "handling", "packing")
+
+
+def _hierarchy_children(source: Any) -> Dict[str, Set[str]]:
+    """parent -> children from every hierarchy the job carries: the model's tree and the
+    write-up's assembly_children. Unioned, because the question asked of it — is one of these
+    the ancestor of another — needs no single source to answer it alone."""
+    children: Dict[str, Set[str]] = {}
+    if not isinstance(source, Mapping):
+        return children
+    _sw = ((source.get("solidworks_native") or {}) if isinstance(
+        source.get("solidworks_native"), Mapping) else {}).get("hierarchy") or {}
+    for parent, kids in (_sw.items() if isinstance(_sw, Mapping) else []):
+        for kid in (kids or []):
+            code = kid[0] if isinstance(kid, (list, tuple)) and kid else kid
+            if str(code or "").strip():
+                children.setdefault(str(parent).upper(), set()).add(str(code).upper())
+    for part in ((source.get("manufacturing_writeup") or {}).get("parts") or []):
+        if not isinstance(part, Mapping):
+            continue
+        for kid in (part.get("assembly_children") or []):
+            if str(kid or "").strip():
+                children.setdefault(
+                    str(part.get("part_number") or "").upper(), set()).add(str(kid).upper())
+    return children
+
+
+def parent_child_overlaps(source: Any) -> Optional[List[Dict[str, Any]]]:
+    """Every operation charged on an assembly and AGAIN on something it contains, as EVENTS.
+
+    None when the job carries no hierarchy (no tree, no opinion). Shared by the invariant
+    that reports these and the decision tally that asks them, so the two cannot disagree.
+
+    WHAT 12173-02 TAUGHT (1 Oct 17:34 book), where twenty such rows read "could not be run":
+      * ONE EVENT IS NOT TWO CHARGES. A weld decision on 04-201 whose participants are its
+        members is the pocket's weld, once — it was reported as "charged on 04-201 and
+        separately on 02M, 02M-H, 03M ...". A decision with a target is one event at that
+        target; its participants are who it joins, not further charges.
+      * NESTED BUILDS ARE LEVELS. An assembly event on 03-GA over 201 and another on 201 over
+        its frames are two builds; config OPERATIONS_REPEATED_PER_LEVEL names the operations
+        that legitimately recur at every level. A coat or a weld is still asked.
+      * THE NEAREST CHARGED ANCESTOR. 06M under 202 under 201, each welded: the question is
+        202-and-06M and 201-and-202, never 201-and-06M on top of them.
+      * SETTLED BY THE DRAWINGS. Where the compiler read an arc weld drawn on the assembly's
+        own sheet and on the member's (field_provenance review
+        'joining_on_assembly_and_member_both_drawn'), each charge is its own drawn weld.
+      * THE DECISION IDS ARE THE PAIR'S, not the operation's first six.
+    A legacy decision with no target (older extracts, test shapes) keeps the old reading:
+    each participant is its own charge.
+
+    [{"operation", "assembly", "descendants", "decision_ids", "asked"}], `asked` naming the
+    compiler issue that already puts it to a person (joining or powder scope), or ""."""
+    if not isinstance(source, Mapping):
+        return None
+    children = _hierarchy_children(source)
+    if not children:
+        return None
+
+    def _desc(code: str) -> Set[str]:
+        out: Set[str] = set()
+        frontier = list(children.get(code, ()))
+        while frontier:
+            k = frontier.pop()
+            if k in out:
+                continue
+            out.add(k)
+            frontier.extend(children.get(k, ()))
+        return out
+
+    shadow = ((source.get("estimate_summary") or {}).get("canonical_route_shadow")
+              if isinstance(source.get("estimate_summary"), Mapping) else None) \
+        or source.get("canonical_route_shadow") or {}
+    if not isinstance(shadow, Mapping):
+        return []
+    _priced = {str(r.get("decision_id") or "") for r in (shadow.get("priced_route_rows") or [])
+               if isinstance(r, Mapping)}
+    _priced.discard("")
+    try:
+        import config as _cfg
+        _repeat = {str(o).strip().lower() for o in (
+            getattr(_cfg, "OPERATIONS_REPEATED_PER_LEVEL", None)
+            or _REPEATED_PER_LEVEL_DEFAULT)}
+    except Exception:                                                # noqa: BLE001
+        _repeat = set(_REPEATED_PER_LEVEL_DEFAULT)
+    # op -> [(decision_id, holders, members, targeted, settled)]
+    events: Dict[str, List[Tuple[str, Set[str], Set[str], bool, bool]]] = {}
+    for n, d in enumerate(shadow.get("decisions") or []):
+        if not isinstance(d, Mapping):
+            continue
+        # A decision that STATES a status other than required is ruled out; one that states
+        # none is not (some writers omit it, and requiring it would blind the check).
+        _st = str(d.get("status") or "").strip().lower()
+        if _st and _st != "required":
+            continue
+        _id = str(d.get("decision_id") or f"#{n + 1}")
+        if _priced and _id not in _priced:
+            continue                    # a decision is not a charge until a row joins to it
+        op = str(d.get("operation") or "").strip()
+        if not op or op.lower() in _repeat:
+            continue
+        parts_in = {str(p).upper() for p in (d.get("participants") or []) if p}
+        tgt = str(d.get("target_id") or "").strip().upper()
+        holders = {tgt} if tgt else set(parts_in)
+        members = parts_in | ({tgt} if tgt else set())
+        _review = str(((d.get("field_provenance") or {}) if isinstance(
+            d.get("field_provenance"), Mapping) else {}).get("review") or "")
+        events.setdefault(op, []).append(
+            (_id, holders, members, bool(tgt),
+             _review == "joining_on_assembly_and_member_both_drawn"))
+    asked: Dict[Tuple[str, str], str] = {}
+    for iss in (shadow.get("issues") or []):
+        if not isinstance(iss, Mapping):
+            continue
+        if iss.get("code") == "joining_charged_on_assembly_and_member":
+            asked[(str(iss.get("assembly") or "").upper(),
+                   str(iss.get("operation") or "").lower())] = "joining_charged_on_assembly_and_member"
+        elif iss.get("code") == "powder_scope_mixed_members":
+            asked[(str(iss.get("part_number") or "").upper(), "powder_coating")] = \
+                "powder_scope_mixed_members"
+    out: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    for op, evs in events.items():
+        holders_all = {h for (_i, hs, _m, _t, _s) in evs for h in hs}
+        for (ic, hc, mc, tc, settled) in evs:
+            if settled:
+                continue
+            for C in hc:
+                anc = [P for P in holders_all if P != C and C in _desc(P)]
+                # The nearest: no other charged holder sits between P and C.
+                near = [P for P in anc if not any(Q != P and Q in _desc(P) and C in _desc(Q)
+                                                  for Q in anc)]
+                for P in near:
+                    for (ip, hp, mp, tp, _sp) in evs:
+                        if P not in hp:
+                            continue
+                        if ip == ic and tp:
+                            continue            # one targeted event is not two charges
+                        if tc and P in mc:
+                            continue            # the child's own event already holds the parent
+                        rec = out.setdefault((op, P), {
+                            "operation": op, "assembly": P, "descendants": [],
+                            "decision_ids": [], "asked": asked.get((P, op.lower()), "")})
+                        if C not in rec["descendants"]:
+                            rec["descendants"].append(C)
+                        for _i in (ip, ic):
+                            if _i not in rec["decision_ids"]:
+                                rec["decision_ids"].append(_i)
+    for rec in out.values():
+        rec["descendants"].sort()
+    return [out[k] for k in sorted(out)]
+
+
 def costed_job(source: Any) -> Dict[str, Any]:
     """THE record. Pure: same summary in, same record out. Cheap enough to call from every
     writer; persisted by main.py after the read-back for the audit trail only."""
@@ -2092,12 +2292,19 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # ── what a person has to decide, worst first ────────────────────────────────
     decisions: List[Dict[str, Any]] = []
     for l in unpriced:
+        # A LINE UNPRICED FOR WANT OF A GAUGE SAYS SO. A board whose only thickness readings
+        # were the drawing's tolerance text is left without a gauge rather than charged at the
+        # table's 3 mm (12173-03-01J); the line is NOT PRICED, and what it needs is the gauge,
+        # not a rate — said from the costing pass's own sentence on the line.
+        _gauge = next((f for f in (l.get("review_flags") or [])
+                       if "confirm the board gauge" in str(f)), "")
         decisions.append({
             "part": l["part_number"], "kind": "missing_price",
             "issue": f"{l['part_number']} carries no price",
             "assumption": "held at £0 — the unit cost is understated by whatever it is worth",
             "action": ("enter the per-unit figure" if l["kind"] == "commercial"
-                       else "supply a rate or a supplier quote"),
+                       else (f"confirm the board gauge from the drawing — {_gauge}"
+                             if _gauge else "supply a rate or a supplier quote")),
             "owner": l["price_origin"]["owner"], "gbp_at_stake": None})
     # ── WHAT THE TALLY COULD NOT SEE, FROM THE RESOLVERS THAT ALREADY SEE IT (D-324) ──
     # The tally built its list from priced lines only, so an item with NO line — 12645's
@@ -2192,8 +2399,10 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # assembly AND on some (not all) of its members, both charges stand — and the ruling
     # is a person's, so it must sit in the decision tally that keeps the quote a draft,
     # never as an easily-missed warning in a ledger nobody reads before issuing.
-    _shadow_issues = (((source.get("estimate_summary") or {})
-                       .get("canonical_route_shadow") or {}).get("issues") or [])
+    _shadow_issues = ((((source.get("estimate_summary") or {})
+                        .get("canonical_route_shadow") if isinstance(
+                            source.get("estimate_summary"), Mapping) else None)
+                       or source.get("canonical_route_shadow") or {}).get("issues") or [])
     for _iss in _shadow_issues:
         if not isinstance(_iss, Mapping) \
                 or str(_iss.get("code")) != "powder_scope_mixed_members":
@@ -2207,14 +2416,37 @@ def costed_job(source: Any) -> Dict[str, Any]:
                       or str(r.get("wb_operation") or "").upper().replace(" ", "") in ("P.COAT", "POWDERCOAT")]
         _charged = sorted({str(pn) for r in _coat_rows for pn in (r.get("part_numbers") or [])})
         _coat_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _coat_rows), 2)
+        # THE SCOPE THIS DECISION IS ABOUT, AS THE ROW CHARGES IT. The 17:34 12173 book asked
+        # about 04-201 and its members and answered with every part on the job's one P.Coat
+        # row — the frame, the rails, the hooks and a rack hand. The decision names what the
+        # row charges of THIS assembly and its members, and says the row is shared.
+        _members_named = list(_iss.get("coated_members") or []) \
+            + list(_iss.get("uncoated_members") or [])
+        _scope = {str(_iss.get("part_number") or "").upper()} | {
+            str(x).upper() for x in _members_named}
+        _in_scope = [pn for pn in _charged if pn.upper() in _scope]
+        _others = [pn for pn in _charged if pn.upper() not in _scope]
+        _rows_n = [str(r.get("workbook_row")) for r in _coat_rows if r.get("workbook_row")]
+        if not _charged:
+            _assume = "no P.Coat row is charged on the sheet"
+        elif not _members_named or not _others:
+            # The issue names no members, or the row holds nothing else: the row IS the scope.
+            _assume = (f"the sheet charges one P.Coat scope: {', '.join(_charged)}"
+                       f"{f' (£{_coat_gbp:,.2f} a unit)' if _coat_gbp else ''}")
+        else:
+            _assume = (f"the sheet's P.Coat row{'s' if len(_rows_n) > 1 else ''}"
+                       f"{(' ' + ', '.join(_rows_n)) if _rows_n else ''} "
+                       f"charge{'' if len(_rows_n) > 1 else 's'} of this scope: "
+                       f"{', '.join(_in_scope) or 'none of these parts'}"
+                       + (f" (£{_coat_gbp:,.2f} a unit, the row shared with "
+                          f"{', '.join(_others)})" if _coat_gbp else
+                          f" (the row also carries {', '.join(_others)})"))
         decisions.append({
             "part": str(_iss.get("part_number") or ""),
             "kind": "manufacturing_decision",
             "issue": str(_iss.get("message") or "the powder scope is mixed between "
                          "the assembly and its members"),
-            "assumption": (f"the sheet charges one P.Coat scope: {', '.join(_charged)}"
-                           f"{f' (£{_coat_gbp:,.2f} a unit)' if _coat_gbp else ''}"
-                           if _charged else "no P.Coat row is charged on the sheet"),
+            "assumption": _assume,
             "action": ("say which parts are coated before assembly and which after: the whole "
                        "case after build (members' RAW notes read as pre-finish), every part "
                        "before, or a mixed route naming each — the P.Coat rows and powder "
@@ -2495,6 +2727,88 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "nutserts, screws), replace the Weld and Dress rows with the "
                        "mechanical joining labour, rather than only removing them"),
             "owner": "estimator", "gbp_at_stake": _w_gbp or None})
+
+    # ── A JOINT CHARGED ON AN ASSEMBLY AND AGAIN ON ITS MEMBER IS ASKED, ONCE ─────────────
+    # The compiler's joining_charged_on_assembly_and_member issue ("BOTH ARE CHARGED — strike
+    # whichever is not real") reached a person only by riding inside the inferred-weld
+    # decision's reason, so a STATED weld charged on 12173-03-202 and again on its tab 06M
+    # was asked of nobody, while the consistency check printed it as "could not be run". It
+    # is a decision here, priced by the member's weld and dress rows. One per member and
+    # assembly whatever operations the issue names; none where the member's inferred-weld
+    # decision already carries it, or its reader already asked about its weld.
+    _inferred_asked = {str(d.get("part") or "").upper() for d in decisions
+                       if str(d.get("issue") or "").startswith("Welding on ")
+                       and str(d.get("issue") or "").endswith("is inferred, not drawn")}
+    _joints: Dict[Tuple[str, str], Set[str]] = {}
+    for _iss in _shadow_issues:
+        if isinstance(_iss, Mapping) \
+                and str(_iss.get("code")) == "joining_charged_on_assembly_and_member":
+            _joints.setdefault((str(_iss.get("assembly") or ""), str(_iss.get("member") or "")),
+                               set()).add(str(_iss.get("operation") or ""))
+    _joint_asked: Set[Tuple[str, str]] = set()
+    for (_asm, _mem), _ops_j in sorted(_joints.items()):
+        if not _asm or not _mem:
+            continue
+        _joint_asked.add((_asm.upper(), _mem.upper()))
+        if _mem.upper() in _inferred_asked or _mem.upper() in _weld_asked:
+            continue
+        _jrows = [r for r in (_workbook_rows(source) or [])
+                  if {str(o) for o in (r.get("engine_operations") or [])}
+                  & {"welding", "spot_welding", "dress_welds"}
+                  and _mem.upper() in {str(pn).upper() for pn in (r.get("part_numbers") or [])}]
+        _j_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _jrows), 2)
+        _j_nums = [str(r.get("workbook_row")) for r in _jrows if r.get("workbook_row")]
+        decisions.append({
+            "part": _mem, "kind": "manufacturing_decision",
+            "issue": (f"{' and '.join(sorted(o.replace('_', ' ') for o in _ops_j if o))} "
+                      f"charged on {_asm} and again on its member {_mem}"),
+            "assumption": (f"both charged"
+                           + (f" (£{_j_gbp:,.2f} a unit on {_mem}"
+                              + (f", Estimate row{'s' if len(_j_nums) > 1 else ''} "
+                                 f"{', '.join(_j_nums)}" if _j_nums else "") + ")"
+                              if _j_gbp else "")
+                           + " — one joint charged twice, or the assembly's joint plus the "
+                             "member's own weld; the drawings read do not tell them apart"),
+            "action": (f"read the joint on {_asm}'s sheet: if it is the weld that joins {_mem} "
+                       f"to its siblings, strike one charge; if {_mem} has a weld of its own, "
+                       f"confirm both"),
+            "owner": "estimator", "gbp_at_stake": _j_gbp or None})
+
+    # ── AN OPERATION ON AN ASSEMBLY AND AGAIN ON SOMETHING IT CONTAINS ────────────────
+    # The same overlaps the consistency check reports (one helper), asked here unless the
+    # compiler's own question already puts that pair to a person: a coat before AND after
+    # assembly is real, so is one item twice, and only a person can tell.
+    try:
+        _overlaps = parent_child_overlaps(source) or []
+    except Exception:                                                # noqa: BLE001
+        _overlaps = []
+    for _ov in _overlaps:
+        if _ov.get("asked"):
+            continue
+        _asm = str(_ov.get("assembly") or "")
+        _kids = [str(k) for k in (_ov.get("descendants") or [])
+                 if (_asm.upper(), str(k).upper()) not in _joint_asked]
+        if not _asm or not _kids:
+            continue
+        _op_o = str(_ov.get("operation") or "")
+        _orows = [r for r in (_workbook_rows(source) or [])
+                  if _op_o in {str(o) for o in _row_engine_ops(r)}
+                  and {str(pn).upper() for pn in (r.get("part_numbers") or [])}
+                  & {k.upper() for k in _kids}]
+        _o_gbp = round(sum(_num(r.get("total_value_gbp")) for r in _orows), 2)
+        _o_issue = (f"{_op_o.replace('_', ' ')} is charged on {_asm} and again on "
+                    f"{', '.join(_kids)}, which {_asm} contains")
+        if any(d.get("issue") == _o_issue for d in decisions):
+            continue
+        decisions.append({
+            "part": _asm, "kind": "manufacturing_decision", "issue": _o_issue,
+            "assumption": ("both charged"
+                           + (f" (£{_o_gbp:,.2f} a unit on the rows that carry "
+                              f"{', '.join(_kids)})" if _o_gbp else "")
+                           + f" — decisions {', '.join(_ov.get('decision_ids') or [])}"),
+            "action": ("say whether this is done before AND after assembly (two real events) "
+                       "or once — strike the charge that is not real"),
+            "owner": "estimator", "gbp_at_stake": _o_gbp or None})
 
     # ── A LINE COSTED AT A QUANTITY ITS OWN BOM ROW DOES NOT STATE ────────────────
     # 12312-01-GA: the driver, LED tape, power cord and Y-splitter each stated 1 and were

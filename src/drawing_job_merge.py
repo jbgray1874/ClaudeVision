@@ -515,6 +515,11 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
             "geometry_source": "dxf_flat_pattern",
             "geometry_confidence": 1.0,
         })
+        # A ROUND PROFILE TRAVELS AS ONE (12173-03-02J's disc). The blank stays the square
+        # it nests in; the coated face and the banded edge read the circle.
+        if flat.get("outline_shape") == "circle" and flat.get("outline_diameter_mm"):
+            ng["outline_shape"] = "circle"
+            ng["outline_diameter_mm"] = flat["outline_diameter_mm"]
         part["normalized_geometry"] = ng
         part["geometry_score"] = 1.0
         part["flat_pattern_detected"] = True
@@ -844,6 +849,14 @@ def apply_dxf_geometry_to_part(part: Dict[str, Any], dxf_path: Path) -> Dict[str
                 pass
 
     _interpret_part(part)
+    # The interpretation rebuilds normalized_geometry from the rollup; a measured round
+    # outline is a fact about the flat, so it is put back where the finish and edge read it.
+    if flat and flat.get("outline_shape") == "circle" and flat.get("outline_diameter_mm") \
+            and part.get("geometry_source") == "dxf_flat_pattern":
+        _ngc = part.get("normalized_geometry")
+        if isinstance(_ngc, dict):
+            _ngc["outline_shape"] = "circle"
+            _ngc["outline_diameter_mm"] = flat["outline_diameter_mm"]
     return part
 
 

@@ -13610,9 +13610,12 @@ def test_an_operation_charged_on_a_parent_and_its_child_is_surfaced():
                  "participants": ["12422-24-02M"]}]}}
     _v = _chk(_job)
     eq(len(_v), 1, "the overlapping operation is reported once")
-    eq(_v[0]["severity"], "unverified",
-       "UNVERIFIED, not a warning: pricing both is a decision the engine cannot defend, "
-       "and a warning would let the job be quoted firm anyway")
+    # A WARNING AND A DECISION, NOT UNVERIFIED (12173-02). UNVERIFIED means "the check could
+    # not run — it proved nothing", and the report printed "20 could not be run" for a check
+    # that ran on complete data. The ruling is a person's: costed_job asks the overlap under
+    # Decisions required, and that open decision is what keeps the quote a draft.
+    eq(_v[0]["severity"], "warning",
+       "a warning plus a decision: the check ran, and the ruling is the estimator's")
     ok(_v[0]["severity"] != "blocking",
        "and not blocking either — staged finishing is real, and refusing to price a job "
        "that legitimately coats twice would be a wrong answer of its own")

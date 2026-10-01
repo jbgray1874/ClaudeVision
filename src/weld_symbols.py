@@ -378,8 +378,18 @@ def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
 
 
 def _says_welded(finish: Any) -> bool:
-    """A title block whose FINISH field states the part leaves the bench welded."""
-    return bool(re.search(r"\bWELDED\b", str(finish or "").upper()))
+    """A title block whose FINISH field states the part leaves the bench (arc) welded.
+
+    ONE VOCABULARY. The statement words are config's (FINISH_FIELD_PROCESS_STATEMENTS), read
+    through finish_rules.process_statements — the same reader the finish census uses — so
+    this reader and the check that asks whether the statement is charged cannot disagree
+    about what "WELDED" means. A spot-weld statement is discharged by the Spotweld row, not
+    by arc welding, so it does not stamp `welding` here."""
+    try:
+        from finish_rules import process_statements
+    except Exception:                                                # noqa: BLE001
+        return bool(re.search(r"\bWELDED\b", str(finish or "").upper()))
+    return any("welding" in ops for ops in process_statements(finish)[0].values())
 
 
 def apply_finish_welds(parts: Sequence[Dict[str, Any]],

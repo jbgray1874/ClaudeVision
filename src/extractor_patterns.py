@@ -1369,6 +1369,9 @@ def extract_process_notes(text: str) -> Dict[str, Any]:
         "LASER",
         "DRILL",
         "PUNCH",
+        # A finish note naming ONE face ("PAINTED TOP FACE", 12173-03-02J) is kept so the
+        # coated-area reader can see it; it adds no operation (config "finish_one_face").
+        "FACE",
     ]
 
     _weld_text = strip_specification_legend(text)

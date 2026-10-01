@@ -4223,11 +4223,15 @@ def weldment_finish_for_gate(record: Mapping[str, Any], target_id: str,
     that family is not powder. A mixed set, or a powder set, leaves the parent's own (empty)
     finish untouched, so a genuinely powder-coated weldment is unaffected. A part that states
     its own finish is returned as-is, so leaves are unchanged."""
-    from finish_rules import stated_finish, finish_families
-    own = stated_finish(record)
+    from finish_rules import stated_finish, finish_families, own_or_mirror_finish
+    records = graph.get("records") or {}
+    # A MIRRORED HAND TAKES ITS BASE'S STATED FINISH, AND NO OTHER. 12173-04-02M-H and
+    # 07-1-02M-H have no sheet of their own; their bases state RAW, and the hands were coated
+    # on the sheet's P.Coat row beside their bare bases (17:34 book).
+    own = own_or_mirror_finish(
+        record, lambda pn: records.get(pn) or _record_by_squashed_key(records, pn))
     if own:
         return own
-    records = graph.get("records") or {}
     kids = (graph.get("children") or {}).get(target_id) or ()
     fams: Set[str] = set()
     for kid in kids:
@@ -5147,6 +5151,71 @@ def compile_job_route(
                 route_id=template.route_id,
             ))
 
+    # A STRANDED SINGLE-BLANK OP ON AN ASSEMBLY, WHOSE MEMBERS ALREADY DO IT, IS THEIRS.
+    #
+    # 12173-03-201/202/203, 04-201, 05-101 and 06-201 carried deburring (and four of them
+    # wire_forming) in their flattened `operations` field — an unattributed source, so each
+    # stayed UNVERIFIED and was printed as a blocking "UNOWNED: ask who performs this" while
+    # the members' own Manual labour and Robomac rows (M173-M187) charged that very work.
+    # bought_in_policy.LEAF_ONLY_OPS says what only a single blank can incur; the rule above
+    # rules only its narrower list out. Widening that list outright would rule out, at
+    # bom_tree rank, a drawing-noted edge banding on an assembly no member carries — money
+    # removed in silence. So this is narrow by construction:
+    #   * every claim on the event is from the unattributed `operations` field ("unknown");
+    #   * the op is single-blank work the rule above does not already cover;
+    #   * the target is an assembly;
+    #   * at least one member below it has a REQUIRED claim for that op (department aliases
+    #     counted — a member routed to the Robomac does wire forming).
+    # The reason names the members. Anything else is untouched: the stranded op stays the
+    # one question it was, and a drawing-noted op stays as read.
+    try:
+        from bought_in_policy import LEAF_ONLY_OPS as _LEAF_WIDE
+    except Exception:                                                # noqa: BLE001
+        _LEAF_WIDE = frozenset()
+    _stranded_alias: Dict[str, Set[str]] = {}
+    try:
+        from costed_facts import _dept_to_engine_ops as _depts
+        for _dops in (_depts() or {}).values():
+            # Aliases only among single-blank ops of one department: a department that also
+            # inserts hardware or works at the bench must not let that stand in for a trade.
+            _low = {clean_operation(x) for x in _dops} & {clean_operation(x) for x in _LEAF_WIDE}
+            for _o in _low:
+                _stranded_alias.setdefault(_o, set()).update(_low)
+    except Exception:                                                # noqa: BLE001
+        pass
+    _carriers: Dict[str, Set[str]] = {}
+    for _ecl in claims_by_event.values():
+        if _ecl and any(c.status == REQUIRED for c in _ecl):
+            _op0 = _ecl[0].operation
+            for _o in (_stranded_alias.get(_op0) or {_op0}):
+                _carriers.setdefault(_o, set()).add(_ecl[0].target_id)
+    for event_id, event_claims in list(claims_by_event.items()):
+        template = event_claims[0]
+        if not (template.operation in _LEAF_WIDE
+                and template.operation not in LEAF_ONLY_OPERATIONS
+                and kinds.get(template.target_id) == "assembly"
+                and all(c.source == "unknown" for c in event_claims)):
+            continue
+        _members = sorted(
+            pn for pn in (_carriers.get(template.operation) or set())
+            if pn != template.target_id
+            and _is_descendant(pn, template.target_id, graph["parents"]))
+        if not _members:
+            continue
+        add_claim(event_id, make_claim(
+            template.operation, NOT_APPLICABLE, "bom_tree",
+            subject_id=template.target_id,
+            target_id=template.target_id,
+            scope=template.scope,
+            participants=template.participants,
+            sequence=template.sequence,
+            reason=(f"single-blank work done on its members "
+                    f"{', '.join(_members[:6])}{' …' if len(_members) > 6 else ''} — the "
+                    f"assembly's own record named it with no source, and the members' "
+                    f"routes charge it"),
+            route_id=template.route_id,
+        ))
+
     # Tube stock is cut by the tube process. A page-level Laser word on a CHS/RHS record is
     # not a second profile-cutting event. Keep the positive claim in the audit trail and let
     # the deterministic stock-form claim rule it not applicable.
@@ -5252,6 +5321,12 @@ def compile_job_route(
         reason = finish_contradiction(
             template.operation,
             weldment_finish_for_gate(record, template.target_id, graph))
+        if reason:
+            # SAY WHOSE SHEET IT WAS. A hand with no finish of its own is gated on its base's.
+            from finish_rules import stated_finish as _sf_own, mirror_base_number as _mbn
+            if not _sf_own(record) and _mbn(record):
+                reason += (f" — read from {_mbn(record)}'s sheet, the part this hand "
+                           f"mirrors; the hand states no finish of its own")
         if not reason and template.scope == "part":
             # The physical stock-form rule is part-only — it catches the panel whose finish
             # nobody read (12422-24's Egger laminate, no finish family, oven would destroy it).

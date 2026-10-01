@@ -253,6 +253,19 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
     part = dict(part or {})
     _l, _w = _blank(part)
     perimeter = round(2.0 * ((_l or 0) + (_w or 0)), 1) if (_l and _w) else 0.0
+    # A DISC'S EDGE IS ITS CIRCUMFERENCE. 12173-03-02J's DXF measures a 556 mm circle; its
+    # drawn edge is pi x 556, not the 2,224 mm of the square it nests in. Read only where the
+    # measured outline says circle and its diameter fits the blank (where one is held).
+    _ng0 = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                          dict) else {}
+    try:
+        _od = float(_ng0.get("outline_diameter_mm") or 0.0) \
+            if str(_ng0.get("outline_shape") or "") == "circle" else 0.0
+    except (TypeError, ValueError):
+        _od = 0.0
+    if _od > 0 and (not _l or _od <= _l + 0.5):
+        import math as _m
+        perimeter = round(_m.pi * _od, 1)
     out: Dict[str, Any] = {"mm": None, "basis": "", "evidence": "",
                            "drawn_perimeter_mm": perimeter}
 

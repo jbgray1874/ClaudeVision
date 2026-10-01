@@ -610,7 +610,9 @@ def test_but_two_priced_rows_on_a_parent_and_its_child_still_surface():
     }
     found = invariants.check_an_operation_is_not_charged_on_a_parent_and_its_child(job)
     assert len(found) == 1
-    assert found[0]["severity"] == invariants.UNVERIFIED
+    # A WARNING NOW, AND A DECISION (12173-02): UNVERIFIED means "the check could not run",
+    # and this check runs; the ruling is a person's, asked under Decisions required.
+    assert found[0]["severity"] == invariants.WARNING
     assert found[0]["detail"]["assembly"] == "12422-24-102"
 
 

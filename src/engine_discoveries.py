@@ -73,6 +73,13 @@ _ESTIMATOR = {
     # states a genuinely mixed scope, and only a person can rule whether the assembly
     # coat covers the coated members or is a separate finishing stage.
     "powder_scope_mixed_members",
+    # A finish field that states how a part is MADE (FINISH: WELDED) with no row charging
+    # that process on the part or its assembly: charged elsewhere, free, or not done is the
+    # estimator's call with the drawing open.
+    "stated_process_not_charged",
+    # A coat or a weld charged on an assembly and again on a part it contains: before AND
+    # after assembly, or one item twice. Asked under Decisions required; only a person rules.
+    "operation_charged_on_a_parent_and_its_child",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it

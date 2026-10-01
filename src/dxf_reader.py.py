@@ -1092,6 +1092,49 @@ def _get_layer_entities(
     return result
 
 
+# ── A DISC IS AN OUTLINE ──────────────────────────────────────────────────────────────────
+# 12173-03-02J, the 18 mm MDF spinner plate: its DXF ('..._18mm MDF_revA.DXF', a block/INSERT
+# export) holds one CIRCLE for the profile and the fixing holes, and no straight edge at all.
+# The flat-pattern test demanded four cut LINEs, so a perfectly measured disc read "a cut path
+# but no closed outline", its blank fell to the parts list's 556 x 556 square, and the paint
+# and the edging were figured on the square. A cut layer that holds no line and no arc, whose
+# largest circle contains every other circle on it, is a disc: the largest circle is the
+# outline, the others are holes inside it.
+_DISC_MIN_DIAMETER_MM = 10.0
+
+
+def _disc_outline(msp: Any, scale: float) -> Optional[Tuple[float, float, float, List[Any]]]:
+    """(cx, cy, r) of a circular cut outline in mm, and the circles inside it, or None.
+
+    INSERTs and polylines are exploded the same way the outline reader explodes them, so the
+    two cannot disagree about what is on the cut layer."""
+    if _get_layer_entities(msp, CUT_LAYERS, {"LINE", "ARC"}):
+        return None
+    circs = _get_layer_entities(msp, CUT_LAYERS, {"CIRCLE"})
+    if not circs:
+        return None
+    rows = []
+    for e in circs:
+        try:
+            r = float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+            rows.append((e.dxf.center.x * scale, e.dxf.center.y * scale, r, e))
+        except Exception:
+            continue
+    if not rows:
+        return None
+    cx, cy, R, outer = max(rows, key=lambda t: t[2])
+    if 2.0 * R < _DISC_MIN_DIAMETER_MM:
+        return None
+    inner = []
+    for (x, y, r, e) in rows:
+        if e is outer:
+            continue
+        if math.hypot(x - cx, y - cy) + r > R + 1e-6:
+            return None                       # a circle outside the disc: not one outline
+        inner.append(e)
+    return cx, cy, R, inner
+
+
 def _order_segments(
     lines: List[Any],
     scale: float = 1.0,
@@ -1283,6 +1326,8 @@ def _exact_perimeter_and_area(
     # be a circle, and reading nothing gave a 0 x 0 blank on a perfectly measurable part.
     # Only in that case, because anywhere else a circle is a HOLE and its extent is inside
     # the profile already.
+    _disc_r = 0.0
+    _disc_holes_mm2 = 0.0
     if not _pts_x and (cut_circs or []):
         for e in cut_circs:
             try:
@@ -1292,6 +1337,19 @@ def _exact_perimeter_and_area(
                 _pts_y += [cy - r, cy + r]
             except Exception:
                 continue
+        # THE OUTLINE IS THE LARGEST CIRCLE, AND IT IS CUT. Its circumference is the cut
+        # path and its area — less the holes inside it — is the part's face; the square it
+        # sits in is only what it nests in. The other circles stay holes, counted by the
+        # hole reader as before.
+        try:
+            _radii = sorted((float(getattr(e.dxf, "radius", 0.0) or 0.0) * scale
+                             for e in cut_circs), reverse=True)
+            if _radii and _radii[0] > 0:
+                _disc_r = _radii[0]
+                _disc_holes_mm2 = sum(math.pi * r * r for r in _radii[1:] if r < _disc_r)
+                perimeter += 2.0 * math.pi * _disc_r
+        except Exception:
+            _disc_r = 0.0
 
     xs, ys = _pts_x, _pts_y
     if not xs:
@@ -1314,6 +1372,10 @@ def _exact_perimeter_and_area(
     area, _area_method, fill_pct = _shapely_net_area_mm2(
         cut_lines, cut_arcs, cut_circs, scale, bbox_area
     )
+    if _disc_r > 0:
+        area = math.pi * _disc_r * _disc_r - _disc_holes_mm2
+        _area_method = "disc"
+        fill_pct = round(100.0 * area / bbox_area, 2) if bbox_area > 0 else 0.0
     if area < 1.0 and bbox_area > 0:
         area = bbox_area                      # last-resort guard (function already abstains)
         _area_method = "bbox_guard"
@@ -1326,6 +1388,8 @@ def _exact_perimeter_and_area(
         "blank_width_mm":  blank_width,
         "bbox_fill_pct":   fill_pct,
         "area_method":     _area_method,
+        **({"outline_shape": "circle", "outline_diameter_mm": round(2.0 * _disc_r, 3)}
+           if _disc_r > 0 else {}),
     }
 
 
@@ -1578,7 +1642,9 @@ def _is_flat_pattern(msp: Any, scale: float = 1.0) -> bool:
             return False
     cut_lines = _get_layer_entities(msp, CUT_LAYERS, {"LINE"})
     if len(cut_lines) < 4:
-        return False
+        # A DISC HAS NO STRAIGHT EDGE (12173-03-02J). Its one circle is the outline.
+        _disc = _disc_outline(msp, scale)
+        return bool(_disc and math.pi * _disc[2] ** 2 > 100.0)
 
     xs = [e.dxf.start.x * scale for e in cut_lines] + \
          [e.dxf.end.x   * scale for e in cut_lines]
@@ -1679,6 +1745,18 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         e for e, _lay in _all_entities_with_layers(msp, {"CIRCLE"})
         if _circle_diameter_mm(e, scale) >= 1.0 and (_lay or "").upper() not in _skip
     ]
+    # THE DISC'S OWN OUTLINE IS NOT A HOLE. On a circular profile the largest cut circle is
+    # the part's edge; counting it priced the rim as a hole.
+    if outline.get("outline_shape") == "circle":
+        _od = float(outline.get("outline_diameter_mm") or 0.0)
+        _dropped = False
+        _kept_holes = []
+        for e in _hole_circles:
+            if not _dropped and abs(_circle_diameter_mm(e, scale) - _od) < 0.01:
+                _dropped = True
+                continue
+            _kept_holes.append(e)
+        _hole_circles = _kept_holes
     all_circles = _hole_circles
     hole_diams  = sorted(set(round(_circle_diameter_mm(e, scale), 2) for e in _hole_circles))
     hole_count  = len(_hole_circles)
@@ -1769,6 +1847,10 @@ def extract_flat_pattern_data(dxf_path: Path) -> Dict[str, Any]:
         "blank_length_mm":      outline.get("blank_length_mm", 0.0),
         "blank_width_mm":       outline.get("blank_width_mm",  0.0),
         "blank_area_mm2":       area_mm2,
+        # A circular profile says so, with its diameter: the coated face and the banded
+        # edge follow the circle, while the blank (what it nests in) stays the square.
+        "outline_shape":        outline.get("outline_shape"),
+        "outline_diameter_mm":  outline.get("outline_diameter_mm"),
         "bbox_area_mm2":        outline.get("bbox_area_mm2",   0.0),
         "bbox_fill_pct":        outline.get("bbox_fill_pct",   0.0),
         "perimeter_mm":         outline.get("perimeter_mm",    0.0),

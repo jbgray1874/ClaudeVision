@@ -537,18 +537,51 @@ def strip_leaf_operations(part: Dict[str, Any]) -> List[str]:
             or str(part.get("canonical_kind") or "").lower() == "assembly"):
         return []
     removed: List[str] = []
+    # EDGING THE ASSEMBLY'S OWN PARTS LIST STATES IS THE ASSEMBLY'S. 12173-03-01J is a glued
+    # stack of two numbered 25 mm discs (D-378) and its own parts list states "EDGING, L:
+    # 1979mm" (D-381). As an assembly it lost edge_banding here, so the stated length had no
+    # operation left to price it — the banding vanished without a word. A stated length on
+    # the assembly's own sheet keeps the op there, and whether the edge is banded once on the
+    # joined stack or on each piece is asked, never decided either way in silence.
+    try:
+        _stated_band = float(part.get("stated_banded_length_mm") or 0.0)
+    except (TypeError, ValueError):
+        _stated_band = 0.0
+    _kept_stated = False
     for field in ("textual_operations", "inferred_operations"):
         vals = part.get(field)
         if not isinstance(vals, list):
             continue
         kept: List[Any] = []
         for op in vals:
-            if str(op).strip().lower() in LEAF_ONLY_OPS:
+            _low = str(op).strip().lower()
+            if _low in LEAF_ONLY_OPS:
+                if _stated_band > 0 and _low in ("edge_banding", "edgebanding"):
+                    kept.append(op)
+                    _kept_stated = True
+                    continue
                 if str(op) not in removed:
                     removed.append(str(op))
             else:
                 kept.append(op)
         part[field] = kept
+    if _kept_stated:
+        _q = {
+            "issue": (f"Is the edging {part.get('part_number')} states on its own parts list "
+                      f"({_stated_band:g} mm) applied once to the joined assembly, or to each "
+                      f"of its pieces?"),
+            "assumption": ("charged on the assembly at the stated length; edging any of its "
+                           "pieces carries of its own is charged as well"),
+            "action": ("if the stack is banded once after joining, strike the pieces' edging; "
+                       "if each piece is banded, strike the assembly's"),
+            "source": "bought_in_policy.strip_leaf_operations",
+            "subject": "edge_banding",
+            "charged_operations": ["edge_banding"],
+        }
+        _qs = part.setdefault("manufacturing_questions", [])
+        if isinstance(_qs, list) and not any(
+                isinstance(x, dict) and x.get("issue") == _q["issue"] for x in _qs):
+            _qs.append(_q)
     return removed
 
 
