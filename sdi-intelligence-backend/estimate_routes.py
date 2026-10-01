@@ -1486,6 +1486,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
 
     try:
         staged = staging.stage(_sources, client=client, drawing=drawing)
+    except staging.StagingInUse as exc:
+        raise HTTPException(409, str(exc))
     except staging.StagingError as exc:
         raise HTTPException(400, str(exc))
     except OSError as exc:

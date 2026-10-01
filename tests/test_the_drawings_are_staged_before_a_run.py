@@ -276,3 +276,28 @@ def test_no_extract_means_no_sidecar_and_no_pretending(staging, tmp_path):
     _pdf(pack / "ga.pdf")
     res = staging.stage([str(pack)], client="Boots", drawing="12422")
     assert res["sidecars"] == [] and res["sidecars_count"] == 0
+
+
+def test_a_pack_still_open_elsewhere_is_said_plainly_not_a_502(staging, tmp_path, monkeypatch):
+    """12173-02, 1 Oct 2026: a run of the same pack from a second portal still held the staged
+    files, and six presses came back as a bare 502 while the button looked ready. A locked file
+    is StagingInUse — the route's 409 — naming the file and the usual holders."""
+    pack = tmp_path / "12173"
+    _pdf(pack / "12173-02-GA.pdf")
+    staging.stage([str(pack)], client="MandS", drawing="12173-02")
+
+    def _locked(folder):
+        raise PermissionError(13, "The process cannot access the file", str(folder / "12173-02-GA.pdf"))
+    monkeypatch.setattr(staging, "_clear_folder", _locked)
+    with pytest.raises(staging.StagingInUse) as got:
+        staging.stage([str(pack)], client="MandS", drawing="12173-02")
+    msg = str(got.value)
+    assert "12173-02-GA.pdf" in msg and "still open in another program" in msg
+    assert "second one on the same machine" in msg
+    assert isinstance(got.value, staging.StagingError)
+
+
+def test_the_route_answers_a_locked_pack_with_409():
+    src = (_BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
+    block = src.split("staged = staging.stage(_sources, client=client, drawing=drawing)")[1][:300]
+    assert "except staging.StagingInUse as exc:\n        raise HTTPException(409, str(exc))" in block

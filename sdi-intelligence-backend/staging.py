@@ -89,6 +89,10 @@ class StagingError(Exception):
     """Something the estimator can see and fix. The route turns it into a 400."""
 
 
+class StagingInUse(StagingError):
+    """The staged folder is held open by another program — a run, SOLIDWORKS or Excel."""
+
+
 def staging_root() -> Path:
     return Path(getattr(config, "STAGING_ROOT", "") or "")
 
@@ -383,13 +387,26 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
             continue
         break
 
-    replaced = _clear_folder(folder)
-
-    copied: List[str] = []
-    for f in files:
-        dest = folder / f.name
-        shutil.copy2(str(f), str(dest))
-        copied.append(f.name)
+    # A FILE SOMETHING STILL HOLDS OPEN IS NOT A SHARE FAULT. 12173-02, 1 Oct 2026: a run of
+    # the same pack was still reading this folder — started from a second portal on the same
+    # machine, whose queue this service cannot see — so clearing it hit a locked drawing, and
+    # the page got a bare 502 six times while the button looked ready. Said as what it is,
+    # with the file and the usual holders, so the next press is the right one.
+    try:
+        replaced = _clear_folder(folder)
+        copied: List[str] = []
+        for f in files:
+            dest = folder / f.name
+            shutil.copy2(str(f), str(dest))
+            copied.append(f.name)
+    except PermissionError as exc:
+        raise StagingInUse(
+            f"The staged pack for {drawing} ({folder}) is still open in another program, so "
+            f"it cannot be replaced: {Path(str(getattr(exc, 'filename', '') or exc)).name}. "
+            f"Usually a run of this job is still going — from this portal or a second one on "
+            f"the same machine — or SOLIDWORKS or Excel still has the file open after a run "
+            f"was stopped. Let that run finish or abandon it, close SOLIDWORKS/Excel if a run "
+            f"is not using them, then press again.") from exc
 
     # The job-level sidecars, after the drawings so a copy failure on one cannot cost the pack.
     sidecars: List[str] = []
