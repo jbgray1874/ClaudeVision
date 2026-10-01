@@ -177,5 +177,6 @@ def mark_third_party_supplied(parts: List[Dict[str, Any]],
                 break
     for m in marked:
         print(f"   [scope] {m['part_number']} supplied by {m['party'].title()} "
-              f"(drawing note names '{m['item']}') — listed at £0", flush=True)
+              f"({'its own BOM line says so' if m['item'] == 'its own line' else 'drawing note names ' + repr(m['item'])})"
+              f" — listed at £0", flush=True)
     return marked
