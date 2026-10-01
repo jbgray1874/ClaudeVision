@@ -1803,6 +1803,17 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
                   or (part.get("material_estimate") or {}).get("stock_form") or "").lower()
         if _sf in ("tube", "section", "bar", "wire", "profile", "extrusion", "rod"):
             continue
+        # NOR DOES A PART SDI DOES NOT CUT. 12527-22-03X is the customer's printed ticket,
+        # supplied by others and on the sheet at £0: no blank of ours prices it, so a 3 x 1 mm
+        # "blank" beside a 1,010 mm cut path read off its card outline is no contradiction in
+        # the money — and it blocked the 09:06 riser book as one. An assembly is costed
+        # through its members, and a bought-in arrives made. Same rule as the envelope flag.
+        try:
+            from detail_page_geometry import not_cut_from_a_blank as _not_cut
+            if _not_cut(part):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
         import costed_facts as _cf
         _blank = _cf.blank_dimensions(part)
         length = _blank["length_mm"] or 0.0

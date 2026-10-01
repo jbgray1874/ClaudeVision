@@ -95,3 +95,19 @@ def test_a_line_another_party_supplies_is_accounted_for():
     got = invariants._reached_unaccounted_core(
         {"estimate_summary": {"canonical_route_shadow": payload, "part_estimates": pes}})
     assert "R-03X" in got["unaccounted"]
+
+
+def test_a_part_sdi_does_not_cut_cannot_block_on_its_blank():
+    """The 09:06 book's one failing check: the customer's ticket, 3 x 1 mm against a
+    1,010 mm cut path. A fabricated leaf with the same contradiction still blocks."""
+    import invariants
+    bad = {"blank_length_mm": 3, "blank_width_mm": 1, "cut_length_mm": 1010.0,
+           "normalized_material": "MILD_STEEL"}
+    ticket = dict(bad, part_number="R-03X", description="TICKET-SUPPLIED BY OTHERS",
+                  supplied_by_third_party="OTHERS")
+    leaf = dict(bad, part_number="R-05M", description="SIDE PANEL",
+                textual_operations=["laser_cutting"])
+    codes = lambda ps: [v["code"] for v in
+                        invariants.check_a_blank_and_its_cut_path_can_both_be_true({"parts": ps})]
+    assert "blank_and_cut_path_disagree" not in codes([ticket])
+    assert "blank_and_cut_path_disagree" in codes([leaf])
