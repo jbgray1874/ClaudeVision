@@ -67,4 +67,5 @@ def test_a_hand_with_its_own_flat_is_not_settled():
 def test_the_portal_path_settles_after_every_reading_is_in():
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     i = src.index("stamp_drawing_bend_callouts(summary[\"manufacturing_writeup\"][\"parts\"]")
-    assert i < src.index("settle_mirrored_folds(summary[\"manufacturing_writeup\"][\"parts\"])")
+    assert i < src.index(
+        "settle_mirrored_folds(summary[\"manufacturing_writeup\"][\"parts\"], summary)")

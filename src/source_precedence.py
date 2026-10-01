@@ -35,6 +35,7 @@ signal that carries knowledge the drawing does not.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 __all__ = [
@@ -1022,6 +1023,13 @@ def _norm_value_key(value: Any) -> str:
     return str(value).strip().upper().replace("_", " ")
 
 
+def _same_token(a: Any, b: Any) -> bool:
+    """One value in two spellings ('MILD_STEEL' / 'MILD STEEL' / 'MILD-STEEL')."""
+    na = re.sub(r"\s+", " ", str(a).replace("_", " ").replace("-", " ")).strip().upper()
+    nb = re.sub(r"\s+", " ", str(b).replace("_", " ").replace("-", " ")).strip().upper()
+    return bool(na) and na == nb
+
+
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
                 note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
     """Set a datum if this source is entitled to, and record where it came from.
@@ -1079,6 +1087,36 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
         # and a false claim at worst.
         return False
 
+    # ONE READER, TWO READINGS, IS ITS OWN OUTCOME (review of D-379). 12173-07-2-02M: the
+    # parts-list reader submitted one row's 1 as bom_tree, then the table's 2 as bom_tree. D-379
+    # stopped the first reading defending against the second, and the second then met either
+    # the "two sources of equal standing" sentence — there were not two sources — or, with a
+    # higher confidence, a silent write: title_block naming PETG beside a PETG filename, then
+    # ABS at 0.9, wrote ABS with nothing said. A reader that contradicts itself is not evidence
+    # either way, so it never writes, the held value stays, and the record says what happened.
+    #
+    # Two exemptions, both statements rather than readings. A person or a confirmed rule
+    # changing its answer goes to rank exactly as before. A held value whose stamp was CLEARED
+    # is a reader saying its earlier figure is superseded (file_scan clears the tree's stale
+    # stamp once it recognises an arrangement), so it is not held against the new one. And one
+    # value in two spellings is not a contradiction.
+    if (_cur is not MISSING and _cur_src and str(source or "").strip()
+            and str(source) not in _NOT_A_READING
+            and field_rank(source, field) < _DECISION_RANK
+            and not _same_token(_cur, value)
+            and str(source) in support_for(part, field, _cur)):
+        _observe(part, field, value, source, applied=False)
+        part.setdefault("_self_revisions", {}).setdefault(field, []).append(
+            {"source": str(source), "from": _cur, "to": value})
+        _others = [s for s in support_for(part, field, _cur) if s != str(source)]
+        part.setdefault("review_flags", []).append(
+            f"{field}: {source} read both '{_cur}' and '{value}' — one reader, two readings, "
+            f"so neither counts against the other. '{_cur}' is kept"
+            + (f" ({', '.join(_others)} also say{'s' if len(_others) == 1 else ''} '{_cur}')"
+               if _others else "")
+            + "; confirm which is right")
+        return False
+
     # A QUORUM DEFENDS, AS WELL AS OVERRULES. Asked BEFORE precedence, because precedence
     # cannot ask it: by the time a stronger source has been allowed to write, the thing worth
     # weighing — that several independent readers already agreed against it — has been
@@ -1087,11 +1125,18 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     if _defence is not None:
         _observe(part, field, value, source, applied=False)
         part.setdefault("_corroboration", {})[field] = _defence
+        # "OUTRANKS" IS A FACT ABOUT TWO RANKS, SO IT IS COMPUTED. The sentence said it of
+        # every refused newcomer; a defence also turns away an equal or weaker one.
+        _outranks = field_rank(source, field) > field_rank(_cur_src, field)
         part.setdefault("review_flags", []).append(
-            f"{field}: '{value}' from {source} was NOT applied although it outranks what is "
-            f"held — {len(_defence['sources'])} independent sources say '{_cur}' "
-            f"({', '.join(_defence['sources'])}) against it. The stronger single reading has "
-            f"been set aside because several others agree against it; confirm which is right")
+            f"{field}: '{value}' from {source} was NOT applied"
+            f"{' although it outranks what is held' if _outranks else ''} — "
+            f"{len(_defence['sources'])} independent sources say '{_cur}' "
+            f"({', '.join(_defence['sources'])}) against it. "
+            + ("The stronger single reading has been set aside because several others agree "
+               "against it" if _outranks else
+               "Several independent readings agree against it")
+            + "; confirm which is right")
         return False
 
     if may_overwrite(part, field, source, new_value=value, new_confidence=confidence):
@@ -1152,11 +1197,6 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     # 'MILD STEEL' from the drawing are the same token; asking an estimator to "confirm
     # which is right" between an underscore and a space is noise dressed as a decision.
     # The refusal above still records the observation — only the flag is withheld.
-    def _same_token(a: Any, b: Any) -> bool:
-        import re as _re
-        na = _re.sub(r"\s+", " ", str(a).replace("_", " ").replace("-", " ")).strip().upper()
-        nb = _re.sub(r"\s+", " ", str(b).replace("_", " ").replace("-", " ")).strip().upper()
-        return bool(na) and na == nb
     if _same_token(_cur, value):
         return False
     if field_rank(source, field) == field_rank(_cur_src, field):

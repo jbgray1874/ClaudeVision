@@ -56,6 +56,21 @@ _LABEL = {
     NO_EVIDENCE: "nothing on this part",
     CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model confirms",
 }
+# Not a rung: the UP/DOWN callouts counted off the part's own sheet. They decide only with the
+# model's confirmation (CALLOUTS_AND_MODEL); where they do not decide, they are still a reading.
+_CALLOUTS_LABEL = "the UP/DOWN bend callouts on its own sheet"
+
+
+def _note_is_angle_list_only(part: Dict[str, Any]) -> bool:
+    """The note rung's count came from the bend-angle list alone — no fold count was stated
+    and no fold dimensions were read. That list is de-duplicated by value
+    (extractor_patterns._findall_unique), so two 90° bends read as one angle: it is a short
+    reading of the same printed statements the callouts count in full."""
+    if not isinstance(part, dict):
+        return False
+    return (not _int(part.get("fold_count_textual"))
+            and not (part.get("fold_values_mm") or [])
+            and bool(part.get("angles_deg")))
 
 
 def _int(value: Any) -> Optional[int]:
@@ -152,11 +167,19 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     _model = solidworks_bend_features(part)
     # The model must CONFIRM the callouts (at least as many features), never supply the
     # number: 12614-01's side panels print 11 callouts where the model has 12 (D-259).
-    # AND THE SAME TWO STATEMENTS OUTRANK A FOLD NOTE THAT COUNTS FEWER. 12173-04-02M's
+    # AND THE SAME TWO STATEMENTS OUTRANK A NOTE THAT IS ONLY THE ANGLE LIST. 12173-04-02M's
     # sheet prints two bend callouts, its model has four bend features and its DXF two bend
-    # lines; a single angle read as the "note" charged one fold (D-380).
-    if (source in (FLAT_PATTERN, DRAWING_NOTE) and _callouts and _model
-            and _model >= _callouts and _callouts > count):
+    # lines; a single angle read as the "note" charged one fold (D-380). The angle list is
+    # de-duplicated by value, so it under-counts the very callouts it was read from.
+    #
+    # NOT AN EXPLICIT FOLD COUNT OR FOLD DIMENSIONS (review of D-380). D-380 let the pair
+    # outrank the whole note rung, so a page-level callout count the model "confirms" by having
+    # at least as many features beat a fold count the drawing office wrote down, was labelled
+    # measured, and closed "no confirmation is needed". A stated count keeps the note rung; the
+    # callouts and the model go into the disagreement, which asks.
+    if (_callouts and _model and _model >= _callouts and _callouts > count
+            and (source == FLAT_PATTERN
+                 or (source == DRAWING_NOTE and _note_is_angle_list_only(part)))):
         count, source = _callouts, CALLOUTS_AND_MODEL
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is
@@ -165,11 +188,16 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # list of 6. In both cases the only way a reader could have known is by opening both
     # files. None of them ever changes the charge.
     model = solidworks_bend_features(part)
-    _others = [(name, value) for name, value in rungs
+    _others = [(_LABEL[name], value) for name, value in rungs
                if name != source and value is not None and int(value) != count]
+    # THE CALLOUTS ARE A READING TOO. They were not a rung, so a note that beat them — or a
+    # flat pattern the model did not let them correct — left them out of the sentence, and a
+    # sheet's own UP/DOWN count could disagree with the charge without anyone being told.
+    if _callouts and source != CALLOUTS_AND_MODEL and _callouts != count:
+        _others.append((_CALLOUTS_LABEL, _callouts))
     disagreement = None
     if _others:
-        _said = "; ".join(f"{_LABEL[n]} read {int(v)}" for n, v in _others)
+        _said = "; ".join(f"{n} read {int(v)}" for n, v in _others)
         # AND IT DOES NOT ASK FOR A CONFIRMATION IT ALREADY HAS.
         #
         # James Gray, 18 Sep 2026: "it still says 'confirm the fold count if this matters.'
@@ -180,8 +208,14 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
         # dutiful confirmations stops being read -- the lesson three other flags in this
         # engine have already paid for. Where the charge rests on something UNMEASURED, the
         # ask is real and stays.
+        # A measurement is not asked to confirm itself — but the drawing office's own callouts
+        # disagreeing with it are a statement, not a feature tree, and that is asked.
+        _sheet_disagrees = any(n == _CALLOUTS_LABEL for n, _v in _others)
         _closing = (
             "The charge follows the measurement; no confirmation is needed."
+            if source in _MEASURED and not _sheet_disagrees else
+            "The charge follows the measurement; the sheet's own callouts disagree, so "
+            "confirm the fold count."
             if source in _MEASURED else
             "The charge follows the strongest evidence available. Confirm the fold count "
             "if this matters to the price.")

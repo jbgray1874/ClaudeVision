@@ -282,6 +282,68 @@ def combine_repeated_item_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any
     return out
 
 
+def rows_combined_per_table(bom_rows: Any) -> List[Dict[str, Any]]:
+    """The job's parts-list rows, each table's repeated item rows combined (D-335) — ONE
+    reading per (table, code), for every reader that takes a quantity per code.
+
+    A CODE-KEYED READER TOOK ONE ROW OF A PAIR, AND THEN THE TABLE'S TOTAL. 12173-07-2-GA
+    prints 12173-07-2-02M at items 1 and 3, one per hand. The record builders keyed rows by
+    code and wrote the first row's 1 as bom_tree; the effective pass then wrote the table's
+    combined 2, also as bom_tree. One reader, two readings of one table, and the second was
+    refused as a disagreement with the first (D-379 / review of D-379). Read through this,
+    the table's own total is bom_tree's first and only reading.
+
+    GROUPED AS resolve_effective_quantities GROUPS THEM — by the drawing the table was read
+    off (`source_pdf`) — so the record and the tree count one table the same way. A row with
+    no table recorded is passed through as read: nothing says two such rows are one table, and
+    adding across tables is the double count D-335 exists to prevent the other way round."""
+    out: List[Dict[str, Any]] = []
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[Any] = []
+    for r in bom_rows or []:
+        if not isinstance(r, dict):
+            continue
+        src = str(r.get("source_pdf") or "")
+        if not src:
+            order.append(r)
+            continue
+        if src not in groups:
+            groups[src] = []
+            order.append(src)
+        groups[src].append(r)
+    for entry in order:
+        if isinstance(entry, dict):
+            out.append(entry)
+        else:
+            out.extend(combine_repeated_item_rows(groups[entry]))
+    return out
+
+
+def drawn_counts_by_code(bom_rows: Any) -> Dict[str, int]:
+    """{code: how many ONE table lists} — the drawing's own per-parent count of each code,
+    from rows_combined_per_table. Where a code sits on several tables the largest is kept:
+    it answers "does the drawing list this code at least N times under a parent", which is
+    the only question its callers ask (a model's handed twin is checked against it).
+
+    ONLY WHAT A TABLE SETTLES. A row with no table recorded, or a code left on two rows of one
+    table because neither carries an item number (the same line read twice, or two lines —
+    nothing says which), is not a count of anything; such a code is left out rather than
+    given a number, so a caller sees "the drawing does not say" instead of a guess."""
+    per_table: Dict[tuple, List[int]] = {}
+    for r in rows_combined_per_table(bom_rows):
+        code = _norm(r.get("part_number"))
+        src = str(r.get("source_pdf") or "")
+        if not code or not src:
+            continue
+        per_table.setdefault((src, code), []).append(_qty(r))
+    out: Dict[str, int] = {}
+    for (_src, code), counts in per_table.items():
+        if len(counts) != 1:
+            continue
+        out[code] = max(out.get(code, 0), counts[0])
+    return out
+
+
 def resolve_effective_quantities(
     bom_rows: List[Dict[str, Any]],
     main_ga: Optional[str] = None,

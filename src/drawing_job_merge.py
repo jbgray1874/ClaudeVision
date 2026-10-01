@@ -2181,28 +2181,114 @@ def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
 # rung there is a one-line addition here.
 _FOLD_EVIDENCE_FIELDS = ("bend_count_dxf", "fold_count_textual", "fold_values_mm", "angles_deg",
                          "solidworks_bend_features", "drawing_bend_callouts")
+# The ones a SHEET states: a fold note, fold dimensions, bend angles, bend callouts. The DXF
+# rung is the flat's (a mirrored hand has its base's) and the model rung describes how the
+# model was built, not what the drawing office said about this hand.
+_SHEET_FOLD_FIELDS = ("fold_count_textual", "fold_values_mm", "angles_deg",
+                      "drawing_bend_callouts")
 
 
-def settle_mirrored_folds(parts: List[Dict[str, Any]]) -> int:
+# ── A PART'S OWN SHEET ──────────────────────────────────────────────────────────────────
+#
+# "Its own sheet" was "any page it is bound to". 12173-04-02M-H is bound to page 15 — the
+# pocket's parts list, which no page in the pack details it on (part_index binds a part to a
+# list as the last resort) — so a test on its pages, or on fold fields arriving from them,
+# would have read the pocket's table as the hand's drawing. A sheet is the part's own when it
+# is bound to that part and to no other coded part, is not a parts list read for another part
+# (part_index._bom_table_pages, the reader's own record of which page each table came off),
+# and is a detail page — or carries the part's OWN table, which can make a detail sheet look
+# like an assembly to the page classifier. A page shared by a handed pair (one sheet issued
+# for both, 12614-01-06M-H) is the base's sheet, not the hand's. A page the summary does not
+# hold says nothing either way and is not counted.
+def _own_sheet_context(parts: List[Dict[str, Any]], summary: Any) -> Dict[str, Any]:
+    pages = (summary or {}).get("pages") if isinstance(summary, dict) else None
+    by_no = {pg.get("page_number"): pg for pg in pages or [] if isinstance(pg, dict)}
+    bound: Dict[Any, set] = {}
+    for q in parts or []:
+        if not isinstance(q, dict) or not str(q.get("part_number") or "").strip():
+            continue
+        for p in q.get("pages") or []:
+            if not isinstance(p, dict):
+                bound.setdefault(p, set()).add(id(q))
+    try:
+        from part_index import _bom_table_pages
+        bom_pages, owned = _bom_table_pages(summary) if by_no else (set(), {})
+    except Exception:                                                # noqa: BLE001
+        bom_pages, owned = set(), {}
+    return {"by_no": by_no, "bound": bound, "bom_pages": bom_pages, "owned": owned}
+
+
+def own_detail_pages(part: Mapping[str, Any], ctx: Mapping[str, Any]) -> List[Any]:
+    """The pages that are this part's own drawing sheet (see the block above)."""
+    mine = ctx["owned"].get(str(part.get("part_number") or "").strip()) or set()
+    out: List[Any] = []
+    for p in part.get("pages") or []:
+        if isinstance(p, dict):
+            continue
+        pg = ctx["by_no"].get(p)
+        if pg is None:
+            continue
+        if (ctx["bound"].get(p) or set()) - {id(part)}:
+            continue                                          # shared with another part
+        if p in ctx["bom_pages"] and p not in mine:
+            continue                                          # another part's parts list
+        _role = pg.get("page_role")
+        _role = str((_role.get("primary_role") if isinstance(_role, dict) else _role) or "")
+        if _role and _role.lower() != "detail" and p not in mine:
+            continue
+        out.append(p)
+    return out
+
+
+def settle_mirrored_folds(parts: List[Dict[str, Any]], summary: Any = None) -> int:
     """A hand whose flat IS its base's flat folds as its base is charged (D-380).
 
     12173-04-02M-H inherited 02M's measured flat, then took 02M's callouts and model features
     but not its fold note, and was arbitrated on what it had: 4 folds against 02M's 1. Same
-    tool, opposite hand. Where the hand's geometry was mirrored from the base and its own
-    sheet prints no bend callout of its own, the base's whole fold evidence is held on the
-    hand and the one arbiter decides both. A hand with its own sheet or its own DXF keeps its
-    own reading. Returns the number of hands settled.
+    tool, opposite hand. Where the hand's geometry was mirrored from the base, the base's whole
+    fold evidence is held on the hand and the one arbiter decides both.
+
+    A HAND WHOSE OWN SHEET STATES ITS FOLDS KEEPS THAT READING (review of D-380). The only
+    guard was the hand's own bend callouts, so a hand drawn on its own detail sheet with a fold
+    note or angles of its own lost them to its base's, and its reading vanished from every
+    sentence. Kept where the hand has its own detail sheet (own_detail_pages) and a sheet fold
+    statement that is not a mirror's copy. Where that reading and the base's charge differ, the
+    question is raised with both counts and both sources; nothing chooses between them. Without
+    a summary no sheet is known to be the hand's own, which is D-380's ruling.
+    Returns the number of hands settled.
     """
     n = 0
+    _ctx = _own_sheet_context(parts, summary)
     for hand, base in handed_pairs(parts) or ():
         _ng = hand.get("normalized_geometry") if isinstance(hand.get("normalized_geometry"),
                                                             dict) else {}
         if _own_number_key(_ng.get("mirrored_from")) != _own_number_key(base.get("part_number")):
             continue
-        if hand.get("drawing_bend_callouts") and source_precedence.source_of(
-                hand, "drawing_bend_callouts") != "mirror_of_measured":
-            continue
         if base.get("mirrored_fold_evidence"):
+            continue
+        _said = [k for k in _SHEET_FOLD_FIELDS
+                 if hand.get(k) and source_precedence.source_of(hand, k) != "mirror_of_measured"]
+        # Bend callouts of its own are counted only off its own sheet (stamp_drawing_bend_
+        # callouts), so they need no page test; a note or angles may have come off any page
+        # the hand is bound to, so they stand only where the hand has a sheet of its own.
+        if "drawing_bend_callouts" in _said or (_said and own_detail_pages(hand, _ctx)):
+            try:
+                import fold_count as _fc
+                _h, _b = _fc.press_brake_folds(hand), _fc.press_brake_folds(base)
+            except Exception:                                        # noqa: BLE001
+                continue
+            if _h["count"] != _b["count"]:
+                source_precedence.raise_manufacturing_question(
+                    hand,
+                    (f"fold count of {hand.get('part_number')}: its own sheet states its folds "
+                     f"and on its own evidence it reads {_h['count']} ({_h['source_label']}); "
+                     f"{base.get('part_number')}, whose flat it mirrors, is charged "
+                     f"{_b['count']} ({_b['source_label']}) — one flat, two readings"),
+                    (f"each hand is charged on its own reading: {hand.get('part_number')} "
+                     f"{_h['count']}, {base.get('part_number')} {_b['count']}"),
+                    ("confirm the fold count of the pair against both sheets; if the hands "
+                     "fold alike, the one count applies to both"),
+                    "drawing_job_merge.settle_mirrored_folds")
             continue
         evidence = {k: base.get(k) for k in _FOLD_EVIDENCE_FIELDS if not _is_blank(base.get(k))}
         _dash = (base.get("geometry_rollup") or {}).get("dashed_long_axis_lines") \
@@ -2250,11 +2336,17 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
         except Exception:                                            # noqa: BLE001
             pass
     n = 0
+    # ONLY THE PART'S OWN SHEET (review of D-380). The count was the largest over every page
+    # the part is bound to — a shared sheet, a GA, another part's parts list — and a callout
+    # count the model "confirms" now outranks a short flat pattern or an angle-only note, so a
+    # page's callouts landing on a part that is merely listed there could set its charge. A
+    # part with no sheet of its own takes no page-level count; a mirrored hand takes its base's
+    # below.
+    _ctx = _own_sheet_context(list(parts or []), summary)
     for part in parts or []:
         if not isinstance(part, dict):
             continue
-        counts = [count_by_page.get(p, 0)
-                  for p in (part.get("pages") or []) if not isinstance(p, dict)]
+        counts = [count_by_page.get(p, 0) for p in own_detail_pages(part, _ctx)]
         if counts and max(counts):
             part["drawing_bend_callouts"] = max(counts)
             n += 1

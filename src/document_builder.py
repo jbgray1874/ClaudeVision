@@ -2527,7 +2527,10 @@ def build_document_writeup(summary: Dict[str, Any]) -> Dict[str, Any]:
     # overviews are excluded. Material is inferred downstream from the suffix;
     # missing geometry is flagged for manual dimensioning.
     _bom_meta: Dict[str, Dict[str, Any]] = {}
-    for row in (summary.get("document_analysis") or {}).get("bom_rows") or []:
+    # One reading per (table, code): a code printed at two item numbers of one table is the
+    # table's total, as bom_tree's effective pass reads it (12173-07-2-02M, items 1 and 3).
+    from bom_tree import rows_combined_per_table as _rows_per_table
+    for row in _rows_per_table((summary.get("document_analysis") or {}).get("bom_rows") or []):
         _rpn = str(row.get("part_number") or "").strip().upper()
         if _rpn:
             _bom_meta[_rpn] = row

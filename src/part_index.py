@@ -169,14 +169,21 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
     interpret_part = deps.interpret_part
 
     parts: Dict[str, Dict[str, Any]] = {}
+    # ONE READING PER (TABLE, CODE). 12173-07-2-GA prints 12173-07-2-02M at items 1 and 3, one
+    # per hand. Keyed by code row by row, this reader submitted 1 as bom_tree, and the effective
+    # pass later submitted the table's combined 2 as bom_tree too — one reader contradicting
+    # itself, refused, and the trough built with one side. The table's own total is read once,
+    # through the same per-table combine bom_tree's effective pass uses.
+    from bom_tree import rows_combined_per_table
+    _table_rows = rows_combined_per_table(summary.get("document_analysis", {}).get("bom_rows", []))
     document_bom_lookup = {  # noqa: E501 — see _bom_row_source below for how these are attributed
         row["part_number"]: row
-        for row in summary.get("document_analysis", {}).get("bom_rows", [])
+        for row in _table_rows
         if is_valid_part_identifier(row.get("part_number"))
     }
     document_primary_thickness = summary.get("document_analysis", {}).get("primary_fields", {}).get("thickness_mm")
 
-    for row in summary.get("document_analysis", {}).get("bom_rows", []):
+    for row in _table_rows:
         pn = row["part_number"]
         if not is_valid_part_identifier(pn):
             continue

@@ -820,7 +820,7 @@ def test_equal_rank_conflicts_are_never_resolved_by_running_order():
     from source_precedence import apply_field
     p = {}
     apply_field(p, "normalized_material", "MILD_STEEL", "drawing_deterministic")
-    ok(not apply_field(p, "normalized_material", "ALUMINIUM", "drawing_deterministic"),
+    ok(not apply_field(p, "normalized_material", "ALUMINIUM", "title_block"),
        "an equal-ranked disagreement must not overwrite")
     eq(p["normalized_material"], "MILD_STEEL", "the first observation is kept")
     ok(any("equal standing" in str(f) for f in p.get("review_flags") or []),
@@ -828,9 +828,17 @@ def test_equal_rank_conflicts_are_never_resolved_by_running_order():
     # Confidence is a real reason to prefer the newcomer; page order is not.
     q = {}
     apply_field(q, "normalized_material", "MILD_STEEL", "llm_extract", confidence=0.4)
-    ok(apply_field(q, "normalized_material", "ALUMINIUM", "llm_extract", confidence=0.9),
+    ok(apply_field(q, "normalized_material", "ALUMINIUM", "vision", confidence=0.9),
        "a strictly higher confidence at equal rank is a reason, not an accident")
     eq(q["normalized_material"], "ALUMINIUM", "and it wins")
+    # ONE READER CONTRADICTING ITSELF IS NEITHER (review of D-379): it is not two sources of
+    # equal standing, and its own confidence does not let it overturn its own reading.
+    r = {}
+    apply_field(r, "normalized_material", "MILD_STEEL", "llm_extract", confidence=0.4)
+    ok(not apply_field(r, "normalized_material", "ALUMINIUM", "llm_extract", confidence=0.9),
+       "a reader's second reading does not overturn its first")
+    ok(any("llm_extract read both" in str(f) for f in r.get("review_flags") or []),
+       "and the record says it read both")
 
 
 def test_the_knowledge_base_is_not_gated_before_arbitration():

@@ -1710,7 +1710,10 @@ def apply_native_hierarchy_to_parts(parts: List[Dict[str, Any]],
     return stamped
 
 
-def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, int]:
+def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
+                                 drawn_counts: Optional[Dict[str, int]] = None,
+                                 population: Optional[List[Dict[str, Any]]] = None
+                                 ) -> Dict[str, int]:
     """Fold the SolidWorks native extract into the PRE-ESTIMATE part records — i.e. BEFORE
     costing — so the engine's existing paths fire with modelled truth instead of inferred
     or vision-derived values. Mirrors llm_full_job.apply_full_job_to_pre_estimate but sits
@@ -1726,7 +1729,12 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                  printed title block is what the shop buys to.
       BENDS      bend_count, or a fold flag where the solid is demonstrably formed but the
                  bends are baked into a Base Flange sketch (under-counted by feature scan).
-      QUANTITY   the full-depth BOM roll-up.
+      QUANTITY   the full-depth BOM roll-up. `drawn_counts` ({code: how many one parts list
+                 prints}, bom_tree.drawn_counts_by_code) corroborates a handed twin the
+                 drawing does not name before it is counted with its code; without it the
+                 twin is counted as D-379 did. `population` is the job's whole part list
+                 when `parts` is only some of it, so a hand already held still counts as
+                 listed.
       STRUCTURE  assembly rows are marked as parents so their material is NOT costed twice
                  (the GA double-count rule); imported supplier bodies are marked bought-in
                  so they take no fabrication route.
@@ -1768,18 +1776,106 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
     # HANDED PAIRS"). Counted by its own file name the model says 1, and that 1 stood
     # against the table's 2 — one trough side. Where the job holds no record for the twin,
     # its count is this code's, so the model is asked for both hands together.
+    #
+    # A HAND IS LISTED UNDER ANY SPELLING THE DRAWING USES (review of D-379). "Listed" meant
+    # the model's own file name, so a drawing that prints the hand as "<code> MIR",
+    # "MIRROR <code>" or "Mirror<code>" — or names it by its sheet's "opposite hand of"
+    # note — was counted as not listing it, and base 2 + its own line 1 made 3. The engine's
+    # one hand reader (drawing_job_merge._mirror_base_of: the code's marker, else the sheet's
+    # mirror_of) says which base a record is a hand of; a base with any such record has its
+    # hand on the drawing. No new vocabulary: a spelling the reader does not know ("-LH") is
+    # caught below by the drawing's own count instead of being guessed at here.
     try:
         from part_code_conventions import mirror_base as _mirror_base
     except Exception:                                            # noqa: BLE001
         _mirror_base = None
-    _listed = {_pn_key(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    try:
+        from drawing_job_merge import _mirror_base_of
+    except Exception:                                            # noqa: BLE001
+        _mirror_base_of = None
+    _held = list(population) if isinstance(population, list) else list(parts)
+    _listed = {_pn_key(p.get("part_number")) for p in _held if isinstance(p, dict)}
+    _hand_named = set()
+    if _mirror_base_of is not None:
+        for _p in _held:
+            if isinstance(_p, dict):
+                try:
+                    _hb = _pn_key(_mirror_base_of(_p))
+                except Exception:                                # noqa: BLE001
+                    _hb = ""
+                if _hb:
+                    _hand_named.add(_hb)
     _unlisted_twins: Dict[str, List[Any]] = {}
     if _mirror_base is not None:
         for _r in job.bom:
             _base = _pn_key(_mirror_base(str(_r.part_number or "")))
             if _base and _base != _pn_key(_r.part_number) \
-                    and _pn_key(_r.part_number) not in _listed:
+                    and _pn_key(_r.part_number) not in _listed \
+                    and _base not in _hand_named:
                 _unlisted_twins.setdefault(_base, []).append(_r)
+    try:
+        from source_precedence import raise_manufacturing_question as _raise_question
+    except Exception:                                            # noqa: BLE001
+        def _raise_question(*_a, **_k):
+            return False
+
+    def _per_parent_count(_total: int, _edges: List[Tuple[str, float]]):
+        """(per-parent count or 0, its basis, the one parent or None, a note or None) for a
+        product total and the model's parent edges. See QUANTITY below; one derivation,
+        asked for this code alone and for this code with its unlisted other hand."""
+        _parents = {e[0] for e in _edges}
+        if len(_parents) == 1:
+            # ── PER PARENT = CHILD'S PRODUCT TOTAL ÷ PARENT'S PRODUCT TOTAL ──────────
+            #
+            # The first cut SUMMED the edge list, and the 11650-06 re-run showed why that
+            # is wrong: the model lists the same parent->child edge more than once (per
+            # instance, per configuration, per SLDASM that reports it), so one extender
+            # per set was summed to SIX per set and costed at 18 — worse than the 9 this
+            # was written to fix. The edge list is a record of what was SEEN, not a count.
+            #
+            # Both full-depth figures ARE counts, and the model states them reliably: the
+            # extender is 3 in the product and its set is 3 in the product, so one set
+            # takes 3 / 3 = 1. That division is the per-parent figure, and it only stands
+            # where it comes out whole. Where the parent has no product total of its own
+            # (the top assembly is not a line in its own BOM), its multiplicity is 1 and
+            # the child's total is the per-parent count. The edges are consulted only when
+            # neither exists, and then deduplicated rather than added.
+            _parent = next(iter(_parents))
+            _prow = bom_by_pn.get(_pn_key(_parent))
+            _ptotal = (float(_prow.quantity) if _prow is not None and _prow.quantity
+                       else (1.0 if _pn_key(_parent) in asm_keys else None))
+            if _ptotal and _ptotal > 0 and abs(_total / _ptotal
+                                               - round(_total / _ptotal)) < 1e-9:
+                _q = int(round(_total / _ptotal))
+                return _q, (f"per {_parent}: the SolidWorks model counts {_total} in the "
+                            f"whole product and {_ptotal:g} of {_parent}, so one takes "
+                            f"{_total}/{_ptotal:g} = {_q}"), _parent, None
+            if _ptotal and _ptotal > 0:
+                # It does not divide. The model is saying something this cannot turn into
+                # a per-parent count, so it writes nothing and says so.
+                return 0, "", _parent, (
+                    f"SolidWorks: {_total} in the whole product does not divide by the "
+                    f"{_ptotal:g} of {_parent} — no per-{_parent} count can be derived, "
+                    f"so the BOM edge decides")
+            _distinct = sorted({q for _p, q in _edges})
+            return ((int(round(_distinct[0])) if len(_distinct) == 1 else 0),
+                    (f"per {_parent}, from the SolidWorks assembly's own tree "
+                     f"({_total} in the whole product, all levels)"), _parent, None)
+        if len(_parents) > 1:
+            # One part under several parents: no single per-parent count exists, and the
+            # full-depth figure would be multiplied again under each of them. The
+            # drawing's BOM edges already carry a count per parent, so they decide.
+            return 0, "", None, (
+                f"SolidWorks: this part sits under {len(_parents)} assemblies "
+                f"({', '.join(sorted(_parents))}), {_total} in the whole product — the "
+                f"per-assembly counts on the BOM decide, not the product total")
+        if getattr(job, "hierarchy", None):
+            # The model has a tree and this part is not on it under any parent: the
+            # total is not known to be per-parent, and writing it risks the same double
+            # roll-up. Kept as the cross-check only.
+            return 0, "", None, None
+        return _total, "from the SolidWorks assembly BOM (component count, all levels)", \
+            None, None
 
     for part in parts:
         if not isinstance(part, dict):
@@ -1951,85 +2047,58 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             _total = int(round(row.quantity))
             _edges = list(per_parent_edges.get(_pn_key(pn)) or [])
             _twins = _unlisted_twins.get(_pn_key(pn)) or []
-            for _tw in _twins:
-                if _tw.quantity and _tw.quantity > 0:
-                    _total += int(round(_tw.quantity))
             if _twins:
                 # The edges, per parent, summed across the two hands: one parent takes one
                 # of each, which is two of this code.
+                _tw_total = _total + sum(int(round(_tw.quantity)) for _tw in _twins
+                                         if _tw.quantity and _tw.quantity > 0)
                 _by_parent: Dict[str, float] = {}
                 for _pp, _qq in set(_edges):
                     _by_parent[_pp] = _by_parent.get(_pp, 0.0) + _qq
                 for _tw in _twins:
                     for _pp, _qq in set(per_parent_edges.get(_pn_key(_tw.part_number)) or []):
                         _by_parent[_pp] = _by_parent.get(_pp, 0.0) + _qq
-                _edges = list(_by_parent.items())
-                flags.append(
-                    f"SolidWorks: the model files the other hand as "
-                    f"{', '.join(str(t.part_number) for t in _twins)}, which the drawing does "
-                    f"not list — counted with this code, {_total} in the product")
+                _tw_edges = list(_by_parent.items())
+                # ── THE DRAWING'S OWN COUNT CORROBORATES THE FOLD, OR IT IS ASKED ────────
+                #
+                # The fold assumes the drawing prints this code once per hand. 12173-07-2-GA
+                # does — items 1 and 3, so its table counts 2 — and there the model's two
+                # documents are the table's two lines. Where the table counts fewer than
+                # both hands, the drawing is not carrying the other hand under this code
+                # (or carries it under a spelling no reader knows, such as "-LH"), and
+                # adding it would be money nobody drew. So the count stays as the drawing
+                # lists it, and the question goes to a person. Compared in the unit the
+                # write uses: per parent where the model gives one, else the product total.
+                _drawn = None
+                if drawn_counts is not None:
+                    _drawn = drawn_counts.get(_pn_key(part.get("part_number")))
+                    if _drawn is None:
+                        _drawn = drawn_counts.get(_pn_key(pn))
+                _tw_q = _per_parent_count(_tw_total, _tw_edges)[0]
+                _want = _tw_q if _tw_q > 0 else _tw_total
+                if _drawn is not None and _drawn < _want:
+                    _names = ", ".join(str(t.part_number) for t in _twins)
+                    _raise_question(
+                        part,
+                        (f"{part.get('part_number')}: the SolidWorks model files a second hand "
+                         f"({_names}) that the drawing does not list, and the drawing's parts "
+                         f"list counts this code {_drawn:g} time(s) under its parent against "
+                         f"{_want} for both hands"),
+                        (f"counted as the drawing lists it — {_names} is not added to "
+                         f"{part.get('part_number')}"),
+                        ("confirm the hands: if the other hand is made, list it on the drawing "
+                         "(or state that this code is made in both hands) and the count "
+                         "follows; if it is not, the model's extra document is not part of "
+                         "the product"),
+                        "solidworks.apply_native_to_pre_estimate")
+                    _twins = []
+                else:
+                    _total, _edges = _tw_total, _tw_edges
             part["quantity_total_per_unit"] = _total
             part["quantity_total_per_unit_source"] = SOURCE_NAME
-            _parents = {e[0] for e in _edges}
-            if len(_parents) == 1:
-                # ── PER PARENT = CHILD'S PRODUCT TOTAL ÷ PARENT'S PRODUCT TOTAL ──────────
-                #
-                # The first cut SUMMED the edge list, and the 11650-06 re-run showed why that
-                # is wrong: the model lists the same parent->child edge more than once (per
-                # instance, per configuration, per SLDASM that reports it), so one extender
-                # per set was summed to SIX per set and costed at 18 — worse than the 9 this
-                # was written to fix. The edge list is a record of what was SEEN, not a count.
-                #
-                # Both full-depth figures ARE counts, and the model states them reliably: the
-                # extender is 3 in the product and its set is 3 in the product, so one set
-                # takes 3 / 3 = 1. That division is the per-parent figure, and it only stands
-                # where it comes out whole. Where the parent has no product total of its own
-                # (the top assembly is not a line in its own BOM), its multiplicity is 1 and
-                # the child's total is the per-parent count. The edges are consulted only when
-                # neither exists, and then deduplicated rather than added.
-                _parent = next(iter(_parents))
-                _prow = bom_by_pn.get(_pn_key(_parent))
-                _ptotal = (float(_prow.quantity) if _prow is not None and _prow.quantity
-                           else (1.0 if _pn_key(_parent) in asm_keys else None))
-                if _ptotal and _ptotal > 0 and abs(_total / _ptotal
-                                                   - round(_total / _ptotal)) < 1e-9:
-                    _q = int(round(_total / _ptotal))
-                    _basis = (f"per {_parent}: the SolidWorks model counts {_total} in the "
-                              f"whole product and {_ptotal:g} of {_parent}, so one takes "
-                              f"{_total}/{_ptotal:g} = {_q}")
-                elif _ptotal and _ptotal > 0:
-                    # It does not divide. The model is saying something this cannot turn into
-                    # a per-parent count, so it writes nothing and says so.
-                    flags.append(
-                        f"SolidWorks: {_total} in the whole product does not divide by the "
-                        f"{_ptotal:g} of {_parent} — no per-{_parent} count can be derived, "
-                        f"so the BOM edge decides")
-                    _q = 0
-                    _basis = ""
-                else:
-                    _distinct = sorted({q for _p, q in _edges})
-                    _q = int(round(_distinct[0])) if len(_distinct) == 1 else 0
-                    _basis = (f"per {_parent}, from the SolidWorks assembly's own tree "
-                              f"({_total} in the whole product, all levels)")
-            elif len(_parents) > 1:
-                # One part under several parents: no single per-parent count exists, and the
-                # full-depth figure would be multiplied again under each of them. The
-                # drawing's BOM edges already carry a count per parent, so they decide.
-                flags.append(
-                    f"SolidWorks: this part sits under {len(_parents)} assemblies "
-                    f"({', '.join(sorted(_parents))}), {_total} in the whole product — the "
-                    f"per-assembly counts on the BOM decide, not the product total")
-                _q = 0
-                _basis = ""
-            elif getattr(job, "hierarchy", None):
-                # The model has a tree and this part is not on it under any parent: the
-                # total is not known to be per-parent, and writing it risks the same double
-                # roll-up. Kept as the cross-check only.
-                _q = 0
-                _basis = ""
-            else:
-                _q = _total
-                _basis = "from the SolidWorks assembly BOM (component count, all levels)"
+            _q, _basis, _parent, _note = _per_parent_count(_total, _edges)
+            if _note:
+                flags.append(_note)
             _cur = _num(part.get("quantity"))
             # ALWAYS SUBMIT, even when the numbers already match. Skipping the resolver on
             # agreement left the datum carrying the WEAKER source's name, so a later
@@ -2044,6 +2113,16 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
                     flags.append(f"qty {_cur if _cur is not None else '-'} -> {_q} "
                                  f"{_basis}")
                     out["qty"] += 1
+                # THE TWIN SENTENCE SAYS WHAT THE RECORD HOLDS. It was written before the
+                # count was tried, so it claimed "counted with this code" where the write
+                # was refused or no per-parent count could be derived. Now it is said only
+                # where the record holds the count that includes the other hand.
+                if _twins and _num(part.get("quantity")) == _q:
+                    flags.append(
+                        f"SolidWorks: the model files the other hand as "
+                        f"{', '.join(str(t.part_number) for t in _twins)}, which the drawing "
+                        f"does not list — counted with this code: {_q} "
+                        + (f"per {_parent}" if _parent else "in the product"))
 
         # ── NOT IN THE ASSEMBLY BOM ──────────────────────────────────────────────
         # A modelled part that appears in no assembly is not a component of the product:

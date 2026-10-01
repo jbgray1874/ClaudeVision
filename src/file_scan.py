@@ -2925,7 +2925,17 @@ def _finalize_scan_summary(
                     _sw_why = f"extract refused as belonging to another job: {_why}"
             if _sw_job and _sw_job.found:
                 run_timing.mark("start apply_solidworks_extract")
-                _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job)
+                # THE DRAWING'S OWN COUNT OF EACH CODE, per parts list, counted as the tree
+                # counts it (bom_tree.rows_combined_per_table). The model's handed twin is
+                # folded into its code only where the drawing lists the code for both hands.
+                try:
+                    from bom_tree import drawn_counts_by_code as _drawn_counts
+                    _sw_drawn = _drawn_counts(
+                        (summary.get("document_analysis") or {}).get("bom_rows") or [])
+                except Exception:                                    # noqa: BLE001
+                    _sw_drawn = None
+                _swc = apply_native_to_pre_estimate(_pre_estimate_parts, _sw_job,
+                                                    drawn_counts=_sw_drawn)
                 run_timing.mark("done apply_solidworks_extract")
                 summary.setdefault("manufacturing_writeup", {})["parts"] = _pre_estimate_parts
                 # Keep the normalised extract on the summary so the estimator can audit the
@@ -3610,7 +3620,16 @@ def _finalize_scan_summary(
         _missed = [p for p in summary["manufacturing_writeup"]["parts"]
                    if isinstance(p, dict) and not p.get("solidworks_native")]
         if _sw_job_late is not None and getattr(_sw_job_late, "found", False) and _missed:
-            _lc = _apply_native(_missed, _sw_job_late)
+            try:
+                from bom_tree import drawn_counts_by_code as _drawn_counts_late
+                _sw_drawn_late = _drawn_counts_late(
+                    (summary.get("document_analysis") or {}).get("bom_rows") or [])
+            except Exception:                                        # noqa: BLE001
+                _sw_drawn_late = None
+            # The parts that missed the first pass, against the WHOLE population's hands: a
+            # hand record the first pass already holds still lists its base's other hand.
+            _lc = _apply_native(_missed, _sw_job_late, drawn_counts=_sw_drawn_late,
+                                population=summary["manufacturing_writeup"]["parts"])
             _got = [p.get("part_number") for p in _missed if p.get("solidworks_native")]
             if _got:
                 print(f"   [solidworks] applied to {len(_got)} part(s) that did not exist "
@@ -3739,7 +3758,7 @@ def _finalize_scan_summary(
                                            stamp_drawing_bend_callouts)
             stamp_drawing_bend_callouts(summary["manufacturing_writeup"]["parts"], summary)
             # Every fold reading is in by now, so a hand can take its base's evidence whole.
-            settle_mirrored_folds(summary["manufacturing_writeup"]["parts"])
+            settle_mirrored_folds(summary["manufacturing_writeup"]["parts"], summary)
             for _cp in propose_missing_cuts(summary["manufacturing_writeup"]["parts"]):
                 print(f"   [route] {_cp['part_number']}: measured flat, no cutting operation "
                       f"-> {_cp['result']}", flush=True)
