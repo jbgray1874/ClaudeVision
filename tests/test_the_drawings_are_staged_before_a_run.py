@@ -301,3 +301,13 @@ def test_the_route_answers_a_locked_pack_with_409():
     src = (_BACKEND / "estimate_routes.py").read_text(encoding="utf-8")
     block = src.split("staged = staging.stage(_sources, client=client, drawing=drawing)")[1][:300]
     assert "except staging.StagingInUse as exc:\n        raise HTTPException(409, str(exc))" in block
+
+
+def test_a_folder_whose_drawings_are_all_in_sub_folders_says_so(staging, tmp_path):
+    pack = tmp_path / "12173 - Card Spinner"
+    (pack / "model.IGS").parent.mkdir(parents=True, exist_ok=True)
+    (pack / "model.IGS").write_bytes(b"x")
+    _pdf(pack / "PDF" / "12173-02-GA.pdf")
+    with pytest.raises(staging.StagingError) as got:
+        staging.stage([str(pack)], client="MandS", drawing="12173-02")
+    assert "sub-folders are never read" in str(got.value) and "PDF" in str(got.value)

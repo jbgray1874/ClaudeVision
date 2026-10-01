@@ -345,6 +345,17 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
     folder = job_folder_for(client, drawing)
     files, skipped = _expand(paths)
     if not files:
+        # NOTHING BESIDE THE GA, AND THE DRAWINGS ONE LEVEL DOWN. Sub-folders are never read
+        # (D-375), so a job folder whose drawings all sit in a sub-folder stages nothing — and
+        # the old sentence named the IGS and HTML files beside them, not the reason. Say which
+        # sub-folders were passed over, so the estimator selects the drawings by name.
+        _subs = [Path(p).name for p, why in skipped if "sub-folder" in why]
+        if _subs:
+            raise StagingError(
+                "No drawings sit directly in the chosen folder — sub-folders are never read, "
+                "and this folder's drawings are in: " + ", ".join(_subs[:6])
+                + ". Select the job's drawings by name (open the sub-folder in the Drawings "
+                  "panel and add the PDFs, DXFs and models that belong to this job).")
         detail = "; ".join(f"{Path(p).name}: {why}" for p, why in skipped[:4])
         raise StagingError(
             "None of the selected items is a drawing the engine can read."
