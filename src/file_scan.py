@@ -2978,6 +2978,21 @@ def _finalize_scan_summary(
                     "analyser_error": _sw_job.meta.get("analyser_error"),
                     "bom": [vars(r) for r in _sw_job.bom],
                 }
+                # A DXF READ AS A NUMBERED PIECE IS CHECKED AGAINST THE MODEL TOO. The merge ran
+                # before the model was read, so it could only check the job's parts and parts
+                # lists; a model component <part>-<n> makes the piece reading a question.
+                try:
+                    from drawing_job_merge import recheck_dxf_pieces_against_model as _pc_recheck
+                    _pc_asked = _pc_recheck(
+                        _pre_estimate_parts,
+                        [getattr(_r, "part_number", "") for _r in (_sw_job.bom or [])]
+                        + list((getattr(_sw_job, "part_signals", None) or {}).keys())
+                        + list(getattr(_sw_job, "assembly_pns", None) or []))
+                    if _pc_asked:
+                        print(f"   [dxf] numbered piece(s) asked — the model holds a component "
+                              f"of the same number: {', '.join(_pc_asked)}", flush=True)
+                except Exception as _e_pc:                           # noqa: BLE001
+                    print(f"   [dxf] piece/model check skipped ({_e_pc})", flush=True)
                 if _sw_job.meta.get("extract_stale"):
                     print("   [solidworks] EXTRACT IS STALE — the native models have changed "
                           "since it was taken. The estimate is built on older geometry and "
@@ -3029,12 +3044,24 @@ def _finalize_scan_summary(
             _ws_by_part = _ws_read(_ws_pdfs)
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
             _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
-            if _ws_fin.get("stated") or _ws_fin.get("questioned"):
+            if _ws_fin.get("stated") or _ws_fin.get("questioned") \
+                    or _ws_fin.get("joined_by_symbol"):
                 print(f"   [weld-symbols] welded per its own sheet's FINISH: "
-                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; asked whether "
-                      f"welded itself (members state WELDED, its own sheet does not): "
+                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; welded on assembly "
+                      f"per its own sheet's weld symbols: "
+                      f"{', '.join(_ws_fin.get('joined_by_symbol') or []) or 'none'}; asked "
+                      f"whether welded itself (members state WELDED, the reader found no arc-"
+                      f"weld symbol on its own sheet): "
                       f"{', '.join(_ws_fin.get('questioned') or []) or 'none'}",
                       flush=True)
+            _ws_sym = sorted(str(_p.get("part_number")) for _p in _pre_estimate_parts
+                             if isinstance(_p, dict) and (_p.get("operation_sources") or {})
+                             .get("welding") == "drawing_deterministic"
+                             and any(str(_f).startswith("WELDED per the drawing:")
+                                     for _f in (_p.get("review_flags") or [])))
+            if _ws_sym:
+                print(f"   [weld-symbols] welded per the arc-weld symbols on its own sheet: "
+                      f"{', '.join(_ws_sym)}", flush=True)
             run_timing.mark("done weld_symbols")
             summary["weld_symbols_by_part"] = _ws_by_part
             if _ws_ruled:

@@ -826,41 +826,18 @@ _ASSEMBLY_PC_PHRASES = [
 # and £91 of powder coating from the border text. Operation cues are read from the page
 # with the legend removed; everything else (materials, dimensions, part numbers) still
 # reads the full text.
-_LEGEND_START_RE = re.compile(
-    r"(?:FINISH|WELD|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:"
-    r"|GENERAL TOLERANCES\s*:"
-    r"|TIMBER PRODUCTS\s*:"
-    r"|GLASS:\s*NO GLASS"
-    r"|WIRING:\s*ALL ELECTRICAL",
-    re.IGNORECASE,
-)
-_LEGEND_STOP_RE = re.compile(
-    r"(?:FINISH|WELD|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:"
-    r"|GENERAL TOLERANCES\s*:|TIMBER PRODUCTS\s*:|GLASS\s*:|WIRING\s*:"
-    r"|DRAWING\s+No|DRAWN\b|CHECKED\b|REVISION TABLE|ITEM\s+DWG"
-    r"|WEIGHT\s*:|MATERIAL\s*:|FINISH\s*:|SCALE\b|MAX LOADING",
-    re.IGNORECASE,
-)
+#
+# ONE READER, NOT TWO. The page-level operation scan (extractor_patterns) needed the same
+# rule — on 12173-02 it painted the border's weld onto 29 parts — so the reader lives there,
+# with its vocabulary in config, and this pass calls it. It also removes the legend's default
+# sentence ("ALL WELDS TO BE TIG UNLESS STATED") where a read has lost the heading.
+from extractor_patterns import strip_specification_legend as _shared_strip_legend  # noqa: E402
 
 
 def _strip_specification_legend(text: Any) -> str:
     """The page text with the boilerplate specification legend removed, for operation-cue
-    scanning only. Spans run from a legend heading to the next title-block field or legend
-    heading; a heading used as a stop is consumed by the next pass of the loop."""
-    s = str(text or "")
-    out: List[str] = []
-    pos = 0
-    while pos < len(s):
-        m = _LEGEND_START_RE.search(s, pos)
-        if not m:
-            out.append(s[pos:])
-            break
-        out.append(s[pos:m.start()])
-        stop = _LEGEND_STOP_RE.search(s, m.end())
-        # A stop that is itself a legend heading is consumed by the next pass of the
-        # loop; a plain title-block field survives into the kept text.
-        pos = stop.start() if stop else len(s)
-    return " ".join(part for part in out if part)
+    scanning only (extractor_patterns.strip_specification_legend)."""
+    return _shared_strip_legend(text)
 
 
 def _page_lookup_key(page: Dict[str, Any], summary: Dict[str, Any]) -> Optional[int]:
@@ -1406,7 +1383,22 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             _ops = set(part.get("textual_operations") or [])
             _ops -= _sheet_metal_ops
             _ops.add("wire_forming")
+            # THE WIRE ROUTE'S WELD IS THE ROUTE'S ASSUMPTION, AND IT IS SAID TO BE ONE. Every
+            # wire part is given a weld here whatever its sheet says; it then reached the book
+            # as "a note on the drawing" (12173-04-06M, a formed riser in a tab-and-slot
+            # pocket). Where the part's own text (legend removed) names no weld, the weld is
+            # kept — priced, as every inference is — and recorded as an inference, so the
+            # estimator is asked with its money rather than shown a note nobody wrote.
+            _weld_cued = ("welding" in _ops
+                          or re.search(r"\bWELD", cue_upper) is not None
+                          or re.search(r"\b(?:TIG|MIG)\b", cue_upper) is not None)
             _ops.add("welding")
+            if not _weld_cued:
+                part.setdefault("operation_sources", {}).setdefault("welding", "inference")
+                part.setdefault("review_flags", []).append(
+                    "welding on this wire part is the wire route's assumption — its own sheet "
+                    "names no weld (the pack's weld specification is not one); priced and "
+                    "asked, not read")
             if part.get("_bar_recognised"):
                 # Bars are cut on the Robomac (WB dept ROBO, £31.45/hr) — Tim charges
                 # £0.17 on 1310. Not a forming op: a solid bar is cut, not looped.

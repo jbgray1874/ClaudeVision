@@ -663,8 +663,19 @@ _BOILERPLATE_RE = re.compile(
 
 
 def _strip_spec_boilerplate(text: str) -> str:
-    """Remove drawing-border spec blocks before operation inference."""
-    return _BOILERPLATE_RE.sub(" ", text)
+    """Remove drawing-border spec blocks before operation inference.
+
+    ALSO THE LEGEND'S DEFAULT SENTENCE ON ITS OWN. A process-note snippet is a FRAGMENT of the
+    page, so "ALL WELDS TO BE TIG UNLESS STATED" arrives without its "WELD SPECIFICATION:"
+    heading and the block patterns above never see it; re-inferred here it put "welding" back
+    on every part (12173-02). The shared legend reader removes it in either form."""
+    out = _BOILERPLATE_RE.sub(" ", text)
+    try:
+        from extractor_patterns import strip_specification_legend
+        out = strip_specification_legend(out)
+    except Exception:                                                # noqa: BLE001
+        pass
+    return out
 
 
 def apply_material_context_normalisation(parts: List[Dict[str, Any]]) -> None:

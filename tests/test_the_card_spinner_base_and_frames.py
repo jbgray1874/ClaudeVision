@@ -124,7 +124,8 @@ def test_a_weldment_over_raw_members_keeps_its_weld():
     parts = [{"part_number": "W-101"}, {"part_number": "W-01M"}]
     sheets = {"W-101": {"finish": "POWDER COATED", "text": "W-01M"},
               "W-01M": {"finish": "SEE ASSEMBLY DRAWING", "text": ""}}
-    assert ws.apply_finish_welds(parts, sheets) == {"stated": [], "questioned": []}
+    assert ws.apply_finish_welds(parts, sheets) == {"stated": [], "questioned": [],
+                                                    "joined_by_symbol": []}
 
 
 def test_a_piece_match_is_flagged_on_the_part(tmp_path):

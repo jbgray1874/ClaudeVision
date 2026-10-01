@@ -4291,6 +4291,28 @@ def compile_job_route(
         else:
             declared_scope = "part"
         source = "inference" if route.get("inferred") else "llm_full_extract"
+        # A WELD QUOTING ONLY THE PACK'S WELD SPECIFICATION IS AN INFERENCE. "ALL WELDS TO BE TIG
+        # UNLESS STATED" says how a weld is made, never that these parts are welded (12173-02:
+        # pocket sides, the rack and an MFC back charged Weld (CO2) on it). The claim is kept
+        # and priced, its quote moved to the reason, and its empty evidence makes the costed
+        # job ask the estimator (D-258) rather than show it as read.
+        _route_evidence = (route.get("evidence") or route.get("drawing_note")
+                           or route.get("quote") or "")
+        _route_reason = route.get("notes") or route.get("description")
+        if "weld" in operation and source == "llm_full_extract":
+            try:
+                from extractor_patterns import cites_only_specification_legend as _legend_cite
+                if _legend_cite(_route_evidence):
+                    source = "inference"
+                    _route_reason = ((str(_route_reason) + "; ") if _route_reason else "") + (
+                        f"the extract quoted only the pack's weld specification "
+                        f"('{str(_route_evidence).strip()[:80]}'), which says how welds are "
+                        f"made, not that these parts are welded")
+                    _route_evidence = ""
+                    issues.append({"code": "weld_route_cites_only_the_specification_legend",
+                                   "operation": operation, "participants": participants})
+            except Exception:                                        # noqa: BLE001
+                pass
         base_route_id = str(route.get("route_id") or stable_id("route", {
             "operation": operation,
             "sequence": number(route.get("sequence")),
@@ -4383,8 +4405,7 @@ def compile_job_route(
                 # WHAT THE DRAWING SAID, if the extract quoted it. A claim carrying the
                 # sheet's own words can be held against the sheet; a bare operation name
                 # cannot be argued with, only ranked.
-                evidence=(route.get("evidence") or route.get("drawing_note")
-                          or route.get("quote") or ""),
+                evidence=_route_evidence,
                 evidence_where=(route.get("evidence_where") or route.get("where") or ""),
                 # A ROUTE-GROUP QUANTITY IS NOT EACH TARGET'S QUANTITY.
                 #
@@ -4405,7 +4426,7 @@ def compile_job_route(
                 ),
                 sequence=route.get("sequence"),
                 confidence=route.get("confidence"),
-                reason=route.get("notes") or route.get("description"),
+                reason=_route_reason,
                 route_id=route_id,
             )
             add_claim(event_id, claim)
@@ -5468,10 +5489,27 @@ def _flag_possible_joint_double_charge(decisions: Sequence[Any],
     as issues so they reach the decisions-required list rather than dying in a review flag.
     """
     _children = graph.get("children") or {}
+    _raw = graph.get("raw") or {}
     _by_target: Dict[str, List[Any]] = {}
     for _d in decisions:
         if _d.status == REQUIRED and _d.operation in _JOINING_OPS:
             _by_target.setdefault(str(_d.target_id), []).append(_d)
+    # WHAT EACH SHEET DRAWS, NOT "NOTHING IN THE PACK". Where the assembly's own sheet and the
+    # member's own sheet each draw arc-weld symbols, the drawings DO tell the joints apart —
+    # 12173-03-201 draws the fillets that join 202 to 203, and 202 draws its own for its tabs
+    # — and both charges are the drawing's. Otherwise the sentence says what the symbol reader
+    # found on each sheet, which is a reading, and asks.
+    try:
+        from weld_symbols import arc_weld_symbols as _arc_n, describe_weld_symbols as _ws_say
+    except Exception:                                                # pragma: no cover
+        _arc_n = _ws_say = None
+
+    def _ws_of(pn: Any) -> Tuple[Optional[Mapping[str, Any]], List[Any]]:
+        _r = _raw.get(str(pn)) or {}
+        _c = _r.get("weld_symbols") if isinstance(_r, Mapping) else None
+        return (_c if isinstance(_c, Mapping) else None,
+                list((_r.get("weld_symbol_pages") if isinstance(_r, Mapping) else None) or []))
+
     _issues: List[Dict[str, Any]] = []
     for _parent, _kids in _children.items():
         _parent_joints = _by_target.get(str(_parent)) or []
@@ -5482,12 +5520,26 @@ def _flag_possible_joint_double_charge(decisions: Sequence[Any],
             for _d in _by_target.get(str(_kid)) or []:
                 if _d.operation not in _parent_ops:
                     continue
+                _pc, _pp = _ws_of(_parent)
+                _kc, _kp = _ws_of(_kid)
+                if _arc_n is not None and _arc_n(_pc) and _arc_n(_kc) \
+                        and _d.operation in ("welding", "dress_welds"):
+                    _d.reason = ((_d.reason + " ") if _d.reason else "") + (
+                        f"{_parent} is charged {_d.operation} too, and both sheets draw their "
+                        f"own joints: for {_parent}, {_ws_say(_pc, _pp)}; for {_kid}, "
+                        f"{_ws_say(_kc, _kp)} — each charge is its own drawn weld.")
+                    _d.field_provenance.setdefault(
+                        "review", "joining_on_assembly_and_member_both_drawn")
+                    continue
+                _read = (f"The weld-symbol reading does not settle it (for {_parent}, "
+                         f"{_ws_say(_pc, _pp)}; for {_kid}, {_ws_say(_kc, _kp)}), so"
+                         if _ws_say is not None and (_pc is not None or _kc is not None)
+                         else "Nothing in the pack distinguishes them, so")
                 _d.reason = ((_d.reason + " ") if _d.reason else "") + (
                     f"{_parent} is charged {_d.operation} too. If that is the joint that "
                     f"joins {_kid} to its siblings, this line charges it a second time; if "
-                    f"{_kid} has a seam or sub-weld of its own, both are right. Nothing in "
-                    f"the pack distinguishes them, so BOTH ARE CHARGED — strike whichever "
-                    f"is not real.")
+                    f"{_kid} has a seam or sub-weld of its own, both are right. {_read} "
+                    f"BOTH ARE CHARGED — strike whichever is not real.")
                 _d.field_provenance.setdefault(
                     "review", "joining_overlap_unresolved_with_parent")
                 _issues.append({

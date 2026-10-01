@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import source_precedence
 from source_precedence import apply_field as _apply_field
@@ -885,6 +885,15 @@ def _pick_best_flat(part: Dict[str, Any], paths: Sequence[Path]) -> Path:
 
 
 def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> Optional[Dict[str, Any]]:
+    return _lookup_part_with_basis(parts_by_key, part_number)[0]
+
+
+def _lookup_part_with_basis(parts_by_key: Dict[str, Dict[str, Any]], part_number: str
+                            ) -> Tuple[Optional[Dict[str, Any]], str]:
+    """_lookup_part, naming the rung that matched: alias | exact | piece | ga | alias_target |
+    segment | loose | "" (none). A match on the PIECE rung is a reading of the file's suffix,
+    not a match of its code, and the merge says so (D-382); it could not tell before, because
+    the piece rung returned the part exactly like an exact hit."""
     key = _normalize_part_key(part_number)
     try:
         from part_identity import dxf_alias_target
@@ -893,11 +902,11 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
         if alias:
             alias_key = _normalize_part_key(alias)
             if alias_key in parts_by_key:
-                return parts_by_key[alias_key]
+                return parts_by_key[alias_key], "alias"
     except Exception:
         pass
     if key in parts_by_key:
-        return parts_by_key[key]
+        return parts_by_key[key], "exact"
     # A NUMBERED PIECE OF A PART IS THAT PART'S. "12173-03-01J-1_25mm MDF" and "-01J-2" are the
     # two 25 mm layers of the base 12173-03-01J. With no exact hit they fell to the trailing-
     # segment fallback below, which took the last "1" and "2" and paired them with the FRAMES
@@ -906,7 +915,7 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
     # a lettered segment is that part; the phase-2 split costs each piece.
     _pc = _piece_of_known_part(parts_by_key, key)
     if _pc is not None:
-        return _pc
+        return _pc, "piece"
     try:
         from part_identity import GA_TO_DETAIL_PREFERENCE, normalize_part_code
 
@@ -915,7 +924,7 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
             if normalize_part_code(detail_code) == norm:
                 ga_key = normalize_part_code(ga_code)
                 if ga_key in parts_by_key:
-                    return parts_by_key[ga_key]
+                    return parts_by_key[ga_key], "ga"
     except Exception:
         pass
     # THE DRAWING'S BOM OWNS IDENTITY, AND IS CONSULTED BEFORE A PART IS INVENTED.
@@ -935,7 +944,7 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
         for _cand in alias_targets(part_number):
             _cand_key = _normalize_part_key(_cand)
             if _cand_key and _cand_key in parts_by_key:
-                return parts_by_key[_cand_key]
+                return parts_by_key[_cand_key], "alias_target"
     except Exception:
         pass
     # A WHOLE SEGMENT, NEVER ITS LAST CHARACTERS. `endswith` let "-1" match "-201" and "-2"
@@ -946,7 +955,7 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
     for candidate_key, part in parts_by_key.items():
         if (len(suffix) >= 3 and candidate_key.split("-")[-1] == suffix) \
                 or candidate_key.replace("-", "") == key.replace("-", ""):
-            return part
+            return part, "segment"
     # Tolerant fall-back: bridge abbreviated DXF part numbers ("1449C", "1450")
     # to full BOM numbers ("1449-01C", "1450-01C") via leading numeric block +
     # trailing letter. Only bind when exactly one BOM part shares it; if several
@@ -960,8 +969,8 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
             and (not tail or _loose_part_key(candidate_key)[1] == tail)
         ]
         if len(hits) == 1:
-            return hits[0]
-    return None
+            return hits[0], "loose"
+    return None, ""
 
 
 def _dxf_code_is_in_this_job(dxf_code: str, parts_by_key: Dict[str, Dict[str, Any]]) -> bool:
@@ -1339,6 +1348,185 @@ def _member_suffix_of_flat(path: Path) -> Optional[str]:
     return mp.group("n") if mp else None
 
 
+# ── A NUMBERED PIECE OR AN ITEM OF ITS OWN ──────────────────────────────────────────────
+# "<part>-<n>" reads as piece n of <part> (12173-03-01J-1 / -2, the base's two 25 mm layers).
+# Another drawing office writes the same suffix for an ITEM: a family member <part>-2 that has
+# its own row, its own record or its own model component. The reading is taken only where
+# nothing in the job names such an item; where something does, the file is not attached and a
+# person says which (D-382 review, 1 Oct). Only what was checked is claimed: the job's parts
+# and its parts-list rows here; the model is read after this merge and is checked by
+# recheck_dxf_pieces_against_model.
+_SIZE_IN_WORDS = re.compile(
+    r"(\d+(?:\.\d+)?)\s*[xX\u00d7]\s*(\d+(?:\.\d+)?)(?:\s*[xX\u00d7]\s*(\d+(?:\.\d+)?))?\s*mm\b",
+    re.I)
+
+
+def _family_items(summary: Mapping[str, Any], parts_by_key: Mapping[str, Dict[str, Any]],
+                  family_key: str) -> List[Dict[str, Any]]:
+    """Every <family>-<m> (m numeric) this job names as an item: a part record (not one this
+    merge minted as a piece) or a parts-list row's code."""
+    fam = re.compile(rf"^{re.escape(family_key)}-(\d{{1,2}})$")
+    out: List[Dict[str, Any]] = []
+    for k, p in parts_by_key.items():
+        m = fam.match(k)
+        if m and not p.get("dxf_minted_piece_of"):
+            out.append({"n": int(m.group(1)), "code": str(p.get("part_number") or k), "key": k,
+                        "where": "part"})
+    for r in ((summary.get("document_analysis") or {}).get("bom_rows") or []) \
+            if isinstance(summary, Mapping) else []:
+        if not isinstance(r, Mapping):
+            continue
+        for c in {r.get("part_number"), r.get("printed_code")} - {None, ""}:
+            m = fam.match(_normalize_part_key(str(c)))
+            if m and not any(o["key"] == _normalize_part_key(str(c)) for o in out):
+                out.append({"n": int(m.group(1)), "code": str(c),
+                            "key": _normalize_part_key(str(c)), "where": "row",
+                            "parent": str(r.get("bom_parent") or "")})
+    return out
+
+
+def _listed_pieces(summary: Mapping[str, Any], parent: Mapping[str, Any],
+                   paths: Sequence[Path]) -> Dict[str, Any]:
+    """The parent's OWN parts list sizing these flats: uncoded rows under that parent whose two
+    largest figures match a flat's blank (within max(2 mm, 2%)) and whose third matches the
+    filename's gauge (within 0.5 mm). 12173-03-01J's table lists two "626 x 626 x 25 mm" rows
+    for its two 626 x 626, 25 mm MDF layers. Item numbers alone corroborate nothing: any parent
+    whose list has n rows has items 1..n."""
+    pkey = _normalize_part_key(parent.get("part_number") or "")
+    rows = [r for r in ((summary.get("document_analysis") or {}).get("bom_rows") or [])
+            if isinstance(r, Mapping)
+            and _normalize_part_key(str(r.get("bom_parent") or "")) == pkey
+            and r.get("bom_parent_known") is not False
+            and not str(r.get("part_number") or "").strip()
+            and _SIZE_IN_WORDS.search(str(r.get("description") or ""))]
+    free, hits = list(rows), []
+    for p in paths:
+        bb = _dxf_bbox_wh(Path(p))
+        gauge = flat_stock_key(Path(p))[0]
+        for r in list(free):
+            fig = sorted(float(x) for x in _SIZE_IN_WORDS.search(str(r["description"])).groups()
+                         if x)
+            if bb and len(fig) >= 2 and all(abs(a - b) <= max(2.0, 0.02 * b)
+                                            for a, b in zip(sorted(bb), fig[-2:])) \
+                    and (gauge is None or len(fig) < 3 or abs(fig[0] - gauge) <= 0.5):
+                hits.append(r)
+                free.remove(r)
+                break
+    if paths and len(hits) == len(paths):
+        return {"rows": [str(r.get("description")) for r in hits], "listed": len(rows)}
+    return {"rows": [], "listed": len(rows)}
+
+
+def _ask_dxf_identity(part: Dict[str, Any], paths: Sequence[Path], against: Sequence[str],
+                      report: Dict[str, Any], costed_as: Sequence[str] = (),
+                      source: str = "drawing_job_merge.augment_summary_with_dxf") -> None:
+    """One question naming the files and the evidence; money only where the pieces are costed."""
+    names = [Path(p).name for p in paths]
+    pn = str(part.get("part_number") or "")
+    costed = [c for c in costed_as if c]
+    _reading = (f"costed as numbered piece{'s' if len(costed) > 1 else ''} of {pn} "
+                f"({', '.join(costed)})" if costed
+                else f"NOT attached — {pn} keeps the geometry its drawing gives")
+    q = {"issue": (f"Is {names[0]} a numbered piece of {pn}, or the flat of an item of its own?"
+                   if len(names) == 1 else
+                   f"Are {', '.join(names[:-1])} and {names[-1]} numbered pieces of {pn}, or "
+                   f"flats of items of their own?"),
+         "assumption": f"{_reading}; {'; '.join(against)}",
+         "action": (f"a piece: confirm, and each piece is costed under {pn}; an item of its "
+                    f"own: name it, so its flat prices that item only"),
+         "source": source,
+         "subject": "dxf_identity",
+         "gbp_parts": list(costed)}
+    qs = part.setdefault("manufacturing_questions", [])
+    if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == q["issue"]
+                                        for x in qs):
+        qs.append(q)
+    part.setdefault("review_flags", []).append(
+        f"DXF {', '.join(names)} {'COSTED AS PIECES' if costed else 'NOT ATTACHED'}: the name "
+        f"reads as a numbered piece of {pn}, but {'; '.join(against)}. A price is only for the "
+        f"exact item — say which it is")
+    report["ambiguous_dxf"].append({
+        "part_number": pn, "candidates": [str(p) for p in paths],
+        "reason": "numbered_piece_or_separate_item_unresolved", "evidence": list(against)})
+
+
+def _flag_dxf_pieces(summary: Mapping[str, Any], part: Dict[str, Any], paths: Sequence[Path],
+                     minted: Mapping[str, str], report: Dict[str, Any],
+                     parts_by_key: Mapping[str, Dict[str, Any]]) -> None:
+    """Say the piece reading on the part and on each piece it minted, with what was checked."""
+    pn = str(part.get("part_number") or "")
+    listed = _listed_pieces(summary, part, paths)
+    _rows_read = bool((summary.get("document_analysis") or {}).get("bom_rows"))
+    recs: List[Dict[str, Any]] = []
+    for p in paths:
+        n = _member_suffix_of_flat(Path(p)) or "?"
+        costed = minted.get(Path(p).name)
+        recs.append({"dxf": Path(p).name, "piece": n, "costed_as": costed,
+                     "corroborated_by": list(listed["rows"])})
+        checked = (f"no part of this job and no row of its parts lists is named {pn}-{n}"
+                   if _rows_read else
+                   f"no part of this job is named {pn}-{n} (no parts-list rows were read to "
+                   f"check)")
+        part.setdefault("review_flags", []).append(
+            f"DXF {Path(p).name} read as numbered piece {n} of {pn}"
+            + (f", costed as {costed}" if costed and costed != pn else "")
+            + f": {checked}. "
+            + (f"Its own parts list sizes the pieces: {'; '.join(listed['rows'])}."
+               if listed["rows"] else
+               "Its own parts list does not size them — if the suffix marks a variant rather "
+               "than a piece, correct the match.")
+            + (" Only one numbered file was supplied; if the part has more pieces their flats "
+               "are missing." if len(paths) == 1 else ""))
+    part["dxf_pieces"] = recs
+    for _name, _code in minted.items():
+        if not _code or _normalize_part_key(_code) == _normalize_part_key(pn):
+            continue
+        _piece = parts_by_key.get(_normalize_part_key(_code))
+        if _piece is not None:
+            _piece["dxf_minted_piece_of"] = pn
+            _piece.setdefault("review_flags", []).append(
+                f"numbered piece of {pn}, read from its DXF name {_name} — see {pn}")
+    # DIFFERING PIECES NOBODY SIZED ARE COSTED AND ASKED, as two gauges on one part number are
+    # (TWO GAUGES ON ONE PART NUMBER, below): withholding them is money removed on a doubt.
+    if len(paths) > 1 and not listed["rows"]:
+        _shapes = set()
+        for p in paths:
+            bb = _dxf_bbox_wh(Path(p))
+            _shapes.add((tuple(round(v) for v in bb) if bb else None, flat_stock_key(Path(p))))
+        if len(_shapes) > 1:
+            _ask_dxf_identity(part, paths, [
+                f"the numbered flats differ ({len(_shapes)} different blanks or stocks) and "
+                f"{pn}'s own parts list does not size them"], report,
+                costed_as=sorted({c for c in minted.values() if c}))
+
+
+def recheck_dxf_pieces_against_model(parts: Sequence[Dict[str, Any]],
+                                     model_codes: Iterable[Any]) -> List[str]:
+    """After the model is read: a costed piece <part>-<n> whose number the model holds as a
+    component of its own (<part>-<n> or <part>-0<n>) is asked about, never detached — the
+    merge ran before the model and could not check it."""
+    codes = {_normalize_part_key(str(c)) for c in (model_codes or ()) if c}
+    asked: List[str] = []
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        pkey = _normalize_part_key(p.get("part_number") or "")
+        for pc in (p.get("dxf_pieces") or []):
+            if not isinstance(pc, Mapping) or not str(pc.get("piece") or "").isdigit():
+                continue
+            fam = re.compile(rf"^{re.escape(pkey)}-0*{int(pc['piece'])}$")
+            hit = sorted(c for c in codes if fam.match(c))
+            if hit:
+                _ask_dxf_identity(p, [Path(str(pc.get("dxf")))],
+                                  [f"the model holds a component {hit[0]}"],
+                                  {"ambiguous_dxf": []},
+                                  costed_as=[str(pc.get("costed_as") or p.get("part_number"))],
+                                  source="drawing_job_merge.recheck_dxf_pieces_against_model")
+                if p.get("part_number") not in asked:
+                    asked.append(str(p.get("part_number")))
+    return asked
+
+
 def _split_parent_flats_to_children(
     parent: Dict[str, Any],
     clusters: List[Tuple[Optional[Tuple[float, float]], List[Path]]],
@@ -1347,17 +1535,23 @@ def _split_parent_flats_to_children(
     summary: Dict[str, Any],
     report: Dict[str, Any],
     matched_keys: set,
+    *,
+    bind_children: bool = True,
 ) -> None:
     """Several DISTINCT blanks resolved to one (parent/assembly) part — e.g. descriptor
     DXFs 04_TOP_PANEL / 04_SIDE_PANEL both reading parent PN ...-04. Bind each blank to
     the child detail part whose dimensions match; promote a distinct part if no child is
-    in scope. Never collapse two different blanks onto one part."""
+    in scope. Never collapse two different blanks onto one part.
+
+    bind_children=False: the flats are NUMBERED PIECES of the parent and are each minted as
+    <parent>-NN. A numbered piece is never bound to a child by elimination — on a part with a
+    handed variant <part>-H, piece 1 landed on the hand and was mirrored back onto the base."""
     parent_key = _normalize_part_key(parent.get("part_number", ""))
     children = [
         p
         for k, p in parts_by_key.items()
         if k != parent_key and k.startswith(parent_key + "-") and not k.endswith("-GA")
-    ]
+    ] if bind_children else []
     used: set = set()
 
     # Bind the most descriptor-specific flats FIRST. With no child dims to match on, an
@@ -3032,6 +3226,7 @@ def augment_summary_with_dxf(
 
     # Phase 1 - resolve each flat DXF to a BOM part (no geometry applied yet).
     resolved: List[Tuple[Dict[str, Any], Path]] = []
+    piece_files: set = set()          # files taken on the numbered-piece reading
     for dxf_path in dxf_paths:
         path = Path(dxf_path)
         if not path.is_file():
@@ -3080,18 +3275,39 @@ def augment_summary_with_dxf(
                         {"path": str(path), "reason": "no_part_number_in_filename"})
                 continue
 
-        part = _lookup_part(parts_by_key, pn)
+        part, _basis = _lookup_part_with_basis(parts_by_key, pn)
         # A NUMBERED PIECE IS AN ASSUMPTION ABOUT A SUFFIX, SO IT IS SAID (D-382). "<part>-1"
         # read as piece 1 of <part> is right for 12173-03-01J's two 25 mm layers; another
-        # drawing office may write the same suffix for a VARIANT. Where the job also holds a
-        # flat named for <part> itself, the part has its own flat and the suffixed files are
-        # more likely variants or alternatives than pieces of it: nothing is attached and the
-        # file is reported ambiguous. Otherwise the piece reading stands and is flagged on the
-        # part, naming the file, so an estimator can see the assumption and correct it.
-        _key_n = _normalize_part_key(pn)
-        if part is not None and _key_n not in parts_by_key \
-                and _piece_of_known_part(parts_by_key, _key_n) is part:
-            _base_key = _normalize_part_key(part.get("part_number"))
+        # drawing office may write the same suffix for a VARIANT or an ITEM of its own. So the
+        # reading is checked against what the job holds before it is taken:
+        #   * the same number spelt with padding (part <part>-01 for file <part>-1) is that
+        #     exact item, and the file is its flat;
+        #   * another <part>-<m> named as a part or on a parts-list row says the family holds
+        #     items of their own: the file is not attached and a person is asked;
+        #   * a flat named for <part> itself beside it: a piece and a variant cannot be told
+        #     apart, so it is not attached (D-382);
+        #   * otherwise the piece reading stands and is flagged in phase 2, with what was
+        #     checked and whether the part's own parts list sizes the pieces.
+        if part is not None and _basis == "piece":
+            _mp = _PIECE_OF_PART.match(_normalize_part_key(pn))
+            _fam_key = _normalize_part_key(part.get("part_number"))
+            _n = int(_mp.group("n")) if _mp else -1
+            _items = _family_items(summary, parts_by_key, _fam_key)
+            _same = [it for it in _items if it["n"] == _n and it["where"] == "part"]
+            if _same:
+                part = parts_by_key[_same[0]["key"]]
+                part.setdefault("review_flags", []).append(
+                    f"DXF {path.name} bound to {part.get('part_number')} — the same item "
+                    f"number, written {pn} in the file name")
+                resolved.append((part, path))
+                continue
+            if _items:
+                _ask_dxf_identity(part, [path], [
+                    (f"{it['code']} is a part of this job" if it["where"] == "part" else
+                     f"{it['code']} is a row of {it.get('parent') or 'a parts list'}'s parts "
+                     f"list") for it in _items], report)
+                continue
+            _base_key = _fam_key
             _own_flat = any(
                 _normalize_part_key(part_number_from_dxf_path(Path(_o)) or "") == _base_key
                 for _o in dxf_paths if Path(_o) != path)
@@ -3107,10 +3323,7 @@ def augment_summary_with_dxf(
                     f"DXF {path.name} NOT attached: its suffix could be a piece or a variant "
                     f"of {part.get('part_number')}, which has a flat of its own — say which")
                 continue
-            part.setdefault("review_flags", []).append(
-                f"DXF {path.name} read as numbered piece {pn.rsplit('-', 1)[-1]} of "
-                f"{part.get('part_number')} (the job has no part {pn}) — if the suffix "
-                f"marks a variant rather than a piece, correct the match")
+            piece_files.add(str(path))
         if not part and not _dxf_code_is_in_this_job(pn, parts_by_key):
             # A FLAT FOR ANOTHER DRAWING IS NOT A PART OF THIS ONE.
             #
@@ -3156,8 +3369,29 @@ def augment_summary_with_dxf(
 
     for pid, paths in by_part.items():
         part = part_by_id[pid]
+        _as_pieces = [p for p in paths if str(p) in piece_files]
         if len(paths) == 1:
             _apply_and_report(part, paths[0], report, matched_keys)
+            if _as_pieces:
+                _flag_dxf_pieces(summary, part, _as_pieces,
+                                 {paths[0].name: str(part.get("part_number") or "")},
+                                 report, parts_by_key)
+            continue
+        if _as_pieces and len(_as_pieces) == len(paths):
+            # NUMBERED PIECES, EACH COSTED AS ITSELF AND NEVER BOUND TO A CHILD. Distinct
+            # numbers on every file say every file is a piece (12173-03-01J's two identical
+            # layers); a lettered child (a hand, <part>-H) is not a piece number.
+            _n_before = len(report["matched"])
+            report["ambiguous_dxf"].append({
+                "part_number": part.get("part_number"),
+                "candidates": [str(p) for p in paths],
+                "reason": "numbered_pieces_promoted"})
+            _split_parent_flats_to_children(
+                part, [(_cluster_paths_by_bbox([p])[0][0], [p]) for p in paths],
+                parts, parts_by_key, summary, report, matched_keys, bind_children=False)
+            _minted = {Path(str(m.get("dxf") or "")).name: str(m.get("part_number") or "")
+                       for m in report["matched"][_n_before:]}
+            _flag_dxf_pieces(summary, part, paths, _minted, report, parts_by_key)
             continue
         # Several flats resolved to one part. Cluster by blank geometry:
         #   1 cluster  -> genuine duplicates / stale revisions (e.g. 08_1_2mm_MS +

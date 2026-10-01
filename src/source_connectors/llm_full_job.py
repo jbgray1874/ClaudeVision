@@ -457,6 +457,18 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
         # decides the source rank: a stated operation is transcription, a concluded one is
         # inference and must never outrank a measurement.
         src = "inference" if route.get("inferred") else "llm_full_extract"
+        # THE PACK'S WELD SPECIFICATION IS NOT A WELD ON THE PARTS IT IS PRINTED BESIDE. A
+        # "stated" weld whose only quoted evidence is "ALL WELDS TO BE TIG UNLESS STATED" is a
+        # reading of HOW, offered as THAT; it stays priced, as an inference, and is asked.
+        _legend_only = False
+        if "weld" in op:
+            try:
+                from extractor_patterns import cites_only_specification_legend as _legend_cite
+                _legend_only = _legend_cite(route.get("evidence"))
+            except Exception:                                        # noqa: BLE001
+                _legend_only = False
+        if _legend_only:
+            src = "inference"
         wanted = {_clean_pn(p) for p in (route.get("part_numbers") or []) if p}
         for part in parts:
             if not isinstance(part, dict) or _clean_pn(part.get("part_number")) not in wanted:
@@ -562,5 +574,11 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
                     f"operation '{op}' {'INFERRED' if route.get('inferred') else 'read'} from "
                     f"the drawing pack ({route.get('confidence') or 'confidence unstated'})"
                     + (f": {route.get('notes')}" if route.get("notes") else ""))
+                if _legend_only:
+                    part.setdefault("review_flags", []).append(
+                        f"operation '{op}' cites only the pack's weld specification "
+                        f"('{str(route.get('evidence')).strip()[:80]}'), which says how welds "
+                        f"are made, not that this part is welded — priced as an inference and "
+                        f"asked")
                 added += 1
     return added

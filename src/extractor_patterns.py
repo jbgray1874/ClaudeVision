@@ -50,6 +50,87 @@ def normalize_text(text: str) -> str:
     return " ".join((text or "").replace("\x00", " ").replace("\n", " ").replace("\r", " ").split())
 
 
+# ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
+# document_builder learned this on 10975-02 (EPDM tape welded and powder coated from the border
+# text) and stripped the legend before ITS operation scan. The page-level scan below never did,
+# and every part takes its sheet's operations from it (part_index), so on 12173-02 (17:34 book)
+# the border's "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED" — read cleanly by OCR
+# where pdfplumber interleaves it — put Weld (CO2) and dressing on 29 parts: tab-and-slot
+# pocket sides and shelves, the rack and trough, meshes, risers, hook saddles and an MFC back.
+# The legend says HOW a weld the drawing calls up is made; it never says THAT a part is welded.
+# Vocabulary in config (SPECIFICATION_LEGEND_HEADINGS / _STOPS / SPECIFICATION_DEFAULT_SENTENCES).
+_LEGEND_DEFAULT_HEADINGS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:", r"GENERAL TOLERANCES\s*:",
+    r"TIMBER PRODUCTS\s*:", r"GLASS:\s*NO GLASS", r"WIRING:\s*ALL ELECTRICAL"]
+_LEGEND_DEFAULT_STOPS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:", r"GENERAL TOLERANCES\s*:",
+    r"TIMBER PRODUCTS\s*:", r"GLASS\s*:", r"WIRING\s*:", r"DRAWING\s+No", r"DRAWN\b",
+    r"CHECKED\b", r"REVISION TABLE", r"ITEM\s+DWG", r"WEIGHT\s*:", r"MATERIAL\s*:",
+    r"FINISH\s*:", r"SCALE\b", r"MAX LOADING"]
+_LEGEND_DEFAULT_SENTENCES = [
+    r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}"]
+_LEGEND_RES: Dict[str, Any] = {}
+
+
+def _legend_res():
+    if not _LEGEND_RES:
+        try:
+            import config as _cfg
+            heads = list(getattr(_cfg, "SPECIFICATION_LEGEND_HEADINGS", None) or _LEGEND_DEFAULT_HEADINGS)
+            stops = list(getattr(_cfg, "SPECIFICATION_LEGEND_STOPS", None) or _LEGEND_DEFAULT_STOPS)
+            sents = list(getattr(_cfg, "SPECIFICATION_DEFAULT_SENTENCES", None) or _LEGEND_DEFAULT_SENTENCES)
+        except Exception:                                            # noqa: BLE001
+            heads, stops, sents = _LEGEND_DEFAULT_HEADINGS, _LEGEND_DEFAULT_STOPS, _LEGEND_DEFAULT_SENTENCES
+        _LEGEND_RES["start"] = re.compile("|".join(heads), re.IGNORECASE)
+        _LEGEND_RES["stop"] = re.compile("|".join(stops), re.IGNORECASE)
+        _LEGEND_RES["sentences"] = [re.compile(x, re.IGNORECASE) for x in sents]
+    return _LEGEND_RES
+
+
+def strip_specification_legend(text: Any) -> str:
+    """The text with the specification legend removed, for OPERATION-CUE scanning only.
+
+    Two forms are removed. A legend BLOCK runs from a heading ("WELD SPECIFICATION:") to the
+    next title-block field or heading; a heading used as a stop is consumed by the next pass.
+    A DEFAULT SENTENCE ("ALL WELDS TO BE TIG UNLESS STATED") is removed wherever it stands,
+    because a read that lost the heading still reads the legend. Everything else — a view's
+    "CORNERS TO BE WELDED", a title block's "FINISH: WELDED" — is kept."""
+    s = str(text or "")
+    res = _legend_res()
+    out: List[str] = []
+    pos = 0
+    while pos < len(s):
+        m = res["start"].search(s, pos)
+        if not m:
+            out.append(s[pos:])
+            break
+        out.append(s[pos:m.start()])
+        stop = res["stop"].search(s, m.end())
+        pos = stop.start() if stop else len(s)
+    kept = " ".join(part for part in out if part)
+    for rx in res["sentences"]:
+        kept = rx.sub(" ", kept)
+    return kept
+
+
+def cites_only_specification_legend(evidence: Any) -> bool:
+    """A quoted reason for a weld that is the pack's weld specification and nothing else
+    ("ALL WELDS TO BE TIG UNLESS STATED"): a statement of how, not that."""
+    return bool(str(evidence or "").strip()) and bool(legend_cues_set_aside(evidence))
+
+
+def legend_cues_set_aside(text: Any) -> List[str]:
+    """The operations a page's legend alone would have cued (weld and dressing), for the record:
+    what the full text cues and the legend-stripped text does not."""
+    full = normalize_text(str(text or "")).upper()
+    kept = normalize_text(strip_specification_legend(text)).upper()
+
+    def _weld(t: str) -> bool:
+        return bool("WELD" in t or re.search(r"\b(?:TIG|MIG)\b", t))
+    return ["welding"] if _weld(full) and not _weld(kept) else []
+
+
 def _findall_unique(pattern: str, text: str, flags: int = 0) -> List[str]:
     matches = re.findall(pattern, text, flags=flags)
     flattened: List[str] = []
@@ -1229,7 +1310,11 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
         "flat_pattern_detected": bool(re.search(FLAT_PATTERN_PATTERN, text, flags=re.IGNORECASE)),
         "slot_detected": bool(re.search(SLOT_PATTERN, text, flags=re.IGNORECASE)),
         "laser_text_detected": bool(re.search(LASER_PATTERN, text, flags=re.IGNORECASE)),
-        "weld_detected": bool(re.search(WELD_PATTERN, text, flags=re.IGNORECASE)),
+        # The legend's "ALL WELDS TO BE TIG" is not a weld on this sheet (see
+        # strip_specification_legend): the cue, and the "Weld text cue detected" flag it
+        # raises, read the text without it.
+        "weld_detected": bool(re.search(WELD_PATTERN, strip_specification_legend(text),
+                                        flags=re.IGNORECASE)),
         "tapped_detected": bool(re.search(TAP_PATTERN, text, flags=re.IGNORECASE)),
         "countersink_detected": bool(re.search(CSK_PATTERN, text, flags=re.IGNORECASE)),
         "deburr_detected": bool(re.search(DEBURR_PATTERN, text, flags=re.IGNORECASE)),
@@ -1250,7 +1335,8 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
             "holes": _confidence(0.88 if dimensions["hole_sizes_mm"] or "HOLE" in text.upper() else 0.0),
             "folds": _confidence(0.88 if dimensions["fold_values_mm"] or dimensions["angles_deg"] or re.search(FOLD_PATTERN, text, flags=re.IGNORECASE) else 0.0),
             "slots": _confidence(0.88 if dimensions["slot_sizes_mm"] or re.search(SLOT_PATTERN, text, flags=re.IGNORECASE) else 0.0),
-            "welding": _confidence(0.9 if re.search(WELD_PATTERN, text, flags=re.IGNORECASE) else 0.0),
+            "welding": _confidence(0.9 if re.search(WELD_PATTERN, strip_specification_legend(text),
+                                                    flags=re.IGNORECASE) else 0.0),
             "tapping": _confidence(0.9 if re.search(TAP_PATTERN, text, flags=re.IGNORECASE) else 0.0),
             "countersinking": _confidence(0.9 if re.search(CSK_PATTERN, text, flags=re.IGNORECASE) else 0.0),
         },
@@ -1285,8 +1371,12 @@ def extract_process_notes(text: str) -> Dict[str, Any]:
         "PUNCH",
     ]
 
+    _weld_text = strip_specification_legend(text)
     for operation, pattern in PROCESS_NOTE_PATTERNS.items():
-        if re.search(pattern, text, flags=re.IGNORECASE):
+        # A weld is read from the notes with the legend taken out: the border's weld
+        # specification is not a weld note on this sheet.
+        _t = _weld_text if operation == "welding" else text
+        if re.search(pattern, _t, flags=re.IGNORECASE):
             note_hits.append(operation)
             if operation in operation_note_types:
                 operations.append(operation)
@@ -1397,20 +1487,27 @@ def infer_operations_from_text(
     if powder_text or powder_finish:
         operations.append("powder_coating")
 
+    # A WELD IS READ OFF THE SHEET, NOT OFF ITS BORDER. "WELD SPECIFICATION: ALL WELDS TO BE
+    # TIG UNLESS STATED" and "RESISTANCE WELDING WIRE TO WIRE" print on every sheet of the pack
+    # and say how a weld is made, not that this part has one (12173-02: 29 parts welded and
+    # dressed from it). Weld and dressing cues read the text with the legend removed; "FINISH:
+    # WELDED", "WELD AND DRESS" and "CORNERS TO BE WELDED" are the sheet's own and are kept.
+    weld_text = normalize_text(strip_specification_legend(text)).upper()
     weld_keywords = (
-        "WELD" in text
-        or re.search(r"\bMIG\b", text, flags=re.IGNORECASE)
-        or re.search(r"\bTIG\b", text, flags=re.IGNORECASE)
-        or "WELD INT" in text
-        or "WELD FLUSH" in text
-        or "WELD CLOSED" in text
-        or "WELD CORNER" in text
-        or re.search(WELD_PATTERN, text, flags=re.IGNORECASE)
+        "WELD" in weld_text
+        or re.search(r"\bMIG\b", weld_text, flags=re.IGNORECASE)
+        or re.search(r"\bTIG\b", weld_text, flags=re.IGNORECASE)
+        or "WELD INT" in weld_text
+        or "WELD FLUSH" in weld_text
+        or "WELD CLOSED" in weld_text
+        or "WELD CORNER" in weld_text
+        or re.search(WELD_PATTERN, weld_text, flags=re.IGNORECASE)
     )
     if weld_keywords and not assembly_join_weld:
         operations.append("welding")
 
-    if ("DRESS" in text and "WELD" in text) or "DRESS WELD" in text or "DRESS FLUSH" in text:
+    if ("DRESS" in weld_text and "WELD" in weld_text) or "DRESS WELD" in weld_text \
+            or "DRESS FLUSH" in weld_text:
         operations.append("dress_welds")
 
     if "WET SPRAY" in text or "SPRAY PAINT" in text or "PAINT" in fin_text:

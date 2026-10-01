@@ -9122,6 +9122,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # record can say it joins members — the envelope sweep reads it.
         "weld_symbols": (dict(part["weld_symbols"])
                          if isinstance(part.get("weld_symbols"), dict) else None),
+        # ...and the pages it read, so a sentence about the reading can say where (costed_facts'
+        # inferred-weld decision and the parent-weld question print "its own sheet (p.6)").
+        "weld_symbol_pages": list(part.get("weld_symbol_pages") or []) or None,
         "spot_weld_count": part.get("spot_weld_count"),
         # Preserve the evidence which explains the route on the costed record. This nested
         # field is shadow-only during migration: no existing workbook consumer reads it, so

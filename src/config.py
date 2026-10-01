@@ -1609,6 +1609,45 @@ WELDMENT_PARENT_DESC_TOKENS = [
 # "SELDED" typo) without relying on the description spelling at all.
 WELDMENT_PARENT_PN_SUFFIXES = [r"-WA\d*$", r"-SA\d*$"]
 
+# ── WHICH WELD SYMBOL STATES WHICH OPERATION ─────────────────────────────────────────────
+# weld_symbols.py names the symbol on a callout's reference line; this says what a named
+# symbol on a part's OWN sheet states. A fillet is an arc weld (Weld (CO2) / TIG). A seam is
+# ISO 2553 RESISTANCE seam welding and states no arc weld; a spot is handled by the spot-only
+# rule; an unclassified callout states nothing. Extend only with a symbol the reader names.
+WELD_SYMBOL_OPERATION = {"fillet": "welding"}
+
+# ── THE SPECIFICATION LEGEND SAYS HOW, NOT THAT ──────────────────────────────────────────
+# Every M&S / SDI sheet prints the same border: "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS
+# STATED", "RESISTANCE WELDING WIRE TO WIRE ...", "FINISH SPECIFICATIONS: POWDERCOATING ...".
+# It specifies HOW work the drawing calls up is done; it does not say THAT a part is welded or
+# coated. On 12173-02 (17:34 book) a weld cue painted from it onto 29 parts charged Weld (CO2)
+# and dressing on tab-and-slot pockets, the rack, meshes, risers and an MFC back. Operation
+# cues are read with these spans removed (extractor_patterns.strip_specification_legend).
+#   headings: a legend block runs from one of these to the next title-block field or heading.
+SPECIFICATION_LEGEND_HEADINGS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:",
+    r"GENERAL TOLERANCES\s*:",
+    r"TIMBER PRODUCTS\s*:",
+    r"GLASS:\s*NO GLASS",
+    r"WIRING:\s*ALL ELECTRICAL",
+]
+SPECIFICATION_LEGEND_STOPS = [
+    r"(?:FINISH|WELD(?:ING)?|CHINA MATERIAL)\s+SPECIFICATIONS?\s*:",
+    r"GENERAL TOLERANCES\s*:", r"TIMBER PRODUCTS\s*:", r"GLASS\s*:", r"WIRING\s*:",
+    r"DRAWING\s+No", r"DRAWN\b", r"CHECKED\b", r"REVISION TABLE", r"ITEM\s+DWG",
+    r"WEIGHT\s*:", r"MATERIAL\s*:", r"FINISH\s*:", r"SCALE\b", r"MAX LOADING",
+]
+#   sentences: a DEFAULT specification read without its heading (an OCR or vision read can
+#   lose the heading or shuffle the lines). "UNLESS (OTHERWISE) STATED" is what makes it a
+#   default — it applies where the drawing says nothing else, so it is never a statement about
+#   one part. A weld note on a part's own sheet with no such clause ("WELD AND DRESS",
+#   "CORNERS TO BE WELDED") is not touched.
+SPECIFICATION_DEFAULT_SENTENCES = [
+    r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
+    # The legend's how-to for wire-to-wire joints (json_normaliser strips the same line).
+    r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}",
+]
+
 PROCESS_NOTE_PATTERNS = {
     "deburr": DEBURR_PATTERN,
     "break_sharp_edges": BREAK_EDGE_PATTERN,

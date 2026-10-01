@@ -2256,6 +2256,57 @@ def costed_job(source: Any) -> Dict[str, Any]:
                            "if its members are the whole of it, confirm £0"),
                 "owner": "estimator", "gbp_at_stake": round(_own_price, 2)})
 
+    # A READER'S QUESTION, PRICED BY WHAT RIDES ON IT. A question naming the operations it is
+    # about (charged_operations) is a decision only where the sheet charges one of them on the
+    # part, and carries those rows' money: an uncharged weld cannot be double-charged, so the
+    # flag the reader left on the part stands alone (12173-03-GA, whose members state WELDED,
+    # has no weld row). A question naming the lines it is about (gbp_parts — the pieces a DXF
+    # reading costed) carries their money. Otherwise the part's own line, as before (D-382).
+    _weld_asked: Set[str] = set()
+
+    def _question_decision(part: Mapping[str, Any], mq: Mapping[str, Any]
+                           ) -> Optional[Dict[str, Any]]:
+        _pn = str(part.get("part_number") or "")
+        _ops = {str(o) for o in (mq.get("charged_operations") or []) if o}
+        _assume = str(mq.get("assumption") or "")
+        if _ops:
+            _rows = [r for r in (_workbook_rows(source) or [])
+                     if {str(o) for o in (r.get("engine_operations") or [])} & _ops
+                     and _pn.upper() in {str(x).upper() for x in (r.get("part_numbers") or [])}]
+            if not _rows:
+                return None
+            _gbp = round(sum(_num(r.get("total_value_gbp")) for r in _rows), 2) or None
+            _nums = [str(r.get("workbook_row")) for r in _rows if r.get("workbook_row")]
+            if _gbp or _nums:
+                _assume += (" (" + (f"£{_gbp:,.2f} a unit" if _gbp else "charged")
+                            + (f", Estimate row{'s' if len(_nums) > 1 else ''} "
+                               f"{', '.join(_nums)}" if _nums else "") + ")")
+        elif "gbp_parts" in mq:           # empty: nothing is costed on the reading — no money
+            _gbp = round(sum(_money_of(_by_pn[str(c).upper()]) for c in mq.get("gbp_parts") or []
+                             if str(c).upper() in _by_pn), 2) or None
+        else:
+            _line = _by_pn.get(_pn.upper())
+            _gbp = (_money_of(_line) if _line is not None else None) or None
+        if str(mq.get("subject") or "") == "welding":
+            _weld_asked.add(_pn.upper())
+        return {"part": _pn, "kind": "manufacturing_decision",
+                "issue": str(mq.get("issue")), "assumption": _assume,
+                "action": str(mq.get("action") or ""), "owner": "estimator",
+                "gbp_at_stake": _gbp}
+
+    def _questions_of(part: Mapping[str, Any]) -> None:
+        _seen_q: Set[str] = set()
+        for _mq in (part.get("manufacturing_questions") or []):
+            if not isinstance(_mq, Mapping) or not _mq.get("issue"):
+                continue
+            if str(_mq["issue"]) in _seen_q or any(
+                    d.get("issue") == _mq["issue"] for d in decisions):
+                continue
+            _seen_q.add(str(_mq["issue"]))
+            _dq = _question_decision(part, _mq)
+            if _dq is not None:
+                decisions.append(_dq)
+
     for part in job_parts(source):
         if not isinstance(part, Mapping):
             continue
@@ -2271,20 +2322,7 @@ def costed_job(source: Any) -> Dict[str, Any]:
         # A READER'S OPEN QUESTION IS A DECISION (D-382). A reader that finds evidence it
         # cannot settle — a parent finished one way over members stated welded — leaves the
         # money as the route had it and asks; the question is counted here like any other.
-        _seen_q: Set[str] = set()
-        for _mq in (part.get("manufacturing_questions") or []):
-            if not isinstance(_mq, Mapping) or not _mq.get("issue"):
-                continue
-            if str(_mq["issue"]) in _seen_q or any(
-                    d.get("issue") == _mq["issue"] for d in decisions):
-                continue
-            _seen_q.add(str(_mq["issue"]))
-            _line = _by_pn.get(str(part.get("part_number") or "").upper())
-            decisions.append({
-                "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
-                "issue": str(_mq.get("issue")), "assumption": str(_mq.get("assumption") or ""),
-                "action": str(_mq.get("action") or ""), "owner": "estimator",
-                "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
+        _questions_of(part)
         _ov = part.get("block_overflow")
         if isinstance(_ov, Mapping) and _ov.get("basis") == "net_part_provisional":
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
@@ -2368,6 +2406,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
         if isinstance(part, Mapping) and str(part.get("part_number") or "").upper() \
                 not in _seen_parts:
             _priced_assembly(part)
+            # An assembly with no line of its own still carries the questions its readers left.
+            _questions_of(part)
     # ── HOW A PLASTIC ASSEMBLY IS JOINED IS A PERSON'S CALL ──────────────────────
     # 12633-00-GA review: "three glue charges should not be added merely because there are
     # three GAs. Confirm the joining method for each assembly." The engine costs one bonding
@@ -2411,7 +2451,33 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 and str(_d.get("source") or "").strip().lower() == "inference"
                 and not str(_d.get("evidence") or "").strip()):
             _guessed.setdefault(str(_d.get("target_id") or ""), _d)
+    # THE SENTENCE IS COMPUTED FROM THE RECORD. "no weld note or symbol on the drawing" was a
+    # literal: on the 1 Oct 12173 book it sat beside the extract's own "weld symbols and frame
+    # weld assembly views on pages 6-8" for three parts whose sheets draw fillet callouts. The
+    # note half is what empty evidence means — the inference quotes no note; the symbol half
+    # is what the reader found on the target's own sheet (weld_symbols.describe_weld_symbols),
+    # with "not read" kept apart from "named none".
+    try:
+        from weld_symbols import describe_weld_symbols as _describe_ws
+    except Exception:                                                # pragma: no cover
+        _describe_ws = None
+    _ws_recs: Dict[str, Mapping[str, Any]] = {}
+    for _wp in list(job_parts(source)) + list(
+            ((source.get("manufacturing_writeup") or {}).get("parts") or [])
+            if isinstance(source, Mapping) else []):
+        if isinstance(_wp, Mapping) and _wp.get("part_number"):
+            _k = str(_wp.get("part_number")).upper()
+            if _k not in _ws_recs or (_ws_recs[_k].get("weld_symbols") is None
+                                      and _wp.get("weld_symbols") is not None):
+                _ws_recs[_k] = _wp
     for _tgt, _d in _guessed.items():
+        if _tgt.upper() in _weld_asked:
+            continue                      # its reader already asked, with the rows' money
+        _wrec = _ws_recs.get(_tgt.upper()) or {}
+        _wsc = _wrec.get("weld_symbols")
+        _drawn = (_describe_ws(_wsc if isinstance(_wsc, Mapping) else None,
+                               _wrec.get("weld_symbol_pages") or [])
+                  if _describe_ws is not None else "its own sheet was not read for weld symbols")
         _wrows = [r for r in (_workbook_rows(source) or [])
                   if {str(o) for o in (r.get("engine_operations") or [])}
                   & {"welding", "spot_welding", "dress_welds"}
@@ -2423,8 +2489,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
             "issue": f"Welding on {_tgt} is inferred, not drawn",
             "assumption": (f"charged as welded and dressed"
                            f"{f' (£{_w_gbp:,.2f} a unit)' if _w_gbp else ''}"
-                           f"{f' — {_why}' if _why else ''}; no weld note or symbol on "
-                           f"the drawing"),
+                           f"{f' — {_why}' if _why else ''}; the inference quotes no weld "
+                           f"note from the drawing, and {_drawn}"),
             "action": ("confirm it is welded; if it is assembled mechanically (studs, "
                        "nutserts, screws), replace the Weld and Dress rows with the "
                        "mechanical joining labour, rather than only removing them"),

@@ -14,7 +14,11 @@ sheet reads too. Only a SYMBOL on the reference line classifies the weld:
 
     spot    a closed circle centred on the line
     seam    the same circle with two parallel lines through it
-    fillet  a closed triangle standing on the line
+    fillet  a triangle standing on the line — a closed curve, or (ISO callouts with the
+            dashed identification line) a vertical leg and a slant drawn as strokes
+
+A circle at the reference line's END is not a spot: it is the weld-all-round modifier at the
+arrow junction, recorded as `all_round` and never counted as a weld type.
 
 Anything else on a reference line is `unclassified` and counted as such — a callout the reader
 saw and could not name, which is a question for a person, not a weld type to guess.
@@ -37,6 +41,23 @@ _LEADER_REACH = 1.2           # how far a leader's end may sit from the referenc
 _CIRCLE_D = (1.8, 9.0)        # a weld-symbol circle's diameter
 _ON_LINE = 0.9                # a symbol centre's distance from the reference line
 _ID_GAP = (0.8, 6.0)          # the ISO dashed identification line's offset from the reference
+
+
+def _dashed(ln: Mapping[str, Any]) -> bool:
+    """A stroke with a dash pattern that has marks in it.
+
+    A SOLID STROKE IS WRITTEN TWO WAYS, AND THE READER KNEW ONE OF THEM. pdfplumber gives a
+    solid line as dash None — the 12527-22 riser's sheets — or as ([], 0), an explicit `[] 0 d`
+    in the content stream — every sheet of the 12173-03 pack (3,465 of the 4,153 lines on the
+    frame weld assembly's page 6). ([], 0) is truthy, so every solid line on that pack read
+    as dashed, no reference line was ever found, and the reader returned nothing for sheets
+    that draw fillet callouts on 201, 202, 203, 04M and 05M. Only a pattern with marks is
+    dashed."""
+    d = ln.get("dash")
+    if not d:
+        return False
+    pat = d[0] if isinstance(d, (list, tuple)) and d and isinstance(d[0], (list, tuple)) else d
+    return bool(pat)
 
 
 def _is_horizontal(ln: Mapping[str, Any]) -> bool:
@@ -94,10 +115,10 @@ def _triangle_on(curve: Mapping[str, Any], y: float) -> Optional[Tuple[float, fl
 
 def reference_lines(lines: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     """Every horizontal solid line with a leader meeting one of its ends."""
-    solid = [ln for ln in lines if _is_horizontal(ln) and not ln.get("dash")
+    solid = [ln for ln in lines if _is_horizontal(ln) and not _dashed(ln)
              and _REF_LEN[0] <= _length(ln) <= _REF_LEN[1]]
     slanted = [ln for ln in lines if not _is_horizontal(ln)]
-    dashed = [ln for ln in lines if _is_horizontal(ln) and ln.get("dash")]
+    dashed = [ln for ln in lines if _is_horizontal(ln) and _dashed(ln)]
     out: List[Dict[str, Any]] = []
     for ln in solid:
         x0, x1 = sorted((float(ln["x0"]), float(ln["x1"])))
@@ -124,9 +145,41 @@ def reference_lines(lines: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
     return out
 
 
+def _fillet_from_strokes(lines: Sequence[Mapping[str, Any]], y: float, x0: float,
+                         x1: float) -> Optional[float]:
+    """The x of a fillet triangle drawn as STROKES on the reference line at y, else None.
+
+    12173-03 p.6 draws 201's fillet as three separate lines, not one closed curve: a vertical
+    leg (433.7, 145.39)-(433.7, 150.69) standing on the reference line, a slant from its free
+    end back down to the line, and the base, which IS the reference line. The closed-curve
+    test never saw it. A leg of symbol height standing on the line, inside its x-range, with a
+    slant from the leg's free end that lands back on the line inside its x-range, is the
+    triangle."""
+    for v in lines:
+        if _is_horizontal(v) or _dashed(v) or abs(float(v["x1"]) - float(v["x0"])) > 0.3:
+            continue
+        top, bot, vx = float(v["top"]), float(v["bottom"]), float(v["x0"])
+        if not (_CIRCLE_D[0] <= bot - top <= _CIRCLE_D[1]) or not (x0 - 0.5 <= vx <= x1 + 0.5):
+            continue
+        if abs(bot - y) <= _ON_LINE:
+            apex = top
+        elif abs(top - y) <= _ON_LINE:
+            apex = bot
+        else:
+            continue
+        for s in lines:
+            if s is v or _is_horizontal(s) or abs(float(s["x1"]) - float(s["x0"])) <= 0.3:
+                continue
+            e = _ends(s)
+            if any(abs(ex - vx) <= 0.6 and abs(ey - apex) <= 0.6 for ex, ey in e) and \
+                    any(abs(ey - y) <= _ON_LINE and x0 - 0.5 <= ex <= x1 + 0.5 for ex, ey in e):
+                return vx
+    return None
+
+
 def read_weld_symbols(lines: Sequence[Mapping[str, Any]],
                       curves: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
-    """One entry per weld callout on the sheet: {kind, x, y, identification_line}."""
+    """One entry per weld callout on the sheet: {kind, x, y, identification_line, all_round}."""
     found: List[Dict[str, Any]] = []
     circles = [c for c in (_circle(cv) for cv in curves) if c is not None]
     horizontal = [ln for ln in lines if _is_horizontal(ln)]
@@ -134,27 +187,49 @@ def read_weld_symbols(lines: Sequence[Mapping[str, Any]],
         y, x0, x1 = ref["y"], ref["x0"], ref["x1"]
         kind = None
         at = None
+        all_round = False
         for cx, cy, d in circles:
-            if abs(cy - y) <= _ON_LINE and x0 - 0.5 <= cx <= x1 + 0.5:
-                # A seam weld is the same circle with two parallel lines through it.
-                crossing = [h for h in horizontal
-                            if abs(float(h["top"]) - y) > _ON_LINE
-                            and abs(float(h["top"]) - cy) <= d / 2.0
-                            and float(h["x0"]) <= cx <= float(h["x1"])
-                            and _length(h) <= 3.0 * d]
-                kind, at = ("seam" if len(crossing) >= 2 else "spot"), cx
-                break
+            if abs(cy - y) > _ON_LINE:
+                continue
+            # THE CIRCLE AT THE ARROW JUNCTION IS "WELD ALL ROUND", NOT A SPOT. 12173-03 p.9
+            # draws the tube frame's fillet all round: the circle sits on the reference line's
+            # end (centre x 543.75 against a line end at 543.8). Read as a spot it made 04M
+            # and 05M "spot welded only" and ruled their arc weld and dressing out. Either
+            # end, because reference_lines can take the tail fork for the leader.
+            if min(abs(cx - x0), abs(cx - x1)) <= _LEADER_REACH:
+                all_round = True
+                continue
+            # A SPOT OR SEAM SITS ON THE LINE, so the range stays the line's own. Widening it
+            # past the ends turns a hole or a balloon in line with the reference into a spot,
+            # and a spot-only reading rules out an arc weld — money removed on a false read.
+            if not (x0 - 0.5 <= cx <= x1 + 0.5):
+                continue
+            # A seam weld is the same circle with two parallel lines through it.
+            crossing = [h for h in horizontal
+                        if abs(float(h["top"]) - y) > _ON_LINE
+                        and abs(float(h["top"]) - cy) <= d / 2.0
+                        and float(h["x0"]) <= cx <= float(h["x1"])
+                        and _length(h) <= 3.0 * d]
+            kind, at = ("seam" if len(crossing) >= 2 else "spot"), cx
+            break
         if kind is None:
             for cv in curves:
                 tri = _triangle_on(cv, y)
                 if tri and x0 - 0.5 <= tri[0] <= x1 + 0.5:
                     kind, at = "fillet", tri[0]
                     break
+        # Strokes are accepted only on an ISO callout (the dashed identification line): two
+        # loose lines meeting a reference line are too common on a sheet to name a weld alone.
+        if kind is None and ref["identification_line"]:
+            fx = _fillet_from_strokes(lines, y, x0, x1)
+            if fx is not None:
+                kind, at = "fillet", fx
         if kind is None and not ref["identification_line"]:
             continue                 # a line meeting a line is not a callout without a symbol
         found.append({"kind": kind or "unclassified", "x": round(at if at is not None
                                                                  else (x0 + x1) / 2.0, 1),
-                      "y": round(y, 1), "identification_line": ref["identification_line"]})
+                      "y": round(y, 1), "identification_line": ref["identification_line"],
+                      "all_round": all_round})
     return found
 
 
@@ -187,6 +262,43 @@ def only_spot_welds(counts: Mapping[str, int]) -> int:
 
 def _clean_pn(value: Any) -> str:
     return "".join(str(value or "").upper().split())
+
+
+def _symbol_ops() -> Dict[str, str]:
+    """What a named symbol on a part's own sheet states (config.WELD_SYMBOL_OPERATION)."""
+    try:
+        import config
+        return dict(getattr(config, "WELD_SYMBOL_OPERATION", None) or {"fillet": "welding"})
+    except Exception:                                                # noqa: BLE001
+        return {"fillet": "welding"}
+
+
+def arc_weld_symbols(counts: Optional[Mapping[str, Any]]) -> int:
+    """How many callouts on the sheet name an ARC weld. A seam is ISO resistance seam welding
+    and an unclassified callout names nothing, so neither counts (D-382 counted seams)."""
+    return sum(int((counts or {}).get(k) or 0) for k, op in _symbol_ops().items()
+               if op == "welding")
+
+
+def describe_weld_symbols(counts: Optional[Mapping[str, Any]], pages: Sequence[Any] = ()) -> str:
+    """THE sentence for what the symbol reader found on a part's own sheet.
+
+    It reports a READING — "found" or "named no" — never that a sheet "carries" no symbol. The
+    reader is blind to some drawings (a spot circle drawn tangent above the line, an AWS
+    stroke fillet with no identification line, butt and plug symbols), so absence of a reading
+    is not absence of a weld. An unclassified callout is never called a weld symbol. None means
+    the sheet was not read at all."""
+    if counts is None:
+        return "its own sheet was not read for weld symbols"
+    pg = [str(p) for p in (pages or []) if p not in (None, "")]
+    where = f"its own sheet (p.{', '.join(pg)})" if pg else "its own sheet"
+    named = {str(k): int(v) for k, v in counts.items()
+             if str(k) != "unclassified" and isinstance(v, (int, float)) and v}
+    if not named:
+        return f"the weld-symbol reader named no weld symbol on {where}"
+    return ("the weld-symbol reader found "
+            + ", ".join(f"{v} {k}" for k, v in sorted(named.items()))
+            + f" weld symbol(s) on {where}")
 
 
 def sheet_weld_symbols(pdf_path: Any) -> Dict[str, Dict[str, Any]]:
@@ -242,7 +354,8 @@ def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
                     if not pn:
                         continue
                     slot = out.setdefault(_clean_pn(pn), {"counts": {}, "pages": [],
-                                                          "text": "", "finish": ""})
+                                                          "text": "", "finish": "",
+                                                          "finishes": []})
                     for k, v in read_page(page).items():
                         slot["counts"][k] = slot["counts"].get(k, 0) + v
                     slot["pages"].append(i)
@@ -251,8 +364,14 @@ def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
                         _fin = str((_title_block_fields(page) or {}).get("finish") or "")
                     except Exception:                                # noqa: BLE001
                         _fin = ""
-                    if _fin and not slot["finish"]:
-                        slot["finish"] = _fin.upper()
+                    # ONE PAGE'S FINISH DOES NOT SPEAK FOR A SLOT OF SEVERAL SHEETS. Each page's
+                    # finish is kept; the slot's finish is the one they agree on, else none.
+                    # 12173-07-2's three member sheets (RAW) were pooled under the GA's key and
+                    # took page 1's POWDER COATED.
+                    if _fin:
+                        slot["finishes"].append(_fin.upper())
+                        slot["finish"] = (slot["finishes"][0]
+                                          if len(set(slot["finishes"])) == 1 else "")
         except Exception:                                            # noqa: BLE001
             continue
     return out
@@ -280,7 +399,7 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
         route charges on it stands and a manufacturing decision is raised naming the
         evidence, for a person reading the joint on the drawing.
 
-    Returns {"stated": [...], "questioned": [...]}."""
+    Returns {"stated": [...], "questioned": [...], "joined_by_symbol": [...]}."""
     stated: List[str] = []
     questioned: List[str] = []
     by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
@@ -297,43 +416,59 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
             f"WELDED per its own sheet: the title block's FINISH reads "
             f"'{by_part[pn].get('finish')}' — a stated weld, not an inference")
         stated.append(str(part.get("part_number") or pn))
+    joined: List[str] = []
     for pn, facts in by_part.items():
         finish = str(facts.get("finish") or "")
         if not finish or _says_welded(finish):
             continue
         part = by_pn.get(pn)
-        if part is None:
-            continue
+        if part is None or "welding" in (part.get("operations_ruled_out") or {}):
+            continue                      # spot welded per its own symbols: already settled
         text = str(facts.get("text") or "")
         members = sorted(m for m in welded if m != pn and m in text)
         if not members:
             continue
-        counts = dict(facts.get("counts") or {})
-        _arc = sum(int(counts.get(k) or 0) for k in ("fillet", "seam"))
         _names = ", ".join(str((by_pn.get(m) or {}).get("part_number") or m) for m in members)
-        if _arc:
+        counts = facts.get("counts") if isinstance(facts.get("counts"), Mapping) else None
+        pages = list(facts.get("pages") or [])
+        # WHAT THE READER FOUND, NEVER WHAT THE SHEET "SHOWS". Until the stroke-fillet and
+        # solid-dash fixes the reader returned nothing for 201's own sheet, which draws two
+        # ISO fillet callouts at the 202/203 joint; "shows no arc-weld symbol" was false there.
+        _drawn = describe_weld_symbols(counts, pages)
+        if arc_weld_symbols(counts):
+            # Stated by apply_to_parts from the symbols; say why the members do not double it.
             part.setdefault("review_flags", []).append(
-                f"welded as well as its members: its own sheet shows {_arc} arc-weld "
-                f"symbol(s), beside FINISH '{finish}' and members {_names} stated WELDED")
+                f"welded on assembly: {_drawn} — the joint between {_names}, whose own sheets "
+                f"state FINISH: WELDED for their own welds")
+            joined.append(str(part.get("part_number") or pn))
             continue
         _q = {
             "issue": (f"Is {part.get('part_number')} welded itself? Its members {_names} each "
                       f"state FINISH: WELDED on their own sheets; its own sheet states FINISH "
-                      f"'{finish}' and shows no arc-weld symbol, which says how it is finished "
-                      f"and not how its members are joined"),
+                      f"'{finish}' and {_drawn}, which says how it is finished and not how "
+                      f"its members are joined"),
             "assumption": ("whatever the route charges for welding and dressing on it stands "
                            "until answered — nothing is removed on this evidence"),
             "action": ("read the joint between the members on its sheet: if they are bolted, "
                        "slotted or only welded within themselves, rule the weld and dressing "
                        "off this assembly; if they are welded to each other, confirm it"),
             "source": "weld_symbols.apply_finish_welds",
+            # ASKED ONLY WHERE MONEY RIDES ON IT. An uncharged weld cannot be double-charged,
+            # so costed_facts raises this as a decision only when the sheet charges one of
+            # these on the part, with those rows' money; otherwise the flag below stands alone.
+            "subject": "welding",
+            "charged_operations": ["welding", "spot_welding", "dress_welds"],
         }
         qs = part.setdefault("manufacturing_questions", [])
         if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == _q["issue"]
                                             for x in qs):
             qs.append(_q)
+            part.setdefault("review_flags", []).append(
+                f"WELD ON THIS ASSEMBLY NOT SETTLED: {_names} state FINISH: WELDED; this sheet "
+                f"states FINISH '{finish}' and {_drawn}. Any weld the route charges here stands "
+                f"and is asked; none is added or removed")
         questioned.append(str(part.get("part_number") or pn))
-    return {"stated": stated, "questioned": questioned}
+    return {"stated": stated, "questioned": questioned, "joined_by_symbol": joined}
 
 
 def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mapping[str, Any]]
@@ -353,6 +488,22 @@ def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mappin
         counts = dict(hit.get("counts") or {})
         sheets = ", ".join(str(p) for p in hit.get("pages") or [])
         part["weld_symbols"] = counts
+        part["weld_symbol_pages"] = list(hit.get("pages") or [])
+        # AN ARC-WELD SYMBOL ON A PART'S OWN SHEET STATES THE WELD. 12173-03-04M and 05M draw a
+        # fillet all round on their tube corners; 202 and 203 a fillet for their tabs; 201 two
+        # fillets at the 202/203 joint. All were "inferred, not drawn" — or not welded at all —
+        # because nothing turned a symbol into a statement. A fillet (config
+        # WELD_SYMBOL_OPERATION) is a reading of the drawing; a seam or an unnamed callout
+        # states nothing.
+        if arc_weld_symbols(counts) and "welding" not in (part.get("operations_ruled_out") or {}):
+            _ops = part.setdefault("textual_operations", [])
+            if isinstance(_ops, list) and "welding" not in _ops:
+                _ops.append("welding")
+            part.setdefault("operation_sources", {})["welding"] = "drawing_deterministic"
+            _flag = (f"WELDED per the drawing: "
+                     f"{describe_weld_symbols(counts, part['weld_symbol_pages'])}")
+            if _flag not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_flag)
         n = only_spot_welds(counts)
         if not n:
             continue
@@ -400,7 +551,7 @@ def _rule_members(parts: Sequence[Dict[str, Any]], weldment: Mapping[str, Any],
         if not pn or pn == own or (pn not in kids and pn not in text):
             continue
         mine = (by_part.get(pn) or {}).get("counts") or {}
-        if any(int(mine.get(k) or 0) for k in ("fillet", "seam")):
+        if arc_weld_symbols(mine):
             continue
         _why = (f"joined into {weldment.get('part_number')} by spot welds — that sheet "
                 f"({sheets}) carries {n} ISO spot-weld symbol(s) and no arc-weld symbol")
