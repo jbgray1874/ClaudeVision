@@ -6733,10 +6733,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # the standard (_customer_finish_standard) from the same customer name the workbook
     # header prints; a customer not in the table keeps the shop default exactly as before.
     _cfs = part.get("_customer_finish_standard")
+    # NOT AFTER A WELD THE DRAWING RULED OUT. 12527-22-101's own sheet states spot welds, and
+    # arc welding is ruled out on it with that reason; the op still reached this list from
+    # another reader, and the M&S standard put Dress Welds back on a spot-welded riser.
+    _arc_ruled_out = "welding" in (part.get("operations_ruled_out") or {})
     if (
         getattr(config, "DRESS_AFTER_STRUCTURAL_WELD", True)
         and "welding" in ops
         and "dress_welds" not in ops
+        and not _arc_ruled_out
     ):
         if isinstance(_cfs, dict) and _cfs.get("dress_visible_welds") is False:
             part.setdefault("review_flags", []).append(

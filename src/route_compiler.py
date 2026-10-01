@@ -4724,9 +4724,14 @@ def compile_job_route(
         decision.target_id for decision in current_decisions
         if decision.operation == "assembly" and decision.status == REQUIRED
     }
+    # EVERY WELD THAT MAKES MEMBERS ONE OBJECT, NOT ONLY AN ARC WELD. 12527-22-101 is spot
+    # welded by its own sheet's symbols; read as "not welded", its coat went to the two
+    # members (qty 2) and it was given a separate assemble event over 01M and 02M — a joining
+    # step the spot weld already is. _JOINING_OPS less dressing, which joins nothing.
     welded_targets = {
         decision.target_id for decision in current_decisions
-        if decision.operation == "welding" and decision.status == REQUIRED
+        if decision.operation in (_JOINING_OPS - {"dress_welds"})
+        and decision.status == REQUIRED
     }
     for node in graph["nodes"]:
         # WELDING REPLACES THE JOINING STEP, NOT THE FINAL PACK.
