@@ -2987,6 +2987,36 @@ def augment_summary_with_dxf(
                 continue
 
         part = _lookup_part(parts_by_key, pn)
+        # A NUMBERED PIECE IS AN ASSUMPTION ABOUT A SUFFIX, SO IT IS SAID (D-382). "<part>-1"
+        # read as piece 1 of <part> is right for 12173-03-01J's two 25 mm layers; another
+        # drawing office may write the same suffix for a VARIANT. Where the job also holds a
+        # flat named for <part> itself, the part has its own flat and the suffixed files are
+        # more likely variants or alternatives than pieces of it: nothing is attached and the
+        # file is reported ambiguous. Otherwise the piece reading stands and is flagged on the
+        # part, naming the file, so an estimator can see the assumption and correct it.
+        _key_n = _normalize_part_key(pn)
+        if part is not None and _key_n not in parts_by_key \
+                and _piece_of_known_part(parts_by_key, _key_n) is part:
+            _base_key = _normalize_part_key(part.get("part_number"))
+            _own_flat = any(
+                _normalize_part_key(part_number_from_dxf_path(Path(_o)) or "") == _base_key
+                for _o in dxf_paths if Path(_o) != path)
+            if _own_flat:
+                report["ambiguous_dxf"].append({
+                    "path": str(path), "part_number": pn,
+                    "reason": "suffixed_flat_beside_the_parts_own_flat",
+                    "detail": (f"{path.name} reads as piece {pn.rsplit('-', 1)[-1]} of "
+                               f"{part.get('part_number')}, but the job also holds a flat "
+                               f"named for {part.get('part_number')} itself — a variant or a "
+                               f"piece cannot be told apart, so it is not attached")})
+                part.setdefault("review_flags", []).append(
+                    f"DXF {path.name} NOT attached: its suffix could be a piece or a variant "
+                    f"of {part.get('part_number')}, which has a flat of its own — say which")
+                continue
+            part.setdefault("review_flags", []).append(
+                f"DXF {path.name} read as numbered piece {pn.rsplit('-', 1)[-1]} of "
+                f"{part.get('part_number')} (the job has no part {pn}) — if the suffix "
+                f"marks a variant rather than a piece, correct the match")
         if not part and not _dxf_code_is_in_this_job(pn, parts_by_key):
             # A FLAT FOR ANOTHER DRAWING IS NOT A PART OF THIS ONE.
             #

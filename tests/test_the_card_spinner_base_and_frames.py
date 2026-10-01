@@ -86,13 +86,37 @@ def test_a_sheet_that_says_welded_states_the_weld():
     assert "textual_operations" not in parts[3]
 
 
-def test_the_powder_parent_of_welded_members_is_not_welded_again():
+def test_the_powder_parent_of_welded_members_is_asked_not_ruled():
+    """D-382: members stated WELDED do not prove the parent has no weld of its own. The
+    route's charge stands and a manufacturing decision names the evidence."""
     parts = [{"part_number": k} for k in ("12173-03-201", "12173-03-202", "12173-03-203")]
     got = ws.apply_finish_welds(parts, _sheets())
-    assert got["ruled_out"] == ["12173-03-201"]
-    ro = parts[0]["operations_ruled_out"]
-    assert "welding" in ro and "dress_welds" in ro
-    assert "FINISH: WELDED" in ro["welding"] and "POWDER" in ro["welding"]
+    assert got["questioned"] == ["12173-03-201"]
+    assert "operations_ruled_out" not in parts[0]
+    q = parts[0]["manufacturing_questions"][0]
+    assert "12173-03-202, 12173-03-203" in q["issue"] and "POWDER" in q["issue"]
+    assert "nothing is removed" in q["assumption"]
+    ws.apply_finish_welds(parts, _sheets())
+    assert len(parts[0]["manufacturing_questions"]) == 1, "asked once, however often it runs"
+
+
+def test_a_parent_whose_own_sheet_shows_an_arc_weld_is_welded_without_asking():
+    parts = [{"part_number": k} for k in ("12173-03-201", "12173-03-202", "12173-03-203")]
+    sheets = _sheets()
+    sheets["12173-03-201"] = dict(sheets["12173-03-201"], counts={"fillet": 2})
+    got = ws.apply_finish_welds(parts, sheets)
+    assert got["questioned"] == [] and "manufacturing_questions" not in parts[0]
+    assert "operations_ruled_out" not in parts[0]
+
+
+def test_the_question_is_a_decision_on_the_record():
+    import costed_facts as cf
+    q = {"issue": "Is W-201 welded itself?", "assumption": "stands", "action": "read it"}
+    src = {"estimate_summary": {"part_estimates": [
+        {"part_number": "W-201", "quantity": 1, "manufacturing_questions": [q, dict(q)]}]}}
+    ds = [x for x in cf.costed_job(src).get("decisions_required") or []
+          if x.get("issue") == q["issue"]]
+    assert len(ds) == 1 and ds[0]["kind"] == "manufacturing_decision"
 
 
 def test_a_weldment_over_raw_members_keeps_its_weld():
@@ -100,7 +124,37 @@ def test_a_weldment_over_raw_members_keeps_its_weld():
     parts = [{"part_number": "W-101"}, {"part_number": "W-01M"}]
     sheets = {"W-101": {"finish": "POWDER COATED", "text": "W-01M"},
               "W-01M": {"finish": "SEE ASSEMBLY DRAWING", "text": ""}}
-    assert ws.apply_finish_welds(parts, sheets) == {"stated": [], "ruled_out": []}
+    assert ws.apply_finish_welds(parts, sheets) == {"stated": [], "questioned": []}
+
+
+def test_a_piece_match_is_flagged_on_the_part(tmp_path):
+    import ezdxf
+    for n in ("9999-01-01J-1_25mm MDF.DXF", "9999-01-01J-2_25mm MDF.DXF"):
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline([(0, 0), (500, 0), (500, 500), (0, 500)], close=True)
+        doc.saveas(tmp_path / n)
+    parts = [{"part_number": "9999-01-01J", "description": "BASE", "quantity": 1}]
+    out = d.augment_summary_with_dxf({"manufacturing_writeup": {"parts": parts}, "pages": []},
+                                     sorted(tmp_path.glob("*.DXF")), reestimate=False)
+    base = next(p for p in out["manufacturing_writeup"]["parts"] if p["part_number"] == "9999-01-01J")
+    flags = " ".join(base.get("review_flags") or [])
+    assert "read as numbered piece 1 of 9999-01-01J" in flags and "variant" in flags
+
+
+def test_a_suffixed_flat_beside_the_parts_own_flat_is_not_attached(tmp_path):
+    import ezdxf
+    for n, w in (("9999-01-01J_18mm MDF.DXF", 500), ("9999-01-01J-1_18mm MDF.DXF", 400)):
+        doc = ezdxf.new()
+        doc.modelspace().add_lwpolyline([(0, 0), (w, 0), (w, w), (0, w)], close=True)
+        doc.saveas(tmp_path / n)
+    parts = [{"part_number": "9999-01-01J", "description": "BASE", "quantity": 1}]
+    out = d.augment_summary_with_dxf({"manufacturing_writeup": {"parts": parts}, "pages": []},
+                                     sorted(tmp_path.glob("*.DXF")), reestimate=False)
+    rep = out.get("dxf_augmentation") or out.get("dxf_report") or {}
+    names = {p["part_number"] for p in out["manufacturing_writeup"]["parts"]}
+    assert "9999-01-01J-01" not in names
+    base = next(p for p in out["manufacturing_writeup"]["parts"] if p["part_number"] == "9999-01-01J")
+    assert any("NOT attached" in f for f in base.get("review_flags") or [])
 
 
 def test_every_pdf_in_the_pack_is_read():

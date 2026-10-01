@@ -3006,10 +3006,11 @@ def _finalize_scan_summary(
             _ws_by_part = _ws_read(_ws_pdfs)
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
             _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
-            if _ws_fin.get("stated") or _ws_fin.get("ruled_out"):
+            if _ws_fin.get("stated") or _ws_fin.get("questioned"):
                 print(f"   [weld-symbols] welded per its own sheet's FINISH: "
-                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; not welded again "
-                      f"(its members are): {', '.join(_ws_fin.get('ruled_out') or []) or 'none'}",
+                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; asked whether "
+                      f"welded itself (members state WELDED, its own sheet does not): "
+                      f"{', '.join(_ws_fin.get('questioned') or []) or 'none'}",
                       flush=True)
             run_timing.mark("done weld_symbols")
             summary["weld_symbols_by_part"] = _ws_by_part

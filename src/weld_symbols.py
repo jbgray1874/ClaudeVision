@@ -269,17 +269,20 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
 
     12173-03: the FRONT and SIDE frames (202, 203) each state FINISH: WELDED on their own
     sheets, and the FRAME WELD ASSEMBLY that holds them (201) states FINISH: POWDER COATED.
-    The book read none of it: all three were "inferred, not drawn", and 201 was welded a third
-    time over its members. So:
+    The book read none of it: all three were "inferred, not drawn".
 
-      * a part whose own sheet says FINISH: WELDED is welded by the drawing, not by inference;
-      * an assembly whose own sheet states another finish, over members whose sheets say
-        WELDED, is not welded again — its joints ARE its members' welds; ruled out with the
-        reason, through operations_ruled_out, as every stage reads it.
+      * A part whose own sheet says FINISH: WELDED is welded by the drawing, not by inference.
+      * An assembly whose own sheet states ANOTHER finish, over members whose sheets say
+        WELDED, is NOT settled by that. Its members' finish proves THEIR welds; it does not
+        prove there is no further weld joining them (D-382 — D-378 ruled the parent's weld
+        out on this and that was a conclusion the evidence does not carry). Where the
+        parent's own sheet shows an arc-weld symbol the weld stands; otherwise whatever the
+        route charges on it stands and a manufacturing decision is raised naming the
+        evidence, for a person reading the joint on the drawing.
 
-    Returns {"stated": [...], "ruled_out": [...]}."""
+    Returns {"stated": [...], "questioned": [...]}."""
     stated: List[str] = []
-    ruled: List[str] = []
+    questioned: List[str] = []
     by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
     welded = {pn for pn, f in by_part.items() if _says_welded(f.get("finish"))}
     for pn in sorted(welded):
@@ -305,17 +308,32 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
         members = sorted(m for m in welded if m != pn and m in text)
         if not members:
             continue
-        _why = (f"its own sheet states FINISH '{finish}', and its members "
-                f"{', '.join(by_pn[m].get('part_number') or m for m in members if m in by_pn) or ', '.join(members)} "
-                f"each state FINISH: WELDED on their own sheets — the welds are theirs, so "
-                f"this assembly is not welded again")
-        part.setdefault("operations_ruled_out", {}).setdefault("welding", _why)
-        part.setdefault("operations_ruled_out", {}).setdefault("dress_welds", _why)
-        part.setdefault("operation_ruling_sources", {}).setdefault("welding", "drawing_deterministic")
-        part.setdefault("operation_ruling_sources", {}).setdefault("dress_welds", "drawing_deterministic")
-        part.setdefault("review_flags", []).append(f"no weld charged on this assembly: {_why}")
-        ruled.append(str(part.get("part_number") or pn))
-    return {"stated": stated, "ruled_out": ruled}
+        counts = dict(facts.get("counts") or {})
+        _arc = sum(int(counts.get(k) or 0) for k in ("fillet", "seam"))
+        _names = ", ".join(str((by_pn.get(m) or {}).get("part_number") or m) for m in members)
+        if _arc:
+            part.setdefault("review_flags", []).append(
+                f"welded as well as its members: its own sheet shows {_arc} arc-weld "
+                f"symbol(s), beside FINISH '{finish}' and members {_names} stated WELDED")
+            continue
+        _q = {
+            "issue": (f"Is {part.get('part_number')} welded itself? Its members {_names} each "
+                      f"state FINISH: WELDED on their own sheets; its own sheet states FINISH "
+                      f"'{finish}' and shows no arc-weld symbol, which says how it is finished "
+                      f"and not how its members are joined"),
+            "assumption": ("whatever the route charges for welding and dressing on it stands "
+                           "until answered — nothing is removed on this evidence"),
+            "action": ("read the joint between the members on its sheet: if they are bolted, "
+                       "slotted or only welded within themselves, rule the weld and dressing "
+                       "off this assembly; if they are welded to each other, confirm it"),
+            "source": "weld_symbols.apply_finish_welds",
+        }
+        qs = part.setdefault("manufacturing_questions", [])
+        if isinstance(qs, list) and not any(isinstance(x, dict) and x.get("issue") == _q["issue"]
+                                            for x in qs):
+            qs.append(_q)
+        questioned.append(str(part.get("part_number") or pn))
+    return {"stated": stated, "questioned": questioned}
 
 
 def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mapping[str, Any]]

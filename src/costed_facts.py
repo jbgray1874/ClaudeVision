@@ -2264,6 +2264,23 @@ def costed_job(source: Any) -> Dict[str, Any]:
                 "issue": str(_gap.get("issue")), "assumption": str(_gap.get("assumption") or ""),
                 "action": str(_gap.get("action") or ""), "owner": "estimator",
                 "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
+        # A READER'S OPEN QUESTION IS A DECISION (D-382). A reader that finds evidence it
+        # cannot settle — a parent finished one way over members stated welded — leaves the
+        # money as the route had it and asks; the question is counted here like any other.
+        _seen_q: Set[str] = set()
+        for _mq in (part.get("manufacturing_questions") or []):
+            if not isinstance(_mq, Mapping) or not _mq.get("issue"):
+                continue
+            if str(_mq["issue"]) in _seen_q or any(
+                    d.get("issue") == _mq["issue"] for d in decisions):
+                continue
+            _seen_q.add(str(_mq["issue"]))
+            _line = _by_pn.get(str(part.get("part_number") or "").upper())
+            decisions.append({
+                "part": str(part.get("part_number") or ""), "kind": "manufacturing_decision",
+                "issue": str(_mq.get("issue")), "assumption": str(_mq.get("assumption") or ""),
+                "action": str(_mq.get("action") or ""), "owner": "estimator",
+                "gbp_at_stake": (_money_of(_line) if _line is not None else None) or None})
         _ov = part.get("block_overflow")
         if isinstance(_ov, Mapping) and _ov.get("basis") == "net_part_provisional":
             _line = _by_pn.get(str(part.get("part_number") or "").upper())
