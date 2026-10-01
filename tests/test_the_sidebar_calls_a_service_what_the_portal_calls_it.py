@@ -63,8 +63,11 @@ def _portal_services():
     _json = _BACKEND / "services.json"
     if "const SERVICES=[" not in _PORTAL and _json.exists():
         import json
+        # An app-launcher-only entry (surface "app") is not on the intranet portal, so the
+        # intranet sidebars do not carry it.
         return [(s["id"], s["name"]) for s in
-                json.loads(_json.read_text(encoding="utf-8"))["services"]]
+                json.loads(_json.read_text(encoding="utf-8"))["services"]
+                if s.get("surface") != "app"]
     out = []
     for m in re.finditer(r"\{id:'([a-z0-9-]+)',\s*name:'((?:[^'\\]|\\.)*)'", _PORTAL):
         name = _unescape_js(m.group(2)).replace("\\'", "'")
