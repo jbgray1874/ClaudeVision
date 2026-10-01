@@ -389,11 +389,20 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # generic @1100 / garbled one); the LLM cut length is the printed truth.
         a, b, t = _parse_section(jp.get("tube_section"))
         cut = _num(jp.get("cut_length_mm"))
+        # ONE PART, SEVERAL PIECES (D-380). A welded tube frame is cut 1,532 x2 + 290 + 350 of
+        # one section; its stock is the sum, not the longest piece. The pieces are kept on the
+        # section so the length reader can see them.
+        _pieces = [v for v in (_num(x) for x in (jp.get("cut_lengths_mm") or [])
+                               if not isinstance(x, (dict, list))) if v and v > 0]
+        if _pieces and not (cut and cut > 0):
+            cut = max(_pieces)
         if a and b and t and cut and cut > 0 and not _dxf_backed:  # DXF geometry wins; LLM drives no-DXF
             ss = part.get("section_stock")
             ss = dict(ss) if isinstance(ss, dict) else {}
             _before_len = _num(ss.get("length_mm"))
             ss.update({"a": a, "b": b, "t": t, "length_mm": cut})
+            if len(_pieces) > 1:
+                ss["cut_lengths_mm"] = _pieces
             ss["source"] = _src(jp, "tube_section")
             part["section_stock"] = ss
             if ss["source"] == "inference":

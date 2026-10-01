@@ -2177,6 +2177,48 @@ def _mupdf_page_text(page: Mapping[str, Any], docs: Dict[str, Any]) -> str:
         return ""
 
 
+# The fields fold_count.press_brake_folds reads. Kept beside the arbiter's readers so a new
+# rung there is a one-line addition here.
+_FOLD_EVIDENCE_FIELDS = ("bend_count_dxf", "fold_count_textual", "fold_values_mm", "angles_deg",
+                         "solidworks_bend_features", "drawing_bend_callouts")
+
+
+def settle_mirrored_folds(parts: List[Dict[str, Any]]) -> int:
+    """A hand whose flat IS its base's flat folds as its base is charged (D-380).
+
+    12173-04-02M-H inherited 02M's measured flat, then took 02M's callouts and model features
+    but not its fold note, and was arbitrated on what it had: 4 folds against 02M's 1. Same
+    tool, opposite hand. Where the hand's geometry was mirrored from the base and its own
+    sheet prints no bend callout of its own, the base's whole fold evidence is held on the
+    hand and the one arbiter decides both. A hand with its own sheet or its own DXF keeps its
+    own reading. Returns the number of hands settled.
+    """
+    n = 0
+    for hand, base in handed_pairs(parts) or ():
+        _ng = hand.get("normalized_geometry") if isinstance(hand.get("normalized_geometry"),
+                                                            dict) else {}
+        if _own_number_key(_ng.get("mirrored_from")) != _own_number_key(base.get("part_number")):
+            continue
+        if hand.get("drawing_bend_callouts") and source_precedence.source_of(
+                hand, "drawing_bend_callouts") != "mirror_of_measured":
+            continue
+        if base.get("mirrored_fold_evidence"):
+            continue
+        evidence = {k: base.get(k) for k in _FOLD_EVIDENCE_FIELDS if not _is_blank(base.get(k))}
+        _dash = (base.get("geometry_rollup") or {}).get("dashed_long_axis_lines") \
+            if isinstance(base.get("geometry_rollup"), dict) else None
+        if _dash is not None:
+            evidence["geometry_rollup"] = {"dashed_long_axis_lines": _dash}
+        if not evidence:
+            continue
+        hand["mirrored_fold_evidence"] = {"from": base.get("part_number"), "evidence": evidence}
+        hand.setdefault("review_flags", []).append(
+            f"fold count taken as {base.get('part_number')}'s, on its evidence and its rules "
+            f"— a mirrored hand is the same flat")
+        n += 1
+    return n
+
+
 def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> int:
     """How many bend callouts ("UP 105°", "DOWN 90°") the part's own drawing sheets print.
 

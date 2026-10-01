@@ -3715,8 +3715,11 @@ def _finalize_scan_summary(
             print(f"   [mirror] sheet-note pass skipped: {_mn_err}", flush=True)
         _mirrored = apply_mirror_geometry(summary["manufacturing_writeup"]["parts"])
         try:
-            from drawing_job_merge import propose_missing_cuts, stamp_drawing_bend_callouts
+            from drawing_job_merge import (propose_missing_cuts, settle_mirrored_folds,
+                                           stamp_drawing_bend_callouts)
             stamp_drawing_bend_callouts(summary["manufacturing_writeup"]["parts"], summary)
+            # Every fold reading is in by now, so a hand can take its base's evidence whole.
+            settle_mirrored_folds(summary["manufacturing_writeup"]["parts"])
             for _cp in propose_missing_cuts(summary["manufacturing_writeup"]["parts"]):
                 print(f"   [route] {_cp['part_number']}: measured flat, no cutting operation "
                       f"-> {_cp['result']}", flush=True)

@@ -117,6 +117,18 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     Every consumer asks this one function: the process time, the workbook labour row, the
     provenance, the report and the review flags. One number, one label, and they cannot drift.
     """
+    # A MIRRORED HAND IS THE SAME FLAT (D-380). 12173-04-02M-H took 02M's callouts and model
+    # features but not its fold note, so it was arbitrated on a different set of evidence and
+    # charged 4 folds beside 02M's 1. Where the hand's flat is its base's, the base's whole
+    # evidence is held on the hand (drawing_job_merge.settle_mirrored_folds) and arbitrated
+    # here by the same rules, so the two hands cannot land differently.
+    _mirror = part.get("mirrored_fold_evidence") if isinstance(part, dict) else None
+    if isinstance(_mirror, dict) and _mirror.get("evidence"):
+        out = press_brake_folds(dict(_mirror["evidence"]))
+        out["mirrored_from"] = _mirror.get("from")
+        out["source_label"] = (f"{out['source_label']} on {_mirror.get('from')}, the hand "
+                               f"this part mirrors")
+        return out
     rungs = (
         (FLAT_PATTERN, flat_pattern_bend_lines(part)),
         (DRAWING_NOTE, drawing_fold_note(part)),
@@ -140,8 +152,11 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     _model = solidworks_bend_features(part)
     # The model must CONFIRM the callouts (at least as many features), never supply the
     # number: 12614-01's side panels print 11 callouts where the model has 12 (D-259).
-    if (source == FLAT_PATTERN and _callouts and _model and _model >= _callouts
-            and _callouts > count):
+    # AND THE SAME TWO STATEMENTS OUTRANK A FOLD NOTE THAT COUNTS FEWER. 12173-04-02M's
+    # sheet prints two bend callouts, its model has four bend features and its DXF two bend
+    # lines; a single angle read as the "note" charged one fold (D-380).
+    if (source in (FLAT_PATTERN, DRAWING_NOTE) and _callouts and _model
+            and _model >= _callouts and _callouts > count):
         count, source = _callouts, CALLOUTS_AND_MODEL
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is

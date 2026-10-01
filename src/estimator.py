@@ -1032,6 +1032,7 @@ def _lookup_catalogue_tube_price(
     side_b_mm: Optional[float],
     wall_t_mm: Optional[float],
     length_mm: Optional[float],
+    own_part_number: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Find a genuine catalogued price for a detected hollow section by matching its
     PROFILE (and length, when available) against priced rows in UDEF
@@ -1077,12 +1078,69 @@ def _lookup_catalogue_tube_price(
         except Exception:
             pass
 
+    return _select_catalogue_section_row(rows, side_a_mm, side_b_mm, wall_t_mm, length_mm,
+                                         own_part_number)
+
+
+# Words in a catalogue description that name a MADE thing, not a stock section. Config may
+# extend the list (SECTION_CATALOGUE_MADE_FORM_WORDS); the length suffix "@ 1125mm" is NOT one —
+# that is how a bought-in cut piece (SLOTTEDTUBE01) is described.
+_MADE_FORM_WORDS_DEFAULT = ("FRAME", "ASSEMBLY", "ASSY", "WELDMENT", "FABRICATION")
+
+
+def _catalogue_row_is_a_made_part(code: Any, desc: Any,
+                                  own_part_number: Optional[str] = None) -> str:
+    """Why a priced catalogue row is another drawing's made part, or "" when it is stock.
+
+    12173-03-04M, a 30x30x2 tube frame cut 1,532 x2 + 290 + 350, took the price of UDEF row
+    11248-14 "L FRAME 30x30x2 @ 1395mm" — another job's frame, matched on its section and a
+    length within 10% (D-380). A row coded with a drawing number, or naming a drawing or a
+    made form, is that part's price and nothing else's (the no-near-match rule). The part's
+    own code is the exact item and is always allowed.
+    """
+    try:
+        import part_code_conventions as _pcc
+    except Exception:                                            # noqa: BLE001
+        return ""
+    own = _pcc.bare_code(own_part_number or "")
+    code_s = str(code or "").strip()
+    if own and _pcc.bare_code(code_s) == own:
+        return ""
+    if code_s and _pcc.looks_like_a_drawing_number(code_s):
+        return f"its code {code_s} is a drawing number"
+    du = str(desc or "").upper()
+    for tok in re.split(r"[\s,;/()]+", du):
+        if tok and _pcc.looks_like_a_drawing_number(tok) and _pcc.bare_code(tok) != own:
+            return f"its description names drawing {tok}"
+    try:
+        import config as _cfg
+        words = tuple(getattr(_cfg, "SECTION_CATALOGUE_MADE_FORM_WORDS",
+                              _MADE_FORM_WORDS_DEFAULT))
+    except Exception:                                            # noqa: BLE001
+        words = _MADE_FORM_WORDS_DEFAULT
+    for w in words:
+        if re.search(rf"\b{re.escape(str(w).upper())}\b", du):
+            return f"its description names a made form ({w})"
+    return ""
+
+
+def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
+                                  side_b_mm: Optional[float], wall_t_mm: Optional[float],
+                                  length_mm: Optional[float],
+                                  own_part_number: Optional[str] = None
+                                  ) -> Optional[Dict[str, Any]]:
+    """The catalogue row that is this section at this length, or None. Pure: rows in, row out."""
+    if not (side_a_mm and side_b_mm and wall_t_mm):
+        return None
+    _lo, _hi = sorted([round(side_a_mm), round(side_b_mm)])
     best = None
     best_len_delta = None
     prof_re = re.compile(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)")
     len_re = re.compile(r"(?:@|x|X)\s*(\d{2,5})\s*MM", re.IGNORECASE)
     for r in rows:
         code, desc, cost, supplier, uom = r[0], str(r[1] or ""), r[2], r[3], r[4]
+        if _catalogue_row_is_a_made_part(code, desc, own_part_number):
+            continue
         pm = prof_re.search(desc.upper())
         if not pm:
             continue
@@ -2372,6 +2430,14 @@ def _infer_section_length_mm(part: Dict[str, Any]) -> Optional[float]:
     for its leg — and the CALLER decides whether it is priced, flagged, or refused.
     """
     _ss = part.get("section_stock") or {}
+    # A CUT LIST IS THE LENGTH (D-380). Several pieces of one section — 12173-03-04M's frame,
+    # 1,532 x2 + 290 + 350 — are bought as their sum; the longest piece alone was 41% of it.
+    _pieces = [v for v in (_safe_float(x) for x in (_ss.get("cut_lengths_mm") or [])
+                           if not isinstance(x, (dict, list))) if v and v > 0]
+    if len(_pieces) > 1:
+        part["_section_length_source"] = "section_stock"
+        part["_section_length_reader"] = "cut_list_sum"
+        return round(sum(_pieces), 2)
     _ss_len = _safe_float(_ss.get("length_mm"))
     if _ss_len is not None and _ss_len > 0:
         part["_section_length_source"] = "section_stock"
@@ -5413,7 +5479,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # (SLOTTEDTUBE01/02 etc. in UDEF). If the detected profile+length matches a priced
             # catalogue row, use that real per-piece price + supplier instead of a mass*£/kg
             # estimate. Falls through to the mass estimate (flagged) if no catalogue match.
-            _cat = _lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm)
+            _cat = _lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm,
+                                                own_part_number=part.get("part_number"))
             if _cat and _cat.get("unit_price_gbp"):
                 _cat_unit = float(_cat["unit_price_gbp"])
                 _cat_ext = round(_cat_unit * quantity, 2)

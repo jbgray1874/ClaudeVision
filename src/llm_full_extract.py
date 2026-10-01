@@ -80,7 +80,7 @@ _SCHEMA = """{
     {"item_no": "", "part_number": "", "description": "", "qty": 0,
      "material_family": "metal|acrylic|timber|wire|tube|bought_in|mixed|other",
      "material": "", "thickness_or_section": "",
-     "cut_length_mm": null, "weight_g": null,
+     "cut_length_mm": null, "cut_lengths_mm": [], "weight_g": null,
      "finish": "", "colour": "",
      "is_fabricated": true, "is_bought_in": false,
      "confidence": "high|medium|low",
@@ -127,6 +127,9 @@ purchased complete, and set is_bought_in to match it.
 
 cut_length_mm is the length a tube, wire or extruded section is sawn to. Without it a section
 cannot be costed at all \u2014 the section size alone does not say how much of it we buy.
+Where one part is made from SEVERAL pieces of the same section (a welded tube frame with a cut
+list "1532 x2, 290, 350"), list every piece in cut_lengths_mm, one number per piece, repeating a
+length for each piece it is cut ([1532, 1532, 290, 350]); cut_length_mm is then the longest.
 
 MIXED ASSEMBLIES. Keep components PURE. Only a top-level assembly, or a sub-assembly that
 genuinely combines materials, is "mixed" — never force one material onto everything under it.
@@ -504,6 +507,7 @@ def project_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "thickness_mm": thk if thk is not None else row.get("thickness_mm"),
         "tube_section": sec or row.get("tube_section"),
         "cut_length_mm": row.get("cut_length_mm"),
+        "cut_lengths_mm": row.get("cut_lengths_mm") or None,
         "weight_g": row.get("weight_g"),
         "finish": row.get("finish") or None,
         "colour": row.get("colour") or None,
