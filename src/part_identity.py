@@ -139,9 +139,16 @@ _PLACEHOLDER_CODES = frozenset({
 # A drawing labels a BOM cell as often as it fills one: "VITAL PARTS: LOW068" is a label
 # and a code, and the label travelled with it all the way to UDEF, which was asked for a
 # part called "VITAL PARTS: LOW068" and had nothing. The code is on the right of the colon.
+#
+# A HYPHEN INSIDE A CODE IS NOT A LABEL (D-379). "FIXING-3.5-X12MM-PAN-HEAD" is the code
+# 12173-03-GA prints; "FIXING-" was read as a label and stripped to "3.5-X12MM-PAN-HEAD",
+# while the parts-list edge kept the printed code — so one screw became two lines and the
+# ×16 screw's own row read as "stated and not carried". A label is set off by a colon, or
+# by a hyphen with space on both sides ("BOUGHT IN - LOW068"); a hyphen joining two parts
+# of a code is the code.
 _CODE_LABEL_PREFIX = re.compile(
     r"^\s*(?:VITAL\s+PARTS?|STD\s+PARTS?|STANDARD\s+PARTS?|BOUGHT[\s-]?IN|PART\s*(?:NO|CODE)?"
-    r"|ITEM|SUPPLIER|FIXINGS?|HARDWARE)\s*[:\-]\s*(?=\S)",
+    r"|ITEM|SUPPLIER|FIXINGS?|HARDWARE)(?:\s*:\s*|\s+-\s+)(?=\S)",
     re.IGNORECASE)
 
 

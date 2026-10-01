@@ -910,6 +910,25 @@ def _raw_identity_aliases(
         if len(matches) == 1:
             aliases[identity] = matches[0]
 
+    # THE PRINTED CODE SURVIVES A CODE WE MINTED (D-379). Where the extract read a parts-list
+    # row without its code it was given a stand-in (BI-SCREW); the same row read with its
+    # code is that item, and the code the drawing printed is the one a catalogue and an
+    # estimator can look up. One printed code onto one stand-in only: two would be two
+    # items the stand-in cannot tell apart, and they stay as they were.
+    try:
+        from part_identity import is_engine_minted_code as _minted
+    except Exception:                                            # noqa: BLE001
+        _minted = None
+    if _minted is not None:
+        _onto: Dict[str, List[str]] = {}
+        for _src, _dst in aliases.items():
+            if _minted(_dst) and not _minted(_src):
+                _onto.setdefault(_dst, []).append(_src)
+        for _dst, _srcs in _onto.items():
+            if len(_srcs) == 1 and _dst not in aliases:
+                del aliases[_srcs[0]]
+                aliases[_dst] = _srcs[0]
+
     # ── ONE PART, TWO SPELLINGS, TWO SOURCES ──────────────────────────────────────────
     # Prefix-related codes carrying the SAME description and the SAME quantity are one item
     # read twice. Description and quantity together are what make this safe: 79814P vs

@@ -1762,6 +1762,25 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
             per_parent_edges.setdefault(_pn_key(_child), []).append(
                 (_clean_pn(str(_parent)), float(_q or 1.0)))
 
+    # A HANDED TWIN THE DRAWING DOES NOT NAME IS THIS CODE'S OTHER HAND (D-379). The model
+    # files the opposite hand as its own document ("12173-07-2-02M-H"); the parts list prints
+    # the code once per hand ("12173-07-2-02M" on item rows 1 and 3, "PRODUCED IN RH/LH
+    # HANDED PAIRS"). Counted by its own file name the model says 1, and that 1 stood
+    # against the table's 2 — one trough side. Where the job holds no record for the twin,
+    # its count is this code's, so the model is asked for both hands together.
+    try:
+        from part_code_conventions import mirror_base as _mirror_base
+    except Exception:                                            # noqa: BLE001
+        _mirror_base = None
+    _listed = {_pn_key(p.get("part_number")) for p in parts if isinstance(p, dict)}
+    _unlisted_twins: Dict[str, List[Any]] = {}
+    if _mirror_base is not None:
+        for _r in job.bom:
+            _base = _pn_key(_mirror_base(str(_r.part_number or "")))
+            if _base and _base != _pn_key(_r.part_number) \
+                    and _pn_key(_r.part_number) not in _listed:
+                _unlisted_twins.setdefault(_base, []).append(_r)
+
     for part in parts:
         if not isinstance(part, dict):
             continue
@@ -1930,9 +1949,27 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob) ->
         # there is, so that case is unchanged.
         if row is not None and row.quantity and row.quantity > 0:
             _total = int(round(row.quantity))
+            _edges = list(per_parent_edges.get(_pn_key(pn)) or [])
+            _twins = _unlisted_twins.get(_pn_key(pn)) or []
+            for _tw in _twins:
+                if _tw.quantity and _tw.quantity > 0:
+                    _total += int(round(_tw.quantity))
+            if _twins:
+                # The edges, per parent, summed across the two hands: one parent takes one
+                # of each, which is two of this code.
+                _by_parent: Dict[str, float] = {}
+                for _pp, _qq in set(_edges):
+                    _by_parent[_pp] = _by_parent.get(_pp, 0.0) + _qq
+                for _tw in _twins:
+                    for _pp, _qq in set(per_parent_edges.get(_pn_key(_tw.part_number)) or []):
+                        _by_parent[_pp] = _by_parent.get(_pp, 0.0) + _qq
+                _edges = list(_by_parent.items())
+                flags.append(
+                    f"SolidWorks: the model files the other hand as "
+                    f"{', '.join(str(t.part_number) for t in _twins)}, which the drawing does "
+                    f"not list — counted with this code, {_total} in the product")
             part["quantity_total_per_unit"] = _total
             part["quantity_total_per_unit_source"] = SOURCE_NAME
-            _edges = per_parent_edges.get(_pn_key(pn)) or []
             _parents = {e[0] for e in _edges}
             if len(_parents) == 1:
                 # ── PER PARENT = CHILD'S PRODUCT TOTAL ÷ PARENT'S PRODUCT TOTAL ──────────

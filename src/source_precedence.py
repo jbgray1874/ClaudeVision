@@ -949,6 +949,13 @@ def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,
         return None
     holding = set(support_for(part, field, _cur))
     holding.discard("")
+    # A READER IS NOT OUTVOTED BY ITSELF (D-379). 12173-07-2-GA prints 12173-07-2-02M on two
+    # item rows, one per hand. The parts-list reader first read one row (1), then the table
+    # (2); its own first reading was counted as one of "2 independent sources" defending 1,
+    # and the trough was built with one side. A source revising its reading is one voice, and
+    # the voice it revises cannot stand against it.
+    _new_voice = _voices({str(new_source or "")}, field)
+    holding = {s for s in holding if not (_voices({s}, field) & _new_voice)}
     # SAME COUNT, SAME RULE, BOTH DIRECTIONS. A defence must be worth as much as an overrule, or
     # the two halves of one mechanism disagree about what independence is.
     _holding_fams = _voices(holding, field)
