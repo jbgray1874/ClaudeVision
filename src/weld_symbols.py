@@ -27,6 +27,7 @@ change.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 # In PDF points (1 pt = 0.353 mm).
@@ -216,6 +217,105 @@ def sheet_weld_symbols(pdf_path: Any) -> Dict[str, Dict[str, Any]]:
     except Exception:                                                # noqa: BLE001
         return out
     return out
+
+
+def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
+    """Every sheet of every PDF in the pack, by the part its title block names:
+    {"counts", "pages", "text", "finish"}. A multi-sheet pack (12173's 02-, 03-, 07-GA files)
+    is read whole — the weld on 12173-03-202 is stated on the 03-GA PDF, not the product's."""
+    try:
+        import pdfplumber
+        from drawing_facts import _title_block_part, _title_block_fields
+    except Exception:                                                # noqa: BLE001
+        return {}
+    out: Dict[str, Dict[str, Any]] = {}
+    seen = set()
+    for pdf_path in pdf_paths or ():
+        if not pdf_path or str(pdf_path).lower() in seen:
+            continue
+        seen.add(str(pdf_path).lower())
+        try:
+            with pdfplumber.open(str(pdf_path)) as pdf:
+                for i, page in enumerate(pdf.pages, 1):
+                    text = page.extract_text() or ""
+                    pn = _title_block_part(page, text)
+                    if not pn:
+                        continue
+                    slot = out.setdefault(_clean_pn(pn), {"counts": {}, "pages": [],
+                                                          "text": "", "finish": ""})
+                    for k, v in read_page(page).items():
+                        slot["counts"][k] = slot["counts"].get(k, 0) + v
+                    slot["pages"].append(i)
+                    slot["text"] += _clean_pn(text)
+                    try:
+                        _fin = str((_title_block_fields(page) or {}).get("finish") or "")
+                    except Exception:                                # noqa: BLE001
+                        _fin = ""
+                    if _fin and not slot["finish"]:
+                        slot["finish"] = _fin.upper()
+        except Exception:                                            # noqa: BLE001
+            continue
+    return out
+
+
+def _says_welded(finish: Any) -> bool:
+    """A title block whose FINISH field states the part leaves the bench welded."""
+    return bool(re.search(r"\bWELDED\b", str(finish or "").upper()))
+
+
+def apply_finish_welds(parts: Sequence[Dict[str, Any]],
+                       by_part: Mapping[str, Mapping[str, Any]]) -> Dict[str, List[str]]:
+    """What a sheet's FINISH field says about welding.
+
+    12173-03: the FRONT and SIDE frames (202, 203) each state FINISH: WELDED on their own
+    sheets, and the FRAME WELD ASSEMBLY that holds them (201) states FINISH: POWDER COATED.
+    The book read none of it: all three were "inferred, not drawn", and 201 was welded a third
+    time over its members. So:
+
+      * a part whose own sheet says FINISH: WELDED is welded by the drawing, not by inference;
+      * an assembly whose own sheet states another finish, over members whose sheets say
+        WELDED, is not welded again — its joints ARE its members' welds; ruled out with the
+        reason, through operations_ruled_out, as every stage reads it.
+
+    Returns {"stated": [...], "ruled_out": [...]}."""
+    stated: List[str] = []
+    ruled: List[str] = []
+    by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
+    welded = {pn for pn, f in by_part.items() if _says_welded(f.get("finish"))}
+    for pn in sorted(welded):
+        part = by_pn.get(pn)
+        if part is None or "welding" in (part.get("operations_ruled_out") or {}):
+            continue
+        ops = part.setdefault("textual_operations", [])
+        if isinstance(ops, list) and "welding" not in ops:
+            ops.append("welding")
+        part.setdefault("operation_sources", {})["welding"] = "drawing_deterministic"
+        part.setdefault("review_flags", []).append(
+            f"WELDED per its own sheet: the title block's FINISH reads "
+            f"'{by_part[pn].get('finish')}' — a stated weld, not an inference")
+        stated.append(str(part.get("part_number") or pn))
+    for pn, facts in by_part.items():
+        finish = str(facts.get("finish") or "")
+        if not finish or _says_welded(finish):
+            continue
+        part = by_pn.get(pn)
+        if part is None:
+            continue
+        text = str(facts.get("text") or "")
+        members = sorted(m for m in welded if m != pn and m in text)
+        if not members:
+            continue
+        _why = (f"its own sheet states FINISH '{finish}', and its members "
+                f"{', '.join(by_pn[m].get('part_number') or m for m in members if m in by_pn) or ', '.join(members)} "
+                f"each state FINISH: WELDED on their own sheets — the welds are theirs, so "
+                f"this assembly is not welded again")
+        part.setdefault("operations_ruled_out", {}).setdefault("welding", _why)
+        part.setdefault("operations_ruled_out", {}).setdefault("dress_welds", _why)
+        part.setdefault("operation_ruling_sources", {}).setdefault("welding", "drawing_deterministic")
+        part.setdefault("operation_ruling_sources", {}).setdefault("dress_welds", "drawing_deterministic")
+        part.setdefault("review_flags", []).append(f"no weld charged on this assembly: {_why}")
+        ruled.append(str(part.get("part_number") or pn))
+    return {"stated": stated, "ruled_out": ruled}
 
 
 def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mapping[str, Any]]

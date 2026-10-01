@@ -2989,10 +2989,22 @@ def _finalize_scan_summary(
     # or symbol on the drawing". Failure-isolated: an unreadable sheet leaves the job as it is.
     if pdf_path:
         try:
-            from weld_symbols import apply_to_parts as _ws_apply, sheet_weld_symbols as _ws_read
+            from weld_symbols import (apply_to_parts as _ws_apply,
+                                      apply_finish_welds as _ws_finish,
+                                      sheet_weld_facts as _ws_read)
             run_timing.mark("start weld_symbols")
-            _ws_by_part = _ws_read(pdf_path)
+            # EVERY PDF IN THE PACK, not only the one this summary is anchored on: a
+            # multi-sheet job states a sub-assembly's weld on that sub-assembly's own file.
+            _ws_pdfs = [pdf_path] + [_j.get("path") for _j in (summary.get("job_source_pdfs") or [])
+                                     if isinstance(_j, dict) and _j.get("path")]
+            _ws_by_part = _ws_read(_ws_pdfs)
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
+            _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
+            if _ws_fin.get("stated") or _ws_fin.get("ruled_out"):
+                print(f"   [weld-symbols] welded per its own sheet's FINISH: "
+                      f"{', '.join(_ws_fin.get('stated') or []) or 'none'}; not welded again "
+                      f"(its members are): {', '.join(_ws_fin.get('ruled_out') or []) or 'none'}",
+                      flush=True)
             run_timing.mark("done weld_symbols")
             summary["weld_symbols_by_part"] = _ws_by_part
             if _ws_ruled:

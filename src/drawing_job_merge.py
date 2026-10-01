@@ -34,6 +34,20 @@ except ImportError:
 from estimator import estimate_document
 
 
+
+_PIECE_OF_PART = re.compile(r"^(?P<part>.*[A-Z])-(?P<n>\d{1,2})$")
+
+
+def _piece_of_known_part(parts_by_key: Dict[str, Dict[str, Any]], key: str
+                         ) -> Optional[Dict[str, Any]]:
+    """`<part>-N` where <part> is a part in this job and ends in a letter (01J, 03M, 02A):
+    the Nth piece of that part. A digit-ended code ("…-201") is a part number of its own and
+    is never read as a piece."""
+    m = _PIECE_OF_PART.match(str(key or ""))
+    if not m:
+        return None
+    return parts_by_key.get(_normalize_part_key(m.group("part")))
+
 def _normalize_part_key(part_number: str) -> str:
     try:
         from part_identity import normalize_part_code
@@ -884,6 +898,15 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
         pass
     if key in parts_by_key:
         return parts_by_key[key]
+    # A NUMBERED PIECE OF A PART IS THAT PART'S. "12173-03-01J-1_25mm MDF" and "-01J-2" are the
+    # two 25 mm layers of the base 12173-03-01J. With no exact hit they fell to the trailing-
+    # segment fallback below, which took the last "1" and "2" and paired them with the FRAMES
+    # 12173-03-201 and -202 — a 25 mm MDF gauge on a steel weldment, and the base left on a
+    # 3 mm floor. A code that is an existing part plus a one- or two-digit piece number after
+    # a lettered segment is that part; the phase-2 split costs each piece.
+    _pc = _piece_of_known_part(parts_by_key, key)
+    if _pc is not None:
+        return _pc
     try:
         from part_identity import GA_TO_DETAIL_PREFERENCE, normalize_part_code
 
@@ -915,9 +938,14 @@ def _lookup_part(parts_by_key: Dict[str, Dict[str, Any]], part_number: str) -> O
                 return parts_by_key[_cand_key]
     except Exception:
         pass
+    # A WHOLE SEGMENT, NEVER ITS LAST CHARACTERS. `endswith` let "-1" match "-201" and "-2"
+    # match "-202" — the near-match presumption Dave Wright ruled out ("better left as zero
+    # cost and flagging it"). The trailing segment must equal the candidate's own, and be long
+    # enough to mean something.
     suffix = key.split("-")[-1]
     for candidate_key, part in parts_by_key.items():
-        if candidate_key.endswith(suffix) or candidate_key.replace("-", "") == key.replace("-", ""):
+        if (len(suffix) >= 3 and candidate_key.split("-")[-1] == suffix) \
+                or candidate_key.replace("-", "") == key.replace("-", ""):
             return part
     # Tolerant fall-back: bridge abbreviated DXF part numbers ("1449C", "1450")
     # to full BOM numbers ("1449-01C", "1450-01C") via leading numeric block +
@@ -1184,8 +1212,10 @@ def _orphan_child_pn(parent: Dict[str, Any], path: Path, index: int = 0,
 
     # The member number the drawing office gave it: "...01A_-07_5MM..." -> 07
     _m = re.search(r"[_\s-]-(\d{1,3})(?=[_\s.-])", path.stem)
-    if _m:
-        _hit = _free(f"{parent_pn}-{_m.group(1)}")
+    # ...or joined straight to the lettered code: "12173-03-01J-1_25mm" -> piece 01.
+    _num = _m.group(1) if _m else _member_suffix_of_flat(path)
+    if _num:
+        _hit = _free(f"{parent_pn}-{int(_num):02d}" if len(_num) < 2 else f"{parent_pn}-{_num}")
         if _hit:
             return _hit
     _thk = thickness_mm_from_dxf_filename(path)
@@ -1297,7 +1327,16 @@ def _member_suffix_of_flat(path: Path) -> Optional[str]:
     ("12349-02-69-01A") cannot supply one, and a revision marker ("_REV[A]") has none.
     """
     m = _MEMBER_SUFFIX.search(str(getattr(path, "name", path)))
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    # SDI's other spelling: the piece number joined straight to a lettered part code —
+    # "12173-03-01J-1_25mm MDF", "-01J-2_…" (the two layers of one base).
+    try:
+        _pn = part_number_from_dxf_path(Path(str(getattr(path, "name", path))))
+    except Exception:                                                # noqa: BLE001
+        _pn = None
+    mp = _PIECE_OF_PART.match(str(_pn or "").upper())
+    return mp.group("n") if mp else None
 
 
 def _split_parent_flats_to_children(
@@ -2961,6 +3000,14 @@ def augment_summary_with_dxf(
         #                 DXFs 04_TOP_PANEL/04_SIDE_PANEL both reading parent ...-04)
         #                 -> split each to the child detail part it matches by dimension.
         clusters = _cluster_paths_by_bbox(paths)
+        # NUMBERED PIECES ARE PIECES, EVEN WHEN THEY ARE THE SAME SHAPE. The base of 12173-03
+        # is two identical 626 x 626 x 25 mm layers, "-01J-1" and "-01J-2": one blank, one
+        # stock, so they clustered as duplicates and one would have been dropped as a stale
+        # revision. A revision is never given a piece number; distinct numbers on every file
+        # say every file is a piece, so each is its own cluster and each is costed.
+        _nums = [_member_suffix_of_flat(p) for p in paths]
+        if None not in _nums and len(set(_nums)) == len(paths) and len(paths) > 1:
+            clusters = [(_cluster_paths_by_bbox([p])[0][0], [p]) for p in paths]
         if len(clusters) <= 1:
             chosen = _pick_best_flat(part, paths)
             report["ambiguous_dxf"].append(
