@@ -548,6 +548,16 @@ OP_NAME_MAP_JOINERY = {
     # line. Minted only where the drawing calls up a rebate, groove, mortice, tenon,
     # moulding or profile (document_builder), so a plain panel still gets no such row.
     "machining_joinery": "Machines Joinery",
+    # HOLES AND EDGES ON BOARD ARE JOINERY WORK, NEVER THE ACRYLIC BENCH. With no entry here
+    # they fell through to the acrylic map and OP_NAME_MAP: 12173-03's MDF panels came back
+    # with "Drill (Acrylic)" and "Manual labour (Acrylic)" rows. The estimator rules both out
+    # on a CNC-routed board (the holes are in the CNC program; board is not deburred); this is
+    # the department for whatever is left — a sawn panel drilled on the joinery machines.
+    "hole_machining":    "Machines Joinery",
+    "drilling":          "Machines Joinery",
+    "drill":             "Machines Joinery",
+    "deburring":         "Bench Work Joinery",
+    "deburr":            "Bench Work Joinery",
 }
 
 # Tube/section bending: SDI bends RHS tube on a tube-bender, NOT a press-brake.
@@ -1927,10 +1937,7 @@ def _is_timber(mat: str) -> bool:
     timber part still has to take the nearest hand-assembly rate — but the estimator is
     told that is what happened rather than reading 'Acrylic' against a timber crate and
     having to work out why."""
-    m = (mat or "").upper()
-    if "ACRYLIC" in m or "PERSPEX" in m or "PMMA" in m:
-        return False          # veneered/laminated acrylic products stay acrylic
-    return any(k in m for k in _TIMBER_TOKENS)
+    return _costed_facts.is_timber_board(mat)
 
 
 class CanonicalRouteUnavailable(RuntimeError):

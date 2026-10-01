@@ -1035,6 +1035,23 @@ _BOARD_TIMBER_TOKENS = (
 )
 
 
+# Timber and board joinery stock — as distinct from acrylic and the other plastics. ONE
+# definition: wb_populate._is_timber names departments from it, and the estimator's material
+# gates (no weld, no deburr, no separate drilling on a routed board) read the same answer.
+TIMBER_BOARD_TOKENS = ("TIMBER", "WOOD", "PINE", "PLYWOOD", "SOFTWOOD", "HARDWOOD", "OAK",
+                       "SPRUCE", "BEECH", "BIRCH", "MDF", "CHIPBOARD", "OSB",
+                       # MFC — melamine faced chipboard, the commonest shop-fitting board.
+                       "MELAMINE", "MFC")
+
+
+def is_timber_board(mat: Any) -> bool:
+    """Timber or wood-based board (MDF, MFC, chipboard, ply, OSB, solid timber)."""
+    m = str(mat or "").upper()
+    if "ACRYLIC" in m or "PERSPEX" in m or "PMMA" in m:
+        return False          # veneered/laminated acrylic products stay acrylic
+    return any(k in m for k in TIMBER_BOARD_TOKENS)
+
+
 def is_other_sheet_material(material) -> bool:
     """True when this material is costed in the workbook's Other Sheet Material block.
 

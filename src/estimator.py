@@ -6648,7 +6648,42 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # family), the same standard as the polish gate, so a part whose material has not been
     # resolved yet is left alone rather than stripped on a guess. Where the material is
     # genuinely mis-read the fix belongs upstream in the material read, not here.
-    _is_board_any = any(mf in _CUT_BOARDS for mf in _mat_fields if mf)
+    # ONE BOARD TEST, NOT A LIST OF NAMES. The exact-name set missed MFC — melamine faced
+    # chipboard — so 12173-03-03J, an MFC back panel, was welded and dressed (£39 at one off)
+    # beside two MDF panels the same gate had cleared. costed_facts.is_other_sheet_material
+    # is the engine's one answer to "is this board or plastic, not metal".
+    try:
+        import costed_facts as _cf_board
+        _is_board_any = any(mf in _CUT_BOARDS or _cf_board.is_other_sheet_material(mf)
+                            for mf in _mat_fields if mf)
+        _is_timber_any = any(_cf_board.is_timber_board(mf) for mf in _mat_fields if mf)
+    except Exception:                                                # noqa: BLE001
+        _is_board_any = any(mf in _CUT_BOARDS for mf in _mat_fields if mf)
+        _is_timber_any = False
+    # A ROUTED BOARD'S HOLES ARE IN ITS CNC PROGRAM, AND BOARD IS NOT DEBURRED. 12173-03's MDF
+    # and MFC panels carried a separate hole_machining (charged as "Drill (Acrylic)") and a
+    # deburring (charged as "Manual labour (Acrylic)") beside the CNC Joinery row that already
+    # cuts them — about £61 at one off. A sawn board with no CNC pass keeps its drilling, on
+    # the joinery machines (wb_populate.OP_NAME_MAP_JOINERY).
+    if _is_timber_any and not _is_metal_any:
+        _routed = any(o in ops for o in ("cnc_routing", "cnc", "cnc_joinery"))
+        _gone = [o for o in ops if o in ("deburring", "deburr")
+                 or (_routed and o in ("hole_machining", "drilling", "drill"))]
+        if _gone:
+            ops = [o for o in ops if o not in _gone]
+            for _op_field in ("textual_operations", "inferred_operations"):
+                if isinstance(part.get(_op_field), list):
+                    part[_op_field] = [o for o in part[_op_field] if o not in _gone]   # precedence: direct-write ok — removes ops, adds no evidence
+            _ruled_b = part.setdefault("operations_ruled_out", {})
+            for _o in _gone:
+                _ruled_b.setdefault(_o, (
+                    "holes in a CNC-routed board are cut in its CNC program"
+                    if _o in ("hole_machining", "drilling", "drill")
+                    else "board is not deburred — its edges are banded or finished"))
+            part.setdefault("review_flags", []).append(
+                f"{'/'.join(_gone)} not charged: part is {_mat_u or 'timber/board'} — "
+                f"{'its holes are cut in the CNC routing it already carries; ' if _routed and any(o in ('hole_machining','drilling','drill') for o in _gone) else ''}"
+                f"board is not deburred. Confirm if this part really is drilled on a separate machine")
     if _is_board_any and not _is_metal_any:
         _weld_ops = ("welding", "dress_welds", "spot_welding", "resistance_welding")
         _stripped = [o for o in ops if o in _weld_ops]
