@@ -49,6 +49,10 @@ output/
 # stray answers file somebody drops in `docs/answers/` is VISIBLE in review rather than
 # silently ignored; the engine still reads one written beside the drawings on the share.
 !docs/answers/*.json
+# AN ESTIMATOR'S BRIEF IS A REVIEWED STATEMENT OF STRUCTURE, like tests/replay's accepted
+# facts: what a book of that job must reproduce, checked by tools/check_book_against_brief.py.
+# Not a run output and not job data — it holds no price.
+!docs/briefs/*.facts.json
 
 # ── Input data (drawings, spreadsheets) ──────────────────────────────────
 input/
