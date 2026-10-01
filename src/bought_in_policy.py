@@ -130,6 +130,54 @@ _CONSUMABLE_RE = re.compile(
     r"|TAPE)\b")
 
 
+# A STOCK PRODUCT BOUGHT READY-MADE (D-381). 12173-04-04M / 05M, "LOWER / UPPER TIER MESH",
+# are panels of 3 mm welded mesh bought to size; with no flat and no wire schedule of their own
+# they were lasered as 1 mm sheet and put on the Robomac off the pack's "WIRE TO WIRE" note.
+# The words are config (PURCHASED_STOCK_PRODUCT_WORDS); this is the default.
+_STOCK_PRODUCT_WORDS_DEFAULT = ("WELDMESH", "WELD MESH", "WELDED MESH", "WIRE MESH",
+                                "MESH PANEL", "MESH", "EXPANDED METAL")
+
+# The coats a purchased panel can still take here: a bought mesh is powder coated with the
+# frame it sits in when its own sheet says so.
+_COAT_OPS = {"powder_coating": "powder", "wet_spray": "wet_spray"}
+
+
+def purchased_stock_product(part: Dict[str, Any]) -> str:
+    """The stock-product word this part's own description names, or "" (D-381).
+
+    Never for a part with measured flat geometry, an assembly, or a wire or bar schedule of
+    its own — those are things we cut or form, whatever they are called."""
+    if not isinstance(part, dict) or has_fabrication_evidence(part):
+        return ""
+    if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
+            or part.get("assembly_children"):
+        return ""
+    if part.get("_bar_recognised") or part.get("wire_schedule") or part.get("bar_schedule"):
+        return ""
+    try:
+        import config as _cfg
+        words = getattr(_cfg, "PURCHASED_STOCK_PRODUCT_WORDS", None)
+    except Exception:                                            # noqa: BLE001
+        words = None
+    text = " ".join(_upper(part.get(k)) for k in ("description", "name"))
+    for w in (words or _STOCK_PRODUCT_WORDS_DEFAULT):
+        if re.search(rf"\b{re.escape(str(w).upper())}\b", text):
+            return str(w).upper()
+    return ""
+
+
+def keeps_its_coat(part: Dict[str, Any], op: Any) -> bool:
+    """A purchased stock product keeps a coat its OWN sheet states (powder, wet spray)."""
+    fam = _COAT_OPS.get(str(op or "").lower())
+    if not fam or not purchased_stock_product(part):
+        return False
+    try:
+        from finish_rules import finish_families, stated_finish
+    except Exception:                                            # noqa: BLE001
+        return False
+    return fam in finish_families(stated_finish(part))
+
+
 def _is_named_consumable(part: Dict[str, Any]) -> bool:
     text = " ".join(_upper(part.get(k)) for k in ("description", "part_number", "name"))
     return bool(_CONSUMABLE_RE.search(text))
@@ -224,6 +272,13 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
     if _is_named_consumable(part) and not has_fabrication_evidence(part) \
             and not part_code_conventions.material_suffix(_upper(part.get("part_number"))):
         return "a named consumable (tape / gasket / adhesive) with no fabrication evidence"
+
+    # A STOCK PRODUCT, NAMED AS ONE (D-381). No material-suffix exemption: SDI numbers a
+    # bought mesh panel "-M" like any steel part, and the suffix says steel, not who makes it.
+    _stock = purchased_stock_product(part)
+    if _stock:
+        return (f"a purchased stock product ({_stock}) with no flat pattern or wire schedule "
+                f"of its own")
 
     fam = str(part.get("material_family") or "").strip().lower()
     if fam == "bought_in":
@@ -431,7 +486,7 @@ def strip_fabrication_ops(part: Dict[str, Any]) -> List[str]:
             continue
         kept: List[Any] = []
         for op in vals:
-            if str(op).lower() in FABRICATION_OPS:
+            if str(op).lower() in FABRICATION_OPS and not keeps_its_coat(part, op):
                 if str(op) not in removed:
                     removed.append(str(op))
             else:

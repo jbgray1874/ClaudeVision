@@ -2295,8 +2295,14 @@ def _finalize_scan_summary(
                 # (part_identity.category_code_identities) — the reconciler below and every
                 # reader of bom_rows see the same identity per article.
                 try:
-                    from part_identity import split_category_code_rows
+                    from part_identity import (mint_uncoded_row_identities,
+                                               split_category_code_rows)
                     _n_split = split_category_code_rows(_dp["rows"])
+                    _n_mint = mint_uncoded_row_identities(_dp["rows"])
+                    if _n_mint:
+                        print(f"   [bom-identity] {_n_mint} uncoded parts-list row(s) named "
+                              f"by their words (BI-<word>) so they reach the bill",
+                              flush=True)
                     if _n_split:
                         print(f"   [bom-identity] {_n_split} row(s) under a shared category "
                               f"code (P/P, FIXING...) given one identity per article",
@@ -3755,10 +3761,15 @@ def _finalize_scan_summary(
         # The readers keep material/thickness/mass per BOM row and the flatten preserves
         # them; this is where they become PART evidence — through source_precedence, so a
         # DXF or model still outranks a table cell and a blanket document figure does not.
-        from bom_pipeline import apply_bom_row_evidence_to_parts
+        from bom_pipeline import apply_bom_row_evidence_to_parts, apply_stated_edging_to_parts
         _rows_ev = (summary.get("document_analysis") or {}).get("bom_rows") or []
         _n_ev = apply_bom_row_evidence_to_parts(
             summary["manufacturing_writeup"]["parts"], _rows_ev)
+        _n_edg = apply_stated_edging_to_parts(
+            summary["manufacturing_writeup"]["parts"], _rows_ev)
+        if _n_edg:
+            print(f"   [bom-evidence] {_n_edg} part(s) take their edging length from the "
+                  f"edging row of their own parts list", flush=True)
         if _n_ev:
             print(f"   [bom-evidence] {_n_ev} part(s) took material/thickness/mass from "
                   f"their own BOM row (bom_tree rank — a measured source still wins)",

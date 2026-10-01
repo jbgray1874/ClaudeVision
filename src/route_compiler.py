@@ -5586,7 +5586,16 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
         # 21:27 book gave the part neither a cutting charge nor a purchase price. Measured
         # geometry of its own, or SDI's own cut-part numbering (a material suffix such as M),
         # says we make it, whatever the word.
-        if _hardware:
+        # A PURCHASED STOCK PRODUCT IS BOUGHT WHATEVER ITS SUFFIX (D-381): a "-M" says the
+        # mesh is steel, not that we weld it. It keeps the coat its own sheet states.
+        _stock_rec = dict(_rec, part_number=_rec.get("part_number") or _d.target_id)
+        try:
+            from bought_in_policy import keeps_its_coat as _keeps_coat
+            from bought_in_policy import purchased_stock_product as _stock_product
+        except Exception:                                        # pragma: no cover
+            _keeps_coat = _stock_product = None
+        _is_stock = bool(_stock_product is not None and _stock_product(_stock_rec))
+        if _hardware and not _is_stock:
             try:
                 from part_code_conventions import material_suffix as _cut_suffix
                 _probe_m = dict(_rec, part_number=_rec.get("part_number") or _d.target_id)
@@ -5595,6 +5604,9 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
                     _hardware = False
             except Exception:                                    # noqa: BLE001
                 pass
+        if _hardware and _is_stock and _keeps_coat is not None \
+                and _keeps_coat(_stock_rec, _d.operation):
+            continue
         if _hardware and _d.operation in _FAB_ALL:
             _d.status = NOT_APPLICABLE
             _d.reason = (f"{_d.target_id} is purchased hardware "

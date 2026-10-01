@@ -73,7 +73,8 @@ param(
         "src/json_normaliser.py",
         "src/source_precedence.py",
         "src/department_codes.py",
-        "src/supplier_reference.py"
+        "src/supplier_reference.py",
+        "src/edge_banding.py"
     ),
 
     # Everything tracked. Here for the day the server's job changes; not the default,

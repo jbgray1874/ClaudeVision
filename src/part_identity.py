@@ -412,6 +412,60 @@ def category_code_identities(rows: Iterable[Any], code_key: str = "part_number",
     return out
 
 
+# Words in a description that do not name a thing: units and dimension markers.
+_NOT_A_THING = frozenset({"MM", "X", "DIA", "THK", "THICK", "OD", "ID", "LG", "LONG", "L"})
+
+
+def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_number",
+                                desc_key: str = "description") -> int:
+    """An identity for a parts-list row with words and no code (D-381). Returns rows minted.
+
+    12173-03-01J's table prints "4  DOWEL, ø6mm x 20mm  6" with no code column. On a pack the
+    model also describes, the placeholder mint in the graph is gated off (it is for
+    PDF-primary packs), so the row reached no record and no node: six dowels the base is built
+    with were never a line. The row is named by its words through the shared minter
+    ("BI-DOWEL"), so every reader derives the same code, and kept visibly ours — a minted code
+    is never put to the catalogue as if the drawing had printed it.
+
+    Only a row whose table names its drawing (bom_parent_known) and whose words name a thing:
+    "626 x 626 x 25 mm" is a size, and an edging row with a length is the parent's banding
+    (edge_banding.stated_edging_length_mm), not a part. A row with a code is untouched."""
+    try:
+        from edge_banding import stated_edging_length_mm
+    except Exception:                                            # noqa: BLE001
+        def stated_edging_length_mm(_d):                         # type: ignore
+            return None
+    listed = [r for r in (rows or []) if isinstance(r, dict)]
+    taken: Dict[str, str] = {}
+    for r in listed:
+        _c = str(r.get(code_key) or "").strip()
+        if _c:
+            taken.setdefault(_c.upper(), str(r.get(desc_key) or "").upper())
+    n = 0
+    for r in listed:
+        code = str(r.get(code_key) or "").strip()
+        if code and not is_placeholder_identity(code):
+            continue
+        if r.get("bom_parent_known") is False or not str(r.get("bom_parent") or "").strip():
+            continue
+        desc = " ".join(str(r.get(desc_key) or "").split())
+        words = [w for w in re.findall(r"[A-Z]+", desc.upper())
+                 if len(w) >= 3 and w not in _NOT_A_THING]
+        if not words or stated_edging_length_mm(desc):
+            continue
+        ident = synthesise_bought_in_code(desc, code) or f"BI-{words[0]}"
+        _held = taken.get(ident.upper())
+        if _held is not None and _held != desc.upper():
+            # Two different rows under one word: the figures are what tell them apart.
+            ident = "BI-" + re.sub(r"[^A-Z0-9]", "", desc.upper())[:24]
+        r.setdefault("printed_code", code)
+        r[code_key] = ident
+        r["identity_source"] = "uncoded_row"
+        taken.setdefault(ident.upper(), desc.upper())
+        n += 1
+    return n
+
+
 def split_category_code_rows(rows: Iterable[Any], code_key: str = "part_number",
                              desc_key: str = "description") -> int:
     """Apply category_code_identities in place, keeping the printed code. Returns rows changed."""

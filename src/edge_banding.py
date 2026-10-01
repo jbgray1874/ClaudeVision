@@ -184,6 +184,27 @@ def _named_edge_length(text: str, part: Dict[str, Any]) -> Tuple[Optional[float]
     return None, ""
 
 
+# A PARTS-LIST ROW THAT STATES THE EDGING AND ITS LENGTH (D-381). 12173-03-01J's sheet lists
+# "3  EDGING, L: 1979mm  1" and 12173-03-02J's "2  EDGING. L:1759mm  1"; the timing took the
+# blank's square perimeter (2,520 / 2,224 mm) because nothing read the row. A banding word and
+# an explicit length are both required — "626 x 626 x 25 mm" is a size, not an edging.
+_STATED_EDGING_RE = re.compile(
+    r"(?:EDG(?:E|ING)|LIPPING|EDGE\s*BAND\w*)\b.*?\bL(?:ENGTH)?\s*[:=.]?\s*"
+    r"(\d+(?:\.\d+)?)\s*MM", re.IGNORECASE)
+
+
+def stated_edging_length_mm(description: Any) -> Optional[float]:
+    """The edging length a parts-list row states, or None when it states none."""
+    m = _STATED_EDGING_RE.search(str(description or ""))
+    if not m:
+        return None
+    try:
+        v = float(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
 def banded_length_mm(part: Any) -> Dict[str, Any]:
     """How many millimetres of this part take ABS, and on whose authority.
 
@@ -236,6 +257,20 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
                                      f"{', '.join(sorted(hits))} — the drawing office drew "
                                      f"the banded edges, and this is their length"))
                 return out
+
+    # 1b ── THE PART'S OWN PARTS LIST STATES THE EDGING LENGTH (D-381). The drawing office
+    #       gave the number; a perimeter would be an inference against it.
+    _stated = part.get("stated_banded_length_mm")
+    try:
+        _stated = float(_stated) if _stated is not None else None
+    except (TypeError, ValueError):
+        _stated = None
+    if _stated is not None and _stated > 0:
+        out.update(mm=round(_stated, 1), basis="drawing_stated_row",
+                   evidence=(f"{_stated:g} mm stated by the edging row of the part's own "
+                             f"parts list — the drawing gives the length, so the perimeter "
+                             f"({perimeter:g} mm) is not used"))
+        return out
 
     text = _text_of(part)
     says_banding = any(w in text for w in _BANDING_WORDS)

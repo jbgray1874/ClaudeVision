@@ -250,6 +250,45 @@ def reconciled_bom_rows_for_job(
     }
 
 
+def apply_stated_edging_to_parts(parts: Any, bom_rows: Any) -> int:
+    """An edging row on a part's own parts list states that part's banded length (D-381).
+
+    12173-03-01J's table: "EDGING, L: 1979mm  1". The row has no code, so it was never a line
+    and never evidence; edging was timed on the 630 x 630 blank's perimeter, 2,520 mm. The row
+    belongs to the drawing whose table printed it (bom_parent), and its length x quantity is
+    that part's banded length, as a drawing reading. Rows of a table whose drawing was not
+    named are left alone — nothing can say whose edge they are. Returns parts stamped."""
+    import source_precedence as sp
+    from edge_banding import stated_edging_length_mm
+    from part_code_conventions import bare_code
+
+    totals: Dict[str, float] = {}
+    for r in bom_rows or []:
+        if not isinstance(r, dict) or r.get("bom_parent_known") is False:
+            continue
+        mm = stated_edging_length_mm(r.get("description"))
+        _parent = bare_code(str(r.get("bom_parent") or ""))
+        if not mm or not _parent:
+            continue
+        try:
+            qty = float(r.get("quantity") or 1) or 1.0
+        except (TypeError, ValueError):
+            qty = 1.0
+        totals[_parent] = totals.get(_parent, 0.0) + mm * qty
+    n = 0
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        mm = totals.get(bare_code(str(p.get("part_number") or "")))
+        if mm and sp.apply_field(p, "stated_banded_length_mm", round(mm, 1),
+                                 "drawing_deterministic"):
+            p.setdefault("review_flags", []).append(
+                f"edging {mm:g} mm stated by the edging row of this part's own parts list — "
+                f"used for the banding in place of the blank's perimeter")
+            n += 1
+    return n
+
+
 def apply_bom_row_evidence_to_parts(parts: Any, bom_rows: Any) -> int:
     """The BOM table's own MATERIAL / thickness / mass cells become part evidence,
     through source_precedence, before costing.
