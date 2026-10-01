@@ -127,9 +127,10 @@ purchased complete, and set is_bought_in to match it.
 
 cut_length_mm is the length a tube, wire or extruded section is sawn to. Without it a section
 cannot be costed at all \u2014 the section size alone does not say how much of it we buy.
-Where one part is made from SEVERAL pieces of the same section (a welded tube frame with a cut
-list "1532 x2, 290, 350"), list every piece in cut_lengths_mm, one number per piece, repeating a
-length for each piece it is cut ([1532, 1532, 290, 350]); cut_length_mm is then the longest.
+Where one part is made from SEVERAL pieces of the same section (a welded tube frame whose cut
+list reads, say, "A x2, B, C"), list every piece in cut_lengths_mm, one number per piece,
+repeating a length once for each piece cut to it ([A, A, B, C]) — only lengths the drawing
+prints, never estimated; cut_length_mm is then the longest.
 
 MIXED ASSEMBLIES. Keep components PURE. Only a top-level assembly, or a sub-assembly that
 genuinely combines materials, is "mixed" — never force one material onto everything under it.
