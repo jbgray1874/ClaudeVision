@@ -194,9 +194,21 @@ def _purchase_stated(part: Dict[str, Any]) -> bool:
                 or str(part.get("supplier_code") or "").strip())
 
 
+def make_or_buy_ruling(part: Any) -> str:
+    """"buy", "make" or "" — the estimator's answer to the make-or-buy question, stamped from
+    config.JOB_DECISIONS[<job>].estimator_decisions.make_or_buy (D-384). A ruling outranks
+    every reading below; it is the question's answer, not another reading."""
+    if not isinstance(part, dict):
+        return ""
+    _r = str(part.get("_estimator_make_or_buy") or "").strip().lower()
+    return _r if _r in ("buy", "make") else ""
+
+
 def _stock_product_candidate(part: Dict[str, Any]) -> bool:
     """No measured flat, not an assembly, no wire or bar schedule, no bend callouts of its own."""
     if not isinstance(part, dict) or has_fabrication_evidence(part):
+        return False
+    if make_or_buy_ruling(part) == "make":
         return False
     if part.get("is_assembly_parent") or part.get("is_sub_assembly") \
             or part.get("assembly_children"):
@@ -225,8 +237,8 @@ def make_buy_question(part: Dict[str, Any]) -> Dict[str, Any]:
     {"word", "ruled" ("bought" or ""), "why"}. A compound product word with nothing on the
     pack stating the purchase is ruled bought AND asked; a question word is only asked. A part
     whose purchase is stated, or that we evidently make, raises nothing."""
-    if not _stock_product_candidate(part):
-        return {}
+    if make_or_buy_ruling(part) or not _stock_product_candidate(part):
+        return {}                       # answered by the estimator, or not a candidate
     text = " ".join(_upper(part.get(k)) for k in ("description", "name"))
     w = _first_word(_config_words("PURCHASED_STOCK_PRODUCT_WORDS",
                                   _STOCK_PRODUCT_WORDS_DEFAULT), text)
@@ -250,7 +262,7 @@ def make_buy_question(part: Dict[str, Any]) -> Dict[str, Any]:
 def keeps_its_coat(part: Dict[str, Any], op: Any) -> bool:
     """A purchased stock product keeps a coat its OWN sheet states (powder, wet spray)."""
     fam = _COAT_OPS.get(str(op or "").lower())
-    if not fam or not purchased_stock_product(part):
+    if not fam or not (purchased_stock_product(part) or make_or_buy_ruling(part) == "buy"):
         return False
     try:
         from finish_rules import finish_families, stated_finish
@@ -273,6 +285,11 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
     diagnosable from the run itself."""
     if not isinstance(part, dict):
         return ""
+    # THE ESTIMATOR'S RULING FIRST (D-384). A make-or-buy answer from config.JOB_DECISIONS is
+    # the question settled by a person, and it is read before any reading below.
+    if make_or_buy_ruling(part) == "buy":
+        return (f"ruled bought in by {part.get('_estimator_make_or_buy_by') or 'the estimator'} "
+                f"(estimator_decisions.make_or_buy)")
     # Catalogue identity first — these are the strong signals and they are not overridable.
     if part.get("is_bought_in") or part.get("_bought_in_from_text_scan"):
         return "flagged bought-in on the record"

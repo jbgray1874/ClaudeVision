@@ -1222,6 +1222,26 @@ JOB_DECISIONS = {
             # purchase, asked of SDI Live, the supplier catalogue or evidenced research.
         },
     },
+    "12173-02": {
+        "confirmed_by": "James Gray",
+        "confirmed_on": "2026-10-01",
+        "note": "From his brief on the M&S Card Spinner, docs/briefs/12173-02.md. Two rulings "
+                "the engine had recorded as open questions; the rest of the brief is engine "
+                "faults and belongs in the code (D-378 to D-384).",
+        "estimator_decisions": {
+            # "04-04M lower mesh … welded 3 mm wire, 333.2 x 123.5, 25.4 / 101.6 pitch. Not a
+            # sheet nest"; "04-05M upper mesh … same wire"; "The pockets are tab-and-slot plus
+            # bought mesh." The sheets describe them as MESH with no flat, which the engine
+            # reads as a make-or-buy question (D-383). This is the answer.
+            "make_or_buy": {"12173-04-04M": "buy", "12173-04-05M": "buy"},
+            # "Frame weld 03-201 is powder matt RAL9005 after the weld. 202 and 203 are marked
+            # WELDED / RAW … Real weld is the two tube frames (TIG and dress), the 16 tabs, the
+            # four rails and the seven hooks." 201's own sheet states a finish and no weld
+            # symbol, which the engine asks about rather than rules on (D-382). This answers
+            # it: the welds are 202's and 203's; 201 is the powder-coated parent.
+            "operations_off": {"12173-03-201": ["welding", "dress_welds"]},
+        },
+    },
 }
 
 
@@ -3471,6 +3491,65 @@ PARTS_LIST_FINISH_QUALIFIER_WORDS = (
 # one (WEDGE, LEDGE, EDGE TRIM, EDGE PROTECTOR, KNIFE EDGE LED STRIP are not banding).
 EDGE_BANDING_ROW_WORDS = ("EDGE BANDING", "EDGEBANDING", "EDGE BAND", "EDGEBAND", "EDGE TAPE",
                           "ABS EDGE", "EDGING", "LIPPING")
+# A BOUGHT TRIM IS NOT THE PARENT'S BANDING. "EDGING TRIM, CHROME, L: 1200mm", "RUBBER EDGING",
+# "U-CHANNEL EDGING PROFILE", "LED EDGING STRIP" and "ALUMINIUM EDGING STRIP" carry a banding
+# noun and name a thing we buy. A row naming any of these words (whole words) is not banding:
+# it is minted as a part or asked. ABS, PVC and veneer edging rows stay banding.
+EDGE_BANDING_NOT_BANDING_WORDS = (
+    "TRIM", "PROFILE", "STRIP", "CHANNEL", "EXTRUSION", "SEAL", "GASKET", "RUBBER", "LED",
+    "GLASS", "ALUMINIUM", "ALUMINUM", "CHROME", "STAINLESS", "STEEL", "BRASS", "MOULDING",
+    "MOLDING", "BEAD", "BUMPER", "GUARD", "PROTECTOR",
+)
+
+# ── WHAT A CODELESS PARTS-LIST ROW IS (D-383, review round 2) ───────────────────────────────
+# A TUBE ACCESSORY IS A PART, whatever section figure it carries. "PLASTIC END CAP 25 x 25 x
+# 1.5 TUBE", "SQUARE TUBE INSERT", "SHS BLANKING PLUG", "TUBE GLIDE INSERT", "TUBE CLAMP" all
+# name the section they fit and are bought; read as the frame's cut list they were consumed
+# and left the bill with nothing said. Whole words; asked before the section reader.
+SECTION_ACCESSORY_WORDS = (
+    "CAP", "CAPS", "END CAP", "INSERT", "INSERTS", "PLUG", "PLUGS", "BUNG", "BUNGS", "GLIDE",
+    "GLIDES", "FOOT", "FEET", "CLAMP", "CLAMPS", "CONNECTOR", "CONNECTORS", "JOINER", "JOINERS",
+    "FERRULE", "FERRULES", "CASTOR", "CASTORS", "LEVELLER", "LEVELLERS", "COUPLER", "COUPLERS",
+    "GROMMET", "GROMMETS",
+)
+# The nouns that name a STOCK SECTION. One vocabulary: the parts-list row classifier (a row
+# that names only a section and its figures is the parent's cut list, never a bought-in part)
+# and the catalogue's made-form test ("SHS 30x30x2 FRAME TUBE" is tube) both read it.
+# Whole words or phrases: BOX and SECTION alone are not stock ("18mm MDF BOX" is made).
+SECTION_STOCK_NOUNS = ("TUBE", "TUBING", "SHS", "RHS", "CHS", "BOX SECTION", "HOLLOW SECTION",
+                       "BAR", "ANGLE", "CHANNEL", "PIPE", "ROD", "WIRE")
+# Words a stock-section row uses beside the noun and its figures ("40 x 40 x 3 EQUAL ANGLE",
+# "12mm DIA BRIGHT BAR 300", "MILD STEEL ERW TUBE"). A row with any other word names a thing.
+SECTION_STOCK_QUALIFIER_WORDS = (
+    "ROUND", "SQUARE", "RECTANGULAR", "RECT", "FLAT", "HOLLOW", "EQUAL", "UNEQUAL", "BRIGHT",
+    "BLACK", "ERW", "CDS", "CFHS", "HFHS", "SEAMLESS", "DRAWN", "COLD", "HOT", "ROLLED",
+    "FORMED", "PRE", "GALV", "GALVANISED", "GALVANIZED", "MILD", "STEEL", "STAINLESS",
+    "ALUMINIUM", "ALUMINUM", "WALL", "LENGTH", "CUT", "DIA", "DIAMETER", "LONG", "OFF", "PCS",
+    "PIECE", "PIECES", "GRADE", "MATERIAL", "STOCK", "LEG", "LEGS", "SIDE", "SIDES",
+)
+# The hollow-section keywords the section reader needs beside an a x b x t figure.
+SECTION_HOLLOW_KEYWORDS = ("TUBE", "RHS", "SHS", "BOX SECTION", "BOX-SECTION", "HOLLOW SECTION")
+# A row that opens with a weld, fold, hole or slot word is an INSTRUCTION only when every word
+# of three letters or more is one of these process and qualifier words ("WELD ALL ROUND",
+# "FOLD UP 90°", "4 HOLES THRU"). "WELD STUD M6 x 20", "WELD ON HINGE", "FOLD FLAT HINGE" and
+# "FOLD DOWN SHELF BRACKET" name a thing and are parts.
+PARTS_LIST_INSTRUCTION_WORDS = (
+    "WELD", "WELDS", "WELDED", "WELDING", "FOLD", "FOLDS", "FOLDED", "FOLDING", "BEND", "BENDS",
+    "BENT", "HOLE", "HOLES", "SLOT", "SLOTS", "SLOTTED", "ALL", "ROUND", "AROUND", "BOTH",
+    "SIDES", "SIDE", "STITCH", "TACK", "TACKED", "SEAM", "FILLET", "CONTINUOUS", "INTERMITTENT",
+    "GRIND", "GROUND", "FLUSH", "DRESS", "DRESSED", "CLEAN", "DEBURR", "REMOVE", "SHARP",
+    "EDGES", "EDGE", "DOWN", "INSIDE", "OUTSIDE", "INTERNAL", "EXTERNAL", "FULL", "LENGTH",
+    "SHOWN", "PER", "DRAWING", "DRG", "DWG", "PITCH", "CENTRES", "CENTERS", "EQUAL", "SPACED",
+    "EQUI", "CTRS", "THRU", "THROUGH", "TAPPED", "TAP", "DRILL", "DRILLED", "CSK",
+    "COUNTERSINK", "COUNTERSUNK", "MIG", "TIG", "SPOT", "ONLY", "WHERE", "VISIBLE", "POSITION",
+    "POSITIONS", "LOCATIONS", "DEG", "DEGREES", "EXT", "INT", "BEFORE", "AFTER", "JOINTS",
+    "JOINT", "CORNERS", "CORNER", "OFF", "AND", "THE", "FROM", "WITH", "NOT",
+)
+# A row that opens with one of these words is a note ("SEE NOTE 3", "REFER TO DRG").
+PARTS_LIST_NOTE_LEADS = ("NOTE", "NOTES", "SEE", "REFER")
+# Sheens qualify a finish and are never the finish ("POWDER COATED - MATT"). The finish-field
+# process test and the uncostable-finish check both read this list.
+FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "MATTE", "SATIN", "SILK", "TEXTURE", "TEXTURED")
 
 # ── A STOCK PRODUCT, AND WHO MAKES IT (D-381, corrected D-383) ─────────────────────────────
 # Compound terms that name a product sold ready-made. A part named by one, with no flat, no

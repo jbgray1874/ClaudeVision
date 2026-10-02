@@ -3973,6 +3973,27 @@ def _finalize_scan_summary(
                         print(f"   [confirmed] operations_off names {_pc}, but NO part of "
                               f"this job carries that number — the line did nothing. Check "
                               f"the code", flush=True)
+                # MAKE OR BUY, ANSWERED (D-384): stamped on the part, where bought_in_policy
+                # and the route compiler's family gate both read it.
+                _mob = _dec.get("make_or_buy") or {}
+                if _mob:
+                    _seen_mob = set()
+                    for _p in (summary["manufacturing_writeup"]["parts"] or []):
+                        if not isinstance(_p, dict):
+                            continue
+                        _pc = str(_p.get("part_number") or "").strip().upper()
+                        if _pc in _mob:
+                            _p["_estimator_make_or_buy"] = _mob[_pc]
+                            _p["_estimator_make_or_buy_by"] = str(
+                                _ec_data.get("confirmed_by") or "the estimator")
+                            _seen_mob.add(_pc)
+                            print(f"   [confirmed] {_pc}: {_mob[_pc].upper()} — "
+                                  f"{_ec_data.get('confirmed_by') or 'the estimator'}'s "
+                                  f"make-or-buy ruling", flush=True)
+                    for _pc in sorted(set(_mob) - _seen_mob):
+                        print(f"   [confirmed] make_or_buy names {_pc}, but NO part of this "
+                              f"job carries that number — the line did nothing. Check the "
+                              f"code", flush=True)
                 # ── A CONFIRMED BANDED LENGTH IS ALSO A ROUTE FACT ───────────────────
                 #
                 # It buys metres of ABS — the material line already reads it — AND it says

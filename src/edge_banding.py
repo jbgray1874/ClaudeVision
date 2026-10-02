@@ -220,16 +220,41 @@ _STATED_EDGING_RE = re.compile(
     re.IGNORECASE)
 
 
+# A BOUGHT TRIM IS NOT THE PARENT'S BANDING (review round 2 of D-383). The row reader took
+# EDGING anywhere in a row, so "EDGING TRIM, CHROME, L: 1200mm" on a banded MDF counter top was
+# read as its banding: the trim left the bill and its 2,400 mm replaced the ABS length at
+# drawing_deterministic, with nothing said. A row naming a trim word or a non-board material
+# (config EDGE_BANDING_NOT_BANDING_WORDS) names a thing we buy, and is minted or asked.
+_NOT_BANDING_DEFAULT = (
+    "TRIM", "PROFILE", "STRIP", "CHANNEL", "EXTRUSION", "SEAL", "GASKET", "RUBBER", "LED",
+    "GLASS", "ALUMINIUM", "ALUMINUM", "CHROME", "STAINLESS", "STEEL", "BRASS", "MOULDING",
+    "MOLDING", "BEAD", "BUMPER", "GUARD", "PROTECTOR")
+try:
+    _NOT_BANDING = tuple(str(w).upper() for w in (
+        getattr(_cfg, "EDGE_BANDING_NOT_BANDING_WORDS", None) or _NOT_BANDING_DEFAULT))
+except Exception:                                                # noqa: BLE001
+    _NOT_BANDING = _NOT_BANDING_DEFAULT
+_NOT_BANDING_RE = re.compile(
+    r"(?<![A-Z])(?:" + "|".join(re.escape(w).replace(r"\ ", r"[\s-]*")
+                                for w in sorted(_NOT_BANDING, key=len, reverse=True))
+    + r")(?![A-Z])", re.IGNORECASE)
+
+
 def is_banding_row(description: Any) -> bool:
     """True when a parts-list row names edge banding (with or without a length) (D-383).
 
     The minter asks this before it names a row: a banding row is the parent's edging, not a
-    bought-in part, whatever else the row says."""
-    return bool(_BANDING_ROW_RE.search(str(description or "")))
+    bought-in part. A row that also names a trim word or a non-board material is a trim we
+    buy, not banding (config EDGE_BANDING_NOT_BANDING_WORDS)."""
+    text = str(description or "")
+    return bool(_BANDING_ROW_RE.search(text)) and not _NOT_BANDING_RE.search(text)
 
 
 def stated_edging_length_mm(description: Any) -> Optional[float]:
-    """The edging length a parts-list row states, or None when it states none."""
+    """The edging length a parts-list row states, or None when it states none (or the row is
+    a bought trim, not banding)."""
+    if not is_banding_row(description):
+        return None
     m = _STATED_EDGING_RE.search(str(description or ""))
     if not m:
         return None

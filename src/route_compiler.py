@@ -1714,15 +1714,22 @@ def build_part_graph(
         _pid = clean_part_number(part.get("part_number"))
         _pid = aliases.get(_pid, _pid)
         # An extract that STATES this parent's children owns it; the description rule only
-        # fills a hierarchy nobody expressed.
-        if not _pid or _pid in _stated_parents:
+        # fills a hierarchy nobody expressed. A NUMBERED PIECE THE DXF MERGE MINTED IS THE
+        # EXCEPTION (D-384): the extract cannot have stated it — it did not exist when the
+        # extract was read — so it is added under its part whatever else the extract says.
+        if not _pid:
             continue
+        _stated_here = _pid in _stated_parents
         _edges: Dict[str, float] = {}
         for _kid in _kids:
             _cid = clean_part_number(_kid)
             _cid = aliases.get(_cid, _cid)
             if not _cid or _cid == _pid:
                 continue
+            if _stated_here:
+                _krec = raw.get(_cid) or extracted.get(_cid) or {}
+                if clean_part_number(_krec.get("dxf_minted_piece_of")) != _pid:
+                    continue
             _edges[_cid] = number((extracted.get(_cid) or raw.get(_cid) or {}).get("quantity"),
                                   1.0) or 1.0
         if not _edges:
@@ -5934,6 +5941,11 @@ def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
         except Exception:                                        # pragma: no cover
             _keeps_coat = _stock_product = None
         _is_stock = bool(_stock_product is not None and _stock_product(_stock_rec))
+        # A MAKE-OR-BUY RULING IS A PURCHASE WHATEVER THE SUFFIX (D-384): the estimator's
+        # "buy" on a "-M" part is read like a compound stock-product word, so the cut-part
+        # suffix does not put the fabrication back.
+        if str(_stock_rec.get("_estimator_make_or_buy") or "").strip().lower() == "buy":
+            _is_stock = True
         if _hardware and not _is_stock:
             try:
                 from part_code_conventions import material_suffix as _cut_suffix

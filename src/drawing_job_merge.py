@@ -1499,6 +1499,17 @@ def _flag_dxf_pieces(summary: Mapping[str, Any], part: Dict[str, Any], paths: Se
             _piece["dxf_minted_piece_of"] = pn
             _piece.setdefault("review_flags", []).append(
                 f"numbered piece of {pn}, read from its DXF name {_name} — see {pn}")
+            # A PIECE IS A CHILD OF ITS PART, OR THE PRODUCT NEVER REACHES IT (D-384). The
+            # 1 Oct 21:19 book minted 12173-03-01J-01 and -02 (the base's two 25 mm MDF layers)
+            # and then listed them "not linked to 12173-02-GA, so not priced": the piece
+            # records existed, carried the flats, and hung on nothing — so the base had labour
+            # and no board. The part that owns the pieces names them as its children, through
+            # the same field the description rule and the route compiler already read.
+            _kids = part.setdefault("assembly_children", [])
+            if isinstance(_kids, list) and not any(
+                    _normalize_part_key(k) == _normalize_part_key(_code) for k in _kids):
+                _kids.append(_code)
+            part["is_assembly_parent"] = True
     # DIFFERING PIECES NOBODY SIZED ARE COSTED AND ASKED, as two gauges on one part number are
     # (TWO GAUGES ON ONE PART NUMBER, below): withholding them is money removed on a doubt.
     if len(paths) > 1 and not listed["rows"]:

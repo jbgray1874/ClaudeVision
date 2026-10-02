@@ -666,6 +666,13 @@ def load_corrections(path: Any) -> Tuple[Dict[str, Any], List[str]]:
 # this stand".
 _DECISION_KEYS = ("plating_gbp_per_unit", "plating_spec", "operations_off",
                   "throughput_per_hour", "commercial_excluded",
+                  # MAKE OR BUY, ANSWERED. {part: "buy" | "make"} — the estimator's answer to
+                  # the make-or-buy question a stock-product name leaves open (D-383: "MESH"
+                  # says what a part looks like, not who makes it). "buy": bought in, its
+                  # fabrication ruled off with the ruling as the reason, a coat kept only
+                  # where its own sheet states one. "make": the question is withdrawn and the
+                  # route the engine computed stands. Never a price — the rate is a purchase.
+                  "make_or_buy",
                   # An estimator-confirmed nesting group: {name: [part numbers]}. The
                   # second of the two proofs that let a laser set-up be shared, and the
                   # stronger one — a person who knows the job, rather than arithmetic over
@@ -731,6 +738,25 @@ def _read_decisions(raw: Mapping[str, Any], path: Any) -> Tuple[Dict[str, Any], 
                     clean_off[str(code).strip().upper()] = names
             if clean_off:
                 out["operations_off"] = clean_off
+
+    _mob = block.get("make_or_buy")
+    if _mob is not None:
+        if not isinstance(_mob, Mapping):
+            problems.append("estimator_decisions.make_or_buy: expected {part: 'buy'|'make'} — "
+                            "ignored")
+        else:
+            clean_mob: Dict[str, str] = {}
+            for code, ans in _mob.items():
+                _a = str(ans or "").strip().lower()
+                if _a in ("buy", "bought", "bought_in", "bought-in", "purchase", "purchased"):
+                    clean_mob[str(code).strip().upper()] = "buy"
+                elif _a in ("make", "made", "fabricate", "fabricated", "ours"):
+                    clean_mob[str(code).strip().upper()] = "make"
+                else:
+                    problems.append(f"estimator_decisions.make_or_buy[{code}]: expected 'buy' "
+                                    f"or 'make', got {ans!r} — ignored")
+            if clean_mob:
+                out["make_or_buy"] = clean_mob
 
     # ── AN ESTIMATOR-CONFIRMED NESTING GROUP ──────────────────────────────────────────
     #

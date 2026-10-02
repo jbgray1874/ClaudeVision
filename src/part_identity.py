@@ -437,7 +437,37 @@ ROW_ROLE_MATERIAL = "parent_material"      # the parent's own stock, named as a 
 ROW_ROLE_SIZE = "parent_size"              # figures only: the parent's blank ("626 x 626")
 ROW_ROLE_PART = "part"                     # words that name a thing we buy
 
-_NOTE_LEAD = re.compile(r"^\s*(?:NOTES?|SEE|REFER)\b")
+# The words a note row opens with. Config (PARTS_LIST_NOTE_LEADS); this is the default.
+_NOTE_LEADS_DEFAULT = ("NOTE", "NOTES", "SEE", "REFER")
+
+
+def _cfg_words(cfg: Any, key: str, default: Iterable[Any]) -> Tuple[str, ...]:
+    """A config vocabulary, upper-cased, or the module default when config does not say."""
+    return tuple(str(w).upper() for w in ((getattr(cfg, key, None) if cfg is not None else None)
+                                          or default))
+
+
+def _config() -> Any:
+    try:
+        import config as _cfg
+        return _cfg
+    except Exception:                                            # noqa: BLE001
+        return None
+
+
+def _note_lead(up: str, cfg: Any = None) -> bool:
+    leads = _cfg_words(cfg, "PARTS_LIST_NOTE_LEADS", _NOTE_LEADS_DEFAULT)
+    return bool(leads) and bool(re.match(
+        r"^\s*(?:" + "|".join(re.escape(w) for w in leads) + r")\b", up))
+
+
+def _names_a_word(up: str, words: Iterable[Any]) -> str:
+    """The first of these words (or phrases) the row names as a whole word, or ""."""
+    for w in sorted({str(x).upper() for x in words if str(x).strip()}, key=len, reverse=True):
+        pat = re.escape(w).replace(r"\ ", r"[\s-]+")
+        if re.search(rf"(?<![A-Z]){pat}(?![A-Z])", up):
+            return w
+    return ""
 
 
 def _leads_with(pattern: Any, text: str) -> bool:
@@ -486,6 +516,15 @@ def _is_finish_statement(up: str, cfg: Any = None) -> bool:
     return True
 
 
+# Words that qualify a material rather than name a thing. Config (MATERIAL_QUALIFIER_WORDS) is
+# read first; this default keeps the row classifier and the catalogue sheet-rate search reading
+# the same list when the key is absent.
+_MATERIAL_QUALIFIERS_DEFAULT = (
+    "SHEET", "SHEETS", "PLATE", "PANEL", "BOARD", "STOCK", "MATERIAL", "GRADE",
+    "CLEAR", "OPAL", "WHITE", "BLACK", "GREY", "GRAY", "MATT", "GLOSS", "SATIN",
+    "TEXTURED", "SMOOTH", "MR", "FR", "EXT", "INT", "STD", "THK", "NOM")
+
+
 def _is_material_statement(up: str, cfg: Any = None) -> bool:
     """A row that names only a material, its qualifiers and figures ("18mm MDF, 626 x 626",
     "MILD STEEL"). The material normaliser reads it, and every word of three letters or more
@@ -501,7 +540,7 @@ def _is_material_statement(up: str, cfg: Any = None) -> bool:
             return False
     except Exception:                                            # noqa: BLE001
         return False
-    quals = {str(w).upper() for w in (getattr(cfg, "MATERIAL_QUALIFIER_WORDS", None) or ())}
+    quals = set(_cfg_words(cfg, "MATERIAL_QUALIFIER_WORDS", _MATERIAL_QUALIFIERS_DEFAULT))
     words = [w for w in re.findall(r"[A-Z]+", up) if len(w) >= 3 and w not in _NOT_A_THING]
     if not words:
         return False
@@ -522,6 +561,97 @@ def _is_material_statement(up: str, cfg: Any = None) -> bool:
     return all(covered)
 
 
+# ── A STOCK SECTION, NAMED AND NOTHING ELSE (review round 2 of D-383) ─────────────────────
+# The section reader alone read only a x b x t plus TUBE/RHS/SHS. Every other stock section a
+# frame's own table lists ("25.4 dia x 1.5 ROUND TUBE 600", "40 x 40 x 3 ANGLE 600", "25 x 3
+# FLAT BAR 450", "12mm DIA BRIGHT BAR 300", "6mm DIA WIRE 450") was minted BI-ROUND, BI-ANGLE,
+# BI-FLAT, BI-BRIGHT, BI-WIRE — D-383's own defect on every round-tube, angle and bar frame.
+# A row whose words are a stock-section noun (config SECTION_STOCK_NOUNS) and nothing but the
+# section's qualifiers (SECTION_STOCK_QUALIFIER_WORDS), a material and its qualifiers is the
+# parent's section. Defaults below; config replaces them.
+_SECTION_NOUNS_DEFAULT = ("TUBE", "TUBING", "SHS", "RHS", "CHS", "BOX SECTION", "HOLLOW SECTION",
+                          "BAR", "ANGLE", "CHANNEL", "PIPE", "ROD", "WIRE")
+_SECTION_QUALIFIERS_DEFAULT = (
+    "ROUND", "SQUARE", "RECTANGULAR", "RECT", "FLAT", "HOLLOW", "EQUAL", "UNEQUAL", "BRIGHT",
+    "BLACK", "ERW", "CDS", "CFHS", "HFHS", "SEAMLESS", "DRAWN", "COLD", "HOT", "ROLLED",
+    "FORMED", "PRE", "GALV", "GALVANISED", "GALVANIZED", "MILD", "STEEL", "STAINLESS",
+    "ALUMINIUM", "ALUMINUM", "WALL", "LENGTH", "CUT", "DIA", "DIAMETER", "LONG", "OFF", "PCS",
+    "PIECE", "PIECES", "GRADE", "MATERIAL", "STOCK", "LEG", "LEGS", "SIDE", "SIDES")
+# A TUBE ACCESSORY IS A PART: an end cap, insert, plug or glide names the section it fits.
+_SECTION_ACCESSORIES_DEFAULT = (
+    "CAP", "CAPS", "END CAP", "INSERT", "INSERTS", "PLUG", "PLUGS", "BUNG", "BUNGS", "GLIDE",
+    "GLIDES", "FOOT", "FEET", "CLAMP", "CLAMPS", "CONNECTOR", "CONNECTORS", "JOINER", "JOINERS",
+    "FERRULE", "FERRULES")
+# The process and qualifier words an instruction row is made of ("WELD ALL ROUND").
+_INSTRUCTION_WORDS_DEFAULT = (
+    "WELD", "WELDS", "WELDED", "WELDING", "FOLD", "FOLDS", "FOLDED", "FOLDING", "BEND", "BENDS",
+    "BENT", "HOLE", "HOLES", "SLOT", "SLOTS", "SLOTTED", "ALL", "ROUND", "AROUND", "BOTH",
+    "SIDES", "SIDE", "STITCH", "TACK", "SEAM", "FILLET", "CONTINUOUS", "INTERMITTENT", "GRIND",
+    "FLUSH", "DRESS", "DRESSED", "CLEAN", "DEBURR", "EDGES", "EDGE", "DOWN", "INSIDE",
+    "OUTSIDE", "FULL", "LENGTH", "SHOWN", "PER", "DRAWING", "DRG", "DWG", "PITCH", "CENTRES",
+    "CENTERS", "EQUAL", "SPACED", "THRU", "THROUGH", "TAPPED", "TAP", "DRILL", "DRILLED", "CSK",
+    "MIG", "TIG", "SPOT", "ONLY", "WHERE", "VISIBLE", "DEG", "DEGREES", "EXT", "INT", "AND",
+    "THE", "FROM", "WITH", "NOT")
+
+
+def _material_covered(words: List[str]) -> List[bool]:
+    """Which of these words the material normaliser reads, alone or as a pair that reads as
+    something neither word reads alone (MILD STEEL, OAK VENEER)."""
+    covered = [False] * len(words)
+    try:
+        from json_normaliser import normalise_material
+        alone = [normalise_material(w) for w in words]
+        for i, w in enumerate(words):
+            if alone[i]:
+                covered[i] = True
+            if i + 1 < len(words):
+                pair = normalise_material(f"{w} {words[i + 1]}")
+                if pair and pair != alone[i] and pair != alone[i + 1]:
+                    covered[i] = covered[i + 1] = True
+    except Exception:                                            # noqa: BLE001
+        pass
+    return covered
+
+
+def names_only_a_stock_section(description: Any, cfg: Any = None) -> bool:
+    """True when a row names a stock section (config SECTION_STOCK_NOUNS) and nothing else:
+    every word of three letters or more is a section noun, a section qualifier, a material it
+    reads, a material qualifier or a unit. "30.00 x 30.00 x 2.00mm TUBE 1532", "MILD STEEL ERW
+    TUBE" and "40 x 40 x 3 EQUAL ANGLE 600" do; "PLASTIC END CAP 25 x 25 x 1.5 TUBE" and "TUBE
+    CLAMP 30 x 30 x 2" do not — they name a thing that fits the section."""
+    cfg = cfg if cfg is not None else _config()
+    up = " ".join(str(description or "").upper().split())
+    nouns = _cfg_words(cfg, "SECTION_STOCK_NOUNS", _SECTION_NOUNS_DEFAULT)
+    if not up or not _names_a_word(up, nouns):
+        return False
+    allowed = ({p for n in nouns for p in re.findall(r"[A-Z]+", n)}
+               | set(_cfg_words(cfg, "SECTION_STOCK_QUALIFIER_WORDS", _SECTION_QUALIFIERS_DEFAULT))
+               | set(_cfg_words(cfg, "MATERIAL_QUALIFIER_WORDS", _MATERIAL_QUALIFIERS_DEFAULT))
+               | set(_NOT_A_THING))
+    words = [w for w in re.findall(r"[A-Z]+", up) if len(w) >= 3]
+    left = [w for w in words if w not in allowed]
+    if not left:
+        return True
+    return all(_material_covered(left))
+
+
+def _is_instruction_row(up: str, cfg: Any = None) -> bool:
+    """A row that OPENS with the weld, fold, hole or slot reader's pattern and is made of
+    nothing but process and qualifier words (config PARTS_LIST_INSTRUCTION_WORDS): "WELD ALL
+    ROUND", "FOLD UP 90°". "WELD STUD M6 x 20", "WELD ON HINGE", "FOLD FLAT HINGE" and "FOLD
+    DOWN SHELF BRACKET" name a thing and are parts."""
+    if not any(_leads_with(getattr(cfg, k, None), up)
+               for k in ("WELD_PATTERN", "FOLD_PATTERN", "HOLE_PATTERN", "SLOT_PATTERN")):
+        return False
+    vocab = (set(_cfg_words(cfg, "PARTS_LIST_INSTRUCTION_WORDS", _INSTRUCTION_WORDS_DEFAULT))
+             | set(_NOT_A_THING))
+    return all(w in vocab for w in re.findall(r"[A-Z]+", up) if len(w) >= 3)
+
+
+def _instruction_vocabulary(cfg: Any = None) -> Set[str]:
+    return set(_cfg_words(cfg, "PARTS_LIST_INSTRUCTION_WORDS", _INSTRUCTION_WORDS_DEFAULT))
+
+
 def parts_list_row_role(description: Any) -> str:
     """What a parts-list row with no code IS, asked of the readers the engine already has.
 
@@ -534,13 +664,18 @@ def parts_list_row_role(description: Any) -> str:
     material ("18mm MDF, 626 x 626") and an edging row would all have been named the same way.
     So the row is asked, in order:
 
-      (a) the section reader (section_profile) reads a canonical profile  -> the parent's
-          cut list, consumed by bom_pipeline.apply_stated_cut_list_to_parts
-      (b) a banding noun (edge_banding.is_banding_row)                    -> the parent's edging
-      (c) the shared hardware vocabulary, or a stock-product word (config
-          PURCHASED_STOCK_PRODUCT_WORDS)                                   -> a part
-      (d) a placeholder, a NOTE/SEE/REFER row, or a row that OPENS with the weld, fold,
-          hole or slot reader's pattern (config) or a finish word        -> an instruction
+      (b) a banding noun and no trim word (edge_banding.is_banding_row) -> the parent's edging
+      (c) the shared hardware vocabulary, a tube accessory (config SECTION_ACCESSORY_WORDS)
+          or a stock-product word (config PURCHASED_STOCK_PRODUCT_WORDS) -> a part. Asked
+          BEFORE the section reader: an end cap names the tube it fits, and read as the
+          frame's cut list it was consumed with nothing said
+      (a) the section reader (section_profile) reads a canonical profile, or the row names a
+          stock section and nothing else (names_only_a_stock_section)  -> the parent's cut
+          list, consumed by bom_pipeline.apply_stated_cut_list_to_parts where it can read
+          it, else asked; a section named with no figures at all is the parent's material
+      (d) a placeholder, a note (config PARTS_LIST_NOTE_LEADS), or a row that OPENS with the
+          weld, fold, hole or slot reader's pattern and names nothing but process words
+          (config PARTS_LIST_INSTRUCTION_WORDS), or only states a finish -> an instruction
       (e) the material normaliser reads a material                        -> the parent's stock
       (f) anything else with a word                                       -> a part (BI-DOWEL)
 
@@ -550,13 +685,7 @@ def parts_list_row_role(description: Any) -> str:
     up = desc.upper()
     if not up:
         return ROW_ROLE_SIZE
-    try:
-        from section_profile import detect_section_stock
-        _sec = detect_section_stock(desc)
-    except Exception:                                            # noqa: BLE001
-        _sec = None
-    if _sec and _sec.get("detection_path") == "canonical_profile":
-        return ROW_ROLE_CUT_LIST
+    _cfg = _config()
     try:
         from edge_banding import is_banding_row
         if is_banding_row(desc):
@@ -565,17 +694,24 @@ def parts_list_row_role(description: Any) -> str:
         pass
     if synthesise_bought_in_code(desc, ""):
         return ROW_ROLE_PART
-    try:
-        import config as _cfg
-    except Exception:                                            # noqa: BLE001
-        _cfg = None
+    if _names_a_word(up, _cfg_words(_cfg, "SECTION_ACCESSORY_WORDS", _SECTION_ACCESSORIES_DEFAULT)):
+        return ROW_ROLE_PART
     _stock_words = getattr(_cfg, "PURCHASED_STOCK_PRODUCT_WORDS", None) or ()
     if any(re.search(rf"\b{re.escape(str(w).upper())}\b", up) for w in _stock_words):
         return ROW_ROLE_PART
-    if is_placeholder_identity(desc) or _NOTE_LEAD.match(up):
+    try:
+        from section_profile import detect_section_stock
+        _sec = detect_section_stock(desc)
+    except Exception:                                            # noqa: BLE001
+        _sec = None
+    _pure = names_only_a_stock_section(desc, _cfg)
+    if _pure and not re.search(r"\d", up):
+        return ROW_ROLE_MATERIAL
+    if _pure or (_sec and _sec.get("detection_path") == "canonical_profile"):
+        return ROW_ROLE_CUT_LIST
+    if is_placeholder_identity(desc) or _note_lead(up, _cfg):
         return ROW_ROLE_INSTRUCTION
-    if any(_leads_with(getattr(_cfg, k, None), up)
-           for k in ("WELD_PATTERN", "FOLD_PATTERN", "HOLE_PATTERN", "SLOT_PATTERN")):
+    if _is_instruction_row(up, _cfg):
         return ROW_ROLE_INSTRUCTION
     if _is_finish_statement(up, _cfg):
         return ROW_ROLE_INSTRUCTION
@@ -623,7 +759,13 @@ def mint_uncoded_row_identities(rows: Iterable[Any], code_key: str = "part_numbe
                  if len(w) >= 3 and w not in _NOT_A_THING]
         if not words:
             continue
-        ident = synthesise_bought_in_code(desc, code) or f"BI-{words[0]}"
+        # A PART NAMED AFTER A PROCESS WORD IS NAMED BY ITS THING: "WELD STUD M6 x 20" is a
+        # stud (BI-STUD), not BI-WELD. Only the leading process words are passed over.
+        _proc = _instruction_vocabulary(_config())
+        _named = words
+        while len(_named) > 1 and _named[0] in _proc:
+            _named = _named[1:]
+        ident = synthesise_bought_in_code(desc, code) or f"BI-{_named[0]}"
         _held = taken.get(ident.upper())
         if _held is not None and _held != desc.upper():
             # Two different rows under one word: the figures are what tell them apart. The

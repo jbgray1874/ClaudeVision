@@ -6909,6 +6909,18 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{'/'.join(_stripped)} removed: part is {_mat_u or 'a board/timber family'}, "
                 f"which is not welded — joining is by glue/fixings. A weld cue was read from "
                 f"the drawing text; confirm it belongs to a different (metal) part")
+            # AND UNDER THE NAME THE ROUTE READS (D-384). This strip cleaned the costed op
+            # lists and said so, while route_operations_by_part and the route compiler honour
+            # operations_ruled_out and nothing else — so 12173-03-03J, an MFC back panel, read
+            # "welding removed: part is MFC" on the 1 Oct 21:19 report and £23.77 of Weld (CO2)
+            # on the same book's sheet. The same two-names fault D-085 found on the tube-bend
+            # gate and the operations_off ruling above.
+            _ruled_w = part.setdefault("operations_ruled_out", {})
+            for _o in _stripped:
+                _ruled_w.setdefault(_o, (
+                    f"part is {_mat_u or 'a board/timber family'}, which is not welded — "
+                    f"joining is by glue/fixings; the weld cue came from the pack's text, not "
+                    f"this part's own sheet"))
             # Clear the weld SIGNALS too, not just the costed ops. welding_required is
             # synthesised from textual_operations back at document-build time, so without
             # this the sheet correctly shows no weld while the job report still tells the

@@ -19,7 +19,15 @@ from typing import Any, Dict, Optional
 
 __all__ = ["detect_section_stock", "section_kg_per_m"]
 
-_SECTION_HOLLOW_KW = ("TUBE", "RHS", "SHS", "BOX SECTION", "BOX-SECTION", "HOLLOW SECTION")
+# The hollow-section keywords PATH 1 needs. Config (SECTION_HOLLOW_KEYWORDS) since this list
+# also decides which parts-list rows are a frame's cut list; this is the default.
+_SECTION_HOLLOW_KW_DEFAULT = ("TUBE", "RHS", "SHS", "BOX SECTION", "BOX-SECTION", "HOLLOW SECTION")
+try:
+    import config as _cfg
+    _SECTION_HOLLOW_KW = tuple(str(w).upper() for w in (
+        getattr(_cfg, "SECTION_HOLLOW_KEYWORDS", None) or _SECTION_HOLLOW_KW_DEFAULT))
+except Exception:                                                # noqa: BLE001
+    _SECTION_HOLLOW_KW = _SECTION_HOLLOW_KW_DEFAULT
 _SECTION_PROFILE_RE = re.compile(
     r"(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)(?:\s*MM)?",
     re.IGNORECASE,
