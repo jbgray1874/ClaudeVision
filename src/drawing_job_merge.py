@@ -3093,10 +3093,14 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # not fire for either real hand. A base is wire when its own record says so — a bar
         # or wire schedule, the wire route's override, a wire stock form; a base with a gauge
         # and a measured sheet blank is sheet, whatever note the pack painted on it.
+        # NOT `_wire_part_override` (D-388): the document builder sets that flag from the
+        # pack's wire note too, so on the saved 03:17 job both sheet-metal bases carried it
+        # and the guard skipped both real hands. A bar or wire schedule, a recognised bar, or
+        # a wire stock form is the base's own record saying what it is; a flag a note painted
+        # on it is not.
         _wire_ops = ("wire_forming", "robomac")
         _base_is_wire = bool(
             base.get("_bar_recognised") or base.get("wire_schedule") or base.get("bar_schedule")
-            or base.get("_wire_part_override")
             or str(base.get("stock_form")
                    or (base.get("material_estimate") or {}).get("stock_form") or "").lower()
             in ("wire", "bar", "rod"))

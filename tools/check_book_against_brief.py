@@ -225,6 +225,28 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
     for name in facts.get("forbidden_names_everywhere") or []:
         hit = [l.get("part_number") for l in lines if _sq(name) == _sq(l.get("part_number"))]
         res.add("forbidden_name", name, not hit, f"on {hit}" if hit else "")
+    # HOW a line was priced, not only whether (D-388). A frame priced at the global £/kg hold
+    # and a frame priced from the catalogue's stock length both carry money; the brief can say
+    # which methods are not acceptable for a line ("not") or which one it must be ("in").
+    for code, want in (facts.get("cost_method") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        got = str(((pe.get("material_estimate") or {}).get("cost_method")) or "")
+        ok = bool(got)
+        if ok and want.get("not"):
+            ok = got not in set(want["not"])
+        if ok and want.get("in"):
+            ok = got in set(want["in"])
+        res.add("cost_method", code, ok, f"priced by {got or 'no method named'}"
+                + (f" (not {want['not']})" if want.get("not") else "")
+                + (f" (one of {want['in']})" if want.get("in") else ""))
+    # WHAT the price names. The oak back is a bought price only if the row carries the
+    # drawing's product code; a researched figure must name the decor it was asked with.
+    for code, tokens in (facts.get("material_basis_names") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        blob = json.dumps(pe.get("material_estimate") or {}, default=str).upper()
+        missing = [t for t in tokens if str(t).upper() not in blob]
+        res.add("material_basis_names", code, not missing,
+                f"missing {missing}" if missing else f"names {tokens}")
 
     # ── mass ────────────────────────────────────────────────────────────────────
     for code, kg in (facts.get("max_unit_material_mass_kg") or {}).items():

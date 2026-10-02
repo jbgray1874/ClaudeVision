@@ -113,7 +113,7 @@ def test_the_card_spinner_brief_is_well_formed():
              "required_operations_incl_pieces", "forbidden_operations",
              "forbidden_operations_anywhere", "material_charged", "no_cut_assemblies",
              "forbidden_names_everywhere", "unit_mass_kg", "max_unit_material_mass_kg",
-             "min_unit_material_mass_kg"}
+             "min_unit_material_mass_kg", "cost_method", "material_basis_names"}
     assert set(facts) <= known, set(facts) - known
 
 

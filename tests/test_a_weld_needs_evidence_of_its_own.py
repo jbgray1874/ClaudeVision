@@ -129,6 +129,7 @@ def test_a_hand_of_a_wire_base_keeps_wire_forming():
     # schedule, its recognised bar, or its stock form — a sheet base with the note is sheet.
     base, hand = _pair()
     base["textual_operations"] = ["wire_forming"]
+    base["_wire_part_override"] = True          # the production flag the pack note sets (D-388)
     djm.apply_mirror_geometry([base, hand])
     assert "wire_forming" not in hand["textual_operations"]
     base, hand = _pair()

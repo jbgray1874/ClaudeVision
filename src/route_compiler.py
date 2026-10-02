@@ -4640,6 +4640,27 @@ def compile_job_route(
         operation_quantities = part.get("operation_qty_per_unit") or {}
         sequences = part.get("operation_sequence") or {}
 
+        # A PERSON'S RULING REACHES THE ROUTE DIRECTLY (D-388). estimator_decisions.operations_off
+        # is stamped on the record by file_scan and was honoured only by the estimator, which
+        # wrote it into operations_ruled_out as it costed; a route compiled from the saved
+        # record without that pass (the replay of 12173-02's 03:17 job) charged the weld James
+        # Gray had ruled off 12173-03-201. The ruling is the record's, so it is read here too —
+        # and an operation under a ruling raises no compatibility claim of its own: the ruling
+        # event is its decision, not a second one beside it.
+        def _spelled(_o: Any) -> str:
+            return "".join(ch for ch in str(_o).lower() if ch.isalnum())
+
+        _rulings: Dict[str, str] = dict(part.get("operations_ruled_out") or {})
+        _ruled_keys = {_spelled(k) for k in _rulings}
+        _person_ruled: Set[str] = set()
+        for _off in (part.get("_estimator_operations_off") or []):
+            if _spelled(_off) and _spelled(_off) not in _ruled_keys:
+                _rulings[str(_off)] = ("the estimator took this operation off for this job "
+                                       "(estimator_decisions.operations_off in the job's "
+                                       "answers file)")
+                _person_ruled.add(str(_off))
+                _ruled_keys.add(_spelled(_off))
+
         seen: Set[str] = set()
         # WHERE "an unrecorded source" CAME FROM, and why only one of these three changes.
         #
@@ -4666,6 +4687,8 @@ def compile_job_route(
                 if not operation or operation in seen:
                     continue
                 seen.add(operation)
+                if _spelled(operation) in _ruled_keys:
+                    continue          # ruled off this record: the ruling event decides it
                 source = str(operation_sources.get(operation) or fallback_source)
                 event_ids = sorted(
                     explicit_memberships.get((operation, part_number)) or [])
@@ -4832,12 +4855,11 @@ def compile_job_route(
                         route_id=route_id,
                     ))
 
-        for raw_operation, raw_reason in (
-            part.get("operations_ruled_out") or {}
-        ).items():
+        for raw_operation, raw_reason in _rulings.items():
             operation = clean_operation(raw_operation)
             reason = str(raw_reason or "operation ruled out")
-            source = _ruling_source(part, operation, reason)
+            source = ("estimator_confirmed" if raw_operation in _person_ruled
+                      else _ruling_source(part, operation, reason))
             candidates = []
             for event_id in sorted(
                 explicit_memberships.get((operation, part_number)) or []
@@ -6020,12 +6042,34 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
         weld_state[_tid] = "withheld"
 
     # 2. Dressing follows the weld.
+    # A WELD RULED OFF BY ANY ROAD TAKES ITS DRESSING WITH IT (D-388). 12173-03-04M / 05M and
+    # 05-01M carried Dress Welds on the saved 03:17 job while their welding decisions stood
+    # not applicable — the dressing had been read on its own and nothing tied it to the weld
+    # it dresses. Where a target has a welding decision and none of them is required, there is
+    # nothing on it to dress, whatever the dressing's own source; this holds for every target,
+    # not only a leaf under an assembly.
+    _weld_status: Dict[str, Set[str]] = {}
+    for _w in decisions:
+        if str(_w.operation or "").lower() == "welding" and str(_w.scope or "") == "part":
+            _weld_status.setdefault(str(_w.target_id or ""), set()).add(str(_w.status))
     for _d in decisions:
         if _d.status != REQUIRED or str(_d.scope or "") != "part":
             continue
         if str(_d.operation or "").lower() != "dress_welds":
             continue
         _tid = str(_d.target_id or "")
+        _ws_here = _weld_status.get(_tid) or set()
+        if _ws_here and REQUIRED not in _ws_here and weld_state.get(_tid) != "withheld":
+            _d.status = NOT_APPLICABLE
+            _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                         + f"not charged: dressing follows the weld — {_tid}'s welding is "
+                           f"{', '.join(sorted(_ws_here)).replace('_', ' ')}, so there is "
+                           f"nothing on it to dress")
+            _d.field_provenance["status"] = "dress_follows_weld"
+            if issues is not None:
+                issues.append({"code": "dress_follows_weld", "part": _tid,
+                               "weld_status": sorted(_ws_here)})
+            continue
         if not _leaf_under_assembly(_tid):
             continue
         _state = weld_state.get(_tid)
@@ -6075,9 +6119,9 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
     if not welded_assemblies:
         return []
     try:
-        from weld_symbols import arc_weld_symbols as _arc
+        from weld_symbols import arc_weld_symbols as _arc, _says_welded as _sw
     except Exception:                                                # pragma: no cover
-        _arc = None
+        _arc = _sw = None
     moved: List[str] = []
     for _d in list(decisions):
         if _d.status != REQUIRED or str(_d.scope or "") != "part":
@@ -6088,7 +6132,13 @@ def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mappin
         if kinds.get(_tid, "leaf") != "leaf" or not parents.get(_tid):
             continue
         _rec = _graph_record(graph, _tid)
-        if not _rec.get("weld_stated_by_finish"):
+        # The statement is the reader's marker, or the record's own FINISH field saying so —
+        # a saved record from before the marker existed states it the second way (D-388).
+        _stated = bool(_rec.get("weld_stated_by_finish"))
+        if not _stated and not _rec.get("finish_inherited_from") and _sw is not None:
+            _fin_own = str(_rec.get("normalized_finish") or _rec.get("finish") or "")
+            _stated = bool(_fin_own) and _sw(_fin_own)
+        if not _stated:
             continue
         _ws = _rec.get("weld_symbols")
         if _arc is not None and isinstance(_ws, Mapping) and _arc(_ws) > 0:

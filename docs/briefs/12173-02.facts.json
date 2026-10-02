@@ -53,6 +53,8 @@
     "12173-04-06M": ["wire_forming"],
     "12173-05-101": ["powder_coating", "welding"],
     "12173-06-201": ["powder_coating", "welding"],
+    "12173-07-1-GA": ["powder_coating"],
+    "12173-07-2-GA": ["powder_coating"],
     "12173-06-01M": ["wire_forming"],
     "12173-06-03M": ["folding"],
     "12173-07-1-02M": ["folding"],
@@ -64,6 +66,8 @@
     "12173-03-01J": ["wet_spray"]
   },
   "forbidden_operations": {
+    "12173-03-GA": ["powder_coating"],
+    "12173-07-GA": ["powder_coating"],
     "12173-03-01J": ["laser_cutting", "powder_coating", "welding", "dress_welds"],
     "12173-03-02J": ["laser_cutting", "powder_coating", "welding", "dress_welds"],
     "12173-03-03J": ["laser_cutting", "powder_coating", "wet_spray", "edge_banding", "welding", "dress_welds"],
@@ -73,23 +77,31 @@
     "12173-03-202": ["powder_coating"],
     "12173-03-203": ["powder_coating"],
     "12173-04-02M": ["powder_coating", "welding", "dress_welds"],
-    "12173-04-02M-H": ["powder_coating", "welding", "dress_welds"],
+    "12173-04-02M-H": ["powder_coating", "welding", "dress_welds", "wire_forming", "robomac"],
     "12173-04-03M": ["powder_coating", "welding", "dress_welds"],
     "12173-04-04M": ["laser_cutting", "wire_forming", "powder_coating", "welding"],
     "12173-04-05M": ["laser_cutting", "wire_forming", "powder_coating", "welding"],
     "12173-04-06M": ["laser_cutting", "powder_coating"],
     "12173-05-01M": ["laser_cutting", "powder_coating"],
     "12173-05-02M": ["folding", "powder_coating"],
-    "12173-06-01M": ["laser_cutting", "powder_coating"],
+    "12173-06-01M": ["laser_cutting", "powder_coating", "welding", "dress_welds"],
     "12173-06-03M": ["powder_coating"],
     "12173-07-1-01M": ["powder_coating"],
     "12173-07-1-02M": ["powder_coating"],
-    "12173-07-1-02M-H": ["powder_coating"],
+    "12173-07-1-02M-H": ["powder_coating", "wire_forming", "robomac"],
     "12173-07-2-01M": ["powder_coating"],
     "12173-07-2-02M": ["powder_coating"],
     "12173-07-2-03M": ["folding", "powder_coating"]
   },
+  "cost_method": {
+    "12173-03-04M": {"not": ["section_stock_config_rate", "section_stock_flat_rate"]},
+    "12173-03-05M": {"not": ["section_stock_config_rate", "section_stock_flat_rate"]}
+  },
+  "material_basis_names": {
+    "12173-03-03J": ["0H440"]
+  },
   "material_charged": [
+    "12173-03-03J",
     "12173-03-02J", "12173-03-04M", "12173-03-05M", "12173-03-06M",
     "12173-04-02M", "12173-04-02M-H", "12173-04-03M", "12173-04-06M",
     "12173-05-01M", "12173-05-02M", "12173-06-01M", "12173-06-03M",

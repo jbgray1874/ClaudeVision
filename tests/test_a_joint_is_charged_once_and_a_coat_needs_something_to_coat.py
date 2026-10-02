@@ -445,6 +445,63 @@ def test_the_frame_is_priced_from_the_stock_length_before_the_config_hold(monkey
     assert any("11248-14" in f and "was not used" in f for f in part["review_flags"])
 
 
+# ── 8. the saved 03:17 job, replayed on efe904f (D-388) ──────────────────────────────────
+# Three things the replay showed: 03-201's weld — ruled off by James Gray — was charged, because
+# the ruling reached the route only through the estimator's pass; 06-03M (FINISH: WELDED) kept
+# its weld beside the welded hook, because the saved record predates the reader's marker; and
+# 03-04M / 05M / 05-01M carried Dress Welds while their welding stood not applicable.
+
+def test_a_persons_ruling_reaches_the_route_without_the_estimators_pass():
+    parts = [
+        {"part_number": "F-201", "quantity": 1, "is_sub_assembly": True,
+         "assembly_children": ["F-04M"], "textual_operations": ["welding", "dress_welds"],
+         "operation_sources": {"welding": "drawing_deterministic"},
+         "weld_symbols": {"fillet": 2}, "_estimator_operations_off": ["welding", "dress_welds"]},
+        _sheet("F-04M"),
+    ]
+    ds, _ = _decisions(parts, known=["F-201"])
+    w = _of(ds, "F-201", "welding")
+    assert w["status"] == rc.RULED_OUT and w["source"] == "estimator_confirmed"
+    assert "operations_off" in w["reason"]
+    assert _of(ds, "F-201", "dress_welds")["status"] == rc.RULED_OUT
+
+
+def test_a_member_whose_record_says_welded_is_moved_without_the_marker():
+    rec = {"A-01M": {"part_number": "A-01M", "normalized_finish": "WELDED", "weld_symbols": {}}}
+    asm = _dec("A-201", "welding", source="drawing_deterministic", scope="assembly")
+    m1 = _dec("A-01M", "welding", source="drawing_deterministic")
+    assert rc._member_finish_weld_is_the_assemblys([asm, m1], _graph(rec), []) == ["A-01M"]
+    assert m1.status == rc.NOT_APPLICABLE
+    # A finish the document filled in is the document's words, not this sheet's.
+    rec = {"A-01M": {"part_number": "A-01M", "normalized_finish": "WELDED",
+                     "finish_inherited_from": "12173-02-GA"}}
+    m1 = _dec("A-01M", "welding", source="drawing_deterministic")
+    assert rc._member_finish_weld_is_the_assemblys([asm, m1], _graph(rec), []) == []
+
+
+def test_dressing_follows_a_weld_that_stands_not_applicable_or_ruled_out():
+    w = _dec("A-01M", "welding", source="drawing_deterministic", status=rc.NOT_APPLICABLE)
+    dress = _dec("A-01M", "dress_welds", source="drawing_notes")
+    issues = []
+    rc._withhold_evidenceless_leaf_welds([w, dress], _graph(), issues)
+    assert dress.status == rc.NOT_APPLICABLE
+    assert dress.field_provenance["status"] == "dress_follows_weld"
+    assert "nothing on it to dress" in dress.reason
+    assert issues == [{"code": "dress_follows_weld", "part": "A-01M",
+                       "weld_status": [rc.NOT_APPLICABLE]}]
+    # Not a leaf under an assembly: the rule still holds, dressing is the weld's.
+    w = _dec("A-201", "welding", source="estimator_confirmed", status=rc.RULED_OUT)
+    dress = _dec("A-201", "dress_welds", source="drawing_notes")
+    rc._withhold_evidenceless_leaf_welds([w, dress], _graph(), [])
+    assert dress.status == rc.NOT_APPLICABLE
+    # A required weld beside a not-applicable duplicate keeps its dressing.
+    w1 = _dec("A-02M", "welding", source="drawing_deterministic")
+    w2 = _dec("A-02M", "welding", status=rc.NOT_APPLICABLE)
+    dress = _dec("A-02M", "dress_welds", source="override_rule")
+    rc._withhold_evidenceless_leaf_welds([w1, w2, dress], _graph(), [])
+    assert dress.status == rc.REQUIRED
+
+
 def test_with_no_stock_length_the_config_hold_still_prices_and_says_so(monkeypatch):
     monkeypatch.setattr(e, "_fetch_catalogue_section_rows", lambda: [ROWS[0], ROWS[4]])
     part = {"part_number": "F-04M", "description": "FRAME", "quantity": 1,
