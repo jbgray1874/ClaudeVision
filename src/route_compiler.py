@@ -6048,9 +6048,12 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
     # it dresses. Where a target has a welding decision and none of them is required, there is
     # nothing on it to dress, whatever the dressing's own source; this holds for every target,
     # not only a leaf under an assembly.
+    # Every weld decided on the target, whatever its scope and whichever weld it is (arc, spot,
+    # resistance, brazing — the joining operations less the dressing itself).
+    _weld_ops = {o for o in _JOINING_OPS if o != "dress_welds"}
     _weld_status: Dict[str, Set[str]] = {}
     for _w in decisions:
-        if str(_w.operation or "").lower() == "welding" and str(_w.scope or "") == "part":
+        if str(_w.operation or "").lower() in _weld_ops:
             _weld_status.setdefault(str(_w.target_id or ""), set()).add(str(_w.status))
     for _d in decisions:
         if _d.status != REQUIRED or str(_d.scope or "") != "part":
@@ -6059,7 +6062,21 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
             continue
         _tid = str(_d.target_id or "")
         _ws_here = _weld_status.get(_tid) or set()
-        if _ws_here and REQUIRED not in _ws_here and weld_state.get(_tid) != "withheld":
+        # A DRESSING WITH NO WELD DECIDED ON ITS PART DRESSES NOTHING (D-388). 12173-03-04M
+        # carried Dress Welds from a note while no welding decision of any status existed on
+        # it: the dressing had been read on its own. If the part is welded, the weld is the
+        # missing decision — the readers' business — and the dressing follows it back.
+        if not _ws_here:
+            _d.status = NOT_APPLICABLE
+            _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                         + f"not charged: no weld is decided on {_tid}, and dressing dresses a "
+                           f"weld — if {_tid} is welded, the weld is the missing decision, and "
+                           f"its dressing returns with it")
+            _d.field_provenance["status"] = "dress_follows_weld"
+            if issues is not None:
+                issues.append({"code": "dress_follows_weld", "part": _tid, "weld_status": []})
+            continue
+        if REQUIRED not in _ws_here and weld_state.get(_tid) != "withheld":
             _d.status = NOT_APPLICABLE
             _d.reason = ((f"{_d.reason}; " if _d.reason else "")
                          + f"not charged: dressing follows the weld — {_tid}'s welding is "

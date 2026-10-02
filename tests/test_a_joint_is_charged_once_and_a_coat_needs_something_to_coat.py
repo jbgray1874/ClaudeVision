@@ -87,14 +87,12 @@ def test_dressing_follows_the_weld_off_and_on():
     assert dress.status == rc.NOT_APPLICABLE and "follows the weld" in dress.reason
     assert dress.field_provenance["status"] == "evidenceless_leaf_weld_withheld"
     assert [i["operation"] for i in issues] == ["welding", "dress_welds"]
-    # A dressing with no weld to dress, resting on an inference, dresses nothing.
-    lone = _dec("A-02M", "dress_welds")
-    rc._withhold_evidenceless_leaf_welds([lone], _graph(), [])
-    assert lone.status == rc.NOT_APPLICABLE and "no weld to dress" in lone.reason
-    # One with a note of its own is kept.
-    noted = _dec("A-02M", "dress_welds", source="drawing_notes")
-    rc._withhold_evidenceless_leaf_welds([noted], _graph(), [])
-    assert noted.status == rc.REQUIRED
+    # A dressing with no weld decided on its part dresses nothing, whatever its source (D-388
+    # widened this from "an inference alone": 03-04M's dressing came from a note).
+    for _src in ("inference", "drawing_notes"):
+        lone = _dec("A-02M", "dress_welds", source=_src)
+        rc._withhold_evidenceless_leaf_welds([lone], _graph(), [])
+        assert lone.status == rc.NOT_APPLICABLE and "no weld is decided on A-02M" in lone.reason
 
 
 # ── 2. a member's FINISH: WELDED under a welded assembly is the assembly's joint ──────────
@@ -499,6 +497,27 @@ def test_dressing_follows_a_weld_that_stands_not_applicable_or_ruled_out():
     w2 = _dec("A-02M", "welding", status=rc.NOT_APPLICABLE)
     dress = _dec("A-02M", "dress_welds", source="override_rule")
     rc._withhold_evidenceless_leaf_welds([w1, w2, dress], _graph(), [])
+    assert dress.status == rc.REQUIRED
+    # An assembly-scope weld counts as the weld for its target's dressing.
+    w = _dec("A-201", "welding", source="drawing_deterministic", scope="assembly")
+    dress = _dec("A-201", "dress_welds", source="override_rule")
+    rc._withhold_evidenceless_leaf_welds([w, dress], _graph(), [])
+    assert dress.status == rc.REQUIRED
+
+
+def test_a_dressing_with_no_weld_decided_on_its_part_dresses_nothing():
+    # 12173-03-04M on the saved 03:17 job: Dress Welds from a note, no welding decision at all.
+    dress = _dec("A-02M", "dress_welds", source="drawing_notes")
+    issues = []
+    rc._withhold_evidenceless_leaf_welds([dress], _graph(), issues)
+    assert dress.status == rc.NOT_APPLICABLE
+    assert dress.field_provenance["status"] == "dress_follows_weld"
+    assert "no weld is decided on A-02M" in dress.reason
+    assert issues == [{"code": "dress_follows_weld", "part": "A-02M", "weld_status": []}]
+    # A spot weld is a weld: its dressing stays.
+    spot = _dec("A-02M", "spot_welding", source="drawing_deterministic")
+    dress = _dec("A-02M", "dress_welds", source="drawing_notes")
+    rc._withhold_evidenceless_leaf_welds([spot, dress], _graph(), [])
     assert dress.status == rc.REQUIRED
 
 
