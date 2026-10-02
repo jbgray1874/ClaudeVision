@@ -369,11 +369,14 @@ def test_frozen_routing_and_costing_re_execute(job: Path):
         llm_extract=extract,
         bom_rows=doc.get("bom_rows") or [],
     )
-    # Material is re-costed from the costed records, which hold the measured blank and the
-    # material the costing stage read; the document part stands in where a record is absent.
-    parts = costed + [p for p in doc_parts
-                      if str(p.get("part_number") or "").upper()
-                      not in {str(c.get("part_number") or "").upper() for c in costed}]
+    # Material too is re-costed from the document parts — the records the costing stage reads
+    # on a run. The costed record is a RESULT: 7332-01-002's carries material money and
+    # stock_form 'tube' but no section_stock, so re-costing it yields nothing while the leg's
+    # document part costs as the tube it is. A costed record stands in only where the document
+    # population has no part of that number.
+    _doc_pns = {str(p.get("part_number") or "").upper() for p in doc_parts}
+    parts = doc_parts + [c for c in costed
+                         if str(c.get("part_number") or "").upper() not in _doc_pns]
     decisions = [d for d in (compiled.get("decisions") or []) if isinstance(d, dict)]
 
     def _ops_for(pn: str) -> set:
