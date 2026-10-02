@@ -5653,6 +5653,11 @@ def compile_job_route(
     _family_gate(decisions, raw, graph.get("records") or {},
                  positive_only=(pack_mode != "pdf_primary"))
     _withhold_evidenceless_leaf_welds(decisions, graph, issues)
+    # A member stated WELDED only by its FINISH field, under a welded assembly, is that
+    # assembly's joint (D-387); a coat stated on an assembly holding nothing to coat is carried
+    # on its members' own lines (D-387). Both leave the ruled-out decision and its reason.
+    _member_finish_weld_is_the_assemblys(decisions, graph, issues)
+    _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -5865,10 +5870,83 @@ def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
 
 _LEAF_WELD_OPS = frozenset({"welding", "dress_welds"})
 
+# Sources that reason an operation from the job rather than read it off this part's own sheet,
+# model or a person. A claim from one of these is not evidence that THIS part is welded.
+# "unknown" is the flattened `operations` field, whose writer the adapter cannot name;
+# "override_rule" is a decision derived from another (dressing from a weld).
+_WELD_EVIDENCE_FREE_SOURCES = frozenset({
+    "inference", "geometry_inference", "estimator_inferred", "override_rule", "unknown",
+    "vision_concept", "enquiry_brief", "",
+})
+# A person's answer, or a measurement: a weld these state is never re-homed by a rule here.
+_PERSON_OR_MODEL_SOURCES = frozenset({
+    "estimator_confirmed", "knowledge_base", "estimator_read_drawing", "production_substitution",
+    "solidworks_api", "solidworks_flat_pattern", "dxf", "dxf_flat_pattern",
+})
+
+
+def _graph_record(graph: Mapping[str, Any], target_id: Any) -> Mapping[str, Any]:
+    """The merged record for a target: the reconciled `records` first (extract overlaid with
+    every raw value), the raw record next, a unique fuller spelling last."""
+    _tid = str(target_id or "")
+    _records = graph.get("records") or {}
+    _raw = graph.get("raw") or {}
+    _rec = _records.get(_tid) or _raw.get(_tid)
+    if not _rec and _records:
+        _rec = _record_by_squashed_key(_records, _tid)
+    return _rec if isinstance(_rec, Mapping) else {}
+
+
+def _claim_sources(decision: Any) -> List[str]:
+    """The sources of every claim that REQUIRES this decision's operation — all of them, not
+    the winner. The decision's own source stands in when it carries no claims."""
+    out: List[str] = []
+    for _c in (getattr(decision, "claims", None) or []):
+        if isinstance(_c, Mapping):
+            _st, _src = _c.get("status"), _c.get("source")
+        else:
+            _st, _src = getattr(_c, "status", None), getattr(_c, "source", None)
+        if str(_st or "") != REQUIRED:
+            continue
+        out.append(str(_src or "").strip().lower())
+    if not out:
+        out.append(str(getattr(decision, "source", "") or "").strip().lower())
+    return out
+
+
+def _record_states_its_weld(rec: Mapping[str, Any]) -> str:
+    """Why this part's OWN record states a weld, or "" when it states none.
+
+    The evidence a sheet can give: an arc-weld symbol the reader found on it; a welding source
+    that is a reading (drawing_deterministic, a DXF, the model, a person) rather than an
+    inference; its title block's FINISH stating WELDED. A finish the document filled in is the
+    document's words, not this sheet's, so it does not count."""
+    if not isinstance(rec, Mapping):
+        return ""
+    try:
+        from weld_symbols import arc_weld_symbols as _arc, _says_welded as _sw
+    except Exception:                                                # pragma: no cover
+        _arc = _sw = None
+    _ws = rec.get("weld_symbols")
+    if _arc is not None and isinstance(_ws, Mapping):
+        _n = _arc(_ws)
+        if _n > 0:
+            return f"its own sheet draws {_n} arc-weld symbol{'s' if _n != 1 else ''}"
+    _src = str((rec.get("operation_sources") or {}).get("welding") or "").strip().lower()
+    if _src and _src not in _WELD_EVIDENCE_FREE_SOURCES:
+        return f"its welding is read from {_src}"
+    if rec.get("weld_stated_by_finish"):
+        return "its own sheet's FINISH states WELDED"
+    if not rec.get("finish_inherited_from"):
+        _fin = str(rec.get("normalized_finish") or rec.get("finish") or "")
+        if _fin and _sw is not None and _sw(_fin):
+            return "its own sheet's FINISH states WELDED"
+    return ""
+
 
 def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[str, Any],
                                       issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
-    """A weld on a LEAF with no evidence of its own is not charged; it is asked (D-385).
+    """A weld on a LEAF with no evidence of its own is not charged; it is asked (D-385, D-387).
 
     12173-02, 2 Oct 03:17 book: Weld (CO2) £246.74 and Dress Welds £140.06 at 1 off, most of
     it on sheet leaves — pocket sides and shelves, tabs, brackets, risers, the rack and trough
@@ -5879,39 +5957,285 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
     the ASSEMBLIES' — and 'do not TIG every pocket joint because the title block says all
     welds TIG'.
 
-    The rule, generic: a welding or dressing decision on a leaf part, whose only source is an
-    inference (no symbol on its sheet, no FINISH: WELDED, no weld note of its own), and whose
-    leaf sits under an assembly in the graph, is NOT charged — if there is a joint, it is the
-    assembly's, and the assembly's own evidence decides that. The decision stays on the record
-    as not applicable with the reason, and costed_facts raises it as a manufacturing decision
-    so a person can put it back. A leaf with no parent keeps D-258's rule (an inference is
-    priced and asked): there is no assembly to carry the joint. A weld stated by the part's own
-    sheet (drawing_deterministic, a symbol, FINISH: WELDED) is never touched here."""
+    The rule, generic: a welding decision on a leaf part that sits under an assembly, which
+    NO evidence of the part's own supports — every claim that requires it is an inference
+    (or unattributed), and its record draws no arc-weld symbol, reads no welding from a sheet,
+    model or person, and states no FINISH: WELDED — is NOT charged: if there is a joint, it is
+    the assembly's, and the assembly's own evidence decides that. The decision stays on the
+    record as not applicable with the reason, and costed_facts raises it as a manufacturing
+    decision so a person can put it back.
+
+    D-387 corrected two things D-385 got wrong. The first cut tested the WINNING source only,
+    so a weld with its own drawing evidence outranked by nothing (a symbol the reader found,
+    a FINISH: WELDED) could still be withheld when an inference happened to be the decision's
+    named source; every claim and the record itself are read now. And it left the dressing
+    derived from a withheld weld chargeable ("override_rule" is not "inference"): dressing
+    follows the weld — withheld with it, kept with it, and withheld on its own only where the
+    leaf has no required weld at all and the dressing rests on an inference alone.
+
+    A leaf with no parent keeps D-258's rule (an inference is priced and asked): there is no
+    assembly to carry the joint. A weld stated by the part's own sheet is never touched here."""
     kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
     parents = graph.get("parents") or {}
     withheld: List[str] = []
-    for _d in decisions:
-        if _d.status != REQUIRED or str(_d.scope or "") != "part":
-            continue
-        if str(_d.operation or "").lower() not in _LEAF_WELD_OPS:
-            continue
-        if str(_d.source or "").strip().lower() != "inference":
-            continue
-        _tid = str(_d.target_id or "")
-        if kinds.get(_tid, "leaf") != "leaf" or not parents.get(_tid):
-            continue
-        _owner = ", ".join(sorted(parents.get(_tid) or []))
+
+    def _leaf_under_assembly(_tid: str) -> bool:
+        return kinds.get(_tid, "leaf") == "leaf" and bool(parents.get(_tid))
+
+    def _own_evidence(_d: Any, _tid: str) -> str:
+        _read = [s for s in _claim_sources(_d) if s not in _WELD_EVIDENCE_FREE_SOURCES]
+        if _read:
+            return f"a claim from {', '.join(sorted(set(_read)))}"
+        return _record_states_its_weld(_graph_record(graph, _tid))
+
+    def _withhold(_d: Any, _tid: str, _why: str) -> None:
         _d.status = NOT_APPLICABLE
-        _d.reason = ((f"{_d.reason}; " if _d.reason else "")
-                     + f"not charged: {_tid}'s own sheet gives no weld (no symbol, no FINISH: "
-                       f"WELDED, no weld note), so this {_d.operation} rests on an inference "
-                       f"alone — if {_tid} is joined by weld, the joint is {_owner}'s and is "
-                       f"charged there on that sheet's evidence")
+        _d.reason = (f"{_d.reason}; " if _d.reason else "") + _why
         _d.field_provenance["status"] = "evidenceless_leaf_weld_withheld"
         withheld.append(_tid)
         if issues is not None:
             issues.append({"code": "evidenceless_leaf_weld_withheld", "operation": _d.operation,
                            "part": _tid, "parents": sorted(parents.get(_tid) or [])})
+
+    # 1. The weld itself.
+    weld_state: Dict[str, str] = {}
+    for _d in decisions:
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        if str(_d.operation or "").lower() != "welding":
+            continue
+        _tid = str(_d.target_id or "")
+        if not _leaf_under_assembly(_tid):
+            continue
+        _ev = _own_evidence(_d, _tid)
+        if _ev:
+            weld_state[_tid] = "kept"
+            continue
+        _owner = ", ".join(sorted(parents.get(_tid) or []))
+        _withhold(_d, _tid,
+                  f"not charged: {_tid}'s own sheet gives no weld (no symbol, no FINISH: "
+                  f"WELDED, no weld note), so this welding rests on an inference alone — if "
+                  f"{_tid} is joined by weld, the joint is {_owner}'s and is charged there on "
+                  f"that sheet's evidence")
+        weld_state[_tid] = "withheld"
+
+    # 2. Dressing follows the weld.
+    for _d in decisions:
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        if str(_d.operation or "").lower() != "dress_welds":
+            continue
+        _tid = str(_d.target_id or "")
+        if not _leaf_under_assembly(_tid):
+            continue
+        _state = weld_state.get(_tid)
+        if _state == "kept":
+            continue
+        _owner = ", ".join(sorted(parents.get(_tid) or []))
+        if _state == "withheld":
+            _withhold(_d, _tid,
+                      f"not charged: dressing follows the weld — {_tid}'s weld is not charged "
+                      f"(its own sheet gives none), so there is nothing on it to dress; the "
+                      f"joint and its dressing are {_owner}'s")
+            continue
+        # No required weld on this leaf at all: a dressing that rests on an inference alone
+        # dresses nothing. One with evidence of its own (a WELD AND DRESS note) is kept.
+        if _own_evidence(_d, _tid):
+            continue
+        _withhold(_d, _tid,
+                  f"not charged: {_tid} carries no weld to dress, and this dressing rests on "
+                  f"an inference alone — any joint is {_owner}'s and dressed there")
+    return withheld
+
+
+def _member_finish_weld_is_the_assemblys(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                         issues: Optional[List[Dict[str, Any]]] = None
+                                         ) -> List[str]:
+    """A member whose weld is stated ONLY by its title block's FINISH: WELDED, with no weld
+    drawn on its own sheet, under an assembly that is welded, is welded AT that assembly: one
+    joint, charged once, on the assembly (D-387).
+
+    12173-06: the hook assembly 06-201 is welded on its own evidence and its member 06-01M
+    states FINISH: WELDED and draws no weld — the member's field says how it leaves the shop
+    (welded into the hook), not that it is a weldment in itself; charging Weld and Dress on
+    both is the one joint twice. The 03 frames 202 and 203 are different and untouched: each
+    draws its own fillets for its tabs, which is a weld of its own.
+
+    Evidence read: the member's record (weld_stated_by_finish from apply_finish_welds, its
+    arc-weld symbol count), every claim requiring its weld (a model's, a DXF's or a person's
+    claim keeps it), and the nearest ancestor assembly with a required weld — the owner. The
+    member's welding and dressing become not applicable with the reason; costed_facts raises
+    the question with nothing charged, so a person can put a seam weld back."""
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    parents = graph.get("parents") or {}
+    welded_assemblies = {
+        str(d.target_id or "") for d in decisions
+        if d.status == REQUIRED and str(d.operation or "").lower() == "welding"
+        and kinds.get(str(d.target_id or "")) == "assembly"}
+    if not welded_assemblies:
+        return []
+    try:
+        from weld_symbols import arc_weld_symbols as _arc
+    except Exception:                                                # pragma: no cover
+        _arc = None
+    moved: List[str] = []
+    for _d in list(decisions):
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        if str(_d.operation or "").lower() != "welding":
+            continue
+        _tid = str(_d.target_id or "")
+        if kinds.get(_tid, "leaf") != "leaf" or not parents.get(_tid):
+            continue
+        _rec = _graph_record(graph, _tid)
+        if not _rec.get("weld_stated_by_finish"):
+            continue
+        _ws = _rec.get("weld_symbols")
+        if _arc is not None and isinstance(_ws, Mapping) and _arc(_ws) > 0:
+            continue                      # a weld drawn on its own sheet is its own
+        if any(s in _PERSON_OR_MODEL_SOURCES for s in _claim_sources(_d)):
+            continue
+        _dist = _ancestor_distances(_tid, parents)
+        _cands = sorted((dd, a) for a, dd in _dist.items() if a != _tid and a in welded_assemblies)
+        if not _cands:
+            continue
+        _owner = _cands[0][1]
+        _fin = str(_rec.get("normalized_finish") or _rec.get("finish") or "WELDED")
+        for _x in decisions:
+            if (_x.status == REQUIRED and str(_x.scope or "") == "part"
+                    and str(_x.target_id or "") == _tid
+                    and str(_x.operation or "").lower() in _LEAF_WELD_OPS):
+                _x.status = NOT_APPLICABLE
+                _x.reason = ((f"{_x.reason}; " if _x.reason else "")
+                             + f"charged once, on {_owner}: {_tid}'s sheet states FINISH "
+                               f"'{_fin}' and draws no weld of its own, and {_owner}, which "
+                               f"holds it, is welded — the member's statement is the "
+                               f"assembly's joint seen from the member, not a second weld")
+                _x.field_provenance["status"] = "member_weld_is_the_assemblys"
+                _x.field_provenance["weld_owner"] = _owner
+        moved.append(_tid)
+        if issues is not None:
+            issues.append({"code": "member_weld_is_the_assemblys", "part": _tid,
+                           "owner": _owner, "finish": _fin})
+    return moved
+
+
+_GATED_COAT_OPS = ("powder_coating", "wet_spray")
+
+
+def _withhold_coats_with_nothing_to_coat(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                         issues: Optional[List[Dict[str, Any]]] = None
+                                         ) -> List[str]:
+    """A coat stated on an assembly applies only where there is something to coat (D-387).
+
+    12173-02, 2 Oct 03:17 book after D-385: the top-level 03-GA and the rack's parent 07-GA
+    each print FINISH: POWDER COATED, so each carried a required powder decision — over
+    members that are MDF and MFC boards, a frame coated on its own sheet (03-201), purchased
+    fixings, and two sub-GAs coated on their own sheets (07-1-GA, 07-2-GA). The title block
+    states the product's finish; the booth object is whatever raw metal the assembly holds,
+    and here it held none, so 03-GA was given 3.111 m² of boards to coat and the rack was
+    coated twice.
+
+    What counts as something to coat, read from each direct member's own record: a part that
+    is not bought in (a bought item arrives finished unless its own sheet states RAW); for
+    powder, a metal (stock_form_rules.non_metal_reason — nothing non-metal goes through the
+    oven; a board can be wet sprayed); a member with no required coat of its own (one charged
+    a coat on its own line is coated there; RAW, a pointer to the assembly, silence, or a
+    sheet that repeats the product's finish with nothing charged all mean "coated as the
+    assembly"); a sub-assembly without a required coat of its own, when it in turn holds
+    something to coat. A WELDED assembly is never stood down here — its coat is a stage the
+    weldment goes through, the rule the dedup pass already applies. An assembly with no known
+    members is left alone — nothing is removed on what cannot be seen. The ruled-out coat
+    keeps its reason on the record."""
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    children = graph.get("children") or {}
+    try:
+        from finish_rules import stated_finish as _sf, finish_families as _ff, _is_pointer as _ptr
+        from stock_form_rules import non_metal_reason as _nm
+    except Exception:                                                # pragma: no cover
+        return []
+    try:
+        from bought_in_policy import is_bought_in as _bi
+    except Exception:                                                # pragma: no cover
+        def _bi(_p: Any) -> bool:                                    # type: ignore[misc]
+            return False
+    coated = {(str(d.target_id or ""), str(d.operation or "").lower()) for d in decisions
+              if d.status == REQUIRED and str(d.operation or "").lower() in _GATED_COAT_OPS}
+
+    def _own_finish(_rec: Mapping[str, Any]) -> str:
+        return "" if _rec.get("finish_inherited_from") else _sf(_rec)
+
+    def _coatable(_pn: str, _op: str, _depth: int) -> Tuple[bool, str]:
+        _rec = _graph_record(graph, _pn)
+        _fin = _own_finish(_rec)
+        _raw_stated = bool(_fin) and "bare" in _ff(_fin)
+        if kinds.get(_pn) == "bought_in" or (_rec and _bi(dict(_rec))):
+            if not _raw_stated:
+                return False, "bought in"
+        _mat = str(_rec.get("normalized_material") or _rec.get("material") or "")
+        if _op == "powder_coating":
+            _why = _nm(_mat)
+            if _why:
+                return False, f"{_why}, not metal"
+        # COATED ON ITS OWN LINE MEANS CHARGED THERE: a required coat decision of the member's
+        # own. A member whose sheet merely repeats the product's finish, with no coat charged
+        # on its line, is coated AS the assembly (7332-01-101 over its POWDER COATED panel) —
+        # the dedup pass above decides what complete coverage means for that shape.
+        _own_coat = any((_pn, o) in coated for o in _GATED_COAT_OPS)
+        _states_coat = bool(_fin) and not _ptr(_fin) and bool(_ff(_fin) & {"powder", "wet_spray"})
+        if kinds.get(_pn) == "assembly":
+            if _own_coat:
+                return False, ("a sub-assembly coated on its own sheet" if _states_coat
+                               else "a sub-assembly coated on its own line")
+            _kids = list(children.get(_pn) or {})
+            if _kids and _depth < 8:
+                for _k in _kids:
+                    if _coatable(str(_k), _op, _depth + 1)[0]:
+                        return True, ""
+                return False, "a sub-assembly with nothing to coat"
+            return True, ""
+        if _own_coat:
+            return False, (f"coated on its own sheet ({_fin})" if _states_coat
+                           else "coated on its own line")
+        return True, ""
+
+    # A WELDMENT'S COAT IS A STAGE THE WELDMENT GOES THROUGH — the rule the dedup pass above
+    # already applies (_pw_assembly_stage): welded members become one object in the booth, so a
+    # welded assembly's coat is never stood down here on its members' account.
+    welded = {str(d.target_id or "") for d in decisions
+              if d.status == REQUIRED and str(d.operation or "").lower() == "welding"}
+    withheld: List[str] = []
+    for _d in decisions:
+        if _d.status != REQUIRED:
+            continue
+        _op = str(_d.operation or "").lower()
+        _tid = str(_d.target_id or "")
+        if _op not in _GATED_COAT_OPS or kinds.get(_tid) != "assembly" or _tid in welded:
+            continue
+        _kids = sorted(str(k) for k in (children.get(_tid) or {}))
+        if not _kids:
+            continue
+        _classes: List[str] = []
+        _something = False
+        for _k in _kids:
+            _ok, _why = _coatable(_k, _op, 0)
+            if _ok:
+                _something = True
+                break
+            _classes.append(f"{_k} ({_why})")
+        if _something:
+            continue
+        _d.status = NOT_APPLICABLE
+        _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                     + f"nothing on {_tid} to coat: its members are {'; '.join(_classes)} — "
+                       f"the finish its sheet states is carried on their own lines, so a "
+                       f"{_op.replace('_', ' ')} charge here would coat them twice or coat "
+                       f"what cannot be coated")
+        _d.field_provenance["status"] = "coat_with_nothing_to_coat"
+        withheld.append(_tid)
+        if issues is not None:
+            issues.append({"code": "coat_with_nothing_to_coat", "operation": _op, "part": _tid,
+                           "members": _classes})
     return withheld
 
 

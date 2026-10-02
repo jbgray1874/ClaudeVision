@@ -1021,6 +1021,24 @@ def _lookup_catalogue_tube_price(
     """
     if not (side_a_mm and side_b_mm and wall_t_mm):
         return None
+    rows = _fetch_catalogue_section_rows()
+    if rows is None:
+        return None
+    return _select_catalogue_section_row(rows, side_a_mm, side_b_mm, wall_t_mm, length_mm,
+                                         own_part_number, refused=refused)
+
+
+# The catalogue's priced section rows, read once per run: every section part of a job asked
+# the same query, and the stock-length rate (D-387) asks it again for each.
+_SECTION_ROWS_CACHE: Dict[str, Any] = {}
+
+
+def _fetch_catalogue_section_rows() -> Optional[List[Any]]:
+    """Every priced row in SDI Live's estimating catalogue that describes a hollow section —
+    tube, RHS/SHS/CHS, box section, slotted tube — as (code, description, cost, supplier, UOM).
+    None when the catalogue cannot be reached; never raises."""
+    if "rows" in _SECTION_ROWS_CACHE:
+        return _SECTION_ROWS_CACHE["rows"]
     try:
         import config as _cfg
         cn = _cfg.get_connection(timeout=20)
@@ -1028,17 +1046,19 @@ def _lookup_catalogue_tube_price(
         return None
     try:
         cur = cn.cursor()
-        # Normalise the two cross-section dimensions (order-independent: 60x30 == 30x60).
-        _lo, _hi = sorted([round(side_a_mm), round(side_b_mm)])
-        # Pull candidate priced section rows; match dims in Python (descriptions vary in format).
+        # Pull candidate priced section rows; the profile is matched in Python (descriptions
+        # vary in format). BOX / SECTION / CHS joined the list for stock lengths (D-387), which
+        # the catalogue describes as "BOX SECTION 30 X 30 X 2 X 7.5M" as readily as "SHS".
         cur.execute(
             """SELECT [Part code],[Description],[System cost per],[Supplier name],[UOM]
                FROM dbo.UDEF_PARTS_TABLE_FOR_ESTIMATING
                WHERE [System cost per] > 0
                  AND ([Description] LIKE '%TUBE%' OR [Part code] LIKE 'SLOTTEDTUBE%'
-                      OR [Description] LIKE '%RECT%' OR [Description] LIKE '%RHS%' OR [Description] LIKE '%SHS%')"""
+                      OR [Description] LIKE '%RECT%' OR [Description] LIKE '%RHS%'
+                      OR [Description] LIKE '%SHS%' OR [Description] LIKE '%CHS%'
+                      OR [Description] LIKE '%BOX%' OR [Description] LIKE '%SECTION%')"""
         )
-        rows = cur.fetchall()
+        rows = list(cur.fetchall())
     except Exception:
         try:
             cn.close()
@@ -1050,9 +1070,25 @@ def _lookup_catalogue_tube_price(
             cn.close()
         except Exception:
             pass
+    _SECTION_ROWS_CACHE["rows"] = rows
+    return rows
 
-    return _select_catalogue_section_row(rows, side_a_mm, side_b_mm, wall_t_mm, length_mm,
-                                         own_part_number, refused=refused)
+
+def _lookup_catalogue_section_stock_rate(
+    side_a_mm: Optional[float],
+    side_b_mm: Optional[float],
+    wall_t_mm: Optional[float],
+    own_part_number: Optional[str] = None,
+    refused: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """The £/m SDI Live's catalogue buys this exact profile at as STOCK LENGTH (D-387), or None."""
+    if not (side_a_mm and side_b_mm and wall_t_mm):
+        return None
+    rows = _fetch_catalogue_section_rows()
+    if rows is None:
+        return None
+    return _select_catalogue_section_stock_rate(rows, side_a_mm, side_b_mm, wall_t_mm,
+                                                own_part_number, refused=refused)
 
 
 # Words in a catalogue description that name a MADE thing, not a stock section. Config may
@@ -1196,6 +1232,102 @@ def _select_catalogue_section_row(rows: Any, side_a_mm: Optional[float],
     return best
 
 
+_SECTION_PROFILE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)\s*[xX]\s*(\d+(?:\.\d+)?)")
+# A stated length on a catalogue row: "@ 1125mm", "x 7500MM", "7.5M", "6M LENGTH". A metre
+# figure is read only with a decimal or as a whole word, so "2MM" (a wall) is never a length.
+_SECTION_LEN_MM_RE = re.compile(r"(?:@|x|X|\s)\s*(\d{4,5})\s*MM\b", re.IGNORECASE)
+_SECTION_LEN_M_RE = re.compile(r"(?<![\dxX.])(\d{1,2}(?:\.\d+)?)\s*M(?:TR|ETRE|ETER)?\b(?!M)", re.IGNORECASE)
+_SECTION_PER_METRE_UOMS_DEFAULT = ("M", "MTR", "METRE", "METER", "LM", "PER M", "PER METRE")
+
+
+def _section_row_profile(desc: str) -> Optional[Tuple[int, int, float]]:
+    """(lo side, hi side, wall) read from a catalogue description, or None."""
+    pm = _SECTION_PROFILE_RE.search(str(desc or "").upper())
+    if not pm:
+        return None
+    d = sorted([round(float(pm.group(1))), round(float(pm.group(2))), float(pm.group(3))])
+    return round(d[1]), round(d[2]), d[0]
+
+
+def _select_catalogue_section_stock_rate(rows: Any, side_a_mm: Optional[float],
+                                         side_b_mm: Optional[float], wall_t_mm: Optional[float],
+                                         own_part_number: Optional[str] = None,
+                                         refused: Optional[List[Dict[str, Any]]] = None
+                                         ) -> Optional[Dict[str, Any]]:
+    """The £/m the catalogue's STOCK LENGTHS of this exact profile sell at, or None (D-387).
+    Pure: rows in, rate out.
+
+    12173-03-04M / 05M, 30x30x2 tube frames cut to 3,704 mm: no catalogue row is a cut piece
+    of that length, so both fell to config.SECTION_STOCK_PRICE_GBP_PER_KG — a single global
+    hold set for 12.7x1.2 tube — while the catalogue holds the profile itself as stock length.
+    A stock length of the exact profile is the item SDI buys to cut these pieces from, and its
+    price per metre is a real rate for every length cut from it: not a near match of another
+    part (Dave Wright's rule is about the ITEM, and the item is the section), not a global.
+
+    A row qualifies when its description carries the exact profile (sides and wall), it is not
+    another drawing's made part (_catalogue_row_is_a_made_part — every refusal is collected),
+    and it is sold by the metre (UOM in config SECTION_PER_METRE_UOMS) or at a stated length of
+    at least config SECTION_STOCK_LENGTH_MIN_MM. Several rows (suppliers, lengths) give one
+    rate: the median £/m, every row named, so a person can see the spread."""
+    if not (side_a_mm and side_b_mm and wall_t_mm):
+        return None
+    try:
+        import config as _cfg
+        _min_len = float(getattr(_cfg, "SECTION_STOCK_LENGTH_MIN_MM", 3000) or 3000)
+        _per_m = {str(u).upper() for u in (getattr(_cfg, "SECTION_PER_METRE_UOMS", None)
+                                           or _SECTION_PER_METRE_UOMS_DEFAULT)}
+    except Exception:                                            # noqa: BLE001
+        _min_len, _per_m = 3000.0, set(_SECTION_PER_METRE_UOMS_DEFAULT)
+    _lo, _hi = sorted([round(side_a_mm), round(side_b_mm)])
+    found: List[Dict[str, Any]] = []
+    for r in rows or ():
+        try:
+            code, desc, cost, supplier, uom = r[0], str(r[1] or ""), r[2], r[3], r[4]
+        except (IndexError, TypeError):
+            continue
+        prof = _section_row_profile(desc)
+        if not prof or not (prof[0] == _lo and prof[1] == _hi and abs(prof[2] - wall_t_mm) < 0.3):
+            continue
+        _why = _catalogue_row_is_a_made_part(code, desc, own_part_number)
+        if _why:
+            if refused is not None:
+                refused.append({"code": str(code or ""), "description": desc.strip(), "why": _why})
+            continue
+        _cost = _safe_float(cost)
+        if not _cost or _cost <= 0:
+            continue
+        _uom = str(uom or "").strip().upper()
+        _du = desc.upper()
+        cat_len: Optional[float] = None
+        if _uom in _per_m:
+            rate = _cost
+            basis = f"{code} '{desc.strip()}' GBP {_cost:.2f} per metre"
+        else:
+            lm = _SECTION_LEN_MM_RE.search(_du)
+            if lm:
+                cat_len = float(lm.group(1))
+            else:
+                mm = _SECTION_LEN_M_RE.search(_du)
+                if mm:
+                    cat_len = float(mm.group(1)) * 1000.0
+            if not cat_len or cat_len < _min_len:
+                continue          # a cut piece, or no length: not a stock length
+            rate = _cost / (cat_len / 1000.0)
+            basis = f"{code} '{desc.strip()}' GBP {_cost:.2f} per {cat_len:g} mm length"
+        found.append({"part_code": str(code or ""), "description": desc.strip(),
+                      "unit_price_gbp": _cost, "supplier": str(supplier or "").strip(),
+                      "uom": str(uom or "").strip(), "catalogue_length_mm": cat_len,
+                      "rate_gbp_per_m": round(rate, 4), "basis": basis})
+    if not found:
+        return None
+    found.sort(key=lambda x: (x["rate_gbp_per_m"], x["part_code"]))
+    _rates = [x["rate_gbp_per_m"] for x in found]
+    _n = len(_rates)
+    _median = (_rates[_n // 2] if _n % 2 else (_rates[_n // 2 - 1] + _rates[_n // 2]) / 2.0)
+    return {"rate_gbp_per_m": round(_median, 4), "rows": found,
+            "suppliers": sorted({x["supplier"] for x in found if x["supplier"]})}
+
+
 # Cache the HIPS rate table per-thickness for the duration of one run so we don't
 # re-query UDEF for every HIPS part. Keyed by rounded thickness; value is £/m².
 _SHEET_RATE_CACHE: Dict[Tuple[str, float], Optional[float]] = {}
@@ -1217,8 +1349,10 @@ _NOT_A_MATERIAL_WORD = frozenset(str(w).upper() for w in getattr(
 # graphics price, not a sheet price.
 _SHEET_RATE_EXCLUDE = ("PRINT", "MIRROR", "FLOCK", "VAC", "GOLD", "SILVER", "FOIL",
                        "GRAPHIC", "DIGITALLY", "SCREEN")
+# A GAUGE OF TWO DIGITS IS A GAUGE (D-386): the pattern took one digit before 'mm', so a 12, 18
+# or 25 mm board row in UDEF never matched and every board above 9 mm fell off rung 1 unseen.
 _SHEET_DIM_RE = re.compile(
-    r"(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d(?:\.\d+)?)\s*mm",
+    r"(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d{2,4}(?:\.\d+)?)\s*[xX]\s*(\d{1,2}(?:\.\d+)?)\s*mm",
     re.IGNORECASE)
 _SHEET_RATE_MAX_GBP_PER_M2 = 60.0
 _SHEET_RATE_MIN_AREA_M2 = 0.05
@@ -2314,7 +2448,9 @@ def _researched_sheet_terms(res: Dict[str, Any], area_m2: float,
         out["parts_per_sheet"] = stock_estimate["parts_per_sheet"]
     return out
 
-def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[float]) -> Optional[Dict[str, Any]]:
+def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[float],
+                                         part: Optional[Dict[str, Any]] = None
+                                         ) -> Optional[Dict[str, Any]]:
     """Live £/m² rate for a plastic sheet material (HIPS etc.) derived from the CURRENT
     UDEF catalogue, so it tracks price changes rather than a stale config table.
 
@@ -2341,6 +2477,17 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     # agnostic already. One `if` was the whole gate, and a rule that names a material is the
     # thing this engine is not supposed to contain.
     _probes = _sheet_catalogue_probes(material)
+    # THE DRAWING'S OWN PRODUCT REFERENCE FIRST (D-386). A catalogue row that carries the
+    # maker's code or the decor name the title block prints IS the product; the material
+    # word is the class it belongs to. 0H440 before MFC, and MINNESOTA before MELAMINE.
+    _ref_probes: List[Tuple[str, Optional[str]]] = []
+    if isinstance(part, dict):
+        try:
+            from product_reference import reference_probes as _rprobes
+            _ref_probes = [(str(t).upper(), None) for t in _rprobes(part)]
+        except Exception:                                        # noqa: BLE001
+            _ref_probes = []
+    _probes = _ref_probes + [p for p in _probes if p not in _ref_probes]
     if not _probes or thickness_mm is None:
         return None
     _token = _probes[0][0]
@@ -2351,13 +2498,16 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
     # KEYED ON MATERIAL AND GAUGE, NOT GAUGE ALONE. The cache held thickness only, which was
     # correct while exactly one material could reach it and silently wrong the moment a second
     # could: 2mm ABS would have been handed the 2mm HIPS rate, from a cache hit, with a basis
-    # string naming the wrong material. One key for two questions.
-    _cache_key = (_token, _t_key)
+    # string naming the wrong material. One key for two questions. And the product reference
+    # (D-386): an oak-faced board and a white one share a material word and not a rate.
+    _cache_key = ((_token, _t_key, "|".join(p[0] for p in _ref_probes)) if _ref_probes
+                  else (_token, _t_key))
     if _cache_key in _SHEET_RATE_CACHE:
         _cached = _SHEET_RATE_CACHE[_cache_key]
         return None if _cached is None else {
             "rate_gbp_per_m2": _cached, "thickness_mm": _t_key, "material_token": _token,
             "sample_count": None, "basis": f"udef_{_token.lower()}_median_cached",
+            "product_reference_match": _token in {p[0] for p in _ref_probes},
         }
 
     try:
@@ -2409,6 +2559,9 @@ def _resolve_board_sheet_rate_gbp_per_m2(material: str, thickness_mm: Optional[f
         "thickness_mm": _t_key,
         "material_token": _used,
         "sample_count": len(rates),
+        # Whether the rows that answered carry the drawing's own product reference (the
+        # exact product) or only the material word (the class).
+        "product_reference_match": _used in {p[0] for p in _ref_probes},
         "basis": (f"udef_{_used.lower()}_median_live" if not _needed else
                   f"udef_{_used.lower()}_with_{_needed.lower()}_median_live"),
     }
@@ -3462,6 +3615,11 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
         "description": _brief.get("description"),
         "part_code": _brief.get("code"),
         "quantity": _brief.get("order_quantity"),
+        # THE PRODUCT, NOT ONLY THE MATERIAL (D-386): the drawing's colour, finish and
+        # material cell go to the researcher as the lookup already accepts them.
+        "material": _brief.get("material"),
+        "colour": _brief.get("colour"),
+        "finish": _brief.get("finish"),
         # WHAT THE LINE IS BOUGHT BY. Edging is sold by the metre and board by the sheet
         # or the square metre; asked for "one ABS edging" a model prices a REEL, and the
         # reel price then gets multiplied by the metres. The producer refuses a figure in
@@ -3474,6 +3632,36 @@ def _rung4_researcher(_brief: Dict[str, Any]) -> Dict[str, Any]:
     if not _found.get("found"):
         return {"not_found": "the market research was asked and found no listing and no "
                              "estimate for it"}
+    # A BOARD IS LISTED BY THE SHEET AND BOUGHT BY THE SQUARE METRE (D-386). Asked for a
+    # £/m² rate the market answers with the price of a sheet, and the producer rightly
+    # refuses a figure in the wrong unit rather than invent the sheet it was for. The
+    # caller DOES know the sheet: the stock size the engine nests this material on
+    # (sheet_mm, from config, not a guess). Where the answer is per sheet, each or board
+    # and the brief wants m², the figure is divided by that sheet's area and the division
+    # is written into the quantity basis. Nothing is invented; the sheet is the engine's.
+    _want = str(_brief.get("wanted_unit") or "").strip().lower()
+    _got_u = str(_found.get("unit") or "each").strip().lower().replace("per_", "").replace(
+        "per ", "").lstrip("/")
+    _sheet = _brief.get("sheet_mm")
+    _p_raw = _found.get("price_gbp")
+    if (_want in ("m2", "sq m", "square metre", "square_metre")
+            and _got_u in ("each", "sheet", "board", "panel", "piece", "pc")
+            and isinstance(_sheet, (list, tuple)) and len(_sheet) == 2
+            and isinstance(_p_raw, (int, float)) and _p_raw > 0):
+        try:
+            _L, _W = float(_sheet[0]), float(_sheet[1])
+        except (TypeError, ValueError):
+            _L = _W = 0.0
+        if _L > 0 and _W > 0:
+            _area = _L * _W / 1_000_000.0
+            _found = dict(_found)
+            _found["price_gbp"] = round(float(_p_raw) / _area, 4)
+            _found["unit"] = "per_m2"
+            _found["price_basis"] = (
+                f"{_found.get('price_basis') or _found.get('quantity_basis') or 'one sheet'}"
+                f" — GBP {float(_p_raw):,.2f} per {_got_u}, taken as the {_L:g} x {_W:g} mm "
+                f"stock sheet ({_area:.3f} m2) this material is nested on, = GBP "
+                f"{_found['price_gbp']:,.2f}/m2")
     # ASKED AS A PURCHASE, ANSWERED AS A MADE PART: not an answer. The same check the first
     # asker makes (pricing_service.answers_a_purchase), so neither rung can carry it.
     if _brief.get("kind") == "bought_in_component":
@@ -3575,6 +3763,29 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     # only the word for what is being bought changes.
     _desc = (f"{_thk:g}mm {str(material).replace('_', ' ')} {noun}"
              if _thk else f"{str(material).replace('_', ' ')} {noun}")
+    # AND THE PRODUCT THE DRAWING NAMES (D-386). "18mm MFC board" is a class; "18mm MFC
+    # board, UNILIN MINNESOTA OAK WARM NATURAL 0H440 (Z5L), 2800 x 2070 sheet" is a product
+    # a listing exists for. The reference goes into the description, its first code into
+    # the brief's code, and the stock sheet into sheet_mm so a per-sheet answer can be
+    # turned into the £/m² the line is bought by. Cached per product, not per material: an
+    # oak-faced MFC and a white one are two boards.
+    try:
+        from product_reference import product_reference as _pref
+        _ref = _pref(part)
+    except Exception:                                            # noqa: BLE001
+        _ref = {"text": "", "codes": [], "words": []}
+    _sheet_mm = None
+    try:
+        _ss = select_sheet_size(material, _l, _w, part) or {}
+        _cand = list(_ss.get("candidate_sheet_size_mm") or [])
+        if len(_cand) == 2 and _safe_float(_cand[0]) and _safe_float(_cand[1]):
+            _sheet_mm = (float(_cand[0]), float(_cand[1]))
+    except Exception:                                            # noqa: BLE001
+        _sheet_mm = None
+    if _ref.get("text"):
+        _desc = f"{_desc}, {_ref['text']}"
+    if _sheet_mm:
+        _desc = f"{_desc} — {_sheet_mm[0]:g} x {_sheet_mm[1]:g} mm sheet"
     # ONE BOARD, ONE RATE, ONE LOOKUP.
     #
     # 11908-21 has three parts cut from the same 9mm sheet. Researched per part, that is
@@ -3583,7 +3794,8 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     # difference an estimator can wave through; it is visibly incoherent, and it would be
     # this engine's own doing. Cached on the FAMILY AND THE GAUGE, which is what the rate
     # is a property of, for the life of the run.
-    _rate_key = (str(material).upper(), round(float(_thk), 1) if _thk else None)
+    _rate_key = (str(material).upper(), round(float(_thk), 1) if _thk else None,
+                 str(_ref.get("text") or "").upper())
     if _rate_key in _RESEARCHED_BOARD_RATE_CACHE:
         _hit = _RESEARCHED_BOARD_RATE_CACHE[_rate_key]
         if not _hit:
@@ -3604,8 +3816,13 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
     try:
         from indicative_price import resolve_indicative as _rung4
         _out = _rung4(
-            {"code": "", "description": _desc, "quantity": _area_m2,
-             "unit_of_measure": "m2",
+            {"code": (_ref.get("codes") or [""])[0], "description": _desc,
+             "quantity": _area_m2, "unit_of_measure": "m2",
+             "material": str(material).replace("_", " "),
+             "colour": ", ".join(str(c) for c in (part.get("colours") or []) if c) or None,
+             "finish": ", ".join(str(f) for f in (part.get("surface_finishes") or []) if f) or None,
+             "product_reference": _ref.get("text") or None,
+             "sheet_mm": list(_sheet_mm) if _sheet_mm else None,
              # THE PROVENANCE OF EVERY INPUT, so the producer's contamination guard can do
              # its job. The area is measured off the drawing; nothing here came off an
              # estimator's sheet, and if it ever does the brief is refused rather than
@@ -4328,7 +4545,7 @@ def _material_we_can_actually_price(part: Dict[str, Any], material: Any) -> Tupl
     # "Can we price this material" is ONE question and must have one answer. Asking a single
     # table and treating silence as no-rate-anywhere is the dual-path defect in the money.
     try:
-        if _resolve_board_sheet_rate_gbp_per_m2(material, part.get("normalized_thickness_mm")):
+        if _resolve_board_sheet_rate_gbp_per_m2(material, part.get("normalized_thickness_mm"), part):
             return material, None
     except Exception:                                        # noqa: BLE001
         pass
@@ -5030,7 +5247,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             f"{_faced_why}. The laminating on the route is IN the sheet price, not a "
             f"shop operation.")
     _cost_family = _faced_family or material
-    _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(_cost_family, thickness)
+    _live_sheet_rate = _resolve_board_sheet_rate_gbp_per_m2(_cost_family, thickness, part)
     if ((_mat_acr in config.PLASTIC_SHEET_PRICED_MATERIALS or _llm_rate_m2 or _live_sheet_rate)
             and blank_length and blank_width
             # A promoted board with no rate of its own does not borrow the core's.
@@ -5630,6 +5847,72 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                                          _ss.get("profile_form"), density) or 0.0
             unit_length_m = length_mm / 1000.0
             unit_mass_kg = kg_per_m * unit_length_m
+            policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
+            waste_factor = 1.0 + (float(policy.get("waste_factor_pct", 4.0)) / 100.0)
+            # THE CATALOGUE'S STOCK LENGTH OF THIS PROFILE, BEFORE ANY GLOBAL HOLD (D-387).
+            # 12173-03-04M / 05M (30x30x2, 3,704 mm of cut list each) had no catalogue row of
+            # their length and fell to config.SECTION_STOCK_PRICE_GBP_PER_KG, a single trade
+            # hold set for 12.7x1.2 tube — while SDI Live lists the profile itself as stock
+            # length. That is the item these pieces are cut from, and its £/m is a real rate
+            # for every length cut from it. Every row read is named on the record.
+            _stock_refused: List[Dict[str, Any]] = []
+            _stock = _lookup_catalogue_section_stock_rate(
+                side_a_mm, side_b_mm, wall_t_mm, own_part_number=part.get("part_number"),
+                refused=_stock_refused)
+            for _rf in _stock_refused:
+                _msg = (f"catalogue row {_rf['code']} '{_rf['description']}' was not used to "
+                        f"price this section: {_rf['why']} — another drawing's made part "
+                        f"prices only that item. If it is plain stock, confirm it")
+                if _msg not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_msg)
+            if _stock and _safe_float(_stock.get("rate_gbp_per_m")):
+                _rate_m = float(_stock["rate_gbp_per_m"])
+                _stock_unit = unit_length_m * _rate_m * waste_factor
+                _rows_named = "; ".join(x["basis"] for x in _stock["rows"][:4])
+                part["stock_form"] = "tube"
+                part.setdefault("review_flags", []).append(
+                    f"section material priced at GBP {_rate_m:.2f}/m from SDI Live's stock "
+                    f"length{'s' if len(_stock['rows']) != 1 else ''} of this profile "
+                    f"({_rows_named}){' — median of ' + str(len(_stock['rows'])) + ' rows' if len(_stock['rows']) > 1 else ''}; "
+                    f"{length_mm:g} mm cut, {policy.get('waste_factor_pct', 4.0):g}% cut loss included")
+                return {
+                    "material": material,
+                    "thickness_mm": thickness,
+                    "blank_length_mm": blank_length,
+                    "blank_width_mm": blank_width,
+                    "blank_area_m2": None,
+                    "unit_material_mass_kg": round(unit_mass_kg, 3),
+                    "unit_material_cost_gbp": round(_stock_unit, 2),
+                    "cost_per_part_gbp": round(_stock_unit, 2),
+                    "extended_material_cost_gbp": round(_stock_unit * quantity, 2),
+                    "waste_included": True,
+                    "waste_factor_applied": round(waste_factor, 4),
+                    "cost_method": "catalogue_section_stock_length_rate",
+                    "rate_gbp_per_m": _rate_m,
+                    "stock_estimate": {
+                        "section_length_mm": round(length_mm, 2),
+                        "kg_per_m": round(kg_per_m, 4),
+                        "rate_gbp_per_m": _rate_m,
+                        "catalogue_rows": [
+                            {k: x[k] for k in ("part_code", "description", "unit_price_gbp",
+                                               "supplier", "uom", "catalogue_length_mm",
+                                               "rate_gbp_per_m")}
+                            for x in _stock["rows"]],
+                    } | _len_stamp,
+                    "stock_form": "tube",
+                    "supplier": ", ".join(_stock.get("suppliers") or []) or None,
+                    "requires_flat_blank": False,
+                    "part_confidence_overall": _part_confidence_overall(part),
+                    "part_geometry_reliability": _part_geometry_reliability(part),
+                    "price_source": _build_price_source_metadata(
+                        {}, fallback_source="udef_catalogue_section_stock_length",
+                        applied=True,
+                        applied_basis=(f"catalogue stock length GBP {_rate_m:.2f}/m x "
+                                       f"{unit_length_m:.3f} m x {waste_factor:.2f} waste"),
+                    )
+                    | {"section_profile_mm": {"a": side_a_mm, "b": side_b_mm, "t": wall_t_mm}}
+                    | _len_stamp,
+                }
             applied_price_per_kg = external_price.get("applied_price_per_kg")
             fallback_price_per_kg = MATERIAL_PRICE_GBP_PER_KG.get(material or "")
             price_per_kg = applied_price_per_kg if applied_price_per_kg is not None else fallback_price_per_kg
@@ -5657,8 +5940,6 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     f"Small section is not sold on that basis — 12.7x1.2 tube is about "
                     f"GBP 7.29/kg — so this line UNDER-READS, likely several times over. Set "
                     f"config.SECTION_STOCK_PRICE_GBP_PER_KG to the trade rate")
-            policy = getattr(config, "SECTION_STOCK_POLICY", {}) or {}
-            waste_factor = 1.0 + (float(policy.get("waste_factor_pct", 4.0)) / 100.0)
             unit_cost = (unit_mass_kg * price_per_kg * waste_factor) if price_per_kg is not None else None
             extended = (unit_cost * quantity) if unit_cost is not None else None
             # TAG THE PART ITSELF, not only the material estimate. The route compiler's
@@ -10124,6 +10405,7 @@ def _merge_sheet_into_estimate_workbook_inputs(out_doc: Dict[str, Any], summary:
 _BOUGHT_IN_SOURCE_RANK = {
     "sdi_bom_code_udef_priced": 5,        # exact UDEF catalogue code — most grounded
     "udef_catalogue_section": 5,
+    "udef_catalogue_section_stock_length": 5,
     "non_sdi_bom_row": 4,                 # a structured BOM-table row
     "sdi_bom_row_no_geometry": 4,
     "prose_recogniser_layer2": 3,         # deterministic prose match to SDI history
@@ -10650,6 +10932,11 @@ def stamp_members_coated_area(parts: Any) -> int:
             _owned.setdefault(str(_p["owning_assembly"]).strip().upper(), []).append(_p)
     _faces = float((getattr(config, "POWDER_COSTING_POLICY", {}) or {}).get(
         "coated_faces_multiplier", 2.0) or 2.0)
+    try:
+        from stock_form_rules import non_metal_reason as _non_metal
+    except Exception:                                                # noqa: BLE001
+        def _non_metal(_m: str = "") -> Optional[str]:               # type: ignore[misc]
+            return None
     stamped = 0
     for _asm in parts:
         if not isinstance(_asm, dict):
@@ -10671,6 +10958,7 @@ def stamp_members_coated_area(parts: Any) -> int:
         _asm_qty = _safe_float(_asm.get("quantity")) or 1.0
         _area = 0.0
         _counted: List[str] = []
+        _left_out: List[str] = []
         _by_member: Dict[str, float] = {}
         try:
             from document_builder import flat_blank_mm as _flat_blank_mm
@@ -10681,6 +10969,16 @@ def stamp_members_coated_area(parts: Any) -> int:
                         _safe_float(_g.get("blank_width_mm")) or _safe_float(_p.get("blank_width_mm")))
         for _m in _members:
             if _mbi(_m):
+                continue
+            # A BOARD IS NOT IN THE BOOTH. 12173-03-GA's area summed its MDF base layers and
+            # its MFC back beside the frame (3.111 m², 2 Oct 03:17 book): powder cures at
+            # 180-200 C and nothing non-metal goes through the oven, so a non-metal member is
+            # never part of a powder-coated assembly's area, whatever the assembly's own
+            # sheet states (D-387). The class rule is stock_form_rules' — one answer for the
+            # operation gate and for the area.
+            _nm = _non_metal(str(_m.get("normalized_material") or _m.get("material") or ""))
+            if _nm:
+                _left_out.append(f"{_m.get('part_number')} ({_nm})")
                 continue
             # A COAT THE MEMBER TOOK FROM THE TITLE BLOCK IS THE CASE'S COAT, NOT ITS OWN.
             # 12567-02-101's panels all carried powder_coating — stamped onto every metal part
@@ -10712,11 +11010,14 @@ def stamp_members_coated_area(parts: Any) -> int:
         _asm["_powder_members_coated_m2"] = round(_area, 6)
         _asm["_powder_members"] = _counted
         _asm["_powder_members_m2"] = _by_member
+        if _left_out:
+            _asm["_powder_members_left_out"] = _left_out
         _asm.setdefault("review_flags", []).append(
             f"powder on this assembly is charged over the sum of its members' blanks, "
             f"{_area:.3f} m2 both faces ({', '.join(_counted)}) — their sheets carry no coat "
             f"of their own, so they are coated as the assembly; override the area on the "
-            f"sheet if the shop coats them before assembly")
+            f"sheet if the shop coats them before assembly"
+            + (f"; not counted, not metal: {', '.join(_left_out)}" if _left_out else ""))
         stamped += 1
     return stamped
 

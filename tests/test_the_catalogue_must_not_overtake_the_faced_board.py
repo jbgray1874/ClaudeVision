@@ -59,7 +59,7 @@ class _Catalogue:
         self.rates = {k.upper(): v for k, v in rates.items()}
         self.asked = []
 
-    def __call__(self, material, thickness_mm):
+    def __call__(self, material, thickness_mm, part=None):
         token = str(material or "").upper()
         self.asked.append(token)
         rate = self.rates.get(token)

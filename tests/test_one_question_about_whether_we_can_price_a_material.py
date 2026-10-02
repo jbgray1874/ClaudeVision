@@ -78,7 +78,7 @@ def test_the_gauge_is_part_of_the_question(monkeypatch):
     so the lookup is watched rather than its outcome guessed at."""
     seen = []
     monkeypatch.setattr(estimator, "_resolve_board_sheet_rate_gbp_per_m2",
-                        lambda m, t: (seen.append((m, t)), None)[1])
+                        lambda m, t, p=None: (seen.append((m, t)), None)[1])
     estimator._material_we_can_actually_price(_part(thickness=2.2), "PETG")
     assert seen == [("PETG", 2.2)], (
         "the catalogue was asked about a gauge this part is not made from")
@@ -87,7 +87,7 @@ def test_the_gauge_is_part_of_the_question(monkeypatch):
 def test_a_catalogue_failure_does_not_take_the_estimate_with_it():
     """The lookup crosses a network to a database. A material must not become unpriceable —
     or worse, raise — because a server was slow."""
-    def _boom(material, thickness):
+    def _boom(material, thickness, part=None):
         raise RuntimeError("UDEF unreachable")
     _real = estimator._resolve_board_sheet_rate_gbp_per_m2
     estimator._resolve_board_sheet_rate_gbp_per_m2 = _boom

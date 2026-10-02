@@ -440,8 +440,13 @@ def has_fabrication_evidence(part: Dict[str, Any]) -> bool:
     # copies only from a base measured at DXF or model rank; it is read first.
     _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
                                                            dict) else {}
-    _mirrored = (str(_ng.get("geometry_source") or "").lower() == "mirror_of_measured"
-                 and bool(_ng.get("mirrored_from")))
+    # `mirrored_from` is written only when the mirror filled this hand from a base measured at
+    # DXF or model rank, whichever node-level source the hand then carries (its own blank may
+    # have arrived first by another reading and kept its name, D-387) — so a hand that names
+    # its base and holds a blank is the measured flat one step removed.
+    _mirrored = bool(_ng.get("mirrored_from")) and (
+        str(_ng.get("geometry_source") or "").lower() == "mirror_of_measured"
+        or bool(_ng.get("blank_length_mm") and _ng.get("blank_width_mm")))
     if (part.get("dxf_measured_outline") is False
             and not part.get("dxf_measured_cut_length")
             and not part.get("native_flat_pattern")

@@ -3159,6 +3159,37 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "rows return; if it is joined within its assembly, nothing is needed"),
             "owner": "estimator", "gbp_at_stake": None})
 
+    # ── A MEMBER'S FINISH: WELDED UNDER A WELDED ASSEMBLY IS ONE JOINT, ASKED ONCE (D-387) ──
+    # The compiler charges the joint on the assembly and leaves the member's welding and
+    # dressing not applicable with the owner named; a seam weld the member carries in itself
+    # is a person's to put back, with nothing charged until then.
+    _moved: Dict[str, Dict[str, Any]] = {}
+    for _d in _shadow_d:
+        if (isinstance(_d, Mapping) and str(_d.get("status") or "") == "not_applicable"
+                and str((_d.get("field_provenance") or {}).get("status") or "")
+                == "member_weld_is_the_assemblys"):
+            _slot = _moved.setdefault(str(_d.get("target_id") or ""), {
+                "ops": [], "owner": str((_d.get("field_provenance") or {}).get("weld_owner")
+                                        or "its assembly")})
+            _slot["ops"].append(str(_d.get("operation") or ""))
+    for _tgt, _m in sorted(_moved.items()):
+        if not _tgt or _tgt.upper() in _weld_asked:
+            continue
+        _ops_m = sorted(set(_m["ops"]))
+        decisions.append({
+            "part": _tgt, "kind": "manufacturing_decision",
+            "operation": "welding", "operations": _ops_m,
+            "issue": (f"Is {_tgt} welded within itself, beyond its joint to {_m['owner']}? "
+                      f"Its sheet states FINISH: WELDED and draws no weld"),
+            "assumption": (f"{' and '.join(_ops_m)} NOT charged on {_tgt}: the one joint is "
+                           f"charged on {_m['owner']}, which is welded on its own evidence; "
+                           f"the member's FINISH: WELDED says how it leaves the shop, not that "
+                           f"it is a weldment in itself"),
+            "action": ("if this part carries a seam or tab weld of its own, say so and its "
+                       "Weld and Dress rows return; if it is only welded into the assembly, "
+                       "nothing is needed"),
+            "owner": "estimator", "gbp_at_stake": None})
+
     # ── A JOINT CHARGED ON AN ASSEMBLY AND AGAIN ON ITS MEMBER IS ASKED, ONCE ─────────────
     # The compiler's joining_charged_on_assembly_and_member issue ("BOTH ARE CHARGED — strike
     # whichever is not real") reached a person only by riding inside the inferred-weld

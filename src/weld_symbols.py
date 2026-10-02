@@ -32,7 +32,7 @@ change.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 # In PDF points (1 pt = 0.353 mm).
 _H_TOL = 0.35                 # a horizontal line's rise
@@ -422,6 +422,11 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
         if isinstance(ops, list) and "welding" not in ops:
             ops.append("welding")
         part.setdefault("operation_sources", {})["welding"] = "drawing_deterministic"
+        # WHICH STATEMENT IT WAS. The route compiler tells a weld the sheet DRAWS (a symbol,
+        # the member's own) from one its FINISH field states (how the part leaves the shop):
+        # the latter, on a member of a welded assembly with no symbol of its own, is the
+        # assembly's joint seen from the member (D-387).
+        part["weld_stated_by_finish"] = True
         part.setdefault("review_flags", []).append(
             f"WELDED per its own sheet: the title block's FINISH reads "
             f"'{by_part[pn].get('finish')}' — a stated weld, not an inference")
@@ -488,9 +493,42 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
 _COAT_OP_BY_FAMILY = {"powder": "powder_coating", "wet_spray": "wet_spray"}
 
 
+def _coatable_member(member: Mapping[str, Any], member_finish: str, op: str,
+                     coated_assemblies: Set[str]) -> Tuple[bool, str]:
+    """Is this direct member something the assembly's coat would be applied to? (ok, why not).
+
+    Read from the member's own record and its own sheet's FINISH (D-387): a bought item
+    arrives finished unless its sheet states RAW; nothing non-metal goes through the powder
+    oven (a board can be wet sprayed); a sub-assembly whose own sheet names a coat is coated
+    there (this reader stamps it). A LEAF that repeats the product's finish on its own sheet is
+    still something to coat — whether it is coated on its own line or as the assembly is the
+    route compiler's dedup question, not this reader's. RAW, a pointer to the assembly, or
+    silence all mean "coated as the assembly"."""
+    try:
+        from finish_rules import finish_families, stated_finish
+        from stock_form_rules import non_metal_reason
+        from bought_in_policy import is_bought_in
+    except Exception:                                            # noqa: BLE001
+        return True, ""
+    fin = str(member_finish or "").strip().upper() or (
+        "" if member.get("finish_inherited_from") else stated_finish(member))
+    fams = finish_families(fin) if fin else set()
+    raw_stated = "bare" in fams
+    if is_bought_in(dict(member)) and not raw_stated:
+        return False, "bought in"
+    if op == "powder_coating":
+        why = non_metal_reason(str(member.get("normalized_material") or member.get("material") or ""))
+        if why:
+            return False, f"{why}, not metal"
+    if _clean_pn(member.get("part_number")) in coated_assemblies:
+        return False, "a sub-assembly coated on its own sheet"
+    return True, ""
+
+
 def apply_finish_coats(parts: Sequence[Dict[str, Any]],
                        by_part: Mapping[str, Mapping[str, Any]]) -> List[str]:
-    """An ASSEMBLY whose own title block states a coat is coated (D-385).
+    """An ASSEMBLY whose own title block states a coat is coated — where it holds something to
+    coat (D-385, D-387).
 
     12173-07-2-GA (the trough) and 12173-07-GA (the rack) each print FINISH: POWDER COATED on
     their own sheet over members stated RAW; neither carried a coat on the 2 Oct 03:17 book,
@@ -499,7 +537,18 @@ def apply_finish_coats(parts: Sequence[Dict[str, Any]],
     field is read here for the assembly exactly as D-378 reads WELDED: the coat joins its
     operations as a drawing reading, and its stated finish is recorded so every coat gate
     reads the same words. Leaves are left to the readers that already handle them; a part
-    whose coat is ruled out keeps the ruling. Returns the part numbers stated."""
+    whose coat is ruled out keeps the ruling.
+
+    D-385 stamped every assembly whose sheet named a coat, and the next book coated the
+    product's top GA (members: boards, a frame coated on its own sheet, fixings) over
+    3.111 m² of MDF and MFC, and the rack's parent GA beside the two sub-GAs that each state
+    their own coat. The title block states the product's finish; the booth object is the raw
+    metal the assembly holds. So the coat is stamped only where a direct member is something
+    to coat (_coatable_member); where every member is bought in, non-metal, coated on its own
+    sheet or a coated sub-assembly, the coat is ruled out on this record with the members
+    named — the one ruling the estimator and the route both honour. An assembly whose members
+    cannot be seen here is stamped; the route compiler's gate reads the finished graph.
+    Returns the part numbers stated."""
     try:
         from finish_rules import finish_families
         import source_precedence as _sp
@@ -507,6 +556,20 @@ def apply_finish_coats(parts: Sequence[Dict[str, Any]],
         return []
     stated: List[str] = []
     by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
+    # Sub-assemblies whose own sheet names a coat: coated there, not again on their parent.
+    coated_assemblies: Set[str] = set()
+    for pn, facts in by_part.items():
+        part = by_pn.get(pn)
+        if part is None or not (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                                or part.get("assembly_children")):
+            continue
+        if any(f in _COAT_OP_BY_FAMILY for f in finish_families(str(facts.get("finish") or ""))):
+            coated_assemblies.add(pn)
+    members_of: Dict[str, List[str]] = {}
+    for p in parts or ():
+        if isinstance(p, dict) and p.get("owning_assembly"):
+            members_of.setdefault(_clean_pn(p["owning_assembly"]), []).append(
+                _clean_pn(p.get("part_number")))
     for pn, facts in by_part.items():
         finish = str(facts.get("finish") or "").strip()
         part = by_pn.get(pn)
@@ -522,16 +585,44 @@ def apply_finish_coats(parts: Sequence[Dict[str, Any]],
         ops = part.setdefault("textual_operations", [])
         if not isinstance(ops, list):
             continue
-        ruled = part.get("operations_ruled_out") or {}
+        if not str(part.get("normalized_finish") or "").strip():
+            _sp.apply_field(part, "normalized_finish", finish.upper(), "drawing_deterministic")
+        member_pns: List[str] = []
+        for _k in list(part.get("assembly_children") or []) + members_of.get(pn, []):
+            _ck = _clean_pn(_k)
+            if _ck and _ck != pn and _ck not in member_pns and _ck in by_pn:
+                member_pns.append(_ck)
+        ruled = part.setdefault("operations_ruled_out", {}) if member_pns else (
+            part.get("operations_ruled_out") or {})
         added: List[str] = []
         for op in ops_wanted:
-            if op in ruled or op in ops or op in (part.get("inferred_operations") or []):
+            if op in ruled:
+                continue
+            classes: List[str] = []
+            something = not member_pns          # unseen members: stamp, the route gate reads
+            for _m in member_pns:
+                _ok, _why = _coatable_member(by_pn[_m], str((by_part.get(_m) or {}).get("finish")
+                                                            or ""), op, coated_assemblies)
+                if _ok:
+                    something = True
+                    break
+                classes.append(f"{by_pn[_m].get('part_number') or _m} ({_why})")
+            if not something:
+                _why_not = (f"nothing on {part.get('part_number') or pn} to coat: its title "
+                            f"block's FINISH reads '{finish}', but its members are "
+                            f"{'; '.join(classes)} — the finish is carried on their own lines")
+                ruled[op] = _why_not
+                for _f in ("textual_operations", "inferred_operations", "operations"):
+                    if isinstance(part.get(_f), list):
+                        part[_f] = [o for o in part[_f] if str(o) != op]
+                part.setdefault("review_flags", []).append(
+                    f"{op} NOT charged on this assembly: {_why_not}")
+                continue
+            if op in ops or op in (part.get("inferred_operations") or []):
                 continue
             ops.append(op)
             part.setdefault("operation_sources", {}).setdefault(op, "drawing_deterministic")
             added.append(op)
-        if not str(part.get("normalized_finish") or "").strip():
-            _sp.apply_field(part, "normalized_finish", finish.upper(), "drawing_deterministic")
         if added:
             part.setdefault("review_flags", []).append(
                 f"{'/'.join(added)} per its own sheet: the title block's FINISH reads "

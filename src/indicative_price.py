@@ -206,6 +206,14 @@ def research_brief(line: Any, *, order_qty: int = 1) -> Dict[str, Any]:
             if _v not in (None, ""):
                 brief[_f] = _v
 
+    # THE PRODUCT THE DRAWING NAMES, CARRIED TO THE RESEARCHER (D-386). A colour, a finish, a
+    # maker's reference and the stock sheet the line is bought as are what turn "18mm MFC
+    # board" into a product a listing can be found for. Carried only where the line has them.
+    for _f in ("colour", "finish", "product_reference", "sheet_mm", "material"):
+        _v = line.get(_f)
+        if _v not in (None, "", [], ()):
+            brief[_f] = _v
+
     # THE INPUTS, EACH WITH ITS ORIGIN, so the guard can refuse a poisoned brief.
     brief["inputs"] = [
         {"field": k, "value": v, "origin": _clean((line.get("input_origins") or {}).get(k))

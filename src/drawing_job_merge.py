@@ -3088,8 +3088,19 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         # Robomac row (£16) off the pack's 'RESISTANCE WELDING WIRE TO WIRE' note: with no
         # flat of their own at document-build time, the wire note landed on them, and the
         # stock-form gate did not see them as sheet. The flat they take says what they are.
+        # KEYED ON WHAT THE BASE IS, NOT ON ITS OP LIST (D-387): on the saved 03:17 job both
+        # bases carried the same pack-wide wire_forming note, so a test on the base's ops did
+        # not fire for either real hand. A base is wire when its own record says so — a bar
+        # or wire schedule, the wire route's override, a wire stock form; a base with a gauge
+        # and a measured sheet blank is sheet, whatever note the pack painted on it.
         _wire_ops = ("wire_forming", "robomac")
-        if _got and not any(o in _ops(base) for o in _wire_ops) \
+        _base_is_wire = bool(
+            base.get("_bar_recognised") or base.get("wire_schedule") or base.get("bar_schedule")
+            or base.get("_wire_part_override")
+            or str(base.get("stock_form")
+                   or (base.get("material_estimate") or {}).get("stock_form") or "").lower()
+            in ("wire", "bar", "rod"))
+        if _got and not _base_is_wire \
                 and _num(base.get("normalized_thickness_mm")) is not None:
             _had = [o for o in _wire_ops if o in _ops(part)]
             if _had:

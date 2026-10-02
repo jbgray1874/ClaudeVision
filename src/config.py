@@ -3461,6 +3461,14 @@ SECTION_CATALOGUE_GRADE_TOKEN_RE = r"^\d{3,5}-(?:T\d+|\d?[A-Z]{1,2}|\d)$"
 # part of THAT length, within the drawing's own rounding — not within 10% or 75 mm.
 SECTION_CATALOGUE_LENGTH_TOLERANCE_MM = 1.0
 
+# ── A STOCK LENGTH OF THE EXACT PROFILE IS A REAL RATE (D-387) ─────────────────────────────
+# Where no catalogue row is a cut piece of the part's length, the catalogue's STOCK LENGTHS of
+# the same profile (sides and wall) give the £/m SDI buys that section at — the item the pieces
+# are cut from — before any global £/kg hold. A row counts as a stock length when its stated
+# length is at least this, or its UOM says it is sold by the metre.
+SECTION_STOCK_LENGTH_MIN_MM = 3000
+SECTION_PER_METRE_UOMS = ("M", "MTR", "METRE", "METER", "LM", "PER M", "PER METRE")
+
 # ── A PART'S OWN CUT LIST (D-383) ──────────────────────────────────────────────────────────
 # The parts table of a tube frame's own sheet lists every piece ("30.00 x 30.00 x 2.00mm TUBE
 # 1532"). Their summed mass is held against the sheet's stated WEIGHT; outside this fraction
@@ -3550,6 +3558,28 @@ PARTS_LIST_NOTE_LEADS = ("NOTE", "NOTES", "SEE", "REFER")
 # Sheens qualify a finish and are never the finish ("POWDER COATED - MATT"). The finish-field
 # process test and the uncostable-finish check both read this list.
 FINISH_SHEEN_WORDS = ("GLOSS", "MATT", "MATTE", "SATIN", "SILK", "TEXTURE", "TEXTURED")
+
+# ── THE PRODUCT A DRAWING NAMES FOR A PART (D-386) ──────────────────────────────────────────
+# 12173-03-03J's title block: COLOUR "UNILIN MINNESOTA OAK WARM NATURAL 0H440 … (Z5L)" — a
+# maker, a decor and two product references, which is what SDI Live files a board under and a
+# supplier lists it by. product_reference.py reads these fields off every part; the price
+# ladder asks SDI Live by the references first, then the market with them in the brief.
+PRODUCT_REFERENCE_FIELDS = ("colours", "colour", "surface_finishes", "finish",
+                            "material_text_as_printed", "decor", "product_reference")
+# Qualifiers of a colour or finish that never name a product.
+PRODUCT_REFERENCE_STOP_WORDS = (
+    "MATT", "MATTE", "GLOSS", "SATIN", "SILK", "TEXTURED", "TEXTURE", "SMOOTH", "FINISH",
+    "COLOUR", "COLOR", "NATURAL", "WARM", "COOL", "LIGHT", "DARK", "SOFT", "DEEP", "PALE",
+    "RAW", "POWDER", "COATED", "COAT", "WET", "SPRAYED", "SPRAY", "PAINTED", "PAINT", "LACQUER",
+    "LACQUERED", "PLATED", "PLATING", "ANODISED", "POLISHED", "BRUSHED", "WELDED", "BARE",
+    "SELF", "MILL", "NONE", "BLACK", "WHITE", "GREY", "GRAY", "RED", "BLUE", "GREEN", "YELLOW",
+    "SILVER", "GOLD", "CLEAR", "OPAL", "AND", "WITH", "THE", "ALL", "OVER", "SIDE", "SIDES",
+    "FACE", "FACES", "ONLY", "TOP", "BOTTOM", "SEE", "NOTE", "DRAWING", "DRG", "REV",
+    "JET", "IVORY", "CREAM", "BEIGE", "BROWN", "ORANGE", "PURPLE", "PINK", "ANTHRACITE",
+    "GRAPHITE", "CHARCOAL", "BRONZE", "COPPER", "CHROME", "NICKEL", "ZINC", "BRASS",
+)
+# A code after one of these names a shade (RAL 9005), not a product.
+PRODUCT_REFERENCE_EXCLUDE_PREFIXES = ("RAL", "BS", "NCS", "PANTONE", "PMS")
 
 # ── A STOCK PRODUCT, AND WHO MAKES IT (D-381, corrected D-383) ─────────────────────────────
 # Compound terms that name a product sold ready-made. A part named by one, with no flat, no

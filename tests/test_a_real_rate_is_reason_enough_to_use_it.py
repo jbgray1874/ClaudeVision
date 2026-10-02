@@ -97,9 +97,9 @@ def test_the_rate_is_asked_for_once_per_material_and_gauge(monkeypatch):
     calls = []
     real = estimator._resolve_board_sheet_rate_gbp_per_m2
 
-    def counting(material, thickness):
+    def counting(material, thickness, part=None):
         calls.append((material, thickness))
-        return real(material, thickness)
+        return real(material, thickness, part)
 
     monkeypatch.setattr(estimator, "_resolve_board_sheet_rate_gbp_per_m2", counting)
     for pn in ("A", "B", "C", "D"):

@@ -124,7 +124,15 @@ def test_a_mirrored_sheet_hand_loses_the_wire_note():
 
 
 def test_a_hand_of_a_wire_base_keeps_wire_forming():
+    # THE BASE'S OWN OP LIST IS NOT THE TEST (D-387): on 12173 every base carried the pack's
+    # WIRE TO WIRE note, so a rule reading it never fired. What makes a base wire is its bar
+    # schedule, its recognised bar, or its stock form — a sheet base with the note is sheet.
     base, hand = _pair()
+    base["textual_operations"] = ["wire_forming"]
+    djm.apply_mirror_geometry([base, hand])
+    assert "wire_forming" not in hand["textual_operations"]
+    base, hand = _pair()
+    base["_bar_recognised"] = True
     base["textual_operations"] = ["wire_forming"]
     djm.apply_mirror_geometry([base, hand])
     assert "wire_forming" in hand["textual_operations"]
