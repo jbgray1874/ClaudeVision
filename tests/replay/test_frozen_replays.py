@@ -343,20 +343,37 @@ def test_frozen_routing_and_costing_re_execute(job: Path):
     """
     facts = _facts(job)
     summary = _frozen_summary(job)
-    parts = [p for p in ((summary.get("estimate_summary") or {}).get("part_estimates") or [])
-             if isinstance(p, dict)]
-    if not parts:
-        pytest.fail(f"{job.name}: frozen summary carries no raw part_estimates to re-route")
+    costed = [p for p in ((summary.get("estimate_summary") or {}).get("part_estimates") or [])
+              if isinstance(p, dict)]
+    if not costed:
+        pytest.fail(f"{job.name}: frozen summary carries no raw part_estimates to re-cost")
 
     import copy
     import route_compiler
 
+    # THE POPULATION THE PIPELINE COMPILES, NOT THE ONE IT HAS ALREADY COSTED (D-389). The
+    # route is compiled from the document parts — the records that carry textual_operations,
+    # the stock form and the finish — and the extract is saved under `llm_full_extract`.
+    # part_estimates are the costed records: on the frozen 7332-01 the leg's record carries no
+    # operations at all, so compiling that population derived nothing for it and this tier
+    # failed on every commit since the freeze while the compiler was right throughout. The
+    # same choice tools/route_shadow_compare.py makes, so the gate and the replay tool read one
+    # population.
+    doc_parts = [p for p in (summary.get("parts")
+                             or (summary.get("manufacturing_writeup") or {}).get("parts")
+                             or costed) if isinstance(p, dict)]
+    extract = summary.get("llm_full_extract") or summary.get("llm_extract") or {}
     doc = summary.get("document_analysis") or {}
     compiled = route_compiler.compile_job_route(
-        copy.deepcopy(parts),
-        llm_extract=summary.get("llm_extract") or {},
+        copy.deepcopy(doc_parts),
+        llm_extract=extract,
         bom_rows=doc.get("bom_rows") or [],
     )
+    # Material is re-costed from the costed records, which hold the measured blank and the
+    # material the costing stage read; the document part stands in where a record is absent.
+    parts = costed + [p for p in doc_parts
+                      if str(p.get("part_number") or "").upper()
+                      not in {str(c.get("part_number") or "").upper() for c in costed}]
     decisions = [d for d in (compiled.get("decisions") or []) if isinstance(d, dict)]
 
     def _ops_for(pn: str) -> set:
