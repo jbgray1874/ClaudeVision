@@ -4652,7 +4652,15 @@ def compile_job_route(
 
         _rulings: Dict[str, str] = dict(part.get("operations_ruled_out") or {})
         _ruled_keys = {_spelled(k) for k in _rulings}
-        _person_ruled: Set[str] = set()
+        # THE PERSON'S RULING RANKS AS THE PERSON'S, WHICHEVER FIELD CARRIES IT. On the saved
+        # 03:17 job 12173-03-201 held welding in BOTH fields (the estimator had written the
+        # ruling into operations_ruled_out), so the first cut of this block left it to
+        # _ruling_source, which reads a reason for a model or a DXF and otherwise ranks the
+        # ruling "unknown" (0) — and the sheet's drawing_deterministic weld (70) outvoted James
+        # Gray. An operation named in operations_off is estimator_confirmed wherever it sits.
+        _person_spelled = {_spelled(o) for o in (part.get("_estimator_operations_off") or [])
+                           if _spelled(o)}
+        _person_ruled: Set[str] = {k for k in _rulings if _spelled(k) in _person_spelled}
         for _off in (part.get("_estimator_operations_off") or []):
             if _spelled(_off) and _spelled(_off) not in _ruled_keys:
                 _rulings[str(_off)] = ("the estimator took this operation off for this job "

@@ -462,6 +462,16 @@ def test_a_persons_ruling_reaches_the_route_without_the_estimators_pass():
     assert w["status"] == rc.RULED_OUT and w["source"] == "estimator_confirmed"
     assert "operations_off" in w["reason"]
     assert _of(ds, "F-201", "dress_welds")["status"] == rc.RULED_OUT
+    # The saved 03:17 shape: the estimator had already written the ruling into
+    # operations_ruled_out, and an explicit route line states the weld on the assembly.
+    parts[0]["operations_ruled_out"] = {"welding": "the estimator took this operation off for "
+                                                   "this job (estimator_decisions.operations_off)"}
+    extract = {"routes": [{"operation": "welding", "part_numbers": ["F-201"],
+                           "scope": "assembly", "target_id": "F-201"}]}
+    ds, _ = _decisions(parts, llm_extract=extract, known=["F-201"])
+    for w in [d for d in ds if d["target_id"] == "F-201" and d["operation"] == "welding"]:
+        assert w["status"] == rc.RULED_OUT, w
+        assert w["source"] == "estimator_confirmed"
 
 
 def test_a_member_whose_record_says_welded_is_moved_without_the_marker():
