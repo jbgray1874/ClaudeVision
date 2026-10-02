@@ -3044,6 +3044,14 @@ def _finalize_scan_summary(
             _ws_by_part = _ws_read(_ws_pdfs)
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
             _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
+            try:
+                from weld_symbols import apply_finish_coats as _ws_coats
+                _ws_coated = _ws_coats(_pre_estimate_parts, _ws_by_part)
+                if _ws_coated:
+                    print(f"   [weld-symbols] coated per its own sheet's FINISH (assembly): "
+                          f"{', '.join(_ws_coated)}", flush=True)
+            except Exception as _wc_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] finish coats not read: {_wc_err}", flush=True)
             if _ws_fin.get("stated") or _ws_fin.get("questioned") \
                     or _ws_fin.get("joined_by_symbol"):
                 print(f"   [weld-symbols] welded per its own sheet's FINISH: "

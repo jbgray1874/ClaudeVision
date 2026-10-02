@@ -3133,6 +3133,32 @@ def costed_job(source: Any) -> Dict[str, Any]:
                        "mechanical joining labour, rather than only removing them"),
             "owner": "estimator", "gbp_at_stake": _w_gbp or None})
 
+    # ── A LEAF WELD WITHHELD FOR WANT OF EVIDENCE IS ASKED, WITH NOTHING CHARGED (D-385) ──
+    # The route compiler leaves such a decision on the record as not applicable with the
+    # reason; the question is a person's — put the weld back if the leaf is welded itself.
+    _withheld: Dict[str, List[str]] = {}
+    for _d in _shadow_d:
+        if (isinstance(_d, Mapping) and str(_d.get("status") or "") == "not_applicable"
+                and str((_d.get("field_provenance") or {}).get("status") or "")
+                == "evidenceless_leaf_weld_withheld"):
+            _withheld.setdefault(str(_d.get("target_id") or ""), []).append(
+                str(_d.get("operation") or ""))
+    for _tgt, _ops_w in sorted(_withheld.items()):
+        if not _tgt or _tgt.upper() in _weld_asked or _tgt.upper() in _guessed:
+            continue
+        decisions.append({
+            "part": _tgt, "kind": "manufacturing_decision",
+            "operation": "welding", "operations": sorted(set(_ops_w)),
+            "issue": f"Is {_tgt} welded itself? Nothing on its own sheet says so",
+            "assumption": (f"{' and '.join(sorted(set(_ops_w)))} NOT charged on {_tgt}: its own "
+                           f"sheet shows no weld symbol, no FINISH: WELDED and no weld note, "
+                           f"and the pack's weld specification says how welds are made, not "
+                           f"that this part is welded; any joint is charged on the assembly "
+                           f"it belongs to"),
+            "action": ("if this part carries a weld of its own, say so and the Weld and Dress "
+                       "rows return; if it is joined within its assembly, nothing is needed"),
+            "owner": "estimator", "gbp_at_stake": None})
+
     # ── A JOINT CHARGED ON AN ASSEMBLY AND AGAIN ON ITS MEMBER IS ASKED, ONCE ─────────────
     # The compiler's joining_charged_on_assembly_and_member issue ("BOTH ARE CHARGED — strike
     # whichever is not real") reached a person only by riding inside the inferred-weld

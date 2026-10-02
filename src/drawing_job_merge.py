@@ -3083,6 +3083,28 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 f"{base.get('part_number')}, which folds ({_base_bends() or 'bends stated'}) — "
                 f"the same flat is not a plate in one hand")
 
+        # A HAND THAT TAKES A SHEET FLAT IS SHEET, AND SHEET IS NOT WIRE-FORMED (D-385).
+        # 12173-04-02M-H and 07-1-02M-H took their bases' 1.5 mm flats and still carried a
+        # Robomac row (£16) off the pack's 'RESISTANCE WELDING WIRE TO WIRE' note: with no
+        # flat of their own at document-build time, the wire note landed on them, and the
+        # stock-form gate did not see them as sheet. The flat they take says what they are.
+        _wire_ops = ("wire_forming", "robomac")
+        if _got and not any(o in _ops(base) for o in _wire_ops) \
+                and _num(base.get("normalized_thickness_mm")) is not None:
+            _had = [o for o in _wire_ops if o in _ops(part)]
+            if _had:
+                for _f in ("textual_operations", "inferred_operations", "operations"):
+                    if isinstance(part.get(_f), list):
+                        part[_f] = [o for o in part[_f] if o not in _wire_ops]   # precedence: direct-write ok — removes ops, adds no evidence
+                _ro = part.setdefault("operations_ruled_out", {})
+                for _o in _had:
+                    _ro.setdefault(_o, (
+                        f"this hand takes the {_num(base.get('normalized_thickness_mm')):g} mm "
+                        f"sheet flat of {base.get('part_number')}, which is not wire-formed — a "
+                        f"sheet blank goes to the press brake, not the Robomac"))
+                part.setdefault("review_flags", []).append(
+                    f"{'/'.join(_had)} removed from {part.get('part_number')}: it is the opposite "
+                    f"hand of a sheet part, and the wire note it carried is the pack's, not its own")
         # A HAND THAT TAKES A MADE PART'S MEASURED FLAT IS MADE. 11650-06's handed arm bracket
         # was listed on a kit page tagged as bought-in, so it carried that role; it was then
         # nested and charged as fabricated steel from the plain arm's flat while its provenance

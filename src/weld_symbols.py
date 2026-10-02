@@ -484,6 +484,62 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
     return {"stated": stated, "questioned": questioned, "joined_by_symbol": joined}
 
 
+# The coat a title block's FINISH names, and the operation that applies it.
+_COAT_OP_BY_FAMILY = {"powder": "powder_coating", "wet_spray": "wet_spray"}
+
+
+def apply_finish_coats(parts: Sequence[Dict[str, Any]],
+                       by_part: Mapping[str, Mapping[str, Any]]) -> List[str]:
+    """An ASSEMBLY whose own title block states a coat is coated (D-385).
+
+    12173-07-2-GA (the trough) and 12173-07-GA (the rack) each print FINISH: POWDER COATED on
+    their own sheet over members stated RAW; neither carried a coat on the 2 Oct 03:17 book,
+    because an assembly minted from the parts list has no page text of its own for the
+    note readers, and its members' RAW correctly ruled theirs out. The sheet's own FINISH
+    field is read here for the assembly exactly as D-378 reads WELDED: the coat joins its
+    operations as a drawing reading, and its stated finish is recorded so every coat gate
+    reads the same words. Leaves are left to the readers that already handle them; a part
+    whose coat is ruled out keeps the ruling. Returns the part numbers stated."""
+    try:
+        from finish_rules import finish_families
+        import source_precedence as _sp
+    except Exception:                                            # noqa: BLE001
+        return []
+    stated: List[str] = []
+    by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
+    for pn, facts in by_part.items():
+        finish = str(facts.get("finish") or "").strip()
+        part = by_pn.get(pn)
+        if not finish or part is None:
+            continue
+        if not (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                or part.get("assembly_children")):
+            continue
+        fams = finish_families(finish)
+        ops_wanted = [_COAT_OP_BY_FAMILY[f] for f in sorted(fams) if f in _COAT_OP_BY_FAMILY]
+        if not ops_wanted:
+            continue
+        ops = part.setdefault("textual_operations", [])
+        if not isinstance(ops, list):
+            continue
+        ruled = part.get("operations_ruled_out") or {}
+        added: List[str] = []
+        for op in ops_wanted:
+            if op in ruled or op in ops or op in (part.get("inferred_operations") or []):
+                continue
+            ops.append(op)
+            part.setdefault("operation_sources", {}).setdefault(op, "drawing_deterministic")
+            added.append(op)
+        if not str(part.get("normalized_finish") or "").strip():
+            _sp.apply_field(part, "normalized_finish", finish.upper(), "drawing_deterministic")
+        if added:
+            part.setdefault("review_flags", []).append(
+                f"{'/'.join(added)} per its own sheet: the title block's FINISH reads "
+                f"'{finish}' — the coat is this assembly's, whatever its members state")
+            stated.append(str(part.get("part_number") or pn))
+    return stated
+
+
 def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mapping[str, Any]]
                    ) -> List[str]:
     """Stamp each part with the weld callouts on its OWN sheet. Where spot welds are the only

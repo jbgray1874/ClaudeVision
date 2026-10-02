@@ -5652,6 +5652,7 @@ def compile_job_route(
     # family defaulted from a code's shape, which a model-backed pack has better answers to.
     _family_gate(decisions, raw, graph.get("records") or {},
                  positive_only=(pack_mode != "pdf_primary"))
+    _withhold_evidenceless_leaf_welds(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -5860,6 +5861,58 @@ def _holes_of_its_own(rec: Mapping[str, Any]) -> bool:
                      ("drawing_text", "text", "notes", "title_block_text",
                       "raw_text", "page_text")).upper()
     return any(cue in _text for cue in _HOLE_PRESENCE_CUES + _MACHINING_INSTRUCTION_CUES)
+
+
+_LEAF_WELD_OPS = frozenset({"welding", "dress_welds"})
+
+
+def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                      issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """A weld on a LEAF with no evidence of its own is not charged; it is asked (D-385).
+
+    12173-02, 2 Oct 03:17 book: Weld (CO2) £246.74 and Dress Welds £140.06 at 1 off, most of
+    it on sheet leaves — pocket sides and shelves, tabs, brackets, risers, the rack and trough
+    parts — every one 'inferred, not drawn'. The pack's weld specification ('ALL WELDS TO BE
+    TIG UNLESS STATED') had been read for what it is (D-383), so each weld was correctly a
+    question; but the question's default was to charge. James Gray's brief: the real weld is
+    the two tube frames with their tabs, the four rails and the seven hooks — the joints are
+    the ASSEMBLIES' — and 'do not TIG every pocket joint because the title block says all
+    welds TIG'.
+
+    The rule, generic: a welding or dressing decision on a leaf part, whose only source is an
+    inference (no symbol on its sheet, no FINISH: WELDED, no weld note of its own), and whose
+    leaf sits under an assembly in the graph, is NOT charged — if there is a joint, it is the
+    assembly's, and the assembly's own evidence decides that. The decision stays on the record
+    as not applicable with the reason, and costed_facts raises it as a manufacturing decision
+    so a person can put it back. A leaf with no parent keeps D-258's rule (an inference is
+    priced and asked): there is no assembly to carry the joint. A weld stated by the part's own
+    sheet (drawing_deterministic, a symbol, FINISH: WELDED) is never touched here."""
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    parents = graph.get("parents") or {}
+    withheld: List[str] = []
+    for _d in decisions:
+        if _d.status != REQUIRED or str(_d.scope or "") != "part":
+            continue
+        if str(_d.operation or "").lower() not in _LEAF_WELD_OPS:
+            continue
+        if str(_d.source or "").strip().lower() != "inference":
+            continue
+        _tid = str(_d.target_id or "")
+        if kinds.get(_tid, "leaf") != "leaf" or not parents.get(_tid):
+            continue
+        _owner = ", ".join(sorted(parents.get(_tid) or []))
+        _d.status = NOT_APPLICABLE
+        _d.reason = ((f"{_d.reason}; " if _d.reason else "")
+                     + f"not charged: {_tid}'s own sheet gives no weld (no symbol, no FINISH: "
+                       f"WELDED, no weld note), so this {_d.operation} rests on an inference "
+                       f"alone — if {_tid} is joined by weld, the joint is {_owner}'s and is "
+                       f"charged there on that sheet's evidence")
+        _d.field_provenance["status"] = "evidenceless_leaf_weld_withheld"
+        withheld.append(_tid)
+        if issues is not None:
+            issues.append({"code": "evidenceless_leaf_weld_withheld", "operation": _d.operation,
+                           "part": _tid, "parents": sorted(parents.get(_tid) or [])})
+    return withheld
 
 
 def _family_gate(decisions: Sequence[Any], raw: Mapping[str, Mapping[str, Any]],
