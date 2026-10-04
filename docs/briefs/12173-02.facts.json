@@ -68,9 +68,9 @@
   "forbidden_operations": {
     "12173-03-GA": ["powder_coating"],
     "12173-07-GA": ["powder_coating"],
-    "12173-03-01J": ["laser_cutting", "powder_coating", "welding", "dress_welds"],
-    "12173-03-02J": ["laser_cutting", "powder_coating", "welding", "dress_welds"],
-    "12173-03-03J": ["laser_cutting", "powder_coating", "wet_spray", "edge_banding", "welding", "dress_welds"],
+    "12173-03-01J": ["laser_cutting", "powder_coating", "welding", "dress_welds", "wire_forming", "robomac"],
+    "12173-03-02J": ["laser_cutting", "powder_coating", "welding", "dress_welds", "wire_forming", "robomac"],
+    "12173-03-03J": ["laser_cutting", "powder_coating", "wet_spray", "edge_banding", "welding", "dress_welds", "wire_forming", "robomac"],
     "12173-03-04M": ["laser_cutting", "powder_coating", "folding"],
     "12173-03-05M": ["laser_cutting", "powder_coating", "folding"],
     "12173-03-06M": ["folding", "powder_coating"],
