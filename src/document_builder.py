@@ -1067,6 +1067,7 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # so testing it would make the HOOK PLATE wire as well — one stud would turn every
         # part in the job into a bar. We look ONLY at this part's own pages.
         _bar_sched = []
+        _bar_sched_bare = False
         if not _is_wire_part and not part.get("flat_pattern_detected"):
             _own_pages = set(part.get("pages") or [])
             if _own_pages:
@@ -1076,9 +1077,29 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     if (pg.get("page_number") or pg.get("page")) in _own_pages
                 )
                 _bar_sched = _parse_bar_schedule(_own_text)
+                # A DIAMETER AND A LENGTH WITH NO BLANK IS A BAR (D-391). 12173-06-01M, the
+                # hook ARM, is a Ø6 bar 119.93 long: its own sheet prints "6.00mm DIA 119.93"
+                # in its parts table and no overall length-by-width, SolidWorks gave it no
+                # flat, and nothing else on its page calls it wire. Until D-390 it was wire
+                # only because another part's "MILD STEEL WIRE" was read over the whole pack;
+                # read on its own pages it fell to the sheet path — lasered, folded and priced
+                # from a 1 mm gauge it never stated. The item/qty-prefixed schedule above is
+                # the strong form; the bare "Ø x length" form is admitted only where nothing
+                # was measured that says sheet, the page states no sheet thickness, and the
+                # callout is not a hole.
+                if not _bar_sched and not (part.get("dxf_measured_outline")
+                                           or part.get("native_flat_pattern")
+                                           or part.get("dxf_augmented")):
+                    _bar_sched = _parse_bar_schedule(_own_text, bare=True)
+                    _bar_sched_bare = bool(_bar_sched)
         if _bar_sched:
             _is_wire_part = True
             _b0 = _bar_sched[0]
+            if _bar_sched_bare:
+                part.setdefault("review_flags", []).append(
+                    f"{part.get('part_number') or 'this part'} is round stock per its own "
+                    f"sheet: Ø{_b0['gauge_mm']:g} x {_b0['length_mm']:g} mm is printed on it "
+                    f"and no blank or flat pattern was measured — priced as bar, not sheet")
             part["wire_gauge_mm"] = _b0["gauge_mm"]
             part["wire_length_mm"] = _b0["length_mm"]
             part["bar_schedule"] = _bar_sched
@@ -1799,11 +1820,59 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
             # statement; only the part's own words (its MATERIAL field, its description, its
             # code) may overrule it. An inherited material has no such standing and the page
             # scan still applies to it, which is what catches a bought-in on a steel GA.
-            _own_words_hit = (any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
-                              or any(kw in extra_text for kw in _NON_METAL_KEYWORDS))
+            _field_hit = any(kw in declared_mat for kw in _NON_METAL_KEYWORDS)
+            _name_hit = any(kw in extra_text for kw in _NON_METAL_KEYWORDS)
             _page_hit = any(kw in combined_upper for kw in _NON_METAL_KEYWORDS)
             _material_is_its_own = bool(mat_upper_joined) and not part.get("material_inherited_from")
-            is_non_metal = _own_words_hit or (_page_hit and not _material_is_its_own)
+            # A NAME IS NOT A MATERIAL (D-391). "CARD POCKET ASSEMBLY" (12173-04-201) is a
+            # welded steel assembly — seven fillets and POWDER COATED - MATT on its own sheet —
+            # named after what it HOLDS. Its description was read as its material: the record
+            # was flipped to CARD, tagged bought-in, and the 4 Oct 21:12 book stripped its
+            # weld, its dressing and its coat (eight off) and then ruled its parent's coat out
+            # because its one member was "bought in". The MATERIAL field names the material;
+            # the description names the thing, and a thing is often named for what it carries
+            # (a card pocket, a ticket holder, an LED housing). So a non-metal word in the
+            # NAME overrules the part's material only where the part has no statement of its
+            # own to overrule — a steel it merely inherited from the document — and never on
+            # an assembly, whose material is its members'. Where the name is overruled the
+            # disagreement is written on the record for the reader.
+            _desc_only_upper = str(part.get("description") or "").upper()
+            _named_assembly = bool(part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                                   or part.get("assembly_children")
+                                   or re.search(r"\b(?:ASSEMBLY|ASSY|WELDMENT)\b", _desc_only_upper))
+            _name_overrules = _name_hit and not _material_is_its_own and not _named_assembly
+            _page_overrules = _page_hit and not _material_is_its_own and not _named_assembly
+            if not _field_hit and ((_name_hit and not _name_overrules)
+                                   or (_page_hit and _named_assembly)):
+                _kw = next((kw for kw in sorted(_NON_METAL_KEYWORDS, key=len, reverse=True)
+                            if kw in extra_text or kw in combined_upper), "")
+                _nm_flag = (f"named '{part.get('description') or part.get('part_number')}' — "
+                            f"'{_kw}' on it is read as what it holds or displays, not what "
+                            f"it is made of: "
+                            + ("an assembly's material is its members'"
+                               if _named_assembly else
+                               f"its own sheet states {mat_upper_joined.strip()}, which is kept")
+                            + ". Confirm if the part itself is " + _kw.lower())
+                if _nm_flag not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_nm_flag)
+                if _named_assembly and not _material_is_its_own:
+                    # Nothing of its own settles it: no stated material, a word on its sheet
+                    # naming a non-metal. The steel it inherited and the route it carries
+                    # stand, and a person is asked — a made assembly or a purchased item.
+                    try:
+                        from source_precedence import raise_manufacturing_question as _ask_nm
+                        _ask_nm(part,
+                                f"Is {part.get('part_number')} ({part.get('description')}) a "
+                                f"steel assembly of its members, or a purchased {_kw.lower()} "
+                                f"item? Its own sheet states no material and names {_kw}",
+                                "a made assembly: it keeps the steel it inherited and the "
+                                "joining and finishing on its route",
+                                "if it is bought complete, say so and its fabrication comes off; "
+                                "if it is made here, confirm its members' material",
+                                "document_builder.non_metal_name")
+                    except Exception:                                # noqa: BLE001
+                        pass
+            is_non_metal = _field_hit or _name_overrules or _page_overrules
             # The MATERIAL: field is authoritative. Steel fab drawings routinely
             # mention non-metal terms incidentally — vinyl-logo application notes
             # ("WITH OR WITHOUT VINYL - CHECK ORDER"), LED bend-tabs / foam tape on
@@ -1902,10 +1971,16 @@ _WIRE_BAR_SCHED_RE = re.compile(
 )
 
 
-def _parse_bar_schedule(page_text: str):
-    """Round bar / stud rows from a part's OWN page. Returns [{gauge_mm, length_mm, qty}]."""
+def _parse_bar_schedule(page_text: str, bare: bool = False):
+    """Round bar / stud rows from a part's OWN page. Returns [{gauge_mm, length_mm, qty}].
+
+    The strong form is a schedule row — item, quantity, "Ø x length". With ``bare`` the
+    "<d>mm DIA <length>" callout alone is read too (D-391), for a detail that prints its stock
+    that way and nothing else; a hole callout ("4 HOLES 6mm DIA 100 PCD") is not a bar, and a
+    page that states a sheet thickness describes sheet, so neither yields a row."""
     out, seen = [], set()
-    for m in _WIRE_BAR_SCHED_RE.finditer(page_text or ""):
+    text = page_text or ""
+    for m in _WIRE_BAR_SCHED_RE.finditer(text):
         qty = int(m.group(2))
         gauge = float(m.group(3))
         length = float(m.group(4))
@@ -1918,7 +1993,37 @@ def _parse_bar_schedule(page_text: str):
             continue
         seen.add(key)
         out.append({"gauge_mm": gauge, "length_mm": length, "qty": qty})
+    if out or not bare:
+        return out
+    if _SHEET_THICKNESS_STATED_RE.search(text):
+        return out
+    for m in _WIRE_SIMPLE_RE.finditer(text):
+        gauge = float(m.group(1))
+        length = float(m.group(2))
+        if not (1.0 <= gauge <= 25.0) or not (5.0 <= length <= 6000.0):
+            continue
+        before = text[max(0, m.start() - 24):m.start()].upper()
+        after = text[m.end():m.end() + 24].upper()
+        if _HOLE_CALLOUT_RE.search(before) or _HOLE_CALLOUT_RE.search(after):
+            continue
+        key = (gauge, length, 1)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"gauge_mm": gauge, "length_mm": length, "qty": 1})
     return out
+
+
+# A sheet thickness stated on the page: the part is sheet, whatever else it prints.
+_SHEET_THICKNESS_STATED_RE = re.compile(
+    r"\b\d{1,2}(?:\.\d+)?\s*MM\s*(?:THK|THICK|THICKNESS|GAUGE|SHEET|PLATE)\b|\bMATL\s+THK\b",
+    re.IGNORECASE,
+)
+# The words beside a diameter that make it a hole, not a stock size.
+_HOLE_CALLOUT_RE = re.compile(
+    r"\b(?:HOLES?|PCD|THRU|THROUGH|CSK|C'?BORE|COUNTERSUNK|COUNTERBORE|TAPPED|DRILL|REAM|SLOTS?)\b",
+    re.IGNORECASE,
+)
 
 
 _WIRE_SIMPLE_RE = re.compile(

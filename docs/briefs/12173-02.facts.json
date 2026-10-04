@@ -46,7 +46,7 @@
     "12173-03-202": ["welding"],
     "12173-03-203": ["welding"],
     "12173-03-06M": ["laser_cutting"],
-    "12173-04-201": ["powder_coating"],
+    "12173-04-201": ["powder_coating", "welding"],
     "12173-04-02M": ["folding"],
     "12173-04-02M-H": ["folding"],
     "12173-04-03M": ["folding"],
