@@ -3031,6 +3031,10 @@ def _finalize_scan_summary(
     # rules out one a later pass infers from a name. 12527-22-101 carries four ISO spot-weld
     # symbols and no text; the engine charged Weld (CO2) and dressing and said "no weld note
     # or symbol on the drawing". Failure-isolated: an unreadable sheet leaves the job as it is.
+    # The sheet facts and the records they were read onto are kept: an assembly the SolidWorks
+    # tree mints later has a sheet of its own in the pack too, and is read then (D-390).
+    _ws_by_part: Dict[str, Any] = {}
+    _ws_seen_pns: set = set()
     if pdf_path:
         try:
             from weld_symbols import (apply_to_parts as _ws_apply,
@@ -3042,6 +3046,8 @@ def _finalize_scan_summary(
             _ws_pdfs = [pdf_path] + [_j.get("path") for _j in (summary.get("job_source_pdfs") or [])
                                      if isinstance(_j, dict) and _j.get("path")]
             _ws_by_part = _ws_read(_ws_pdfs)
+            _ws_seen_pns = {str(_p.get("part_number") or "").strip().upper()
+                            for _p in _pre_estimate_parts if isinstance(_p, dict)}
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
             _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
             try:
@@ -3737,6 +3743,36 @@ def _finalize_scan_summary(
         else:
             print(f"   [hierarchy] applied to {len(_hier)} assembly node(s) from the "
                   f"SolidWorks models", flush=True)
+            # A RECORD MINTED HERE HAS A SHEET IN THE PACK TOO (D-390). 12173-07-1-GA and
+            # 07-2-GA exist only from this point — the model's tree mints them — so the sheet
+            # readers above never saw them: their title blocks say POWDER COATED and the trough's
+            # draws five fillets, and the 4 Oct book coated four assemblies, not six. The same
+            # readers run once more, over the records that did not exist the first time only, so
+            # nothing already read is read twice.
+            try:
+                _late_parts = [_p for _p in (summary["manufacturing_writeup"]["parts"] or [])
+                               if isinstance(_p, dict)
+                               and str(_p.get("part_number") or "").strip().upper()
+                               not in _ws_seen_pns]
+                if _ws_by_part and _late_parts:
+                    from weld_symbols import (apply_to_parts as _ws_apply_late,
+                                              apply_finish_welds as _ws_finish_late,
+                                              apply_finish_coats as _ws_coats_late)
+                    _ws_apply_late(_late_parts, _ws_by_part)
+                    _ws_fin_late = _ws_finish_late(_late_parts, _ws_by_part)
+                    _ws_coated_late = _ws_coats_late(
+                        summary["manufacturing_writeup"]["parts"], _ws_by_part)
+                    _ws_seen_pns |= {str(_p.get("part_number") or "").strip().upper()
+                                     for _p in _late_parts}
+                    if _ws_coated_late or _ws_fin_late.get("stated") \
+                            or _ws_fin_late.get("joined_by_symbol"):
+                        print(f"   [weld-symbols] read the sheets of the assemblies the model "
+                              f"minted: coated per own FINISH "
+                              f"{', '.join(_ws_coated_late) or 'none'}; welded per own sheet "
+                              f"{', '.join((_ws_fin_late.get('stated') or []) + (_ws_fin_late.get('joined_by_symbol') or [])) or 'none'}",
+                              flush=True)
+            except Exception as _ws_late_err:                        # noqa: BLE001
+                print(f"   [weld-symbols] late sheet read skipped: {_ws_late_err}", flush=True)
     except Exception as _sw_late_err:
         print(f"   [solidworks] late application skipped: "
               f"{type(_sw_late_err).__name__}: {_sw_late_err}", flush=True)

@@ -205,6 +205,14 @@ def _price_origin(pe: Dict[str, Any]) -> Tuple[str, bool]:
     # names for one guess. Where the rescuer priced the line, its mark decides the label.
     best = None
     _me_lr = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    # A SECTION ON THE CONFIG HOLD IS NOT AN SDI LIVE PRICE (D-390). 12173-03-04M / 05M were
+    # priced at config.SECTION_STOCK_PRICE_GBP_PER_KG and the BOM row's source column read
+    # "SDI Live": the stamp that won below was the £/kg lookup the branch ASKED of SDI Live
+    # and did not use. The cost method names the rate that put the money on the line.
+    _cm_sec = str(_me_lr.get("cost_method") or "")
+    if _cm_sec in ("section_stock_config_rate", "section_stock_flat_rate"):
+        return ("SDI config section rate - verify" if _cm_sec == "section_stock_config_rate"
+                else "flat-product rate - UNDER-READS section", False)
     _lr = str(_me_lr.get("cost_method") or "") == "last_resort_market_indication"
     if _lr:
         # The rescue's own stamp names the source that answered it (D-358) — a market

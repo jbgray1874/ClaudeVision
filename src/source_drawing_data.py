@@ -657,6 +657,21 @@ def build_tables(summary: Mapping[str, Any],
     }
 
 
+def _cell_value(value: Any) -> Any:
+    """What a cell can hold. A dict or a list is written as text, not refused (D-390).
+
+    12173-02, 4 Oct: the sheet was not written at all — "Cannot convert {'length': None,
+    'width': None, 'height': 2.0} to Excel" — because one row carried a mirrored hand's
+    envelope as the dict it is on the record. One bad value lost the whole audit."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return "; ".join(f"{k}: {v}" for k, v in value.items() if v is not None) or None
+    if isinstance(value, (list, tuple, set)):
+        return ", ".join(str(v) for v in value if v is not None) or None
+    return str(value)
+
+
 def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
                               job: str = "",
                               dxf_paths: Optional[Sequence[Any]] = None,
@@ -689,7 +704,7 @@ def write_source_drawing_data(summary: Mapping[str, Any], out_dir: Any,
             cell.font = Font(bold=True)
         for index, row in enumerate(rows, start=2):
             for column, header in enumerate(headers, start=1):
-                sheet.cell(row=index, column=column, value=row.get(header))
+                sheet.cell(row=index, column=column, value=_cell_value(row.get(header)))
         for column, header in enumerate(headers, start=1):
             width = max(len(str(header)),
                         *(len(str(r.get(header) or "")) for r in rows[:200]))

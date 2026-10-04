@@ -1039,11 +1039,23 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         )
 
         mat_upper_joined = " ".join(str(m).upper() for m in materials)
+        # THE PART'S OWN PAGES, NOT THE WHOLE PACK (D-390). The text test read
+        # doc_page_text_upper — every sheet in the job — so on 12173 one hook arm's "MILD
+        # STEEL WIRE" made every part wire: the MDF spinner plate, the MFC back and the screws
+        # carried wire_forming and "welding on this wire part is the wire route's assumption",
+        # and both sheet-metal bases took the `_wire_part_override` that the Robomac guard
+        # then mistook for evidence. A part is wire when ITS material says so or ITS OWN pages
+        # say so, which is the test the bar-schedule rule below already applies.
+        _own_pages_w = set(part.get("pages") or [])
+        _own_text_upper = (" ".join(
+            str(_get_page_text(pg)) for pg in summary.get("pages", [])
+            if (pg.get("page_number") or pg.get("page")) in _own_pages_w).upper()
+            if _own_pages_w else "")
         _is_wire_part = any(
             kw in mat_upper_joined for kw in ("WIRE", "MILD STEEL WIRE", "STEEL WIRE")
         ) or (
-            "MILD STEEL WIRE" in doc_page_text_upper
-            or ("WIRE" in doc_page_text_upper and "LOOP" in doc_page_text_upper)
+            "MILD STEEL WIRE" in _own_text_upper
+            or ("WIRE" in _own_text_upper and "LOOP" in _own_text_upper)
         )
 
         # ROUND BAR / STUD (added 2026-07-13). The test above keys on the literal word
