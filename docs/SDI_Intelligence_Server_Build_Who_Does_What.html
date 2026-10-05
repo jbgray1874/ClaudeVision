@@ -131,7 +131,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 
   <section class="design">
     <div class="owner"><h2>What runs where</h2></div>
-    <p class="sub">The operating system on the metal is Windows Server 2025, and it runs nothing a person would use: Hyper-V and the licence manager. The Windows VM is the laptop, moved to the server, with the card: everything that needs a desktop, Excel, SOLIDWORKS or a SOLIDWORKS library. The Linux VM is Technical Design's: GitLab, PostgreSQL and the FastAPI services, which call the Windows VM over HTTPS for anything SOLIDWORKS. This is the split Yogesh set out on 5 October (UAT-SDI-CAD01 and UAT-SDI-PDM01).</p>
+    <p class="sub">The operating system on the metal is Windows Server 2025, and it runs nothing a person would use: Hyper-V and the licence manager. The Windows VM is the laptop, moved to the server, with the card: everything that needs a desktop, Excel, SOLIDWORKS or a SOLIDWORKS library. The Linux VM is Technical Design's: GitLab, PostgreSQL and the FastAPI services, which call the Windows VM over HTTPS for anything SOLIDWORKS.</p>
     <div class="arch"><svg viewBox="0 0 830 520" role="img" aria-labelledby="archT archD">
 <title id="archT">SDI Intelligence server architecture</title>
 <desc id="archD">One physical server running Windows Server 2025 with Hyper-V and the SOLIDWORKS licence manager. VM 1 (Windows 11 Pro) has the RTX 4000 Ada passed through and runs the estimating engine and runner, the estimating portal and queue, Client Briefing, Drawing Search, Excel, SOLIDWORKS, the SOLIDWORKS Document Manager API, the CAD Validator and the COM tools. VM 2 (Linux) runs the FastAPI services (the Document Manager intelligence layer, Production Design Extraction) and the SDI Design Vault (GitLab with LFS, PostgreSQL), with no graphics card, and calls VM 1 over HTTPS. Both read the shares.</desc>
@@ -225,7 +225,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
       <div class="fact"><b>The graphics card: one card, one VM.</b><p>Passed through (DDA), the RTX&nbsp;4000 Ada belongs to VM&nbsp;1 alone; the host and the Linux VM have none. It cannot be split between VMs: Windows Server&nbsp;2025 only partitions a short list of data-centre cards (NVIDIA L4, L40S, A16 and similar) with NVIDIA's licensed vGPU driver, and this card is not one of them. Moving it to the Linux VM is a shutdown of both VMs each way, so it is for an occasional overnight job, never a routine. If Technical Design ever needs a card of its own, a second card is fitted and passed to the Linux VM the same way; DDA works for Linux guests.</p></div>
       <div class="fact"><b>SOLIDWORKS: the licences are shared, the program is not.</b><p>SOLIDWORKS runs only on VM&nbsp;1; the Linux VM reaches its four COM tools over the network. A network (SolidNetWork) licence puts the seats in a pool on the host: SOLIDWORKS takes one when it opens and returns it when it closes, first come, first served, and designers' PCs can share the same pool. A standalone licence works in a VM but is tied to that VM's identity, so a rebuilt VM means a reactivation; the network licence avoids that.</p></div>
       <div class="fact"><b>One runner, one estimate at a time.</b><p>With no third VM there is one runner, as on the laptop today. The queue still takes every job and prices them in order. A second runner is a later decision and would be a second Windows VM without a card.</p></div>
-      <div class="fact"><b>The Linux VM is Technical Design's.</b><p>Ubuntu LTS server under Hyper-V, administered over SSH, with Yogesh and James as its users. It carries the FastAPI services, Production Design Extraction and the Design Vault, and nothing that drives Excel, SOLIDWORKS or a SOLIDWORKS library; those it reaches on VM&nbsp;1 over HTTPS. Ubuntu carries the Hyper-V integration drivers in its kernel, so nothing extra is installed.</p></div>
+      <div class="fact"><b>The Linux VM is Technical Design's.</b><p>Ubuntu LTS server under Hyper-V, administered over SSH by the Technical Design team. It carries the FastAPI services, Production Design Extraction and the Design Vault, and nothing that drives Excel, SOLIDWORKS or a SOLIDWORKS library; those it reaches on VM&nbsp;1 over HTTPS. Ubuntu carries the Hyper-V integration drivers in its kernel, so nothing extra is installed.</p></div>
     </div>
   </section>
 
@@ -277,7 +277,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <h3>VM 2 (Linux): Technical Design</h3>
     <ol start="17">
       <li><b>Create it as Generation 2</b> with Secure Boot on the <b>Microsoft UEFI Certificate Authority</b> template; no virtual TPM needed. 8 virtual CPUs, 32 GB memory, a 1 TB+ virtual disk on NVMe that can be grown; automatic start with the host.</li>
-      <li><b>Ubuntu LTS server,</b> fixed IP and DNS name on the External switch, SSH open to James and Yogesh with sudo accounts, fully updated. <b>No graphics card.</b></li>
+      <li><b>Ubuntu LTS server,</b> fixed IP and DNS name on the External switch, SSH open to the Technical Design team with sudo accounts, fully updated. <b>No graphics card.</b></li>
       <li><b>Firewall on VM&nbsp;2:</b> GitLab (<code>80</code>/<code>443</code>, and its git-over-SSH port) and the FastAPI services' port from the office network; PostgreSQL (<code>5432</code>) from VM&nbsp;1 only.</li>
       <li><b>A read-only mount of W:</b> for the FastAPI services (a service account on the file server; the credentials kept on the VM, not in any script).</li>
     </ol>
@@ -307,7 +307,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 
   <section class="james">
     <div class="owner"><span class="tag">James</span><h2>Applications: the laptop premise</h2></div>
-    <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop. Yogesh does the Linux side with James.</p>
+    <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop. The Technical Design team does the Linux side with James.</p>
 
     <h3>On VM 1 (estimating, client estimating, Client Briefing, Drawing Search)</h3>
     <ol>
@@ -324,7 +324,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
       <li><b>Hand Jack the antivirus exclusion paths</b> and the ports to open.</li>
     </ol>
 
-    <h3>On VM 2 (Technical Design), with Yogesh</h3>
+    <h3>On VM 2 (Technical Design), with the Technical Design team</h3>
     <ol start="12">
       <li><b>GitLab with LFS</b> on its own address or port, with backups scheduled; the SDI Design Vault's repositories created.</li>
       <li><b>PostgreSQL</b> for the Document Manager's intelligence layer, reachable from VM&nbsp;1 only.</li>
@@ -347,11 +347,11 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <div class="tbl"><table>
       <thead><tr><th>Question</th><th>Who leads</th><th>Why it matters</th></tr></thead>
       <tbody>
-        <tr><td>SOLIDWORKS licensing, in writing from the reseller before the build (Yogesh's three questions, 5 October): (1) may this licence be activated and used in a Hyper-V VM; (2) does it permit automated, server-side use; (3) what licence is needed for unattended generation of STEP, PDF and DXF files. And, separately, the Document Manager API licence-key terms for SDI's use. Network (SolidNetWork) recommended, with the cost of converting</td><td>James, with the reseller</td><td>Hyper-V 2025 on Dassault's supported-platform list is technical support, not a licence right; the three rights are not inferred from it. A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. The runner holds a seat all day.</td></tr>
+        <tr><td>SOLIDWORKS licensing, in writing from the reseller before the build: (1) may this licence be activated and used in a Hyper-V VM; (2) does it permit automated, server-side use; (3) what licence is needed for unattended generation of STEP, PDF and DXF files. And, separately, the Document Manager API licence-key terms for SDI's use. Network (SolidNetWork) recommended, with the cost of converting</td><td>James, with the reseller</td><td>Hyper-V 2025 on Dassault's supported-platform list is technical support, not a licence right; the three rights are not inferred from it. A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. The runner holds a seat all day.</td></tr>
         <tr><td>SOLIDWORKS version: 2026 or later</td><td>James, with the reseller</td><td>SOLIDWORKS lists Hyper-V 2025 (this host) for version 2026. The program runs only on Windows 10/11, never on the Server host.</td></tr>
         <tr><td>Server 2025 drivers for the 3XS board</td><td>Jack, with Scan</td><td>Scan supplies Windows&nbsp;11 drivers; the Server install may need the board maker's chipset and network drivers.</td></tr>
-        <tr><td>The Linux VM's disk: how much of W:'s history the Design Vault will hold</td><td>James and Yogesh</td><td>Sets the virtual disk size and the backup size. It can be grown later, but the NVMe is 2 × 2 TB in total.</td></tr>
-        <tr><td>Ports and names: VM&nbsp;1's portal, Client Briefing, Drawing Search and the HTTPS port for the Document Manager API and COM tools; the Linux VM's GitLab, FastAPI services and git-over-SSH. Yogesh proposes UAT-SDI-CAD01 and UAT-SDI-PDM01 as the VM names</td><td>James gives, Jack opens</td><td>Every link the estimators and the studio use names them.</td></tr>
+        <tr><td>The Linux VM's disk: how much of W:'s history the Design Vault will hold</td><td>James, with Technical Design</td><td>Sets the virtual disk size and the backup size. It can be grown later, but the NVMe is 2 × 2 TB in total.</td></tr>
+        <tr><td>Ports and names: VM&nbsp;1's portal, Client Briefing, Drawing Search and the HTTPS port for the Document Manager API and COM tools; the Linux VM's GitLab, FastAPI services and git-over-SSH.</td><td>James gives, Jack opens</td><td>Every link the estimators and the studio use names them.</td></tr>
         <tr><td>Who is told before Windows updates or restarts, and the remote-access rule</td><td>Jack and James</td><td>A restart or a careless Remote Desktop session mid-run loses that estimate.</td></tr>
         <tr><td>A second graphics card for the Linux VM, and a second runner VM</td><td>James, later</td><td>Neither is in this build. A second card only if a model on the Linux side needs one; a second runner only if the queue backs up.</td></tr>
       </tbody>
