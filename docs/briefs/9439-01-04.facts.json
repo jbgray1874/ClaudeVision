@@ -1,0 +1,139 @@
+{
+  "_reviewed": "James Gray, 5 Oct 2026 — 9439-01-04 Table Standing POS Holder A4 (Harrods) rev C brief, docs/briefs/9439-01-04.md. Structure, not money.",
+  "_note": "Codes compare on letters and digits only. Order quantities are Harrods' and are not on the pack; add quantity_breaks here when known.",
+  "product_root": "9439-01-04-GA",
+  "not_set_aside": [
+    "9439-01-04-101"
+  ],
+  "quantities": {
+    "9439-01-04-101": 1,
+    "9439-01-04-001": 1,
+    "9439-01-04-002": 1,
+    "9439-01-04-003": 2,
+    "9439-01-04-004": 2,
+    "9439-01-04-005": 1
+  },
+  "exactly_one_line": {
+    "A4 BASE": 1,
+    "FRAME CHANNEL": 1,
+    "TOP BAR": 1,
+    "GRAPHIC LENS": 1
+  },
+  "required_operations": {
+    "9439-01-04-101": [
+      "welding",
+      "dress_welds",
+      "powder_coating"
+    ],
+    "9439-01-04-001": [
+      "laser_cutting"
+    ],
+    "9439-01-04-002": [
+      "laser_cutting",
+      "folding"
+    ],
+    "9439-01-04-003": [
+      "laser_cutting"
+    ],
+    "9439-01-04-004": [
+      "laser_cutting"
+    ]
+  },
+  "forbidden_operations": {
+    "9439-01-04-GA": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "anodising"
+    ],
+    "9439-01-04-101": [
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "wet_spray",
+      "anodising",
+      "plating"
+    ],
+    "9439-01-04-001": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "folding",
+      "wire_forming",
+      "robomac"
+    ],
+    "9439-01-04-002": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ],
+    "9439-01-04-003": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "folding",
+      "wire_forming",
+      "robomac"
+    ],
+    "9439-01-04-004": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "deburring"
+    ],
+    "9439-01-04-005": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac",
+      "cnc_routing"
+    ]
+  },
+  "forbidden_operations_anywhere": [
+    "anodising",
+    "tube_bending",
+    "spot_welding"
+  ],
+  "material_charged": [
+    "9439-01-04-001",
+    "9439-01-04-002",
+    "9439-01-04-003",
+    "9439-01-04-004"
+  ],
+  "no_cut_assemblies": true,
+  "unit_mass_kg": {
+    "expected": 0.59,
+    "tolerance_pct": 40
+  },
+  "max_unit_material_mass_kg": {
+    "9439-01-04-001": 0.2,
+    "9439-01-04-002": 0.22,
+    "9439-01-04-003": 0.05,
+    "9439-01-04-004": 0.45
+  },
+  "min_unit_material_mass_kg": {
+    "9439-01-04-001": 0.08,
+    "9439-01-04-002": 0.1,
+    "9439-01-04-003": 0.02,
+    "9439-01-04-004": 0.2
+  }
+}

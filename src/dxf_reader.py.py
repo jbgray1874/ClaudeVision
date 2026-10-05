@@ -1237,9 +1237,19 @@ def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
     if not polys:
         return (bbox_area_mm2, "bbox_polygonize_empty", 0.0)
 
-    outer = max(polys, key=lambda p: p.area)
-    interior = [p for p in polys if p is not outer]
-    net_area = max(0.0, outer.area - sum(p.area for p in interior))
+    # THE OUTER FACE IS THE ONE WHOSE OUTLINE ENCLOSES THE OTHERS, NOT THE BIGGEST FACE
+    # (D-396). Harrods 9439-01-04-001 is a 219 x 60 base cut as a 5 mm rim: polygonize
+    # returns the rim (2,690 mm2, one interior) and the hole it encloses (10,450 mm2).
+    # Picking the biggest face took the HOLE for the blank and subtracted the rim from it
+    # — 7,760 mm2 for a part that is 2,690. Polygonize already leaves a face's holes out
+    # of its area, so the blank is the face with the largest exterior, as it stands; the
+    # faces inside its holes are air.
+    try:
+        from shapely.geometry import Polygon as _Poly
+        outer = max(polys, key=lambda p: _Poly(p.exterior).area)
+    except Exception:
+        outer = max(polys, key=lambda p: p.area)
+    net_area = max(0.0, outer.area)
 
     for e in (cut_circs or []):
         try:
@@ -1265,7 +1275,24 @@ def _shapely_net_area_mm2(cut_lines, cut_arcs, cut_circs, scale, bbox_area_mm2):
             continue
 
     fill = (100.0 * net_area / bbox_area_mm2) if bbox_area_mm2 > 0 else 0.0
-    if not (30.0 <= fill <= 100.5):
+    # A THIN RIM IS A REAL BLANK (D-396). The 30% floor took the base's 20% fill for
+    # garbage and fell back to the solid bbox — 516 g for a 105 g part. What tells a
+    # polygonized blank from garbage is whether its outline closes round the whole
+    # extent: the outer face's bounds match the bbox. A face that does not reach the
+    # extents is a fragment, and the bbox stands as before.
+    _closes = False
+    try:
+        _bx0, _by0, _bx1, _by1 = outer.bounds
+        _ox0 = min(min(s.coords, key=lambda c: c[0])[0] for s in segs)
+        _ox1 = max(max(s.coords, key=lambda c: c[0])[0] for s in segs)
+        _oy0 = min(min(s.coords, key=lambda c: c[1])[1] for s in segs)
+        _oy1 = max(max(s.coords, key=lambda c: c[1])[1] for s in segs)
+        _tol = 0.01 * max(_ox1 - _ox0, _oy1 - _oy0, 1.0)
+        _closes = (abs(_bx0 - _ox0) <= _tol and abs(_bx1 - _ox1) <= _tol
+                   and abs(_by0 - _oy0) <= _tol and abs(_by1 - _oy1) <= _tol)
+    except Exception:
+        _closes = False
+    if fill > 100.5 or (fill < 30.0 and not _closes):
         return (bbox_area_mm2, "bbox_fill_out_of_band", round(fill, 1))
     return (round(net_area, 2), "shapely_polygonize", round(fill, 1))
 

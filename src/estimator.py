@@ -3020,13 +3020,23 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                 or MATERIAL_DENSITY_KG_PER_M3.get(mat.replace(" ", "_")))
         if not dens:
             return None
-        blank_kg = L * W * t * float(dens) * 1e-9
+        # THE CUT OUTLINE WHERE ONE WAS MEASURED (D-396). Harrods 9439-01-04-001 is a
+        # 219 x 60 base cut as a 5 mm rim: the envelope at 5 mm weighs 516 g, the rim the
+        # sheet's 105 g. A DXF flat gives the net area, and that is what the part weighs.
+        area = _safe_float(ng.get("blank_area_mm2") or part.get("blank_area_mm2")
+                           or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2"))
+        _measured_area = bool(area and 0 < area <= L * W * 1.01)
+        if not _measured_area:
+            area = L * W
+        blank_kg = area * t * float(dens) * 1e-9
         over = float(getattr(config, "BLANK_WEIGHT_CHECK_OVER_PCT", 60.0)) / 100.0
         under = float(getattr(config, "BLANK_WEIGHT_CHECK_UNDER_PCT", 20.0)) / 100.0
         if stated * (1.0 - under) <= blank_kg <= stated * (1.0 + over):
             return None
-        fit_t = stated / (L * W * float(dens) * 1e-9)
-        return (f"WEIGHT CHECK: the {L:g} x {W:g} blank at {t:g} mm weighs {blank_kg:.3f} kg; "
+        fit_t = stated / (area * float(dens) * 1e-9)
+        _what = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
+                 if _measured_area else f"the {L:g} x {W:g} blank")
+        return (f"WEIGHT CHECK: {_what} at {t:g} mm weighs {blank_kg:.3f} kg; "
                 f"the sheet states {stated:.3f} kg. "
                 + (f"A blank cannot weigh less than its part, so the gauge is too thin: "
                    if blank_kg < stated else
