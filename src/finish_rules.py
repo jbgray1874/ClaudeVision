@@ -124,6 +124,19 @@ def process_statements(finish_text: Any) -> tuple:
     return hits, rest
 
 
+def minted_operation(token: Any) -> str:
+    """The operation a reader MINTS for a process statement nothing on the part discharges:
+    the first in the statement's configured list ("SCRAPED EDGES" -> deburring). "" when the
+    token is not a statement. The order is config's (FINISH_FIELD_PROCESS_STATEMENTS)."""
+    vocab = _process_statement_vocab()
+    for t, ops in vocab.items():
+        if str(t).upper() == str(token or "").upper():
+            for o in (ops or ()):
+                if str(o).strip():
+                    return str(o).strip().lower()
+    return ""
+
+
 def names_one_face(text: Any) -> bool:
     """True when a finish note names ONE face ("PAINTED TOP FACE", "TOP FACE ONLY").
 

@@ -84,6 +84,76 @@ def _freight_on_sheet(ws, max_row: int) -> Dict[str, Optional[float]]:
     return found
 
 
+def basis_from_rows(final_rows: Any, qty: Any) -> Dict[str, float]:
+    """Per unit, what the sheet's own rows say a quantity's figure is made of (D-393).
+
+    "The 250-off figure also depends heavily on spreading packaging across the batch; that
+    basis needs checking" — James Gray, 12696-01. A break table that shows only the unit
+    cost at each quantity hides what the fall from one off is: the order's packaging and
+    delivery divided by more units, and each department's set-up divided by more units. Both
+    are read off the recalculated rows, not re-priced:
+
+      order_charges_per_unit  the packaging and delivery lines' per-unit value as the sheet
+                              carries them at this quantity (the Material Price Break table
+                              spreads the order figure; this reads the result);
+      setup_per_unit          each labour row's set-up minutes at its department's hourly
+                              rate, summed and divided by the quantity — the sheet's own
+                              arithmetic (hours = set-up/60 + run, value = hours x rate / qty)
+                              taken apart, so the figure is the set-up share and nothing else.
+
+    Keys are present only when the rows that carry them were read; absent is "not read",
+    never zero."""
+    out: Dict[str, float] = {}
+    if not isinstance(final_rows, dict):
+        return out
+    try:
+        q = float(qty)
+    except (TypeError, ValueError):
+        return out
+    if q <= 0:
+        return out
+    freight, seen_freight = 0.0, False
+    for r in final_rows.get("material_rows") or []:
+        if not isinstance(r, dict):
+            continue
+        code = str(r.get("part_code") or "").strip().upper()
+        desc = str(r.get("description") or "").strip().upper()
+        if not any(code.startswith(c) or desc.startswith(c) for c in _FREIGHT_CODES):
+            continue
+        v = _money(r.get("total_value_gbp"))
+        if v is None:
+            continue
+        freight += v
+        seen_freight = True
+    if seen_freight:
+        out["order_charges_per_unit"] = round(freight, 2)
+    setup, seen_setup = 0.0, False
+    for r in final_rows.get("labour_rows") or []:
+        if not isinstance(r, dict):
+            continue
+        mins = _money(r.get("setup_minutes"))
+        rate = _money(r.get("dept_rate_gbp_per_hour"))
+        if mins is None or rate is None:
+            continue
+        setup += (mins / 60.0) * rate
+        seen_setup = True
+    if seen_setup:
+        out["setup_per_unit"] = round(setup / q, 2)
+    return out
+
+
+def _basis_on_sheet(ws, max_col: int, qty: int) -> Dict[str, float]:
+    """basis_from_rows over the recalculated sheet, through the read-back's own row reader."""
+    try:
+        from wep_readback_from_xlsx import read_final_rows
+        return basis_from_rows(read_final_rows(ws, max_col), qty)
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"   [qty-sweep] basis at {qty} off not read ({type(exc).__name__}: {exc}) — "
+              f"the totals stand; the breaks sheet will not show what this column is made of.",
+              flush=True)
+        return {}
+
+
 def file_a_workbook_per_quantity() -> bool:
     """Does this run write a separate workbook for each quantity, or one sheet for all?
 
@@ -159,6 +229,9 @@ def sweep(xlsx_path: Any, quantities: List[int],
             row: Dict[str, Any] = {"quantity": qty}
             for key, needles in _TOTAL_LABELS.items():
                 row[key] = _money(_scan_total(ws, needles, max_row, max_col))
+            # WHAT THIS COLUMN IS MADE OF (D-393): the order charges and the set-up share
+            # at this quantity, read off the same recalculated rows.
+            row.update(_basis_on_sheet(ws, max_col, qty))
             rows.append(row)
             if save_variants:
                 # SaveAs RE-POINTS THE OPEN WORKBOOK at the new file, so from here on the

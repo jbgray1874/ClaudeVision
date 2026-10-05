@@ -3623,7 +3623,33 @@ FINISH_FIELD_PROCESS_STATEMENTS = {
     "SPOT WELDED": ("spot_welding", "spotweld", "spot_weld", "resistance_welding"),
     "WELDED": ("welding", "weld", "spot_welding", "spotweld", "spot_weld",
                "resistance_welding"),
+    # HAND EDGE WORK STATED AS THE FINISH (D-393). 12696-01-01A, a PETG ticket strip, prints
+    # "FINISH: SCRAPED EDGES": its cut edges are hand-scraped, which is bench work on the
+    # acrylic side and names no coat. Read only as a finish it was bare — right, nothing is
+    # coated — and the work it names cost nothing. The FIRST operation is the one a reader
+    # mints when no listed operation is on the part (weld_symbols.apply_finish_processes);
+    # any of them charged discharges the statement.
+    "SCRAPED EDGES": ("deburring", "deburr", "manual_labour_acrylic", "manual_labour"),
+    "EDGES SCRAPED": ("deburring", "deburr", "manual_labour_acrylic", "manual_labour"),
+    "DEBURRED": ("deburring", "deburr", "manual_labour_acrylic", "manual_labour"),
 }
+
+# ── THE WELD PROCESS THE PACK STATES, NAMED ON THE WELD ROW (D-393) ───────────────────────
+# "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED" says HOW a weld the drawing calls up
+# is made (never THAT a part is welded — SPECIFICATION_DEFAULT_SENTENCES above). The rate card
+# carries one arc-weld row, "Weld (CO2)", so a TIG weld is charged there; 12696-01's book said
+# "Weld (CO2)" and nothing else, and the reader of the book took it for a process decision.
+# The process the pack states is read off a welded part's own sheet and written beside the
+# row title, with the rate it is charged at, for the estimator to confirm.
+#   word on the drawing -> the process named on the row
+WELD_PROCESS_VOCAB = {"TIG": "TIG", "GTAW": "TIG", "MIG": "MIG", "MAG": "MIG", "GMAW": "MIG",
+                      "CO2": "CO2", "MMA": "MMA", "STICK": "MMA"}
+#   statements, matched on the sheet's text with its whitespace removed (a letter-spaced
+#   border reads "A L L W E L D S T O B E T I G"); {proc} is the vocabulary's words.
+WELD_PROCESS_STATEMENT_PATTERNS = [
+    r"ALLWELDS(?:TOBE|ARE|:)?({proc})",
+    r"WELD(?:ING)?SPEC(?:IFICATION)?S?:?(?:ALLWELDS(?:TOBE|ARE)?)?({proc})",
+]
 
 # ── OPERATIONS THAT LEGITIMATELY RECUR AT EVERY LEVEL OF A TREE ───────────────────────────
 # An assembly event on 12173-03-GA over 201, and another on 201 over its frames, is two

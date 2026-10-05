@@ -444,6 +444,7 @@ def apply_finish_welds(parts: Sequence[Dict[str, Any]],
         part.setdefault("review_flags", []).append(
             f"WELDED per its own sheet: the title block's FINISH reads "
             f"'{by_part[pn].get('finish')}' — a stated weld, not an inference")
+        note_weld_process(part, by_part[pn].get("text"))
         stated.append(str(part.get("part_number") or pn))
     joined: List[str] = []
     for pn, facts in by_part.items():
@@ -655,6 +656,102 @@ def apply_finish_coats(parts: Sequence[Dict[str, Any]],
     return stated
 
 
+def _arc_weld_row_title() -> str:
+    """The rate card's arc-weld row, from the department table, never typed here."""
+    try:
+        from department_codes import title_for
+        return str(title_for("welding") or "Weld (CO2)")
+    except Exception:                                                # noqa: BLE001
+        return "Weld (CO2)"
+
+
+def note_weld_process(part: Dict[str, Any], sheet_text: Any) -> str:
+    """Record the weld PROCESS a welded part's own sheet states, and say where it is charged.
+
+    D-393: 12696-01-101's book read "Weld (CO2)" beside a pack that says "ALL WELDS TO BE TIG
+    UNLESS STATED", and the row was taken for a process decision. The rate card has one
+    arc-weld row, so a TIG weld is charged there; the record and the row now say so. Called
+    only for a part whose weld is STATED by its own sheet — the specification alone never
+    puts a weld on a part (extractor_patterns.strip_specification_legend). Returns the process
+    or ""."""
+    try:
+        from extractor_patterns import weld_process_stated
+        read = weld_process_stated(sheet_text)
+    except Exception:                                                # noqa: BLE001
+        read = None
+    if not read:
+        return ""
+    row = _arc_weld_row_title()
+    part["weld_process_stated"] = {"process": read["process"], "word": read["word"],
+                                   "default": bool(read.get("default")),
+                                   "charged_on": row, "source": "drawing_deterministic"}
+    _how = ("the pack's weld specification, its default for every weld not stated otherwise"
+            if read.get("default") else "the sheet's weld specification")
+    _flag = (f"WELD PROCESS {read['process']} per {_how}; the rate card's one arc-weld row is "
+             f"{row}, where it is charged — confirm the rate suits {read['process']}")
+    flags = part.setdefault("review_flags", [])
+    if isinstance(flags, list) and _flag not in flags:
+        flags.append(_flag)
+    return str(read["process"])
+
+
+def apply_finish_processes(parts: Sequence[Dict[str, Any]],
+                           by_part: Mapping[str, Mapping[str, Any]]) -> List[str]:
+    """Hand work a sheet's FINISH field STATES, minted as the operation that discharges it.
+
+    D-393: 12696-01-01A (PETG) prints FINISH: SCRAPED EDGES. The coat gates read it as bare
+    (right — nothing is coated) and nothing charged the scraping, so the strip's edges cost
+    nothing. The statement vocabulary is config's (FINISH_FIELD_PROCESS_STATEMENTS): a token
+    whose operations name a weld belongs to the weld readers above and is left to them; any
+    other token puts its FIRST operation on the part as a reading of the drawing, unless one
+    of its operations is already there or ruled out. Returns the part numbers stamped."""
+    try:
+        from finish_rules import process_statements, minted_operation
+        import source_precedence as _sp
+    except Exception:                                                # noqa: BLE001
+        return []
+    stamped: List[str] = []
+    by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
+    for pn, facts in by_part.items():
+        finish = str(facts.get("finish") or "")
+        if not finish:
+            continue
+        part = by_pn.get(pn)
+        if part is None:
+            continue
+        hits, _rest = process_statements(finish)
+        for token, ops in hits.items():
+            if any("weld" in str(o) for o in ops):
+                continue                                  # apply_finish_welds owns these
+            op = minted_operation(token)
+            if not op:
+                continue
+            ruled = part.get("operations_ruled_out") or {}
+            if any(o in ruled for o in ops):
+                continue
+            present = {str(o).strip().lower() for f in ("textual_operations",
+                                                        "inferred_operations", "operations")
+                       for o in (part.get(f) or []) if isinstance(o, str)}
+            _srcs = part.setdefault("operation_sources", {})
+            already = sorted(present & {str(o).lower() for o in ops})
+            if already:
+                # Discharged by an operation another reader put there: the statement is the
+                # stronger source for it, and that is all that changes.
+                for o in already:
+                    if _sp.rank(_srcs.get(o)) < _sp.rank("drawing_deterministic"):
+                        _srcs[o] = "drawing_deterministic"
+                continue
+            tops = part.setdefault("textual_operations", [])
+            if isinstance(tops, list) and op not in tops:
+                tops.append(op)
+            _srcs[op] = "drawing_deterministic"
+            part.setdefault("review_flags", []).append(
+                f"{op} per its own sheet: the title block's FINISH reads '{finish}' — hand "
+                f"work the sheet states, charged on the manual row; it names no coat")
+            stamped.append(str(part.get("part_number") or pn))
+    return stamped
+
+
 def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mapping[str, Any]]
                    ) -> List[str]:
     """Stamp each part with the weld callouts on its OWN sheet. Where spot welds are the only
@@ -688,6 +785,7 @@ def apply_to_parts(parts: Sequence[Dict[str, Any]], by_part: Mapping[str, Mappin
                      f"{describe_weld_symbols(counts, part['weld_symbol_pages'])}")
             if _flag not in (part.get("review_flags") or []):
                 part.setdefault("review_flags", []).append(_flag)
+            note_weld_process(part, hit.get("text"))
         n = only_spot_welds(counts)
         if not n:
             continue

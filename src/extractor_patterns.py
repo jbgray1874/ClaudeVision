@@ -120,6 +120,48 @@ def cites_only_specification_legend(evidence: Any) -> bool:
     return bool(str(evidence or "").strip()) and bool(legend_cues_set_aside(evidence))
 
 
+def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:
+    """The weld PROCESS a sheet's specification states, or None (D-393).
+
+    "ALL WELDS TO BE TIG UNLESS STATED" says how a weld is made, never that a part is welded —
+    strip_specification_legend removes it before any cue is read. But on a part whose own
+    sheet DOES state a weld (a fillet symbol, FINISH: WELDED) the same sentence is the one
+    statement of process the pack makes, and the rate card has one arc-weld row (Weld (CO2)),
+    so a TIG weld is charged there. This reads the process so the row can say so.
+
+    Matched on the text with its whitespace removed — a letter-spaced border and the squashed
+    sheet text weld_symbols keeps both read the same — against config's patterns and words.
+    Returns {"process", "word", "statement", "default"}; `default` is True when the sentence
+    carries an "UNLESS ... STATED" clause (a pack default, not a note on this joint)."""
+    squashed = re.sub(r"\s+", "", str(text or "")).upper()
+    if not squashed:
+        return None
+    try:
+        import config as _cfg
+        vocab = dict(getattr(_cfg, "WELD_PROCESS_VOCAB", None) or {})
+        patterns = list(getattr(_cfg, "WELD_PROCESS_STATEMENT_PATTERNS", None) or [])
+    except Exception:                                                # noqa: BLE001
+        vocab, patterns = {}, []
+    if not vocab or not patterns:
+        return None
+    words = "|".join(sorted((re.escape(str(w).upper()) for w in vocab), key=len, reverse=True))
+    for pat in patterns:
+        try:
+            m = re.search(str(pat).replace("{proc}", words), squashed)
+        except re.error:
+            continue
+        if not m:
+            continue
+        word = m.group(1).upper()
+        tail = squashed[m.end():m.end() + 40]
+        return {"process": str(vocab.get(word) or word),
+                "word": word,
+                "statement": m.group(0),
+                "default": bool(re.match(r"UNLESS(?:OTHERWISE)?(?:STATED|SPECIFIED|NOTED|SHOWN)",
+                                         tail))}
+    return None
+
+
 def legend_cues_set_aside(text: Any) -> List[str]:
     """The operations a page's legend alone would have cued (weld and dressing), for the record:
     what the full text cues and the legend-stripped text does not."""

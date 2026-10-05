@@ -3058,6 +3058,16 @@ def _finalize_scan_summary(
                           f"{', '.join(_ws_coated)}", flush=True)
             except Exception as _wc_err:                             # noqa: BLE001
                 print(f"   [weld-symbols] finish coats not read: {_wc_err}", flush=True)
+            try:
+                # Hand work the FINISH field states (SCRAPED EDGES), minted as its operation
+                # so the sheet charges it (D-393).
+                from weld_symbols import apply_finish_processes as _ws_procs
+                _ws_handwork = _ws_procs(_pre_estimate_parts, _ws_by_part)
+                if _ws_handwork:
+                    print(f"   [weld-symbols] hand work per its own sheet's FINISH: "
+                          f"{', '.join(_ws_handwork)}", flush=True)
+            except Exception as _wp_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] finish processes not read: {_wp_err}", flush=True)
             if _ws_fin.get("stated") or _ws_fin.get("questioned") \
                     or _ws_fin.get("joined_by_symbol"):
                 print(f"   [weld-symbols] welded per its own sheet's FINISH: "
@@ -3757,9 +3767,11 @@ def _finalize_scan_summary(
                 if _ws_by_part and _late_parts:
                     from weld_symbols import (apply_to_parts as _ws_apply_late,
                                               apply_finish_welds as _ws_finish_late,
-                                              apply_finish_coats as _ws_coats_late)
+                                              apply_finish_coats as _ws_coats_late,
+                                              apply_finish_processes as _ws_procs_late)
                     _ws_apply_late(_late_parts, _ws_by_part)
                     _ws_fin_late = _ws_finish_late(_late_parts, _ws_by_part)
+                    _ws_procs_late(_late_parts, _ws_by_part)
                     _ws_coated_late = _ws_coats_late(
                         summary["manufacturing_writeup"]["parts"], _ws_by_part)
                     _ws_seen_pns |= {str(_p.get("part_number") or "").strip().upper()

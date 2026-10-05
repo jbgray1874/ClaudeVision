@@ -1984,6 +1984,37 @@ def material_shown_on_row(pe: Mapping[str, Any], priced: Any) -> str:
     return priced
 
 
+def weld_process_note(wb_op: Any, parts: Any, records_by_pn: Mapping[str, Any]) -> str:
+    """What the weld row adds when the pack states the PROCESS (D-393).
+
+    12696-01-101's row read "Weld (CO2)" under a pack that says "ALL WELDS TO BE TIG UNLESS
+    STATED", and the book's reader took the title for a process decision. The title is the
+    rate card's one arc-weld row; the process is the drawing's. weld_symbols.note_weld_process
+    records it on a part whose weld its own sheet states; this names it on the row with the
+    rate it is charged at. "" for any other row, or when no part on the row states one."""
+    try:
+        from department_codes import title_for as _title_for
+        arc_row = str(_title_for("welding") or "Weld (CO2)")
+    except Exception:                                                # noqa: BLE001
+        arc_row = "Weld (CO2)"
+    if str(wb_op or "") != arc_row:
+        return ""
+    found: Dict[str, bool] = {}
+    for pn in (parts or ()):
+        rec = records_by_pn.get(str(pn or "").strip().upper()) if records_by_pn else None
+        stated = (rec or {}).get("weld_process_stated") if isinstance(rec, Mapping) else None
+        if isinstance(stated, Mapping) and stated.get("process"):
+            proc = str(stated["process"]).upper()
+            found[proc] = found.get(proc, False) or bool(stated.get("default"))
+    if not found:
+        return ""
+    procs = "/".join(sorted(found))
+    how = ("the pack's weld specification" if any(found.values())
+           else "the sheet's weld specification")
+    return (f" [{procs} per {how}; charged at the {arc_row} rate, the card's one arc-weld "
+            f"row — confirm]")
+
+
 def labour_row_description(wb_op: Any, material: Any = "", thickness: Any = None,
                            parts: Any = (), bends: Any = 0, holes: Any = 0,
                            work_ops: Any = ()) -> str:
@@ -6553,6 +6584,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _stamped_records += [r for r in (summary.get(_srcname) or []) if isinstance(r, dict)]
     _stamped_records += [r for r in ((summary.get("estimate_summary") or {}).get(
         "part_estimates") or []) if isinstance(r, dict)]
+    # The records the labour rows read a part's own statements from (D-393: the weld process
+    # its sheet states). Any record of the part serves; one carrying the statement wins.
+    _pe_by_pn_for_rows: Dict[str, Any] = {}
+    for _rec in _stamped_records:
+        _rpn = str(_rec.get("part_number") or "").strip().upper()
+        if _rpn and (_rpn not in _pe_by_pn_for_rows or _rec.get("weld_process_stated")):
+            _pe_by_pn_for_rows[_rpn] = _rec
     for _sp in _stamped_records:
         if not isinstance(_sp, dict):
             continue
@@ -7447,6 +7485,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                                      None if g.get("assembly_scoped") else g["thickness"],
                                      g["parts"], g["bends"], g["holes"],
                                      work_ops=g.get("engine_ops") or ())
+        # THE PROCESS THE PACK STATES, BESIDE THE RATE ROW IT IS CHARGED ON (D-393).
+        _wp_note = weld_process_note(wb_op, g.get("parts") or (), _pe_by_pn_for_rows)
+        if _wp_note:
+            _rd += _wp_note
+            g["weld_process_note"] = _wp_note.strip(" []")
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
         _pcell = (free_labour_parts_cell(ws, row, int(lb["col_desc"]), _parts_col)

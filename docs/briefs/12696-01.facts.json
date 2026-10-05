@@ -39,6 +39,9 @@
     "12696-01-02M": [
       "laser_cutting",
       "folding"
+    ],
+    "12696-01-01A": [
+      "deburring"
     ]
   },
   "forbidden_operations": {

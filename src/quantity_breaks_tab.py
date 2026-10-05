@@ -54,6 +54,65 @@ def _rows_of(swept: Any) -> List[Dict[str, Any]]:
     return sorted(out, key=lambda r: int(r["quantity"]))
 
 
+def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> int:
+    """WHAT THE FALL FROM ONE OFF IS MADE OF (D-393). Returns the rows written.
+
+    "The 250-off figure also depends heavily on spreading packaging across the batch; that
+    basis needs checking." — James Gray, 12696-01, 5 Oct 2026. The sweep records, per
+    quantity, the order charges (packaging, delivery) and the labour set-up as the sheet
+    carries them per unit; this lays them under the totals so a reader sees how much of each
+    column is money divided by the quantity and how much is the unit's own. Written only
+    when the sweep read them: a column with nothing read shows nothing, never a zero."""
+    has_charges = any(_money(r.get("order_charges_per_unit")) is not None for r in rows)
+    has_setup = any(_money(r.get("setup_per_unit")) is not None for r in rows)
+    if not (has_charges or has_setup):
+        return 0
+    from openpyxl.styles import Font                                  # noqa: PLC0415
+    base_q = int(rows[0]["quantity"])
+    r = top
+    ws.cell(row=r, column=1, value=f"What the fall from {base_q} off is made of").font = bold
+    r += 1
+    lines = []
+    if has_charges:
+        lines.append(("Packaging & delivery £/unit", "order_charges_per_unit"))
+    if has_setup:
+        lines.append(("Labour set-up £/unit", "setup_per_unit"))
+        lines.append(("Labour run £/unit", "_run"))
+    if has_charges or has_setup:
+        lines.append(("Unit cost less the spread money £", "_own"))
+    for label, key in lines:
+        ws.cell(row=r, column=1, value=label).font = bold
+        for col, row in enumerate(rows, start=2):
+            charges = _money(row.get("order_charges_per_unit"))
+            setup = _money(row.get("setup_per_unit"))
+            labour = _money(row.get("labour"))
+            unit = _money(row.get("unit"))
+            if key == "_run":
+                v = (round(labour - setup, 2)
+                     if labour is not None and setup is not None else None)
+            elif key == "_own":
+                spread = (charges or 0.0) + (setup or 0.0)
+                v = round(unit - spread, 2) if unit is not None and (
+                    charges is not None or setup is not None) else None
+            else:
+                v = _money(row.get(key))
+            cell = ws.cell(row=r, column=col, value=v)
+            cell.alignment = Alignment(horizontal="right")
+        r += 1
+    note = []
+    if has_charges:
+        note.append("Packaging and delivery are priced for the whole order and divided by "
+                    "the quantity, so most of their fall is arithmetic on an order figure — "
+                    "check that figure before quoting a break.")
+    if has_setup:
+        note.append("Labour set-up is each row's set-up minutes at its department rate, "
+                    "divided by the quantity; run labour is what is left of the labour "
+                    "figure.")
+    note.append("All of it is read off the recalculated rows; nothing here re-prices.")
+    ws.cell(row=r, column=1, value=" ".join(note)).font = Font(italic=True, size=9)
+    return r - top + 1
+
+
 def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                               requested: Optional[List[int]] = None,
                               warning: Optional[str] = None) -> Optional[str]:
@@ -153,6 +212,8 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
         for _r in range(head, head + 8):
             for _c in range(2, len(rows) + 2):
                 ws.cell(row=_r, column=_c).alignment = Alignment(horizontal="right")
+
+        _basis_rows = _write_basis(ws, rows, head + 9, bold, Alignment)
 
         _n = ws.max_row + 2
         ws.cell(row=_n, column=1, value=(
