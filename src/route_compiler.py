@@ -2326,10 +2326,13 @@ def build_part_graph(
         # is refused below as before (product_identity.tops_of_the_job, the same rule pre-run).
         _job_top = ""
         if not _candidates:
-            from product_identity import is_of_the_job, job_number_only
-            _job = job_number_only(_declared)
-            _job_roots = sorted(t for t in top_ids if t and is_of_the_job(_job, t)) \
-                if _job else []
+            from product_identity import (is_of_the_job, is_under_the_numbering,
+                                          job_number_only, numbering_prefix)
+            # The job's numbering one level down counts too (D-395): "9439-01" over
+            # 9439-01-04-GA — the same rule, the root of what is numbered under it.
+            _job = job_number_only(_declared) or numbering_prefix(_declared, _assemblies_here)
+            _job_roots = sorted(t for t in top_ids if t and (
+                is_of_the_job(_job, t) or is_under_the_numbering(_job, t))) if _job else []
             if len(_job_roots) == 1:
                 _job_top = _job_roots[0]
             _candidates = _job_roots
@@ -2340,13 +2343,13 @@ def build_part_graph(
                     "code": "product_is_the_jobs_top_assembly",
                     "declared": _declared,
                     "product": product_root,
-                    "detail": (f"The Drawing Number {_declared!r} is the job number, not a "
-                               f"drawing. The product is {product_root}: the only one of the "
+                    "detail": (f"The Drawing Number {_declared!r} is the job's numbering, not "
+                               f"a drawing. The product is {product_root}: the only one of the "
                                f"job's assemblies that no other drawing's parts list "
                                f"includes, so everything its lists reach is analysed and "
                                f"nothing else is."),
                 })
-                print(f"   [graph] {_declared!r} is the job number — the product is its top "
+                print(f"   [graph] {_declared!r} is the job's numbering — the product is its top "
                       f"assembly, {product_root}", flush=True)
             _reach: Set[str] = set()
             _stack = [product_root]

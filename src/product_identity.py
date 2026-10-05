@@ -96,6 +96,37 @@ def job_number_only(declared: Any) -> str:
     return ds if _BARE_JOB_NUMBER.match(ds) else ""
 
 
+def is_under_the_numbering(prefix: Any, identity: Any) -> bool:
+    """Is this drawing numbered UNDER the prefix typed — the prefix, a separator, then more
+    numbering ("9439-01-04-GA" under "9439-01")? (D-395)
+
+    Harrods 9439-01-04 Table Standing POS Holder: the estimator typed "9439-01", the job's
+    numbering, and the portal refused it — "9439-01" names no drawing exactly, and only a
+    bare job number ("12173") was read as the job. The continuation must be a DIGIT: a role
+    token ("12173-02-GA" after "12173-02") is the same sheet, which names_the_product already
+    says, not a sheet under it."""
+    p = str(prefix or "").strip()
+    t = str(identity or "").strip()
+    if not p or not t or not re.search(r"\d", p):
+        return False
+    toks = [x for x in re.split(r"[\s\-_]+", p.upper()) if x]
+    body = r"[\s\-_]*".join(re.escape(x) for x in toks)
+    return bool(re.match(rf"^{body}[\s\-_]+\d", t.upper()))
+
+
+def numbering_prefix(declared: Any, identities: Sequence[Any]) -> str:
+    """The declared number when it names no drawing here exactly but the pack's drawings are
+    numbered under it ("9439-01" over 9439-01-04-GA and its sheets), else "". A bare job
+    number is job_number_only's; this is the job's numbering one or more levels down."""
+    ds = str(declared or "").strip()
+    if not ds or _BARE_JOB_NUMBER.match(ds):
+        return ""
+    ids = [str(i or "") for i in identities or ()]
+    if any(names_the_product(ds, i) for i in ids):
+        return ""
+    return ds if any(is_under_the_numbering(ds, i) for i in ids) else ""
+
+
 def is_of_the_job(job: Any, identity: Any) -> bool:
     """Is this drawing one of the job's own numbered sheets ("12173-02-GA" of job 12173)?
 
@@ -288,32 +319,41 @@ def resolve_product(declared: Any, file_names: Sequence[Any],
     # name decides it. Without the words (a machine with no PDF reader) the check lets the run
     # go, and the run takes the same answer from its parsed tables (route_compiler). Two tops
     # are a choice, and a choice is the estimator's.
-    job = job_number_only(declared_s)
-    job_assemblies = [a for a in assemblies if is_of_the_job(job, a["number"])] if job else []
+    # AND THE JOB'S NUMBERING ONE LEVEL DOWN (D-395): "9439-01" over 9439-01-04-GA. Read the
+    # same way — the parts lists say which sheet is on top; one assembly under it needs no
+    # list to say so.
+    job = job_number_only(declared_s) or numbering_prefix(
+        declared_s, [d["number"] for d in drawings.values()])
+    job_assemblies = [a for a in assemblies if is_of_the_job(job, a["number"])
+                      or is_under_the_numbering(job, a["number"])] if job else []
+    _what = ("the job number" if job_number_only(declared_s)
+             else "the job's numbering, not one drawing")
     if not matches and job_assemblies:
         listing = "; ".join(_label(a) for a in job_assemblies)
-        tops = tops_of_the_job(job_assemblies, texts) if texts else []
+        tops = (tops_of_the_job(job_assemblies, texts) if texts
+                else (list(job_assemblies) if len(job_assemblies) == 1 else []))
         if len(tops) == 1:
             top = tops[0]
             rest = [a for a in job_assemblies if a is not top]
+            _how = ("Read from the drawings' own parts lists, the product is "
+                    f"{_label(top)} — no other drawing in the pack lists it." if texts else
+                    f"The product is {_label(top)} — the one assembly numbered under it.")
             return {"status": "job", "declared": declared_s, "match": top, "matches": [top],
                     "others": rest,
-                    "message": f"{declared_s} is the job number. Read from the drawings' own "
-                               f"parts lists, the product is {_label(top)} — no other drawing "
-                               f"in the pack lists it. This run prices it, and "
+                    "message": f"{declared_s} is {_what}. {_how} This run prices it, and "
                                + ("; ".join(_label(a) for a in rest) or "nothing else")
                                + " only where its parts list reaches them."}
         if len(tops) > 1:
             return {"status": "many", "declared": declared_s, "match": None, "matches": tops,
                     "others": job_assemblies,
-                    "message": f"{declared_s} is the job number, and {len(tops)} of its "
+                    "message": f"{declared_s} is {_what}, and {len(tops)} of its "
                                f"drawings are listed by no other drawing in the pack ("
                                + "; ".join(_label(t) for t in tops)
                                + "), so there is more than one thing on top. Type the one "
                                  "that is the product, or add the drawing that lists them."}
         return {"status": "job", "declared": declared_s, "match": None, "matches": [],
                 "others": job_assemblies,
-                "message": f"{declared_s} is the job number, not a drawing: the run reads the "
+                "message": f"{declared_s} is {_what}: the run reads the "
                            f"parts lists and prices the assembly no other drawing lists, and "
                            f"the book names it. Assemblies in the pack: {listing}."}
     if not matches:
