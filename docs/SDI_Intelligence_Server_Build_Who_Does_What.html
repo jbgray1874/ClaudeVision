@@ -125,13 +125,13 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 
 <div class="wrap">
   <h1>SDI Intelligence server: the build plan</h1>
-  <p class="rev">Revised 5 October 2026 · Windows Server 2025 on the machine · one Windows&nbsp;11 Pro VM with the graphics card, which is the main part of the set-up · one Linux VM for Technical Design · no third VM</p>
+  <p class="rev">Revised 5 October 2026 · The operating system installed on the machine is WINDOWS SERVER 2025. Windows&nbsp;11 Pro exists only inside VM&nbsp;1, the virtual machine that holds the graphics card and the tools people use. One Linux VM for Technical Design. No third VM.</p>
   <p class="lede">Jack builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James takes them from there, exactly as he would set up a laptop. The first section says what runs where and why; then Jack's list, the handover checks, James's list, and the questions to settle together.</p>
   <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows Server 2025 host (Hyper-V, SOLIDWORKS licence manager) · VM 1 Windows 11 Pro: the card, estimating, client estimating, Client Briefing, Drawing Search · VM 2 Linux: Technical Design services</div>
 
   <section class="design">
     <div class="owner"><h2>What runs where</h2></div>
-    <p class="sub">The host runs nothing a person would use: Hyper-V and the licence manager. The Windows VM is the laptop, moved to the server, with the card: everything that needs a desktop, Excel, SOLIDWORKS or a SOLIDWORKS library. The Linux VM is Technical Design's: GitLab, PostgreSQL and the FastAPI services, which call the Windows VM over HTTPS for anything SOLIDWORKS. This is the split Yogesh set out on 5 October (UAT-SDI-CAD01 and UAT-SDI-PDM01).</p>
+    <p class="sub">The operating system on the metal is Windows Server 2025, and it runs nothing a person would use: Hyper-V and the licence manager. The Windows VM is the laptop, moved to the server, with the card: everything that needs a desktop, Excel, SOLIDWORKS or a SOLIDWORKS library. The Linux VM is Technical Design's: GitLab, PostgreSQL and the FastAPI services, which call the Windows VM over HTTPS for anything SOLIDWORKS. This is the split Yogesh set out on 5 October (UAT-SDI-CAD01 and UAT-SDI-PDM01).</p>
     <div class="arch"><svg viewBox="0 0 830 520" role="img" aria-labelledby="archT archD">
 <title id="archT">SDI Intelligence server architecture</title>
 <desc id="archD">One physical server running Windows Server 2025 with Hyper-V and the SOLIDWORKS licence manager. VM 1 (Windows 11 Pro) has the RTX 4000 Ada passed through and runs the estimating engine and runner, the estimating portal and queue, Client Briefing, Drawing Search, Excel, SOLIDWORKS, the SOLIDWORKS Document Manager API, the CAD Validator and the COM tools. VM 2 (Linux) runs the FastAPI services (the Document Manager intelligence layer, Production Design Extraction) and the SDI Design Vault (GitLab with LFS, PostgreSQL), with no graphics card, and calls VM 1 over HTTPS. Both read the shares.</desc>
@@ -140,7 +140,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <text class="lbl" x="26" y="110">Scan 3XS server · one machine · Windows Server 2025 · Hyper-V</text>
 <rect class="item" x="68" y="14" width="220" height="52" rx="4"/><text class="t" x="78" y="32">Estimators and the studio</text><text class="s" x="78" y="48">the tools in a browser, any desk</text>
 <rect class="box" x="28" y="122" width="300" height="290" rx="6"/>
-<text class="t" x="40" y="142">VM 1 · Windows 11 Pro · the main part</text><text class="s" x="40" y="158">16 vCPU · 64 GB · 500 GB · the runner logged in</text>
+<text class="t" x="40" y="142">VM 1 · Windows 11 Pro · the tools</text><text class="s" x="40" y="158">16 vCPU · 64 GB · 500 GB · the runner logged in</text>
 <rect class="item" x="40" y="168" width="276" height="44" rx="4"/><text class="t" x="50" y="186">Estimating engine · runner 1</text><text class="s" x="50" y="202">prices every job; the only runner</text>
 <rect class="item" x="40" y="218" width="276" height="26" rx="4"/><text class="t" x="50" y="235.5">Estimating portal · 8071</text>
 <rect class="item" x="40" y="250" width="276" height="26" rx="4"/><text class="t" x="50" y="267.5">Client Briefing Intelligence</text>
@@ -148,7 +148,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <rect class="item" x="40" y="314" width="276" height="26" rx="4"/><text class="t" x="50" y="331.5">Excel · SOLIDWORKS · DM API tools</text>
 <rect class="gpu" x="40" y="346" width="276" height="52" rx="4"/><text class="t" x="50" y="364">RTX 4000 Ada SFF</text><text class="s" x="50" y="380">passed through (DDA): this VM only</text>
 <rect class="box" x="352" y="122" width="180" height="290" rx="6"/>
-<text class="t" x="364" y="142">Host</text><text class="s" x="364" y="158">Windows Server 2025</text>
+<text class="t" x="364" y="142">The machine's OS</text><text class="s" x="364" y="158">Windows Server 2025</text>
 <rect class="item" x="364" y="168" width="156" height="44" rx="4"/><text class="t" x="374" y="186">Hyper-V</text><text class="s" x="374" y="202">runs the two VMs</text>
 <rect class="item" x="364" y="218" width="156" height="44" rx="4"/><text class="t" x="374" y="236">Licence manager</text><text class="s" x="374" y="252">SOLIDWORKS · port 25734</text>
 <text class="s" x="364" y="290">Nothing else. No graphics</text>
@@ -261,7 +261,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
       <li><b>Admin access for James:</b> Remote Desktop to the host as an administrator (two sessions), and the host's admin share, which the laptop's <code>push-to-server.ps1</code> copies through.</li>
     </ol>
 
-    <h3>VM 1 (Windows 11 Pro): the graphics card and everything people use</h3>
+    <h3>VM 1 (Windows 11 Pro, a virtual machine on the Server host): the graphics card and everything people use</h3>
     <ol start="8">
       <li><b>Create it as Generation 2</b> with Secure Boot and a virtual TPM (Windows 11 requires both).</li>
       <li><b>Fixed resources:</b> 16 virtual CPUs, 64 GB memory with Dynamic Memory <b>off</b>, a 500 GB+ virtual disk on NVMe; automatic start with the host, automatic stop action "turn off" (DDA requires it).</li>
