@@ -64,9 +64,6 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 .fact{border-left:3px solid var(--line);padding:2px 0 2px 12px}
 .fact b{display:block;font-weight:600;margin-bottom:2px}
 .fact p{margin:0;max-width:70ch}
-.opts{width:100%;border-collapse:collapse;font-size:14px;margin-top:6px}
-.opts th,.opts td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
-.opts th{font:600 12px var(--body);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 @media print{.arch{break-inside:avoid}.fact{break-inside:avoid}h3,.owner,.note{break-after:avoid}.both{break-before:page}}
 @media print{body{font-size:13.5px}.wrap{padding-block:8px 0}section{margin-block:18px}ol{gap:5px}h3{margin-top:14px}tr{break-inside:avoid}.gate,.gotchas{break-inside:avoid}}
 </style>
@@ -125,8 +122,8 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 
 <div class="wrap">
   <h1>SDI Intelligence server: the build plan</h1>
-  <p class="rev">Revised 5 October 2026 · The operating system installed on the machine is WINDOWS SERVER 2025. Windows&nbsp;11 Pro exists only inside VM&nbsp;1, the virtual machine that holds the graphics card and the tools people use. One Linux VM for Technical Design. No third VM. Hardware on site Monday 26 October; go-live in the week commencing 2 November.</p>
-  <p class="lede">Jack, SDI's hardware advisor, builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James, who leads the software design, takes them from there, exactly as he would set up a laptop. The first section says what runs where and why; then Jack's list, the handover checks, James's list, and the questions to settle together.</p>
+  <p class="rev">Revised 5 October 2026 · The operating system installed on the machine is WINDOWS SERVER 2025. Windows&nbsp;11 Pro exists only inside VM&nbsp;1, the virtual machine that holds the graphics card and the tools people use. One Linux VM for Technical Design. No third VM. Ordered 5 October on a 14-day lead time: on site 19 October, go-live in the week commencing 2 November. OPEN WITH SCAN TODAY: the quoted board does not support Windows Server 2025, so the order asks for the same build on a board that does; if Scan cannot supply one at the same lead time, the quoted workstation is built on Proxmox (fallback 2 below) and this plan is rewritten with Proxmox as the plan of record.</p>
+  <p class="lede">Jack, SDI's hardware advisor, builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James, who leads the software design, takes them from there, exactly as he would set up a laptop. The first section says what runs where and why, how Jack and James log in from their desks, what happens if Windows Server will not drive the board, and what to watch for; then Jack's list, the handover checks, James's list and the timeline.</p>
   <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows Server 2025 host (Hyper-V, SOLIDWORKS licence manager) · VM 1 Windows 11 Pro: the card, estimating, client estimating, Client Briefing, Drawing Search · VM 2 Linux: Technical Design services</div>
 
   <section class="design">
@@ -134,11 +131,12 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <p class="sub">The operating system on the metal is Windows Server 2025, and it runs nothing a person would use: Hyper-V and the licence manager. The Windows VM is the laptop, moved to the server, with the card: everything that needs a desktop, Excel, SOLIDWORKS or a SOLIDWORKS library. The Linux VM is Technical Design's: GitLab, PostgreSQL and the FastAPI services, which call the Windows VM over HTTPS for anything SOLIDWORKS.</p>
     <div class="arch"><svg viewBox="0 0 830 520" role="img" aria-labelledby="archT archD">
 <title id="archT">SDI Intelligence server architecture</title>
-<desc id="archD">One physical server running Windows Server 2025 with Hyper-V and the SOLIDWORKS licence manager. VM 1 (Windows 11 Pro) has the RTX 4000 Ada passed through and runs the estimating engine and runner, the estimating portal and queue, Client Briefing, Drawing Search, Excel, SOLIDWORKS, the SOLIDWORKS Document Manager API, the CAD Validator and the COM tools. VM 2 (Linux) runs the FastAPI services (the Document Manager intelligence layer, Production Design Extraction) and the SDI Design Vault (GitLab with LFS, PostgreSQL), with no graphics card, and calls VM 1 over HTTPS. Both read the shares.</desc>
+<desc id="archD">One physical server running Windows Server 2025 with Hyper-V and the SOLIDWORKS licence manager. VM 1 (Windows 11 Pro) has the RTX 4000 Ada passed through and runs the estimating engine and runner, the estimating portal and queue, Client Briefing, Drawing Search, Excel, SOLIDWORKS, the SOLIDWORKS Document Manager API, the CAD Validator and the COM tools. VM 2 (Linux) runs the FastAPI services and the SDI Design Vault (GitLab with LFS, PostgreSQL), with no graphics card, and calls VM 1 over HTTPS. Jack and James log in to the host by Remote Desktop and reach the VMs from there. Both VMs read the shares.</desc>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="srv" x="12" y="92" width="806" height="332" rx="8"/>
 <text class="lbl" x="26" y="110">Scan 3XS server · one machine · Windows Server 2025 · Hyper-V</text>
 <rect class="item" x="68" y="14" width="220" height="52" rx="4"/><text class="t" x="78" y="32">Estimators and the studio</text><text class="s" x="78" y="48">the tools in a browser, any desk</text>
+<rect class="item" x="520" y="14" width="220" height="52" rx="4"/><text class="t" x="530" y="32">Jack and James</text><text class="s" x="530" y="48">Remote Desktop to the host, from their desks</text>
 <rect class="box" x="28" y="122" width="300" height="290" rx="6"/>
 <text class="t" x="40" y="142">VM 1 · Windows 11 Pro · the tools</text><text class="s" x="40" y="158">16 vCPU · 64 GB · 500 GB · the runner logged in</text>
 <rect class="item" x="40" y="168" width="276" height="44" rx="4"/><text class="t" x="50" y="186">Estimating engine · runner 1</text><text class="s" x="50" y="202">prices every job; the only runner</text>
@@ -151,11 +149,11 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <text class="t" x="364" y="142">The machine's OS</text><text class="s" x="364" y="158">Windows Server 2025</text>
 <rect class="item" x="364" y="168" width="156" height="44" rx="4"/><text class="t" x="374" y="186">Hyper-V</text><text class="s" x="374" y="202">runs the two VMs</text>
 <rect class="item" x="364" y="218" width="156" height="44" rx="4"/><text class="t" x="374" y="236">Licence manager</text><text class="s" x="374" y="252">SOLIDWORKS · port 25734</text>
-<text class="s" x="364" y="290">Nothing else. No graphics</text>
-<text class="s" x="364" y="306">card, no SOLIDWORKS, no</text>
-<text class="s" x="364" y="322">tool anyone opens. Two</text>
-<text class="s" x="364" y="338">admin Remote Desktops</text>
-<text class="s" x="364" y="354">for Jack and James.</text>
+<rect class="item" x="364" y="268" width="156" height="44" rx="4"/><text class="t" x="374" y="286">Remote Desktop</text><text class="s" x="374" y="302">two admin sessions</text>
+<text class="s" x="364" y="330">Nothing else. No graphics</text>
+<text class="s" x="364" y="346">card, no SOLIDWORKS, no</text>
+<text class="s" x="364" y="362">tool anyone opens. The VMs</text>
+<text class="s" x="364" y="378">are reached from here.</text>
 <rect class="box" x="556" y="122" width="246" height="290" rx="6"/>
 <text class="t" x="568" y="142">VM 2 · Linux · Technical Design</text><text class="s" x="568" y="158">Ubuntu LTS · 8 vCPU · 32 GB · 1 TB+</text>
 <rect class="item" x="568" y="168" width="222" height="26" rx="4"/><text class="t" x="578" y="185.5">FastAPI services · DM layer</text>
@@ -170,16 +168,17 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <text class="s" x="578" y="384">SSH in; no desktop.</text>
 <rect class="item" x="305" y="454" width="220" height="52" rx="4"/><text class="t" x="315" y="472">The shares</text><text class="s" x="315" y="488">estimating folders, books, W: CAD</text>
 <path class="flow" d="M178 66 V120" marker-end="url(#ah)"/>
+<path class="flow" d="M630 66 V100 H442 V120" marker-end="url(#ah)"/>
 <path class="flow" d="M316 240 H362" marker-end="url(#ah)"/>
 <path class="flow" d="M178 398 V480 H303" marker-end="url(#ah)"/>
 <path class="flow" d="M679 412 V480 H527" marker-end="url(#ah)"/>
-<circle class="num" cx="178" cy="80" r="9"/><text class="numt" x="178" y="84" text-anchor="middle">1</text><circle class="num" cx="340" cy="240" r="9"/><text class="numt" x="340" y="244" text-anchor="middle">2</text><circle class="num" cx="178" cy="430" r="9"/><text class="numt" x="178" y="434" text-anchor="middle">3</text><circle class="num" cx="679" cy="430" r="9"/><text class="numt" x="679" y="434" text-anchor="middle">4</text>
+<circle class="num" cx="178" cy="80" r="9"/><text class="numt" x="178" y="84" text-anchor="middle">1</text><circle class="num" cx="442" cy="100" r="9"/><text class="numt" x="442" y="104" text-anchor="middle">2</text><circle class="num" cx="340" cy="240" r="9"/><text class="numt" x="340" y="244" text-anchor="middle">3</text><circle class="num" cx="178" cy="430" r="9"/><text class="numt" x="178" y="434" text-anchor="middle">4</text><circle class="num" cx="679" cy="430" r="9"/><text class="numt" x="679" y="434" text-anchor="middle">4</text>
 </svg></div>
     <ol class="legend">
       <li>People reach every tool on VM&nbsp;1 in a browser: the estimating portal, Client Briefing and Drawing Search each on its own port. The runner on the same VM takes the oldest job in the queue when it is free.</li>
+      <li>Jack and James log in to the host by Remote Desktop from their desks, two at once, and reach VM&nbsp;1's desktop through the Hyper-V console and the Linux VM by SSH, without interrupting the runner.</li>
       <li>SOLIDWORKS on VM&nbsp;1 takes a licence from the pool on the host while it is open. The runner keeps it open, so VM&nbsp;1 holds one seat all day.</li>
-      <li>VM&nbsp;1 reads and writes the job folders and books on the estimating shares, and reads W: for Drawing Search's index.</li>
-      <li>The Linux VM reads W: for the Document Manager and holds the Design Vault on its own disk.</li>
+      <li>VM&nbsp;1 reads and writes the job folders and books on the estimating shares and reads W: for Drawing Search's index; the Linux VM reads W: for the Document Manager and holds the Design Vault on its own disk.</li>
     </ol>
 
     <h3>Each tool, and where it lives</h3>
@@ -192,21 +191,43 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
         <tr><td>Drawing Search (port 5000): name, brand and image search over the Fixture Library</td><td>VM&nbsp;1 Windows</td><td>Indexes W: and opens files on it; the image search uses the card. Its index lives on VM&nbsp;1's own disk.</td></tr>
         <tr><td>Technical Design's Windows parts: the SOLIDWORKS Document Manager API, the CAD Validator, and the COM tools (DXF flat patterns, drawing generation, validation, tolerance checks)</td><td>VM&nbsp;1 Windows</td><td>The Document Manager API is a SOLIDWORKS library and runs only on Windows; the COM tools drive SOLIDWORKS itself. The Linux side calls them over HTTPS on one port.</td></tr>
         <tr><td>FastAPI services: the Document Manager intelligence layer, Production Design Extraction</td><td>VM&nbsp;2 Linux</td><td>Python services with no Windows need; an outage here costs an import, not an estimate.</td></tr>
-        <tr><td>SDI Design Vault: GitLab with LFS, PostgreSQL, the DM API intelligence layer</td><td>VM&nbsp;2 Linux</td><td>GitLab and PostgreSQL are Linux-native; the vault needs its own large disk.</td></tr>
-        <tr><td>Hyper-V; SOLIDWORKS licence manager</td><td>Host</td><td>The licence manager is supported on Windows Server and stays up when VM&nbsp;1 restarts.</td></tr>
+        <tr><td>SDI Design Vault: GitLab with LFS, PostgreSQL</td><td>VM&nbsp;2 Linux</td><td>GitLab and PostgreSQL are Linux-native; the vault needs its own large disk.</td></tr>
+        <tr><td>Hyper-V; SOLIDWORKS licence manager; Remote Desktop for Jack and James</td><td>Host</td><td>The licence manager is supported on Windows Server and stays up when VM&nbsp;1 restarts; a Server host takes two administrator sessions at once.</td></tr>
         <tr><td>The estimating shares and W:</td><td>The file server, as now</td><td>Nothing here needs this machine to be a file server.</td></tr>
       </tbody>
     </table></div>
 
+    <h3>How Jack and James log in from their desks</h3>
+    <div class="where tbl"><table>
+      <thead><tr><th>Where</th><th>How</th><th>Rule</th></tr></thead>
+      <tbody>
+        <tr><td>The host (Windows Server 2025)</td><td>Remote Desktop as administrators, from each desk; two sessions at once</td><td>This is the normal way in. Nothing a person uses runs on the host, so nothing is interrupted.</td></tr>
+        <tr><td>VM&nbsp;1's desktop (Windows 11 Pro)</td><td>From the host: the Hyper-V console (basic session), which shows the runner's live desktop without a second log-on</td><td>Remote Desktop straight into VM&nbsp;1 is allowed for the runner account only, when nothing is running, and is left with the <code>tscon</code> hand-back. Any other account by Remote Desktop pushes the runner off and stalls an estimate: disabled.</td></tr>
+        <tr><td>The Linux VM</td><td>SSH by name, from any desk</td><td>No desktop there; nothing to interrupt.</td></tr>
+      </tbody>
+    </table></div>
+
     <h3>Why the host is Windows Server and not Windows 11 Pro</h3>
-    <p class="note">Three things were asked of this machine: Remote Desktop into it, the graphics card in a VM, and SOLIDWORKS in a VM. Only a Server host gives all three.</p>
+    <p class="note">Three things are required of this machine: the graphics card inside the Windows&nbsp;11 VM, SOLIDWORKS inside that VM, and Jack and James logging in from their desks. Only a Server host gives all three.</p>
     <div class="why tbl"><table>
       <thead><tr><th>Asked for</th><th>Windows Server 2025 host</th><th>Windows 11 Pro host</th></tr></thead>
       <tbody>
-        <tr><td>The graphics card used by a VM</td><td>Yes. Discrete Device Assignment (DDA) hands the whole card to one VM, with NVIDIA's normal driver inside it.</td><td>No. DDA is a Server feature. The card can only drive the host's own desktop; the partitioning Windows 11 has (GPU-P) is unsupported by NVIDIA and Dassault for this card and does not reach Linux guests at all.</td></tr>
-        <tr><td>SOLIDWORKS in a VM</td><td>Yes, in VM&nbsp;1 with the card. Dassault lists Hyper-V 2025 for SOLIDWORKS 2026.</td><td>Only in software graphics.</td></tr>
-        <tr><td>Remote Desktop</td><td>Two administrator sessions on the host at once. The Windows VM allows one desktop, like any Windows 11; the Hyper-V console reaches it without logging the runner off.</td><td>One desktop on the host, which is also the runner's.</td></tr>
-        <tr><td>Can the card be shared, or used by the host and a VM?</td><td colspan="2">No, on either. A card belongs to one operating system at a time. Passed through, it is VM&nbsp;1's and the host has none, which is fine: a Server host needs no graphics. Sharing one card between VMs needs a data-centre card (NVIDIA L4 and similar) with yearly vGPU licences.</td></tr>
+        <tr><td>The graphics card inside the Windows VM</td><td>Yes. Discrete Device Assignment (DDA) hands the whole card to one VM, with NVIDIA's normal driver inside it.</td><td>No, in any supported way. DDA is a Server feature. The partitioning Windows 11 does have (GPU-P) gives the VM a virtual adapter, not the card: no NVIDIA driver, no certified OpenGL for SOLIDWORKS, unsupported by NVIDIA and Dassault, and it breaks on driver updates.</td></tr>
+        <tr><td>SOLIDWORKS inside the VM</td><td>Yes, with the card. Dassault lists Hyper-V 2025 for SOLIDWORKS 2026.</td><td>Only in software graphics.</td></tr>
+        <tr><td>Logging in from two desks</td><td>Two administrator Remote Desktop sessions on the host; VM&nbsp;1 reached from there without logging the runner off.</td><td>One desktop on the host, which is also the runner's.</td></tr>
+        <tr><td>Drivers</td><td>The board maker lists Windows 11 and Linux, so Server is proved on the evaluation edition before its licence is bought (below).</td><td>Supplied by Scan.</td></tr>
+        <tr><td>Cost</td><td>Server 2025 Standard per core, two 16-core packs, plus client access licences; Windows&nbsp;11 Pro and Office for VM&nbsp;1.</td><td>Windows&nbsp;11 Pro comes with the workstation.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h3>If Windows Server will not drive the board</h3>
+    <p class="note">The board Scan usually fits (ASUS Pro WS WRX90E-SAGE SE) lists Windows 11 and Linux. Windows Server 2025 shares its driver model with Windows 11 24H2 and the host needs few drivers (no graphics driver at all, since the card is dismounted for pass-through), so it normally runs; normally is not supported. So the order asks Scan today for a board the maker lists for Windows Server 2025 if they can supply one, and the install is proved before the licence is bought.</p>
+    <div class="where tbl"><table>
+      <thead><tr><th>Step</th><th>What</th><th>What it keeps</th></tr></thead>
+      <tbody>
+        <tr><td>1. Prove it first</td><td>On day one Jack installs the free 180-day Windows Server 2025 evaluation and checks Device Manager: no unknown devices, both network ports driven. On a clean result the licence is bought and keyed in place.</td><td>Everything, at no risk to the licence money.</td></tr>
+        <tr><td>2. Fallback that keeps the card in the VM</td><td>Proxmox VE (Linux, KVM) on the metal, which the board maker supports, with the card passed to the Windows&nbsp;11 VM by VFIO. Jack and James log in to the Proxmox web console and SSH; VM&nbsp;1 is reached by its console or by Remote Desktop as the runner.</td><td>The card in the VM, SOLIDWORKS in the VM, two-desk access, no Server licence. Loses Dassault's listing: KVM is not on their supported-hypervisor list, so a SOLIDWORKS graphics fault is ours to prove.</td></tr>
+        <tr><td>3. Fallback that gives up the VM</td><td>Windows 11 Pro on the metal, SOLIDWORKS on it with the card, the Linux VM under Hyper-V, a console-sharing tool for two-desk access.</td><td>Everything but the card and SOLIDWORKS in a VM.</td></tr>
       </tbody>
     </table></div>
 
@@ -215,77 +236,82 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
       <thead><tr><th>Where</th><th>Cores</th><th>Memory</th><th>Disk</th><th>Note</th></tr></thead>
       <tbody>
         <tr><td>VM&nbsp;1 Windows</td><td>16 vCPU</td><td>64 GB, Dynamic Memory off</td><td>500 GB+ on NVMe</td><td>SOLIDWORKS, Excel, the engine and Drawing Search's index all here; the models are read here.</td></tr>
-        <tr><td>VM&nbsp;2 Linux</td><td>8 vCPU</td><td>32 GB</td><td>1 TB+ on NVMe, growable</td><td>The Design Vault's GitLab and LFS store grow with every check-in; size the disk for the whole W: history if the vault is to hold it.</td></tr>
+        <tr><td>VM&nbsp;2 Linux</td><td>8 vCPU</td><td>32 GB</td><td>1 TB+ on NVMe, growable</td><td>The Design Vault's GitLab and LFS store grow with every check-in.</td></tr>
         <tr><td>Host</td><td>the remaining 8</td><td>the remaining 32 GB</td><td>the OS drive</td><td>Hyper-V and the licence manager need little.</td></tr>
       </tbody>
     </table></div>
 
     <h3>Timeline</h3>
-    <p class="note">The order goes to Scan on Monday 12 October, once SDI has settled its own SOLIDWORKS licence and activation position, for delivery on a 14-day lead time: hardware on site Monday 26 October. Jack builds that week, James and the Technical Design team install the week after, and go-live is in the week commencing 2 November.</p>
-    <div class="arch"><svg viewBox="0 0 827 374" role="img" aria-label="Build timeline, 5 October to 8 November 2026" style="font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:11px;display:block;width:100%;height:auto;">
+    <p class="note">Ordered Monday 5 October on a 14-day lead time: on site Monday 19 October. The evaluation install and driver check come first; the Server licence is bought on a clean result; Jack builds that week; James and the Technical Design team install the week after; proving follows; go-live is Monday 2 November with a week in hand. The SOLIDWORKS licence position is settled by SDI in parallel and gates SOLIDWORKS automation going live, not the order.</p>
+    <div class="arch"><svg viewBox="0 0 827 400" role="img" aria-label="Build timeline, 5 October to 8 November 2026" style="font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:11px;display:block;width:100%;height:auto;">
 <style>.gl{stroke:#d8dee5;stroke-width:1}.we{fill:#eef1f4}.wk{font-weight:bold;fill:#5a6572}.lab{fill:#1d2328}.who{fill:#5a6572;font-size:10px}.bar{fill:#2f6b8a}.lead{fill:#9bbdd0}.ms{fill:#c47d12}</style>
-<line class="gl" x1="300.0" y1="32" x2="300.0" y2="340"/>
+<line class="gl" x1="300.0" y1="32" x2="300.0" y2="366"/>
 <text class="wk" x="303.0" y="44">w/c 5 Oct</text>
-<rect class="we" x="373.0" y="48" width="14.6" height="292"/>
-<rect class="we" x="387.6" y="48" width="14.6" height="292"/>
-<line class="gl" x1="402.2" y1="32" x2="402.2" y2="340"/>
+<rect class="we" x="373.0" y="48" width="14.6" height="318"/>
+<rect class="we" x="387.6" y="48" width="14.6" height="318"/>
+<line class="gl" x1="402.2" y1="32" x2="402.2" y2="366"/>
 <text class="wk" x="405.2" y="44">w/c 12 Oct</text>
-<rect class="we" x="475.2" y="48" width="14.6" height="292"/>
-<rect class="we" x="489.8" y="48" width="14.6" height="292"/>
-<line class="gl" x1="504.4" y1="32" x2="504.4" y2="340"/>
+<rect class="we" x="475.2" y="48" width="14.6" height="318"/>
+<rect class="we" x="489.8" y="48" width="14.6" height="318"/>
+<line class="gl" x1="504.4" y1="32" x2="504.4" y2="366"/>
 <text class="wk" x="507.4" y="44">w/c 19 Oct</text>
-<rect class="we" x="577.4" y="48" width="14.6" height="292"/>
-<rect class="we" x="592.0" y="48" width="14.6" height="292"/>
-<line class="gl" x1="606.6" y1="32" x2="606.6" y2="340"/>
+<rect class="we" x="577.4" y="48" width="14.6" height="318"/>
+<rect class="we" x="592.0" y="48" width="14.6" height="318"/>
+<line class="gl" x1="606.6" y1="32" x2="606.6" y2="366"/>
 <text class="wk" x="609.6" y="44">w/c 26 Oct</text>
-<rect class="we" x="679.6" y="48" width="14.6" height="292"/>
-<rect class="we" x="694.2" y="48" width="14.6" height="292"/>
-<line class="gl" x1="708.8" y1="32" x2="708.8" y2="340"/>
+<rect class="we" x="679.6" y="48" width="14.6" height="318"/>
+<rect class="we" x="694.2" y="48" width="14.6" height="318"/>
+<line class="gl" x1="708.8" y1="32" x2="708.8" y2="366"/>
 <text class="wk" x="711.8" y="44">w/c 2 Nov</text>
-<rect class="we" x="781.8" y="48" width="14.6" height="292"/>
-<rect class="we" x="796.4" y="48" width="14.6" height="292"/>
+<rect class="we" x="781.8" y="48" width="14.6" height="318"/>
+<rect class="we" x="796.4" y="48" width="14.6" height="318"/>
 <line class="gl" x1="0" y1="76" x2="827.0" y2="76"/>
-<text class="lab" x="4" y="64">SOLIDWORKS licence and activation confirmed (ours)</text><text class="who" x="4" y="75">James</text>
-<rect class="bar" x="301.0" y="58" width="71.0" height="14" rx="3"/>
+<text class="lab" x="4" y="64">Order placed with Scan (Server-listed board if offered)</text><text class="who" x="4" y="75">Jack and James</text>
+<polygon class="ms" points="307.3,57.0 315.3,65.0 307.3,73.0 299.3,65.0"/>
+<text class="lab" x="319.3" y="69.0" style="font-weight:bold">5 Oct</text>
 <line class="gl" x1="0" y1="102" x2="827.0" y2="102"/>
-<text class="lab" x="4" y="90">Scan: spec, Server 2025 drivers, lead time confirmed</text><text class="who" x="4" y="101">Jack</text>
-<rect class="bar" x="301.0" y="84" width="71.0" height="14" rx="3"/>
+<text class="lab" x="4" y="90">14-day lead time</text><text class="who" x="4" y="101">Scan</text>
+<rect class="lead" x="301.0" y="84" width="202.4" height="14" rx="3"/>
 <line class="gl" x1="0" y1="128" x2="827.0" y2="128"/>
-<text class="lab" x="4" y="116">Order placed with Scan; 14-day lead time</text><text class="who" x="4" y="127">Jack</text>
-<rect class="lead" x="403.2" y="110" width="202.4" height="14" rx="3"/>
+<text class="lab" x="4" y="116">SOLIDWORKS licence and activation position settled</text><text class="who" x="4" y="127">James (ours to answer)</text>
+<rect class="bar" x="301.0" y="110" width="173.2" height="14" rx="3"/>
 <line class="gl" x1="0" y1="154" x2="827.0" y2="154"/>
-<text class="lab" x="4" y="142">Licences ordered: Server, CALs, Win 11 Pro, Office</text><text class="who" x="4" y="153">James</text>
-<rect class="bar" x="403.2" y="136" width="71.0" height="14" rx="3"/>
+<text class="lab" x="4" y="142">Preparation: Server media, accounts, firewall, installers, Linux scripts</text><text class="who" x="4" y="153">Jack, James, Technical Design</text>
+<rect class="bar" x="315.6" y="136" width="158.6" height="14" rx="3"/>
 <line class="gl" x1="0" y1="180" x2="827.0" y2="180"/>
-<text class="lab" x="4" y="168">Preparation: media, accounts, firewall, installers</text><text class="who" x="4" y="179">Jack, James, Technical Design</text>
-<rect class="bar" x="403.2" y="162" width="173.2" height="14" rx="3"/>
+<text class="lab" x="4" y="168">Hardware arrives on site</text><text class="who" x="4" y="179">Scan</text>
+<polygon class="ms" points="511.7,161.0 519.7,169.0 511.7,177.0 503.7,169.0"/>
+<text class="lab" x="523.7" y="173.0" style="font-weight:bold">19 Oct</text>
 <line class="gl" x1="0" y1="206" x2="827.0" y2="206"/>
-<text class="lab" x="4" y="194">Hardware arrives on site</text><text class="who" x="4" y="205">Scan</text>
-<polygon class="ms" points="613.9,187.0 621.9,195.0 613.9,203.0 605.9,195.0"/>
-<text class="lab" x="625.9" y="199.0" style="font-weight:bold">26 Oct</text>
+<text class="lab" x="4" y="194">Server 2025 evaluation installed; every device driven, or fallback</text><text class="who" x="4" y="205">Jack</text>
+<rect class="bar" x="505.4" y="188" width="27.2" height="14" rx="3"/>
 <line class="gl" x1="0" y1="232" x2="827.0" y2="232"/>
-<text class="lab" x="4" y="220">Host and the two VMs built; handover checks</text><text class="who" x="4" y="231">Jack</text>
-<rect class="bar" x="607.6" y="214" width="56.4" height="14" rx="3"/>
+<text class="lab" x="4" y="220">Server licence and CALs bought on a clean driver check</text><text class="who" x="4" y="231">James</text>
+<polygon class="ms" points="526.3,213.0 534.3,221.0 526.3,229.0 518.3,221.0"/>
+<text class="lab" x="538.3" y="225.0" style="font-weight:bold">20 Oct</text>
 <line class="gl" x1="0" y1="258" x2="827.0" y2="258"/>
-<text class="lab" x="4" y="246">VM 1: estimating, portal, briefing, search, tools</text><text class="who" x="4" y="257">James</text>
-<rect class="bar" x="651.4" y="240" width="85.6" height="14" rx="3"/>
+<text class="lab" x="4" y="246">Host, VM 1 with the card (DDA), Linux VM built; handover checks</text><text class="who" x="4" y="257">Jack</text>
+<rect class="bar" x="520.0" y="240" width="56.4" height="14" rx="3"/>
 <line class="gl" x1="0" y1="284" x2="827.0" y2="284"/>
-<text class="lab" x="4" y="272">VM 2: GitLab, PostgreSQL, FastAPI services</text><text class="who" x="4" y="283">Technical Design</text>
-<rect class="bar" x="651.4" y="266" width="85.6" height="14" rx="3"/>
+<text class="lab" x="4" y="272">VM 1 services: estimating, portal, briefing, search, tools</text><text class="who" x="4" y="283">James</text>
+<rect class="bar" x="563.8" y="266" width="100.2" height="14" rx="3"/>
 <line class="gl" x1="0" y1="310" x2="827.0" y2="310"/>
-<text class="lab" x="4" y="298">Proving: known jobs, full restart, console test</text><text class="who" x="4" y="309">James</text>
-<rect class="bar" x="709.8" y="292" width="41.8" height="14" rx="3"/>
+<text class="lab" x="4" y="298">Linux VM services: GitLab, PostgreSQL, FastAPI</text><text class="who" x="4" y="309">Technical Design</text>
+<rect class="bar" x="563.8" y="292" width="100.2" height="14" rx="3"/>
 <line class="gl" x1="0" y1="336" x2="827.0" y2="336"/>
-<text class="lab" x="4" y="324">Go-live; laptop stood down</text><text class="who" x="4" y="335">James</text>
-<polygon class="ms" points="759.9,317.0 767.9,325.0 759.9,333.0 751.9,325.0"/>
-<text class="lab" x="771.9" y="329.0" style="font-weight:bold">5 Nov</text>
-<text class="who" x="4" y="366">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Dates assume the licence position settled by Friday 9 October and a 14-day lead time from Scan.</text>
+<text class="lab" x="4" y="324">Proving: known jobs, full restart, remote in-and-out test</text><text class="who" x="4" y="335">James</text>
+<rect class="bar" x="651.4" y="318" width="27.2" height="14" rx="3"/>
+<line class="gl" x1="0" y1="362" x2="827.0" y2="362"/>
+<text class="lab" x="4" y="350">Go-live; laptop stood down</text><text class="who" x="4" y="361">James</text>
+<polygon class="ms" points="716.1,343.0 724.1,351.0 716.1,359.0 708.1,351.0"/>
+<text class="lab" x="728.1" y="355.0" style="font-weight:bold">2 Nov</text>
+<text class="who" x="4" y="392">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Order 5 October; the 14-day lead time gives 19 October. A later delivery moves the bars right; go-live holds in the week commencing 2 November with a week in hand.</text>
 </svg></div>
 
     <h3>What can and cannot be shared</h3>
     <div class="facts">
       <div class="fact"><b>The graphics card: one card, one VM.</b><p>Passed through (DDA), the RTX&nbsp;4000 Ada belongs to VM&nbsp;1 alone; the host and the Linux VM have none. It cannot be split between VMs: Windows Server&nbsp;2025 only partitions a short list of data-centre cards (NVIDIA L4, L40S, A16 and similar) with NVIDIA's licensed vGPU driver, and this card is not one of them. Moving it to the Linux VM is a shutdown of both VMs each way, so it is for an occasional overnight job, never a routine. If Technical Design ever needs a card of its own, a second card is fitted and passed to the Linux VM the same way; DDA works for Linux guests.</p></div>
-      <div class="fact"><b>SOLIDWORKS: the licences are shared, the program is not.</b><p>SOLIDWORKS runs only on VM&nbsp;1; the Linux VM reaches its four COM tools over the network. A network (SolidNetWork) licence puts the seats in a pool on the host: SOLIDWORKS takes one when it opens and returns it when it closes, first come, first served, and designers' PCs can share the same pool. A standalone licence works in a VM but is tied to that VM's identity, so a rebuilt VM means a reactivation; the network licence avoids that.</p></div>
+      <div class="fact"><b>SOLIDWORKS: the licences are shared, the program is not.</b><p>SOLIDWORKS runs only on VM&nbsp;1; the Linux VM reaches its tools over the network. Whether the seat may be driven unattended by our own software, and what covers unattended STEP, PDF and DXF generation, is SDI's own question to settle from its licence agreement, with the reseller asked only where the agreement is silent. A network (SolidNetWork) licence puts the seats in a pool on the host and avoids reactivation if the VM is rebuilt; a standalone licence works in a VM but is tied to that VM's identity.</p></div>
       <div class="fact"><b>One runner, one estimate at a time.</b><p>With no third VM there is one runner, as on the laptop today. The queue still takes every job and prices them in order. A second runner is a later decision and would be a second Windows VM without a card.</p></div>
       <div class="fact"><b>The Linux VM is Technical Design's.</b><p>Ubuntu LTS server under Hyper-V, administered over SSH by the Technical Design team. It carries the FastAPI services, Production Design Extraction and the Design Vault, and nothing that drives Excel, SOLIDWORKS or a SOLIDWORKS library; those it reaches on VM&nbsp;1 over HTTPS. Ubuntu carries the Hyper-V integration drivers in its kernel, so nothing extra is installed.</p></div>
     </div>
@@ -296,57 +322,65 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <p>None of these stops the plan. Each one is a setting or a habit, and each is on a list below with an owner.</p>
     <ol>
       <li><b>The card is VM 1's, and touching it means stopping VM 1.</b> A driver update inside the VM is an ordinary restart of the VM. Moving the card needs both VMs shut down. The host shows "Microsoft Basic Display" from then on; that is expected.</li>
-      <li><b>One desktop in the Windows VM.</b> VM&nbsp;1 is Windows&nbsp;11 and allows one interactive session. A Remote Desktop into it as a different user pushes the runner off and can stall an estimate. Rule: connect as the runner account (same session) and leave by handing the session back to the console with <code>tscon</code>, or use the Hyper-V console from the host, which shows the runner's desktop without logging it off. The host's own two admin sessions are the normal way in.</li>
+      <li><b>One desktop in the Windows VM.</b> VM&nbsp;1 is Windows&nbsp;11 and allows one interactive session. Reach it from the host through the Hyper-V console, or by Remote Desktop as the runner account with the <code>tscon</code> hand-back. Any other account by Remote Desktop pushes the runner off and stalls an estimate: disabled.</li>
+      <li><b>Prove Server before paying for it.</b> The board maker lists Windows 11 and Linux. The evaluation edition goes on first; the licence is bought only when Device Manager is clean. If it is not, the fallback ladder above applies and nothing bought today is wasted.</li>
       <li><b>Everything on VM 1 shares one restart.</b> The runner, the portal, Client Briefing and Drawing Search go down together when VM&nbsp;1 restarts, and a restart mid-run loses that estimate. Windows Update on VM&nbsp;1 is scheduled out of hours and announced.</li>
-      <li><b>Server drivers for a workstation board.</b> Scan supplies Windows&nbsp;11 drivers for the 3XS. Windows Server 2025 installs on the Threadripper PRO board, but chipset and network drivers may need to come from the board maker. Ask Scan to confirm before the build week.</li>
-      <li><b>SOLIDWORKS version and licence.</b> 2026 or later for Hyper-V 2025 support. A network licence is strongly preferred in a VM.</li>
-      <li><b>The VMs must be on the office network, not behind the host.</b> An External virtual switch on the machine's network port, so both VMs get fixed addresses and DNS names, and browsers, Remote Desktop and SSH reach them by name.</li>
+      <li><b>SOLIDWORKS version and licence.</b> 2026 or later for Hyper-V 2025 support. A network licence is preferred in a VM.</li>
+      <li><b>The VMs must be on the office network, not behind the host.</b> An External virtual switch on the machine's network port, so both VMs get fixed addresses and DNS names, and browsers, the Hyper-V console and SSH reach them by name.</li>
       <li><b>Sleep and lock in VM 1.</b> No sleep, no hibernate, no screen lock, no screensaver for the runner account, an exemption from any domain lock policy, and auto-logon with Sysinternals Autologon (Windows Hello off for that account).</li>
       <li><b>Linux under Hyper-V.</b> A Generation&nbsp;2 Linux VM boots with Secure Boot only on the "Microsoft UEFI Certificate Authority" template; the Windows template refuses it. No desktop: SSH.</li>
-      <li><b>GitLab on the Linux VM wants ports 80/443 and git over SSH.</b> Admin SSH and GitLab's SSH both want port 22; give GitLab its own port or its own address. PostgreSQL is opened only to VM&nbsp;1 and the Linux VM itself, never to the office network.</li>
+      <li><b>GitLab on the Linux VM wants ports 80/443 and git over SSH.</b> Admin SSH and GitLab's SSH both want port 22; give GitLab its own port. PostgreSQL is opened only to VM&nbsp;1 and the Linux VM itself.</li>
       <li><b>Licences add up.</b> Server 2025 Standard per core (two 16-core packs for this processor) and client access licences; Windows&nbsp;11 Pro and Office for VM&nbsp;1; nothing for the Linux VM. Server Standard's two free guest licences are for Windows <em>Server</em> guests, not Windows&nbsp;11.</li>
+      <li><b>Keep the estimating shares on the file server.</b> Nothing here needs this machine to be a file server.</li>
     </ol>
   </section>
 
   <section class="jack">
     <div class="owner"><span class="tag">Jack</span><h2>Infrastructure: the host and the two VMs</h2></div>
-    <p class="sub">Everything below the applications: hardware, operating systems, network, accounts, backup. In build order.</p>
+    <p class="sub">Everything below the applications: hardware, operating systems, network, accounts, remote access, backup. In build order.</p>
 
-    <h3>The host (Windows Server 2025)</h3>
+    <h3>Before it arrives (5 to 16 October)</h3>
     <ol>
-      <li><b>Confirm with Scan</b> that Server 2025 drivers exist for the 3XS board, or where to get them.</li>
-      <li><b>BIOS:</b> latest firmware; power on after AC loss; enable virtualisation (SVM) and IOMMU, which the GPU pass-through needs.</li>
-      <li><b>Storage:</b> set up the two NVMe drives (mirror or split OS / VMs — Jack's call) and install Windows Server 2025 with current drivers.</li>
-      <li><b>Network and domain:</b> fixed IP, DNS name, join the domain.</li>
+      <li><b>The order to Scan today:</b> the quoted build, on a board the maker lists for Windows Server 2025 if Scan can supply one, else written confirmation of the board model and where its Server 2025 drivers come from; delivery date on the 14-day lead time, a free slot and power for a second card, storage mirroring, memory population, a management controller if the board has one, and warranty, all in writing.</li>
+      <li><b>Server media ready:</b> the Windows Server 2025 evaluation ISO, the board maker's driver package, NVIDIA's RTX workstation driver for VM&nbsp;1, the Ubuntu LTS server ISO.</li>
+      <li><b>Accounts and names:</b> the portal's service account, the runner account (a dedicated domain user), the host's and both VMs' names and fixed IPs; firewall rules drafted from James's port list; Jack's and James's Remote Desktop access to the host arranged on the domain.</li>
+    </ol>
+
+    <h3>The host (Windows Server 2025), from 19 October</h3>
+    <ol start="4">
+      <li><b>BIOS:</b> latest firmware; power on after AC loss; virtualisation (SVM), IOMMU and above-4G decoding on, which the GPU pass-through needs.</li>
+      <li><b>Prove it:</b> install the Windows Server 2025 evaluation on the first NVMe, apply the drivers, and check Device Manager: no unknown devices, both network ports driven. Clean: tell James, the licence is bought and keyed in place, and the build continues. Not clean: stop and take the fallback ladder with James.</li>
+      <li><b>Storage:</b> the second NVMe for the VMs (mirror or split, Jack's call).</li>
+      <li><b>Network and domain:</b> fixed IP, DNS name, join the domain; Remote Desktop enabled for Jack and James as administrators.</li>
       <li><b>Hyper-V:</b> add the Hyper-V role and create an <b>External virtual switch</b> on the machine's network port, so the VMs sit on the office network.</li>
-      <li><b>SOLIDWORKS licence manager</b> (SolidNetWork): install it on the host with the reseller's serial, and open ports <code>25734</code> and <code>25735</code> to VM&nbsp;1 (and to designers' PCs if they share the pool). It needs SOLIDWORKS 2025 SP3 or later on Server 2025, and must be at least as new as the SOLIDWORKS install.</li>
-      <li><b>Admin access for James:</b> Remote Desktop to the host as an administrator (two sessions), and the host's admin share, which the laptop's <code>push-to-server.ps1</code> copies through.</li>
+      <li><b>SOLIDWORKS licence manager</b> (SolidNetWork), if the licence becomes a network one: install it on the host and open ports <code>25734</code> and <code>25735</code> to VM&nbsp;1 (and to designers' PCs if they share the pool). It must be at least as new as the SOLIDWORKS install.</li>
+      <li><b>The admin share</b> for James, which the laptop's <code>push-to-server.ps1</code> copies through.</li>
     </ol>
 
     <h3>VM 1 (Windows 11 Pro, a virtual machine on the Server host): the graphics card and everything people use</h3>
-    <ol start="8">
+    <ol start="11">
       <li><b>Create it as Generation 2</b> with Secure Boot and a virtual TPM (Windows 11 requires both).</li>
       <li><b>Fixed resources:</b> 16 virtual CPUs, 64 GB memory with Dynamic Memory <b>off</b>, a 500 GB+ virtual disk on NVMe; automatic start with the host, automatic stop action "turn off" (DDA requires it).</li>
       <li><b>Pass the RTX 4000 through</b> (Discrete Device Assignment): disable the card on the host, dismount it, assign it to the VM, then install NVIDIA's RTX workstation driver inside the VM. The host and the Linux VM then have no graphics card; that is expected.</li>
       <li><b>Windows 11 Pro,</b> fixed IP and DNS name on the External switch, joined to the domain, fully updated.</li>
-      <li><b>Runner account:</b> a dedicated domain user that logs on automatically at boot (Sysinternals Autologon, Windows Hello off for it); read/write to the estimating shares and read to W: by UNC path (<code>\\server\share</code>, not a drive letter).</li>
+      <li><b>Runner account:</b> auto-logon at boot (Sysinternals Autologon, Windows Hello off for it); read/write to the estimating shares and read to W: by UNC path (<code>\\server\share</code>, not a drive letter).</li>
       <li><b>Power and lock policy:</b> no sleep, no hibernate, no screen lock, no screensaver, exempt from any domain lock policy — SOLIDWORKS and Excel need a live desktop session.</li>
-      <li><b>Firewall on VM&nbsp;1:</b> allow the estimating portal (<code>8071</code>), Drawing Search (<code>5000</code>) and Client Briefing's port from the office network; allow the COM tools' port from the Linux VM only.</li>
+      <li><b>Remote access into VM&nbsp;1:</b> Remote Desktop allowed for the runner account only; a <code>tscon</code> hand-back script on its desktop; Jack and James shown the Hyper-V console route from the host.</li>
+      <li><b>Firewall on VM&nbsp;1:</b> the estimating portal (<code>8071</code>), Drawing Search (<code>5000</code>) and Client Briefing's port from the office network; the COM tools' port from the Linux VM only.</li>
       <li><b>Windows Update on VM&nbsp;1:</b> restarts scheduled out of hours and announced to James.</li>
-      <li><b>A <code>tscon</code> hand-back script</b> on the runner's desktop, and James shown the Hyper-V console route in.</li>
     </ol>
 
     <h3>VM 2 (Linux): Technical Design</h3>
-    <ol start="17">
+    <ol start="20">
       <li><b>Create it as Generation 2</b> with Secure Boot on the <b>Microsoft UEFI Certificate Authority</b> template; no virtual TPM needed. 8 virtual CPUs, 32 GB memory, a 1 TB+ virtual disk on NVMe that can be grown; automatic start with the host.</li>
-      <li><b>Ubuntu LTS server,</b> fixed IP and DNS name on the External switch, SSH open to the Technical Design team with sudo accounts, fully updated. <b>No graphics card.</b></li>
+      <li><b>Ubuntu LTS server,</b> fixed IP and DNS name on the External switch, SSH open to James and the Technical Design team with sudo accounts, fully updated. <b>No graphics card.</b></li>
       <li><b>Firewall on VM&nbsp;2:</b> GitLab (<code>80</code>/<code>443</code>, and its git-over-SSH port) and the FastAPI services' port from the office network; PostgreSQL (<code>5432</code>) from VM&nbsp;1 only.</li>
       <li><b>A read-only mount of W:</b> for the FastAPI services (a service account on the file server; the credentials kept on the VM, not in any script).</li>
     </ol>
 
     <h3>Running it</h3>
-    <ol start="21">
-      <li><b>Licences:</b> Windows Server 2025 Standard per core (two 16-core packs for the 9975WX) and client access licences; one Windows&nbsp;11 Pro and one Office licence for VM&nbsp;1; nothing for the Linux VM.</li>
+    <ol start="24">
+      <li><b>Licences:</b> Windows Server 2025 Standard per core (two 16-core packs for the 9975WX) and client access licences, bought on the clean driver check; one Windows&nbsp;11 Pro and one Office licence for VM&nbsp;1; nothing for the Linux VM.</li>
       <li><b>Backups:</b> host and both VMs (Windows Server Backup or the company tool, with the VMs exported); the Design Vault's GitLab backup on its own schedule; one restore of each tested before go-live.</li>
       <li><b>Windows Update:</b> host and VM&nbsp;1 on different nights, James told first. Ubuntu's security updates unattended, reboots announced.</li>
       <li><b>Antivirus:</b> apply the exclusions James supplies (SOLIDWORKS temp, the output folders, Drawing Search's index).</li>
@@ -358,12 +392,13 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <h2>Handover checks</h2>
     <p>Jack confirms these, then the machines are James's:</p>
     <ul>
+      <li>The host's Device Manager shows no unknown devices and both network ports driven; the licence is keyed in.</li>
       <li>In VM&nbsp;1's Device Manager the graphics card shows as <b>NVIDIA RTX 4000 Ada</b> with the NVIDIA driver, not "Microsoft Basic Display".</li>
       <li>After a full restart of the host, both VMs start by themselves; VM&nbsp;1 logs in as the runner account with nobody touching it and is still unlocked an hour later.</li>
       <li>Signed in as the runner account, VM&nbsp;1 can open and save a file in the estimating folders and open a file on W: by UNC path.</li>
-      <li>From VM&nbsp;1, the licence manager on the host answers on port 25734.</li>
+      <li>From VM&nbsp;1, the licence manager on the host answers on port 25734 (if the licence is a network one).</li>
       <li>From a desk, VM&nbsp;1 answers on ports 8071 and 5000 (once James's services run, this is just a browser test); from the Linux VM, VM&nbsp;1 answers on the COM tools' port.</li>
-      <li>From James's laptop: Remote Desktop to the host as an administrator while another admin is already connected; the Hyper-V console shows VM&nbsp;1's desktop; SSH into the Linux VM by name, and the W: mount lists a job folder.</li>
+      <li>From Jack's desk and from James's at the same time: Remote Desktop to the host as administrators; the Hyper-V console shows VM&nbsp;1's desktop with the runner still logged in; SSH into the Linux VM by name, and the W: mount lists a job folder.</li>
     </ul>
   </section>
 
@@ -371,31 +406,37 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <div class="owner"><span class="tag">James</span><h2>Applications: the laptop premise</h2></div>
     <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop. The Technical Design team does the Linux side with James.</p>
 
-    <h3>On VM 1 (estimating, client estimating, Client Briefing, Drawing Search)</h3>
+    <h3>Before it arrives (5 to 16 October)</h3>
     <ol>
-      <li><b>SOLIDWORKS:</b> install and point it at the host's licence manager. Open one model to confirm the graphics card is in use.</li>
+      <li><b>The SOLIDWORKS licence position,</b> settled from SDI's licence agreement: activation in a Hyper-V VM; automated, server-side use; unattended STEP, PDF and DXF generation; the Document Manager API key terms. The reseller is asked only where the agreement is silent. This gates SOLIDWORKS automation going live, not the order.</li>
+      <li><b>Installers, the port list and the antivirus exclusion paths</b> ready for Jack.</li>
+    </ol>
+
+    <h3>On VM 1 (estimating, client estimating, Client Briefing, Drawing Search), from 23 October</h3>
+    <ol start="3">
+      <li><b>SOLIDWORKS:</b> install and activate, or point it at the host's licence manager. Open one model to confirm the graphics card is in use.</li>
       <li><b>Office / Excel:</b> install and activate; open one estimate book.</li>
       <li><b>PDM / Design Vault client,</b> if models come from the vault.</li>
       <li><b>Python and Git,</b> clone the repository, create the engine's <code>.venv</code>.</li>
       <li><b>The <code>.env</code> file,</b> written by hand for this machine — never copied from the laptop.</li>
       <li><b>The estimating portal:</b> the backend's own <code>.venv</code> and <code>.env</code>; install and start the SDIIntelligence service on <code>8071</code>; check it loads from a desk.</li>
       <li><b>The runner:</b> scheduled task at logon (<code>restart-runner.ps1</code>) pointing at the portal on this machine.</li>
-      <li><b>Client Briefing Intelligence:</b> install as on its current machine, its own <code>.env</code> and port, started as a service; Jonathan's approval step tested end to end.</li>
-      <li><b>Drawing Search:</b> install on port <code>5000</code>, point it at W: by UNC path, build the Fixture Library index on VM&nbsp;1's own disk (455,000 fixtures: allow a day), confirm the image search is using the card.</li>
-      <li><b>Technical Design's Windows parts:</b> the SOLIDWORKS Document Manager API (with its licence key from Dassault, under the terms confirmed below), the CAD Validator and the COM tools, installed beside SOLIDWORKS and exposed to the Linux VM over HTTPS on one port; test a DXF flat pattern from a model on W:.</li>
+      <li><b>Client Briefing Intelligence:</b> install as on its current machine, its own <code>.env</code> and port, started as a service; the approval step tested end to end.</li>
+      <li><b>Drawing Search:</b> install on port <code>5000</code>, point it at W: by UNC path, build the Fixture Library index on VM&nbsp;1's own disk (allow a day), confirm the image search is using the card.</li>
+      <li><b>Technical Design's Windows parts:</b> the SOLIDWORKS Document Manager API (with its licence key), the CAD Validator and the COM tools, installed beside SOLIDWORKS and exposed to the Linux VM over HTTPS on one port; one DXF flat pattern tested from a model on W:.</li>
       <li><b>Hand Jack the antivirus exclusion paths</b> and the ports to open.</li>
     </ol>
 
     <h3>On VM 2 (Technical Design), with the Technical Design team</h3>
-    <ol start="12">
-      <li><b>GitLab with LFS</b> on its own address or port, with backups scheduled; the SDI Design Vault's repositories created.</li>
+    <ol start="14">
+      <li><b>GitLab with LFS</b> on its own port, with backups scheduled; the SDI Design Vault's repositories created.</li>
       <li><b>PostgreSQL</b> for the Document Manager's intelligence layer, reachable from VM&nbsp;1 only.</li>
       <li><b>The FastAPI services</b> (the Document Manager intelligence layer and Production Design Extraction) as systemd services, reading W: through the mount and calling VM&nbsp;1's Document Manager API and COM tools over HTTPS.</li>
       <li><b>Prove one import:</b> a job from W: through the Document Manager into the vault, and one flat pattern requested from VM&nbsp;1 and received.</li>
     </ol>
 
-    <h3>Proving the whole</h3>
-    <ol start="16">
+    <h3>Proving the whole (29 and 30 October)</h3>
+    <ol start="18">
       <li><b>Run one known job</b> (12645 or 12173) on VM&nbsp;1 and compare the book and the run time with the laptop's.</li>
       <li><b>Restart the host</b> and confirm both VMs, the portal, the runner, Client Briefing, Drawing Search and the Linux services all come back without anyone logging in.</li>
       <li><b>Remote in and out once</b> through the Hyper-V console while a short job runs on VM&nbsp;1, and confirm the job finished.</li>
@@ -404,17 +445,17 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
   </section>
 
   <section class="both">
-    <div class="owner"><h2>Agree together before the build week</h2></div>
+    <div class="owner"><h2>Agree together, this week</h2></div>
     <p class="note">Rule of thumb: if it would be the same on any Windows or Linux machine, it's Jack's. If it only exists because this is SDI Intelligence, it's James's.</p>
     <div class="tbl"><table>
       <thead><tr><th>Question</th><th>Who leads</th><th>Why it matters</th></tr></thead>
       <tbody>
-        <tr><td>SOLIDWORKS licensing, settled by SDI itself from its licence agreement before the order: (1) may this licence be activated and used in a Hyper-V VM; (2) does it permit automated, server-side use; (3) what licence is needed for unattended generation of STEP, PDF and DXF files. And, separately, the Document Manager API licence-key terms for SDI's use. Network (SolidNetWork) if the agreement points that way. The reseller is asked only where the agreement is silent</td><td>James</td><td>Hyper-V 2025 on Dassault's supported-platform list is technical support, not a licence right; the three rights are not inferred from it. A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. The runner holds a seat all day.</td></tr>
-        <tr><td>SOLIDWORKS version: 2026 or later</td><td>James, with the reseller</td><td>SOLIDWORKS lists Hyper-V 2025 (this host) for version 2026. The program runs only on Windows 10/11, never on the Server host.</td></tr>
-        <tr><td>Server 2025 drivers for the 3XS board</td><td>Jack, with Scan</td><td>Scan supplies Windows&nbsp;11 drivers; the Server install may need the board maker's chipset and network drivers.</td></tr>
+        <tr><td>Scan's written confirmations with today's order: a Server-listed board or the board model and its Server 2025 driver source; delivery date on the 14-day lead time; a free slot and power for a second card; storage mirroring; memory population; management controller; warranty</td><td>Jack, with Scan</td><td>The board decides whether the evaluation install is a formality or a gamble; the delivery date sets every other date.</td></tr>
+        <tr><td>SOLIDWORKS licensing, settled by SDI from its own agreement: activation in a Hyper-V VM; automated, server-side use; unattended STEP, PDF and DXF generation; the Document Manager API key terms. The reseller asked only where the agreement is silent</td><td>James</td><td>Does not gate the order. Gates SOLIDWORKS automation going live, and may carry a cost.</td></tr>
+        <tr><td>The fallback decision rule on day one: clean Device Manager means Server; otherwise Proxmox (keeps the card in the VM) or Windows 11 Pro on the metal (gives it up)</td><td>Jack and James</td><td>Decided now so day one is a check, not a meeting.</td></tr>
         <tr><td>The Linux VM's disk: how much of W:'s history the Design Vault will hold</td><td>James, with Technical Design</td><td>Sets the virtual disk size and the backup size. It can be grown later, but the NVMe is 2 × 2 TB in total.</td></tr>
-        <tr><td>Ports and names: VM&nbsp;1's portal, Client Briefing, Drawing Search and the HTTPS port for the Document Manager API and COM tools; the Linux VM's GitLab, FastAPI services and git-over-SSH.</td><td>James gives, Jack opens</td><td>Every link the estimators and the studio use names them.</td></tr>
-        <tr><td>Who is told before Windows updates or restarts, and the remote-access rule</td><td>Jack and James</td><td>A restart or a careless Remote Desktop session mid-run loses that estimate.</td></tr>
+        <tr><td>Ports and names: VM&nbsp;1's portal, Client Briefing, Drawing Search and the HTTPS port for the Document Manager API and COM tools; the Linux VM's GitLab, FastAPI services and git-over-SSH</td><td>James gives, Jack opens</td><td>Every link the estimators and the studio use names them.</td></tr>
+        <tr><td>Who is told before Windows updates or restarts, and the remote-access rule into VM&nbsp;1</td><td>Jack and James</td><td>A restart or a careless Remote Desktop session mid-run loses that estimate.</td></tr>
         <tr><td>A second graphics card for the Linux VM, and a second runner VM</td><td>James, later</td><td>Neither is in this build. A second card only if a model on the Linux side needs one; a second runner only if the queue backs up.</td></tr>
       </tbody>
     </table></div>
