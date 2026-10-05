@@ -2,7 +2,16 @@
   "_reviewed": "James Gray, 5 Oct 2026 — 12696-01 Bag Pricing Hook (M&S) rev A brief, docs/briefs/12696-01.md. Structure, not money.",
   "_note": "Codes compare on letters and digits only, so 'FIXING 297' and 'ACCU - SKTT-M5-10-A1-BL' match however the run spells them.",
   "product_root": "12696-01-GA",
-  "not_set_aside": ["12696-01-101"],
+  "not_set_aside": [
+    "12696-01-101"
+  ],
+  "quantity_breaks": [
+    1,
+    250,
+    500,
+    1000,
+    2500
+  ],
   "quantities": {
     "12696-01-101": 1,
     "12696-01-01M": 1,
@@ -17,25 +26,101 @@
     "TICKET STRIP": 1
   },
   "required_operations": {
-    "12696-01-101": ["welding", "dress_welds", "powder_coating"],
-    "12696-01-01M": ["laser_cutting", "folding"],
-    "12696-01-02M": ["laser_cutting", "folding"]
+    "12696-01-101": [
+      "welding",
+      "dress_welds",
+      "powder_coating"
+    ],
+    "12696-01-01M": [
+      "laser_cutting",
+      "folding"
+    ],
+    "12696-01-02M": [
+      "laser_cutting",
+      "folding"
+    ]
   },
   "forbidden_operations": {
-    "12696-01-GA": ["welding", "dress_welds", "powder_coating", "wet_spray", "laser_cutting", "folding", "wire_forming", "robomac"],
-    "12696-01-101": ["laser_cutting", "folding", "wire_forming", "robomac", "wet_spray"],
-    "12696-01-01M": ["welding", "dress_welds", "powder_coating", "wet_spray", "wire_forming", "robomac"],
-    "12696-01-02M": ["welding", "dress_welds", "powder_coating", "wet_spray", "wire_forming", "robomac"],
-    "12696-01-01A": ["welding", "dress_welds", "powder_coating", "wet_spray", "wire_forming", "robomac"],
-    "ACCU-SKTT-M5-10-A1-BL": ["laser_cutting", "folding", "welding", "dress_welds", "powder_coating", "wire_forming", "robomac"],
-    "FIXING297": ["laser_cutting", "folding", "welding", "dress_welds", "powder_coating", "wire_forming", "robomac"]
+    "12696-01-GA": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac"
+    ],
+    "12696-01-101": [
+      "laser_cutting",
+      "folding",
+      "wire_forming",
+      "robomac",
+      "wet_spray"
+    ],
+    "12696-01-01M": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ],
+    "12696-01-02M": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ],
+    "12696-01-01A": [
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wet_spray",
+      "wire_forming",
+      "robomac"
+    ],
+    "ACCU-SKTT-M5-10-A1-BL": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wire_forming",
+      "robomac"
+    ],
+    "FIXING297": [
+      "laser_cutting",
+      "folding",
+      "welding",
+      "dress_welds",
+      "powder_coating",
+      "wire_forming",
+      "robomac"
+    ]
   },
   "material_charged": [
-    "12696-01-01M", "12696-01-02M", "12696-01-01A",
-    "ACCU-SKTT-M5-10-A1-BL", "FIXING297"
+    "12696-01-01M",
+    "12696-01-02M",
+    "12696-01-01A",
+    "ACCU-SKTT-M5-10-A1-BL",
+    "FIXING297"
   ],
   "no_cut_assemblies": true,
-  "unit_mass_kg": {"expected": 0.11, "tolerance_pct": 50},
-  "max_unit_material_mass_kg": {"12696-01-01M": 0.15, "12696-01-02M": 0.10, "12696-01-01A": 0.03},
-  "min_unit_material_mass_kg": {"12696-01-01M": 0.03, "12696-01-02M": 0.02, "12696-01-01A": 0.003}
+  "unit_mass_kg": {
+    "expected": 0.11,
+    "tolerance_pct": 50
+  },
+  "max_unit_material_mass_kg": {
+    "12696-01-01M": 0.15,
+    "12696-01-02M": 0.1,
+    "12696-01-01A": 0.03
+  },
+  "min_unit_material_mass_kg": {
+    "12696-01-01M": 0.03,
+    "12696-01-02M": 0.02,
+    "12696-01-01A": 0.003
+  }
 }
