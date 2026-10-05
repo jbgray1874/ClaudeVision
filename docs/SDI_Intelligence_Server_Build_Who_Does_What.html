@@ -39,10 +39,10 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 .gotchas{background:var(--warn-bg);border:1px solid var(--warn);border-radius:6px;padding:16px 18px}
 .gotchas h2{font:600 20px/1.2 var(--display);color:var(--warn);margin:0 0 6px}
 .gotchas ol{margin:8px 0 0}
-.both table,.change table{width:100%;border-collapse:collapse;font-size:14px}
+.both table,.why table{width:100%;border-collapse:collapse;font-size:14px}
 .tbl{overflow-x:auto}
-.both th,.both td,.change th,.change td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
-.both th,.change th{font:600 12px var(--body);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.both th,.both td,.why th,.why td{text-align:left;vertical-align:top;padding:8px 10px;border-bottom:1px solid var(--line)}
+.both th,.why th{font:600 12px var(--body);text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
 .note{color:var(--muted);font-size:13.5px;margin:0 0 10px;max-width:70ch}
 .arch{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:14px 14px 6px}
 .arch svg{display:block;width:100%;height:auto}
@@ -122,206 +122,204 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 </script>
 <style>@media print { #sdi-dlbar { display:none !important; } }</style>
 
-
 <div class="wrap">
   <h1>SDI Intelligence server: who does what</h1>
-  <p class="rev">Revised 5 October 2026 · the machine runs Windows&nbsp;11 Pro itself, with a Windows&nbsp;11 VM and a Linux VM under Hyper-V; the earlier plan had a Windows Server 2025 host with a Windows&nbsp;11 virtual machine for SOLIDWORKS</p>
-  <p class="lede">Jack builds the machine and hands over a Windows&nbsp;11 Pro workstation that behaves like a new laptop on the network, with the graphics card in it, plus two virtual machines on it: one Windows&nbsp;11 Pro, one Linux. James takes it from there, exactly as he would set up a laptop. The handover checks in the middle are the line between the two. The first section shows how the parts fit together, what changed from the Server plan, and what to watch for.</p>
-  <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows 11 Pro on the machine itself · SOLIDWORKS, Excel, runner 1 and the portal on it · Hyper-V: VM 2 Windows 11 Pro (runner 2), VM 3 Linux (services)</div>
+  <p class="rev">Revised 5 October 2026 · Windows Server 2025 on the machine, the graphics card and SOLIDWORKS in a Windows&nbsp;11 Pro VM, and a Linux VM beside it. A Windows&nbsp;11 Pro host was considered and set aside: it cannot give a graphics card to a VM.</p>
+  <p class="lede">Jack builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James takes them from there, exactly as he would set up a laptop. The handover checks in the middle are the line between the two. The first section shows how the parts fit together, why the host is Windows Server, and what to watch for.</p>
+  <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows Server 2025 host · VM 1 Windows 11 Pro: the card, SOLIDWORKS, Excel, runner 1 · VM 2 Linux: James's services · optional VM 3 Windows 11 Pro for a second runner</div>
 
   <section class="design">
     <div class="owner"><h2>How it fits together</h2></div>
-    <p class="sub">One machine, three operating systems. SOLIDWORKS, Excel, the first runner and the portal run on Windows&nbsp;11 Pro directly, and the graphics card is the machine's own. Under Hyper-V on the same box: a Windows&nbsp;11 Pro VM for a second runner, and a Linux VM for the services James names. Neither VM has a graphics card.</p>
+    <p class="sub">One machine, split into a host and two virtual machines. The graphics card and SOLIDWORKS live in the Windows VM; the Linux VM runs the services James names; the host runs the portal and the job queue and nothing that needs a desktop.</p>
     <div class="arch"><svg viewBox="0 0 830 484" role="img" aria-labelledby="archT archD">
 <title id="archT">SDI Intelligence server architecture</title>
-<desc id="archD">One physical workstation running Windows 11 Pro. On it directly: the SDI Intelligence portal and job queue, the SOLIDWORKS licence manager if the licence is a network one, runner 1, Excel, SOLIDWORKS and the RTX 4000 Ada as the machine's own card. Two Hyper-V virtual machines: VM 2 (Windows 11 Pro) runs Excel and runner 2 with no GPU and no SOLIDWORKS; VM 3 (Linux) runs the services James names, with no GPU. The runners claim jobs from the portal and read and write the estimating shares.</desc>
+<desc id="archD">One physical server. The Windows Server 2025 host runs the portal and job queue and the SOLIDWORKS licence manager. VM 1 (Windows 11 Pro) has the RTX 4000 Ada passed through and runs SOLIDWORKS, Excel and runner 1. VM 2 (Linux) runs James's services with no graphics card. Runner 1 claims jobs from the portal and reads and writes the estimating shares.</desc>
 <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker></defs>
 <rect class="srv" x="12" y="92" width="806" height="290" rx="8"/>
-<text class="lbl" x="26" y="110">Scan 3XS workstation · one machine · Windows 11 Pro · Hyper-V for the two VMs</text>
-<rect class="item" x="208" y="14" width="220" height="52" rx="4"/><text class="t" x="218" y="32">Estimators</text><text class="s" x="218" y="48">the portal in a browser, any desk</text>
-<rect class="box" x="28" y="122" width="392" height="248" rx="6"/>
-<text class="t" x="40" y="142">The machine itself · Windows 11 Pro</text><text class="s" x="40" y="158">32 cores · 128 GB · always on, logged in as the runner account</text>
-<rect class="item" x="40" y="168" width="176" height="44" rx="4"/><text class="t" x="50" y="186">Runner 1</text><text class="s" x="50" y="202">any job; the one for models</text>
-<rect class="item" x="40" y="218" width="176" height="26" rx="4"/><text class="t" x="50" y="235.5">Excel</text>
-<rect class="item" x="40" y="250" width="176" height="44" rx="4"/><text class="t" x="50" y="268">SOLIDWORKS</text><text class="s" x="50" y="284">reads the models</text>
-<rect class="gpu" x="40" y="300" width="176" height="56" rx="4"/><text class="t" x="50" y="318">RTX 4000 Ada SFF</text><text class="s" x="50" y="334">the machine's own card;</text><text class="s" x="50" y="348">no VM can have it</text>
-<rect class="item" x="232" y="168" width="176" height="44" rx="4"/><text class="t" x="242" y="186">SDI Intelligence portal</text><text class="s" x="242" y="202">port 8071 · the job queue</text>
-<rect class="item" x="232" y="250" width="176" height="44" rx="4"/><text class="t" x="242" y="268">SOLIDWORKS licences</text><text class="s" x="242" y="284">licence manager · if network</text>
-<text class="s" x="232" y="320">SOLIDWORKS is supported on</text>
-<text class="s" x="232" y="336">Windows 11, so it runs here,</text>
-<text class="s" x="232" y="352">on the metal, with the card.</text>
-<rect class="opt" x="436" y="122" width="182" height="248" rx="6"/>
-<text class="t" x="446" y="142">VM 2 · Windows 11 Pro</text><text class="s" x="446" y="158">Hyper-V · 8 vCPU · 32 GB</text>
-<rect class="item" x="446" y="168" width="162" height="44" rx="4"/><text class="t" x="456" y="186">Runner 2</text><text class="s" x="456" y="202">PDF, DXF, render jobs</text>
-<rect class="item" x="446" y="218" width="162" height="26" rx="4"/><text class="t" x="456" y="235.5">Excel</text>
-<rect class="opt" x="446" y="250" width="162" height="106" rx="4"/>
-<text class="t" x="456" y="270">No SOLIDWORKS,</text>
-<text class="t" x="456" y="286">no GPU</text>
-<text class="s" x="456" y="304">Windows 11 Pro cannot</text>
-<text class="s" x="456" y="319">hand a card to a VM.</text>
-<text class="s" x="456" y="334">SOLIDWORKS only if the</text>
-<text class="s" x="456" y="349">no-card test passes.</text>
-<rect class="opt" x="634" y="122" width="168" height="248" rx="6"/>
-<text class="t" x="644" y="142">VM 3 · Linux</text><text class="s" x="644" y="158">Hyper-V · 4 vCPU · 16 GB</text>
-<rect class="item" x="644" y="168" width="148" height="56" rx="4"/><text class="t" x="654" y="186">James's services</text><text class="s" x="654" y="202">tooling, agents, and</text><text class="s" x="654" y="216">perhaps the portal</text>
-<rect class="opt" x="644" y="250" width="148" height="106" rx="4"/>
-<text class="t" x="654" y="270">No GPU, no Excel,</text>
-<text class="t" x="654" y="286">no SOLIDWORKS</text>
-<text class="s" x="654" y="306">Ubuntu LTS, Generation 2,</text>
-<text class="s" x="654" y="320">Secure Boot on the</text>
-<text class="s" x="654" y="334">Microsoft UEFI CA</text>
-<text class="s" x="654" y="348">template.</text>
-<rect class="item" x="208" y="418" width="220" height="52" rx="4"/><text class="t" x="218" y="436">Estimating shares</text><text class="s" x="218" y="452">\\server\share · job folders, books</text>
-<path class="flow" d="M320 66 V166" marker-end="url(#ah)"/>
-<path class="flow" d="M216 190 H230" marker-end="url(#ah)"/>
-<path class="flow" d="M446 190 H410" marker-end="url(#ah)"/>
-<path class="flow" d="M216 272 H230" marker-end="url(#ah)"/>
-<path class="flow" d="M128 356 V444 H206" marker-end="url(#ah)"/>
-<path class="flow" d="M527 370 V444 H430" marker-end="url(#ah)"/>
-<circle class="num" cx="320" cy="80" r="9"/><text class="numt" x="320" y="84" text-anchor="middle">1</text><circle class="num" cx="224" cy="176" r="9"/><text class="numt" x="224" y="180" text-anchor="middle">2</text><circle class="num" cx="428" cy="176" r="9"/><text class="numt" x="428" y="180" text-anchor="middle">2</text><circle class="num" cx="224" cy="258" r="9"/><text class="numt" x="224" y="262" text-anchor="middle">3</text><circle class="num" cx="128" cy="400" r="9"/><text class="numt" x="128" y="404" text-anchor="middle">4</text><circle class="num" cx="527" cy="400" r="9"/><text class="numt" x="527" y="404" text-anchor="middle">4</text>
+<text class="lbl" x="26" y="110">Scan 3XS server · one machine · Windows Server 2025 · Hyper-V</text>
+<rect class="item" x="305" y="14" width="220" height="52" rx="4"/><text class="t" x="315" y="32">Estimators</text><text class="s" x="315" y="48">the portal in a browser, any desk</text>
+<rect class="box" x="28" y="122" width="236" height="248" rx="6"/>
+<text class="t" x="40" y="142">VM 1 · Windows 11 Pro</text><text class="s" x="40" y="158">12 vCPU · 48 GB · always on</text>
+<rect class="item" x="40" y="168" width="212" height="44" rx="4"/><text class="t" x="50" y="186">Runner 1</text><text class="s" x="50" y="202">any job; the one for models</text><rect class="item" x="40" y="218" width="212" height="26" rx="4"/><text class="t" x="50" y="235.5">Excel</text><rect class="item" x="40" y="250" width="212" height="44" rx="4"/><text class="t" x="50" y="268">SOLIDWORKS</text><text class="s" x="50" y="284">reads the models into the extract</text><rect class="gpu" x="40" y="300" width="212" height="56" rx="4"/><text class="t" x="50" y="318">RTX 4000 Ada SFF</text><text class="s" x="50" y="334">passed through (DDA): this VM only</text>
+<rect class="box" x="290" y="122" width="220" height="248" rx="6"/>
+<text class="t" x="302" y="142">Host</text><text class="s" x="302" y="158">Windows Server 2025</text>
+<rect class="item" x="302" y="168" width="196" height="44" rx="4"/><text class="t" x="312" y="186">SDI Intelligence portal</text><text class="s" x="312" y="202">port 8071 · the job queue</text><rect class="item" x="302" y="250" width="196" height="44" rx="4"/><text class="t" x="312" y="268">SOLIDWORKS licences</text><text class="s" x="312" y="284">licence manager · 25734/25735</text>
+<text class="s" x="302" y="322">No graphics card here, and no</text>
+<text class="s" x="302" y="338">SOLIDWORKS: neither runs on</text>
+<text class="s" x="302" y="354">Windows Server. Two admin RDPs.</text>
+<rect class="box" x="536" y="122" width="266" height="248" rx="6"/>
+<text class="t" x="548" y="142">VM 2 · Linux</text><text class="s" x="548" y="158">Ubuntu LTS · 4 vCPU · 16 GB · always on</text>
+<rect class="item" x="548" y="168" width="242" height="44" rx="4"/><text class="t" x="558" y="186">James's services</text><text class="s" x="558" y="202">tooling, agents; maybe the portal</text>
+<rect class="item" x="548" y="218" width="242" height="26" rx="4"/><text class="t" x="558" y="235.5">SSH in · no desktop needed</text>
+<rect class="opt" x="548" y="250" width="242" height="106" rx="4"/>
+<text class="t" x="558" y="270">No graphics card</text>
+<text class="s" x="558" y="290">The one card is VM 1's. A second</text>
+<text class="s" x="558" y="306">card can be passed to this VM</text>
+<text class="s" x="558" y="322">(DDA works for Linux guests too)</text>
+<text class="s" x="558" y="338">if a model here ever needs one.</text>
+<rect class="item" x="305" y="418" width="220" height="52" rx="4"/><text class="t" x="315" y="436">Estimating shares</text><text class="s" x="315" y="452">\\server\share · job folders, books</text>
+<path class="flow" d="M415 66 V166" marker-end="url(#ah)"/>
+<path class="flow" d="M252 190 H300" marker-end="url(#ah)"/>
+<path class="flow" d="M252 272 H300" marker-end="url(#ah)"/>
+<path class="flow" d="M146 356 V444 H303" marker-end="url(#ah)"/>
+<circle class="num" cx="415" cy="80" r="9"/><text class="numt" x="415" y="84" text-anchor="middle">1</text><circle class="num" cx="276" cy="190" r="9"/><text class="numt" x="276" y="194" text-anchor="middle">2</text><circle class="num" cx="276" cy="272" r="9"/><text class="numt" x="276" y="276" text-anchor="middle">3</text><circle class="num" cx="146" cy="400" r="9"/><text class="numt" x="146" y="404" text-anchor="middle">4</text>
 </svg></div>
     <ol class="legend">
-      <li>Estimators start a job on the portal. It joins the queue on the machine.</li>
-      <li>Each runner, when it is free, takes the oldest job waiting. One job at a time each; runner&nbsp;1 is on the machine itself, runner&nbsp;2 in the Windows VM. The Linux VM runs no estimates: it has no Excel and no SOLIDWORKS.</li>
-      <li>SOLIDWORKS takes a licence while it is open. The runner keeps it open, so the machine holds one seat all day. With a standalone licence the seat simply lives on this machine.</li>
-      <li>The runners read and write the job folders and books on the estimating shares, which stay on the file server.</li>
+      <li>Estimators start a job on the portal. It joins the queue on the host.</li>
+      <li>The runner in VM&nbsp;1, when it is free, takes the oldest job waiting. One job at a time. The Linux VM runs no estimates: it has no Excel and no SOLIDWORKS. A second Windows VM with its own runner can be added later (VM&nbsp;3).</li>
+      <li>SOLIDWORKS takes a licence from the pool on the host while it is open. The runner keeps it open, so VM&nbsp;1 holds one seat all day.</li>
+      <li>The runner reads and writes the job folders and books on the estimating shares, which stay on the file server.</li>
     </ol>
 
-    <h3>What changed from the Server 2025 plan</h3>
-    <div class="change tbl"><table>
-      <thead><tr><th>Server 2025 plan</th><th>Windows 11 Pro plan</th><th>Effect</th></tr></thead>
+    <h3>Why the host is Windows Server and not Windows 11 Pro</h3>
+    <p class="note">Three things were asked of this machine: Remote Desktop into it, the graphics card in a VM, and SOLIDWORKS in a VM. Only a Server host gives all three.</p>
+    <div class="why tbl"><table>
+      <thead><tr><th>Asked for</th><th>Windows Server 2025 host</th><th>Windows 11 Pro host</th></tr></thead>
       <tbody>
-        <tr><td>Windows Server 2025 host, Windows 11 VM for SOLIDWORKS, the RTX 4000 passed through to that VM (DDA)</td><td>Windows 11 Pro on the metal; SOLIDWORKS, Excel, the runner and the portal all on it; the card is simply the machine's</td><td>One operating system instead of two, no pass-through to set up, no VM licence for the first runner. SOLIDWORKS is supported on Windows 11 and was never supported on the Server host.</td></tr>
-        <tr><td>Portal service on the host; runner in the VM</td><td>Both on the same machine; the runner points at <code>localhost</code> or the machine's own name</td><td>Nothing in the engine changes. A restart takes both down together, which it did in effect before.</td></tr>
-        <tr><td>Windows Server licence, plus Windows 11 and Office for each VM</td><td>Windows 11 Pro comes with the workstation; Office for the machine; one Windows 11 Pro and one Office licence for VM&nbsp;2; nothing for the Linux VM</td><td>No Server licence, no client access licences. Cheaper and simpler.</td></tr>
-        <tr><td>Hyper-V only if a second VM was ever wanted</td><td>Hyper-V on from day one, for the Windows VM and the Linux VM</td><td>Windows 11 Pro includes Hyper-V and runs Linux guests well (Ubuntu ships the integration drivers). The VMs need an External virtual switch so they sit on the office network with fixed addresses.</td></tr>
-        <tr><td>A second card could be passed through to VM&nbsp;2</td><td>It cannot: Windows 11 Pro has no DDA. A second SOLIDWORKS runner with a card means a second physical machine</td><td>VM&nbsp;2 is for PDF, DXF and render jobs. The no-card test below decides whether it could also run SOLIDWORKS in software graphics.</td></tr>
-        <tr><td>SOLIDWORKS 2026 needed for Hyper-V 2025 support</td><td>Any version Dassault supports on Windows 11; 2026 still recommended</td><td>The Hyper-V constraint only applies if SOLIDWORKS is ever put in VM&nbsp;2.</td></tr>
-        <tr><td>Two admin sessions at once (Server)</td><td>One interactive session (Windows 11). See the gotchas</td><td>Remote access has a rule to follow so it does not disturb the runner.</td></tr>
+        <tr><td>The graphics card used by a VM</td><td>Yes. Discrete Device Assignment hands the whole card to one VM, with NVIDIA's normal driver inside it.</td><td>No. DDA is a Server feature. The card can only drive the host's own desktop. The partitioning Windows 11 has (GPU-P) is unsupported by NVIDIA and Dassault for this card and does not reach Linux guests at all.</td></tr>
+        <tr><td>SOLIDWORKS in a VM</td><td>Yes, in VM&nbsp;1 with the card. Dassault lists Hyper-V 2025 for SOLIDWORKS 2026.</td><td>Only in software graphics, which the engine can test but nobody would design on.</td></tr>
+        <tr><td>Remote Desktop</td><td>Two administrator sessions on the host at once. The Windows VM still allows one desktop, like any Windows 11; the Hyper-V console reaches it without logging the runner off.</td><td>One desktop on the host, which is also the runner's. Any Remote Desktop as another user pushes the runner off.</td></tr>
+        <tr><td>Can the card be shared between the metal and a VM?</td><td colspan="2">No, on either. A card belongs to one operating system at a time. Passed through, it is VM&nbsp;1's and the host has none, which is fine: a Server host needs no graphics. Sharing one card between several VMs needs a data-centre card (NVIDIA L4 and similar) with yearly vGPU licences.</td></tr>
+        <tr><td>Cost</td><td>Server 2025 Standard is licensed per core, 16-core minimum: two packs for 32 cores, plus client access licences. Plus Windows&nbsp;11 Pro and Office for VM&nbsp;1.</td><td>Windows&nbsp;11 Pro comes with the workstation.</td></tr>
       </tbody>
     </table></div>
 
     <h3>What can and cannot be shared</h3>
     <div class="facts">
-      <div class="fact"><b>The graphics card: the machine's own, and nobody else's.</b><p>On Windows 11 Pro the RTX&nbsp;4000 Ada drives the machine's own desktop and SOLIDWORKS directly, with NVIDIA's RTX workstation driver. It cannot be handed to a virtual machine: Discrete Device Assignment is a Windows Server feature, and the partitioning Windows 11 does have (GPU-P) is unsupported by NVIDIA and Dassault for this card and breaks on driver updates. So SOLIDWORKS with a card runs on the metal, which is where this plan puts it.</p></div>
-      <div class="fact"><b>The estimates: shared by the queue.</b><p>This is where "whoever is free takes the next one" happens. A second runner VM means two estimates at once; each takes the oldest job waiting when it finishes the last.</p></div>
-      <div class="fact"><b>SOLIDWORKS: the licences are shared, the program is not.</b><p>Each machine or VM that uses SOLIDWORKS needs its own installation. Now that SOLIDWORKS runs on a physical machine, a standalone licence works without the reactivation risk a VM carried. A network (SolidNetWork) licence is still the right choice if designers' PCs should share the pool; the licence manager can run on this machine (it is supported on Windows 11) or on the file server.</p></div>
-      <div class="fact"><b>Test before planning a second SOLIDWORKS runner.</b><p>The model extract may not need the graphics card at all: its geometry work runs on the processor, and SOLIDWORKS falls back to software graphics without a card. Run the extractor on job 12120 in VM&nbsp;2 (no card) and compare the result and the time with the machine itself. If they match, VM&nbsp;2 can run SOLIDWORKS too, with a second licence and no hardware.</p></div>
-      <div class="fact"><b>The estimating shares stay on the file server.</b><p>Windows 11 Pro allows twenty inbound connections to its own shares. The portal is a web service (no limit of that kind) and the runners read the job folders over the network, so nothing here needs this machine to be a file server, and it should not be made one.</p></div>
+      <div class="fact"><b>The graphics card: one card, one VM.</b><p>Passed through (DDA), the RTX&nbsp;4000 Ada belongs to VM&nbsp;1 alone; the host and the Linux VM have none. It cannot be split between VMs: Windows Server&nbsp;2025 only partitions a short list of data-centre cards (NVIDIA L4, L40S, A16 and similar) with NVIDIA's licensed vGPU driver, and this card is not one of them. Moving it to another VM needs both VMs shut down, so it is a maintenance job, not something that happens per request. The host does not need it. If the Linux VM ever needs a card of its own, a second card is fitted and passed to it the same way; DDA works for Linux guests.</p></div>
+      <div class="fact"><b>The estimates: shared by the queue.</b><p>This is where "whoever is free takes the next one" happens. A second Windows VM with a runner means two estimates at once; each takes the oldest job waiting when it finishes the last.</p></div>
+      <div class="fact"><b>SOLIDWORKS: the licences are shared, the program is not.</b><p>Each VM that uses SOLIDWORKS needs its own installation; it cannot run on the host and be reached from the VMs, and the engine drives it only on its own VM. A network (SolidNetWork) licence puts the seats in a pool on the host: SOLIDWORKS takes one when it opens and returns it when it closes, first come, first served, and designers' PCs can share the same pool. A standalone licence works in a VM but is tied to that VM's identity, so a rebuilt VM means a reactivation; the network licence avoids that.</p></div>
+      <div class="fact"><b>The Linux VM: James's, with no desktop.</b><p>Ubuntu LTS server under Hyper-V, administered over SSH. It runs tooling, agents and any service that needs no Windows; the portal could move to it (it is a Python service and runs the same on Linux). Nothing that drives Excel or SOLIDWORKS goes here. Ubuntu carries the Hyper-V integration drivers in its kernel, so nothing extra is installed.</p></div>
+      <div class="fact"><b>Test before buying another card.</b><p>The model extract may not need the graphics card at all: its geometry work runs on the processor, and SOLIDWORKS falls back to software graphics without a card. Run the extractor on job 12120 in a VM with no card and compare the result and the time with VM&nbsp;1. If they match, a second Windows VM can run SOLIDWORKS without a card, and no GPU purchase is needed.</p></div>
     </div>
 
-    <h3>If more SOLIDWORKS capacity is ever needed</h3>
+    <h3>If more graphics capacity is ever needed</h3>
     <div class="tbl"><table class="opts">
       <thead><tr><th>Option</th><th>What it gives</th><th>Catch</th></tr></thead>
       <tbody>
-        <tr><td>SOLIDWORKS in VM&nbsp;2 without a card</td><td>Two model-capable runners on one box</td><td>Only if the no-card test passes. A second SOLIDWORKS licence. Software graphics are slow for a person but may be fine for an unattended extract.</td></tr>
-        <tr><td>A second physical workstation as runner&nbsp;2</td><td>A card and SOLIDWORKS on each runner</td><td>A second machine, Windows&nbsp;11 Pro, Office and SOLIDWORKS licences. Supported and simple; nothing to share.</td></tr>
-        <tr><td>Reinstall this machine as Windows Server 2025 with VMs</td><td>The original plan: DDA pass-through, two admin sessions</td><td>Server licence, SOLIDWORKS back inside a VM, and a rebuild. Only worth it if several model runners must live on one box.</td></tr>
-        <tr><td>Share this card with a VM through GPU-P</td><td>Host and VM share one card</td><td>Unsupported by Microsoft for workstation cards, NVIDIA and Dassault; breaks on driver updates. Not for this machine.</td></tr>
+        <tr><td>A second RTX 4000 Ada SFF, passed through to the Linux VM or to VM&nbsp;3</td><td>A graphics card in a second VM</td><td>Supported and simple. Scan to confirm a free slot and power.</td></tr>
+        <tr><td>Replace with a card that partitions (NVIDIA L4)</td><td>Three or more VMs, each with a fixed slice</td><td>An NVIDIA vGPU licence per VM each year; needs server-style cooling; the host still gets no share; SOLIDWORKS support to confirm.</td></tr>
+        <tr><td>Share this card through an unsupported driver trick</td><td>Host and VMs share one card</td><td>Needs a Windows&nbsp;11 host; unsupported by Microsoft, NVIDIA and Dassault; breaks on driver updates. Not for this machine.</td></tr>
       </tbody>
     </table></div>
   </section>
 
   <section class="gotchas">
-    <h2>Gotchas: a workstation OS doing a server's job</h2>
+    <h2>Gotchas</h2>
     <p>None of these stops the plan. Each one is a setting or a habit, and each is on a list below with an owner.</p>
     <ol>
-      <li><b>One interactive session.</b> Windows 11 allows one desktop at a time. If James connects by Remote Desktop as himself, the runner account's desktop is pushed off the console, and Excel and SOLIDWORKS automation can stall or fail mid-estimate. Rule: connect <em>as the runner account</em> (same session), and leave by handing the session back to the console with <code>tscon</code> (a one-line script on the desktop), never by closing the window, which leaves the session disconnected and lockable. Or use a console-sharing tool (VNC-style) rather than RDP. Never remote in while a job is running unless it is to watch it.</li>
-      <li><b>Sleep, lock and fast startup are on by default.</b> Power plan to never sleep, never turn off the display to the extent policy allows, hibernate and fast startup off, screensaver and lock off for the runner account. A domain lock policy needs an exemption for this machine. A locked or sleeping desktop is a stopped runner.</li>
-      <li><b>Windows Update is more insistent than on Server.</b> Feature updates arrive yearly and restarts are pushed harder. Windows 11 Pro takes Group Policy: set active hours, schedule restarts out of hours, defer feature updates, and tell James before any restart. A restart mid-run loses that estimate.</li>
-      <li><b>No graphics card for any VM.</b> SOLIDWORKS with a card runs only on the metal. VM&nbsp;2 is for jobs without models until the no-card test says otherwise.</li>
-      <li><b>Auto-logon of a domain account.</b> Windows 11 hides the automatic sign-in setting when Windows Hello is required; use Sysinternals Autologon for the runner account and turn Hello off for it. The password is stored on the machine, so it is a dedicated, least-privilege account.</li>
-      <li><b>Hyper-V changes the host, and it is on from day one.</b> With Hyper-V on, Windows itself runs as a partition, with a small cost to SOLIDWORKS and Excel on the metal; the two VMs need it, so that cost is accepted. Give the VMs fixed shares of the machine (Dynamic Memory off for the Windows VM) and keep at least 64 GB and 16 cores for the metal, where the models are read. Memory integrity (VBS), on by default, costs a few percent of processor speed; turning it off is a security trade-off for Jack to decide.</li>
-      <li><b>The VMs must be on the office network, not behind the host.</b> Hyper-V's Default Switch is a private NAT whose addresses change on every boot. Create an External virtual switch on the machine's network port so both VMs get fixed addresses and DNS names, and the runners, the portal and Remote Desktop can reach them by name.</li>
-      <li><b>Linux under Hyper-V has two settings of its own.</b> A Generation&nbsp;2 Linux VM boots with Secure Boot only on the "Microsoft UEFI Certificate Authority" template (the Windows template refuses it); and there is no Enhanced Session desktop unless xrdp is set up, so it is administered over SSH. Ubuntu LTS carries the Hyper-V integration drivers in its kernel, so nothing extra is installed.</li>
-      <li><b>No graphics card in the Linux VM either,</b> for the same reason as the Windows VM. Anything there that wants a GPU (a local model, say) runs on the processor.</li>
-      <li><b>No Windows Server Backup.</b> Use an imaging tool (Veeam Agent, Macrium or the company standard) for the machine and the VM, and test one restore before go-live.</li>
-      <li><b>Pro or Pro for Workstations.</b> Scan may ship Windows 11 Pro for Workstations with a Threadripper PRO. Either works. Plain Pro covers one socket, 32 cores and 128 GB; Pro for Workstations adds ReFS and more than two sockets or 2 TB, none of which this needs.</li>
-      <li><b>Power after a cut.</b> BIOS set to power on after AC loss, the machine on the UPS, and the runner logging on by itself on boot, so an overnight cut does not leave the queue dead until someone notices.</li>
+      <li><b>The card is VM 1's, and touching it means stopping VM 1.</b> A driver update inside the VM is an ordinary restart of the VM. Moving the card, or changing which VM has it, needs the VMs shut down. The host shows "Microsoft Basic Display" from then on; that is expected.</li>
+      <li><b>One desktop in the Windows VM.</b> VM&nbsp;1 is Windows&nbsp;11 and allows one interactive session. A Remote Desktop into it as a different user pushes the runner off and can stall an estimate. Rule: connect as the runner account (same session) and leave by handing the session back to the console with <code>tscon</code>, or use the Hyper-V console from the host, which shows the runner's desktop without logging it off. The host's own two admin sessions are the normal way in.</li>
+      <li><b>Server drivers for a workstation board.</b> Scan supplies Windows&nbsp;11 drivers for the 3XS. Windows Server 2025 installs on the Threadripper PRO board, but chipset and network drivers may need to come from the board maker. Ask Scan to confirm before the build week.</li>
+      <li><b>SOLIDWORKS version and licence.</b> 2026 or later for Hyper-V 2025 support. A network licence is strongly preferred in a VM: a standalone one is tied to the VM's identity and reactivates on a rebuild.</li>
+      <li><b>The VMs must be on the office network, not behind the host.</b> Create an External virtual switch on the machine's network port so both VMs get fixed addresses and DNS names, and the portal, Remote Desktop and SSH reach them by name.</li>
+      <li><b>Sleep and lock in VM 1.</b> Windows 11 defaults: no sleep, no hibernate, no screen lock, no screensaver for the runner account, and an exemption from any domain lock policy. Auto-logon of a domain account needs Sysinternals Autologon with Windows Hello off for that account.</li>
+      <li><b>Linux under Hyper-V.</b> A Generation&nbsp;2 Linux VM boots with Secure Boot only on the "Microsoft UEFI Certificate Authority" template; the Windows template refuses it. No desktop and no Enhanced Session: SSH.</li>
+      <li><b>A host restart takes every VM down.</b> Windows Update on the host is calmer than Windows&nbsp;11 but a restart mid-run still loses that estimate. Host and VMs on different nights, and James told first.</li>
+      <li><b>Licences add up.</b> Server 2025 Standard per core (two 16-core packs for this processor) and client access licences; Windows&nbsp;11 Pro and Office for VM&nbsp;1 (and VM&nbsp;3 if built); nothing for the Linux VM. Windows Server Standard's two free guest licences are for Windows <em>Server</em> guests, not Windows&nbsp;11.</li>
+      <li><b>Keep the estimating shares on the file server.</b> Nothing here needs this machine to be a file server, and making it one puts the queue and the files on one restart.</li>
     </ol>
   </section>
 
   <section class="jack">
-    <div class="owner"><span class="tag">Jack</span><h2>Infrastructure: the machine</h2></div>
-    <p class="sub">Everything below the applications: hardware, operating system, network, accounts, backup. In build order.</p>
+    <div class="owner"><span class="tag">Jack</span><h2>Infrastructure: the host and the VMs</h2></div>
+    <p class="sub">Everything below the applications: hardware, operating systems, network, accounts, backup. In build order.</p>
 
-    <h3>The machine (Windows 11 Pro)</h3>
+    <h3>The host (Windows Server 2025)</h3>
     <ol>
-      <li><b>BIOS:</b> latest firmware; power on after AC loss; enable virtualisation (SVM) and IOMMU, which Hyper-V needs for the two VMs.</li>
-      <li><b>Storage:</b> set up the two NVMe drives (mirror, or OS on one and data and VM on the other — Jack's call) and install Windows 11 Pro with current drivers, including NVIDIA's RTX workstation driver for the 4000 Ada.</li>
+      <li><b>BIOS:</b> latest firmware; power on after AC loss; enable virtualisation (SVM) and IOMMU, which the GPU pass-through needs.</li>
+      <li><b>Storage:</b> set up the two NVMe drives (mirror or split OS / VMs — Jack's call) and install Windows Server 2025 with current drivers, from the board maker where Scan has none for Server.</li>
       <li><b>Network and domain:</b> fixed IP, DNS name, join the domain.</li>
-      <li><b>Runner account:</b> a dedicated domain user that logs on automatically at boot (Sysinternals Autologon; Windows Hello off for it); read/write to the estimating shares by UNC path (<code>\\server\share</code>, not K:). The portal service runs under this account or its own service account with the same share rights.</li>
-      <li><b>Power and lock policy:</b> no sleep, no hibernate, fast startup off, no screen lock, no screensaver — SOLIDWORKS and Excel need a live desktop session. Exempt the machine from any domain lock policy.</li>
-      <li><b>Windows Update policy:</b> active hours, restarts scheduled out of hours and announced, feature updates deferred.</li>
-      <li><b>Firewall:</b> allow the portal port (<code>8071</code>) from the office network.</li>
-      <li><b>Remote access for James:</b> Remote Desktop as administrator, with the one-session rule from the gotchas; the admin share, which the laptop's <code>push-to-server.ps1</code> copies through.</li>
-      <li><b>SOLIDWORKS licence manager</b> (SolidNetWork), only if the licence is a network one: install it on this machine (or the file server) with the reseller's serial and open ports <code>25734</code> and <code>25735</code> to designers' PCs if they share the pool. It must be at least as new as the SOLIDWORKS install.</li>
+      <li><b>Hyper-V:</b> add the Hyper-V role and create an <b>External virtual switch</b> on the machine's network port, so the VMs are on the office network.</li>
+      <li><b>Service account</b> for the SDI Intelligence portal service, with read/write to the estimating shares by UNC path (<code>\\server\share</code>, not K:).</li>
+      <li><b>Firewall:</b> allow the portal port (<code>8071</code>) from the office network and from the VMs.</li>
+      <li><b>SOLIDWORKS licence manager</b> (SolidNetWork): install it on the host with the reseller's serial, and open ports <code>25734</code> and <code>25735</code> to the VMs (and to designers' PCs if they share the pool). Windows Server is supported for the licence manager; it needs SOLIDWORKS 2025 SP3 or later on Server 2025, and must be at least as new as the SOLIDWORKS installs.</li>
     </ol>
 
-    <h3>Hyper-V and the two VMs</h3>
-    <ol start="10">
-      <li><b>Turn on Hyper-V</b> (a Windows 11 Pro feature) and create an <b>External virtual switch</b> on the machine's network port, so the VMs are on the office network with their own fixed addresses.</li>
-      <li><b>VM 2, Windows 11 Pro:</b> Generation 2 with Secure Boot and a virtual TPM (Windows 11 requires both); 8 virtual CPUs, 32 GB memory with Dynamic Memory <b>off</b>, a 200 GB+ virtual disk on NVMe. Fixed IP and DNS name, joined to the domain, its own runner account with auto-logon, no sleep or lock, fully updated. <b>No graphics card and no SOLIDWORKS.</b> Its runner goes live only after James's routing change (see his list), so jobs with models always go to the machine itself.</li>
-      <li><b>VM 3, Linux:</b> Generation 2 with Secure Boot on the <b>Microsoft UEFI Certificate Authority</b> template (no virtual TPM needed); 4 virtual CPUs, 16 GB memory, a 100 GB+ virtual disk. Ubuntu LTS server, fixed IP and DNS name, SSH open to James, an account for him with sudo. With both VMs at full size the machine itself keeps 20 cores and 80 GB.</li>
-      <li><b>Both VMs start automatically</b> when the machine boots, after the host has logged the runner account in.</li>
+    <h3>VM 1 (Windows 11 Pro): the graphics card, SOLIDWORKS and the runner</h3>
+    <ol start="8">
+      <li><b>Create it as Generation 2</b> with Secure Boot and a virtual TPM (Windows 11 requires both).</li>
+      <li><b>Fixed resources:</b> 12 virtual CPUs, 48 GB memory with Dynamic Memory <b>off</b>, a 300 GB+ virtual disk on NVMe.</li>
+      <li><b>Pass the RTX 4000 through to the VM</b> (Discrete Device Assignment), then install NVIDIA's RTX workstation driver inside the VM. GPU partitioning is not needed (and not available for this card). The host and the Linux VM then have no graphics card; that is expected.</li>
+      <li><b>Windows 11 Pro,</b> fixed IP and DNS name, joined to the domain, fully updated.</li>
+      <li><b>Runner account:</b> a dedicated domain user that logs on automatically at boot (Sysinternals Autologon, Windows Hello off for it); read/write to the estimating shares by UNC path.</li>
+      <li><b>Power and lock policy:</b> no sleep, no screen lock, no screensaver on the VM, exempt from any domain lock policy — SOLIDWORKS and Excel need a live desktop session.</li>
+      <li><b>Admin access for James:</b> Remote Desktop to the host (two admin sessions) and the Hyper-V console to the VM; the host's admin share (the laptop's <code>push-to-server.ps1</code> copies through it); a <code>tscon</code> hand-back script on the runner's desktop.</li>
+    </ol>
+
+    <h3>VM 2 (Linux): James's services</h3>
+    <ol start="15">
+      <li><b>Create it as Generation 2</b> with Secure Boot on the <b>Microsoft UEFI Certificate Authority</b> template; no virtual TPM needed. 4 virtual CPUs, 16 GB memory, a 100 GB+ virtual disk. With VM&nbsp;1 at 48 GB this leaves the host about 64 GB.</li>
+      <li><b>Ubuntu LTS server,</b> fixed IP and DNS name on the External switch, SSH open to James, an account for him with sudo. <b>No graphics card</b> unless a second card is fitted and passed to it.</li>
+      <li><b>Both VMs start automatically</b> with the host, VM&nbsp;1 first.</li>
+    </ol>
+
+    <h3>VM 3 (Windows 11 Pro): a second runner, optional and later</h3>
+    <ol start="18">
+      <li><b>Same as VM&nbsp;1</b> (Generation 2, Secure Boot, virtual TPM, Windows 11 Pro, fixed IP, domain, its own runner account with auto-logon, no sleep or lock), but <b>no graphics card and no SOLIDWORKS</b>; 8 virtual CPUs, 32 GB with Dynamic Memory off, 200 GB+ disk.</li>
+      <li><b>Only after James's routing change</b> (see his list), so jobs with SOLIDWORKS models always go to VM&nbsp;1.</li>
     </ol>
 
     <h3>Running it</h3>
-    <ol start="14">
-      <li><b>Licences:</b> Windows 11 Pro comes with the workstation; one Office licence for it. VM&nbsp;2 needs its own Windows&nbsp;11 Pro and Office licences. The Linux VM needs none. No Server licence and no client access licences.</li>
-      <li><b>Backups:</b> an imaging tool for the machine and an export of each VM, with one restore tested before go-live.</li>
+    <ol start="20">
+      <li><b>Licences:</b> Windows Server 2025 Standard per core (two 16-core packs for the 9975WX) and client access licences; a Windows&nbsp;11 Pro licence and an Office licence for <b>each</b> Windows VM; nothing for the Linux VM. Server Standard's two guest licences cover Windows <em>Server</em> VMs only.</li>
+      <li><b>Backups:</b> host and VMs (Windows Server Backup or the company tool, with the VMs exported), one restore tested before go-live.</li>
+      <li><b>Windows Update:</b> restarts scheduled out of hours, host and VMs on different nights, James told first.</li>
       <li><b>Antivirus:</b> apply the exclusions James supplies (SOLIDWORKS temp and the output folders).</li>
-      <li><b>Power:</b> on the UPS, BIOS set to start again after a power cut, the runner logging on by itself.</li>
+      <li><b>Power:</b> on the UPS, and set to start again after a power cut, with the VMs starting automatically.</li>
     </ol>
   </section>
 
   <section class="gate">
     <h2>Handover checks</h2>
-    <p>Jack confirms these, then the machine is James's:</p>
+    <p>Jack confirms these, then the machines are James's:</p>
     <ul>
-      <li>In Device Manager the graphics card shows as <b>NVIDIA RTX 4000 Ada</b> with the NVIDIA driver, not "Microsoft Basic Display".</li>
-      <li>After a full restart, the machine logs in as the runner account with nobody touching it, and is still logged in and unlocked an hour later; both VMs are running, and each answers on its own fixed address by name.</li>
-      <li>From James's laptop, SSH into the Linux VM works by name, and Remote Desktop into the Windows VM works as its runner account.</li>
-      <li>Signed in as the runner account, it can open and save a file in the estimating folders by UNC path.</li>
-      <li>From a desk, the machine answers on port 8071 (once James's service is running, this is just a browser test).</li>
-      <li>If the licence is a network one: from a designer's PC, the licence manager answers on port 25734.</li>
-      <li>James can Remote Desktop in as an administrator, and the <code>tscon</code> hand-back script is on the runner's desktop.</li>
+      <li>In VM&nbsp;1's Device Manager the graphics card shows as <b>NVIDIA RTX 4000 Ada</b> with the NVIDIA driver, not "Microsoft Basic Display".</li>
+      <li>After a full restart of the host, both VMs start by themselves; VM&nbsp;1 logs in as the runner account with nobody touching it and is still unlocked an hour later.</li>
+      <li>Signed in as the runner account, VM&nbsp;1 can open and save a file in the estimating folders by UNC path.</li>
+      <li>From VM&nbsp;1 and from a desk, the host answers on port 8071 (once James's service is running, this is just a browser test).</li>
+      <li>From VM&nbsp;1, the licence manager on the host answers on port 25734.</li>
+      <li>From James's laptop: Remote Desktop to the host as an administrator while another admin is already connected; the Hyper-V console shows VM&nbsp;1's desktop; SSH into the Linux VM by name.</li>
     </ul>
   </section>
 
   <section class="james">
     <div class="owner"><span class="tag">James</span><h2>Applications: the laptop premise</h2></div>
-    <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop — and now on one machine, as on the laptop.</p>
+    <p class="sub">Everything that makes it an SDI Intelligence machine, installed the same way as on the laptop.</p>
 
-    <h3>On the machine (runs the estimates and the portal)</h3>
+    <h3>On VM 1 (runs the estimates)</h3>
     <ol>
-      <li><b>SOLIDWORKS:</b> install and activate (standalone), or point it at the licence manager (network). Open one model to confirm the graphics card is in use.</li>
+      <li><b>SOLIDWORKS:</b> install on VM&nbsp;1 only and point it at the host's licence manager. Open one model to confirm the graphics card is in use.</li>
       <li><b>Office / Excel:</b> install and activate; open one estimate book.</li>
       <li><b>PDM / Design Vault client,</b> if models come from the vault.</li>
       <li><b>Python and Git,</b> clone the repository, create the engine's <code>.venv</code>.</li>
       <li><b>The <code>.env</code> file,</b> written by hand for this machine — never copied from the laptop.</li>
-      <li><b>The portal:</b> the backend's own <code>.venv</code> and <code>.env</code>; install and start the SDIIntelligence service; check the portal loads from a desk.</li>
-      <li><b>The runner:</b> scheduled task at logon (<code>restart-runner.ps1</code>) pointing at the portal on this machine.</li>
+      <li><b>The runner:</b> scheduled task at logon (<code>restart-runner.ps1</code>) pointing at the host's service.</li>
       <li><b>Hand Jack the antivirus exclusion paths.</b></li>
     </ol>
 
-    <h3>Proving it</h3>
-    <ol start="9">
-      <li><b>Run one known job</b> (12645 or 12173) and compare the book and the run time with the laptop's.</li>
-      <li><b>Restart the machine</b> and confirm the portal and the runner both come back without anyone logging in.</li>
-      <li><b>Remote in and out once</b> as the runner account while a short job runs, hand the session back with <code>tscon</code>, and confirm the job finished.</li>
+    <h3>On the host (runs the portal)</h3>
+    <ol start="8">
+      <li><b>Python</b> and the service's own <code>.venv</code>, the backend files, and the host's own <code>.env</code>.</li>
+      <li><b>Install and start the SDIIntelligence service;</b> check the portal loads from a desk.</li>
     </ol>
 
     <h3>On the Linux VM</h3>
-    <ol start="12">
-      <li><b>What it runs is James's to name:</b> tooling, agents, and any service that needs no Windows. The portal could live here instead of on the metal (it is a Python service and runs the same on Linux); if it does, the runners point at the Linux VM's name, it runs under systemd, and it needs no access to the estimating shares, which only the runners read and write.</li>
-      <li><b>Nothing that drives Excel or SOLIDWORKS</b> goes here: those are Windows programs and the runners stay on Windows.</li>
+    <ol start="10">
+      <li><b>What it runs is James's to name:</b> tooling, agents, and any service that needs no Windows. If the portal moves here, the runners point at the Linux VM's name and it runs under systemd; it needs no access to the estimating shares, which only the runners read and write.</li>
     </ol>
 
-    <h3>Before runner 2 goes live</h3>
-    <ol start="14">
-      <li><b>Routing change in the engine:</b> today whichever runner is free takes the next job, so a job with SOLIDWORKS models could land on VM&nbsp;2 and be costed from the PDFs alone. Each runner will say whether it has SOLIDWORKS, and jobs with models will wait for one that does.</li>
-      <li><b>The graphics test:</b> run the SOLIDWORKS extractor on 12120 in VM&nbsp;2 with no card and compare the extract and the time with the machine itself. This decides whether VM&nbsp;2 can ever run SOLIDWORKS.</li>
+    <h3>Proving it</h3>
+    <ol start="11">
+      <li><b>Run one known job</b> (12645 or 12173) on VM&nbsp;1 and compare the book and the run time with the laptop's.</li>
+      <li><b>Restart the host</b> and confirm the portal, both VMs and the runner all come back without anyone logging in.</li>
+      <li><b>Remote in and out once</b> through the Hyper-V console while a short job runs on VM&nbsp;1, and confirm the job finished.</li>
+      <li><b>The graphics test:</b> run the SOLIDWORKS extractor on 12120 in a VM with no card and compare the extract and the time with VM&nbsp;1. This decides whether a second card is ever needed.</li>
+    </ol>
+
+    <h3>Before VM 3</h3>
+    <ol start="15">
+      <li><b>Routing change in the engine:</b> today whichever runner is free takes the next job, so a job with SOLIDWORKS models could land on VM&nbsp;3 and be costed from the PDFs alone. Each runner will say whether it has SOLIDWORKS, and jobs with models will wait for one that does.</li>
     </ol>
   </section>
 
@@ -331,15 +329,14 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <div class="tbl"><table>
       <thead><tr><th>Question</th><th>Who leads</th><th>Why it matters</th></tr></thead>
       <tbody>
-        <tr><td>SOLIDWORKS licence type: standalone on this machine, or network (SolidNetWork) shared with designers; cover for unattended automated use</td><td>James, with the reseller</td><td>On a physical machine a standalone licence is simple and does not need reactivating. A network licence puts the seats in a pool, first come, first served. Either way the runner keeps SOLIDWORKS open and holds one seat all day.</td></tr>
-        <tr><td>SOLIDWORKS version: 2026 recommended</td><td>James, with the reseller</td><td>Any version Dassault supports on Windows 11 runs on the metal. The Hyper-V constraint (2026 for Hyper-V 2025) only matters if SOLIDWORKS is ever put in VM&nbsp;2.</td></tr>
-        <tr><td>Windows 11 Pro or Pro for Workstations</td><td>Jack, with Scan</td><td>Either runs everything here. Take whichever Scan supplies; nothing in the engine needs the Workstations edition.</td></tr>
-        <tr><td>When runner&nbsp;2 goes live on the Windows VM</td><td>James</td><td>Two runners means two estimates at once. The VM is built with the machine; its runner waits for the routing change and its own Windows&nbsp;11 and Office licences.</td></tr>
+        <tr><td>SOLIDWORKS licence type: network (SolidNetWork) recommended, the cost of converting, and cover for unattended automated use</td><td>James, with the reseller</td><td>A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. Each SOLIDWORKS kept open (as the runner does) holds a seat all day.</td></tr>
+        <tr><td>SOLIDWORKS version: 2026 or later</td><td>James, with the reseller</td><td>SOLIDWORKS lists Hyper-V 2022 for version 2025 and Hyper-V 2025 (this host) for version 2026. The program itself runs only on Windows 10/11, never on the Server host.</td></tr>
+        <tr><td>Server 2025 drivers for the 3XS board</td><td>Jack, with Scan</td><td>Scan supplies Windows&nbsp;11 drivers; the Server install may need the board maker's chipset and network drivers. Confirm before the build week.</td></tr>
         <tr><td>What the Linux VM is for, and whether the portal moves to it</td><td>James</td><td>Decides its size, what Jack opens on the firewall, and which machine name the runners point at. Nothing about SOLIDWORKS or Excel changes either way.</td></tr>
-        <tr><td>Fixed shares of the machine for the two VMs</td><td>Jack and James</td><td>The models are read on the metal, so it keeps most of the cores and memory: 20 cores and 80 GB with the VMs as sized here.</td></tr>
-        <tr><td>A second SOLIDWORKS runner</td><td>James, after the graphics test</td><td>Either VM&nbsp;2 without a card (if the test passes) or a second physical workstation. A second card in this machine helps no VM on Windows&nbsp;11 Pro.</td></tr>
-        <tr><td>Machine name and IP address</td><td>Jack</td><td>The runner, the portal links and the service settings all name it.</td></tr>
-        <tr><td>Who is told before Windows updates or restarts, and the remote-access rule</td><td>Jack and James</td><td>A restart or a careless Remote Desktop session mid-run loses that estimate.</td></tr>
+        <tr><td>A second runner VM (VM&nbsp;3): now, later, or not at all</td><td>James</td><td>Two runners means two estimates at once. It needs its own Windows&nbsp;11 and Office licences, and the routing change first.</td></tr>
+        <tr><td>A second graphics card, for the Linux VM or VM&nbsp;3</td><td>James, after the graphics test; Jack and Scan on fit</td><td>Only if a second VM needs a card: SOLIDWORKS in VM&nbsp;3, or a model on the Linux VM. A second RTX 4000 Ada SFF passed through is the simple option; a partitioning card (NVIDIA L4) adds yearly vGPU licences.</td></tr>
+        <tr><td>Machine names and IP addresses for host and VMs</td><td>Jack</td><td>The runner, the portal links and the service settings all name them.</td></tr>
+        <tr><td>Who is told before Windows updates or restarts</td><td>Jack</td><td>A restart mid-run loses that estimate.</td></tr>
       </tbody>
     </table></div>
   </section>
