@@ -2698,6 +2698,15 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
         if (part.get("blank_length_mm") or part.get("normalized_thickness_mm")
                 or _geom.get("estimated_cut_length_mm") or part.get("flat_pattern_detected")):
             present.add(code)
+        # A PART TRACED TO A DETAIL SHEET OF THE PACK WAS READ THERE (D-397). Harrods
+        # 9439-01-04: one seven-sheet PDF, the title block's number printed hard against the
+        # project title, and the page records carried no drawing number for sheets 2, 6 and
+        # 7 — so 101, the lens and the graphic, each with a sheet of its own and each on the
+        # costed bill, were a BLOCKING "drawing this pack does not contain". The record's
+        # own pages, with a detail role, are the pack saying the sheet is there.
+        _roles = {str(r).strip().lower() for r in (part.get("page_roles") or [])}
+        if (part.get("pages") and _roles & {"detail", "flat_pattern", "fabricated"}):
+            present.add(code)
     present.discard("")
 
     # A QUARANTINED CHIMERA IS NOT A MISSING DRAWING. The graph proved these codes are a

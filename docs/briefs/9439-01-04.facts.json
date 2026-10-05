@@ -1,9 +1,15 @@
 {
   "_reviewed": "James Gray, 5 Oct 2026 — 9439-01-04 Table Standing POS Holder A4 (Harrods) rev C brief, docs/briefs/9439-01-04.md. Structure, not money.",
-  "_note": "Codes compare on letters and digits only. Order quantities are Harrods' and are not on the pack; add quantity_breaks here when known.",
+  "_note": "Codes compare on letters and digits only. Breaks 1/25/50/100 are the quantities the first run was given on 5 Oct.",
   "product_root": "9439-01-04-GA",
   "not_set_aside": [
     "9439-01-04-101"
+  ],
+  "quantity_breaks": [
+    1,
+    25,
+    50,
+    100
   ],
   "quantities": {
     "9439-01-04-101": 1,

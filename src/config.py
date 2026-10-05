@@ -3639,6 +3639,26 @@ FINISH_FIELD_PROCESS_STATEMENTS = {
     "DEBURRED": ("deburring", "deburr", "manual_labour_acrylic", "manual_labour"),
 }
 
+# ── A WELD NOTE ON A PART'S OWN SHEET STATES THE WELD (D-397) ─────────────────────────────
+# Harrods 9439-01-04-101 prints "WELD & DRESS" on the frame and "TAC WELD UNDERSIDE" at the
+# base — words on the assembly's own sheet, no symbol. The book charged the weld on the
+# extract's and the engine's say-so and then asked whether it was welded at all, "inferred,
+# not drawn". A note on the part's own sheet is the drawing's statement, read by rule like a
+# symbol or FINISH: WELDED. The legend's defaults ("ALL WELDS TO BE TIG UNLESS STATED") are
+# removed first; a title ("WELDMENT", "WELD ASSEMBLY") is a name, not a note, and is not here.
+# Matched on whole words in the sheet's own lines.
+SHEET_WELD_NOTE_PATTERNS = [
+    r"\bWELD\s*(?:&|AND|\+)\s*DRESS\b",
+    r"\bTAC?K?\s+WELD(?:ED|S)?\b",
+    r"\bWELDED\b",
+    r"\bWELD\s+(?:INT|INTERNAL|FLUSH|CLOSED|ALL\s+ROUND|CORNERS?|HERE|BOTH\s+SIDES?)\b",
+    r"\bTO\s+BE\s+WELDED\b",
+]
+#   the dressing that goes with it, where the note says so
+SHEET_WELD_DRESS_PATTERNS = [
+    r"\bDRESS(?:ED)?\b",
+]
+
 # ── THE WELD PROCESS THE PACK STATES, NAMED ON THE WELD ROW (D-393) ───────────────────────
 # "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED" says HOW a weld the drawing calls up
 # is made (never THAT a part is welded — SPECIFICATION_DEFAULT_SENTENCES above). The rate card

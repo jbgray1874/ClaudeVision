@@ -5641,6 +5641,41 @@ def compile_job_route(
                     route_id=tube_route_id,
                 ))
 
+    # ONE JOINT ON ONE ASSEMBLY IS ONE EVENT, HOWEVER MANY READINGS DESCRIBE IT (D-397).
+    #
+    # Harrods 9439-01-04-101: the extract's weld route named the three leaves it joins and
+    # resolved to 101; the engine's own inference named 101 itself. Two route ids, two event
+    # ids, two Weld (CO2) rows at £29.24 — the same joint charged twice, and the second row
+    # then asked as "inferred, not drawn" beside the first, which quoted the sheet. An
+    # assembly-scoped joining operation on one target is one event: its claims are pooled so
+    # the strongest reading wins and the others stay as evidence, and the participants are the
+    # union of what each reading named. Part-scoped joints (a member's own seam) are untouched.
+    _joint_events: Dict[Tuple[str, str], str] = {}
+    for _eid in list(claims_by_event.keys()):
+        _cl = claims_by_event.get(_eid) or []
+        if not _cl or _cl[0].operation not in _JOINING_OPS:
+            continue
+        if not all(str(_c.scope or "").lower() == "assembly" for _c in _cl):
+            continue
+        _key = (str(_cl[0].operation), str(_cl[0].target_id))
+        _keep = _joint_events.get(_key)
+        if _keep is None or _keep == _eid:
+            _joint_events[_key] = _eid
+            continue
+        _all = sorted({str(p) for _c in (claims_by_event[_keep] + _cl)
+                       for p in (_c.participants or []) if p})
+        for _c in claims_by_event[_keep] + _cl:
+            _c.participants = list(_all)
+        claims_by_event[_keep].extend(_cl)
+        del claims_by_event[_eid]
+        issues.append({
+            "code": "joining_events_merged_on_assembly",
+            "operation": _key[0], "assembly": _key[1],
+            "merged_event": _eid, "into": _keep,
+            "note": (f"{_key[0]} on {_key[1]} was described by more than one reading; they "
+                     f"are one joint, charged once, with every reading kept as evidence"),
+        })
+
     decisions = [
         arbitrate_event(event_id, claims)
         for event_id, claims in claims_by_event.items()

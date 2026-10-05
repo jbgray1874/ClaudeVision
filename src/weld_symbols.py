@@ -405,6 +405,13 @@ def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
                     # each printed line whole (D-394) — the border's weld specification is
                     # legible only in the second.
                     slot["text"] += _clean_pn(text) + _clean_pn(text_by_baseline(page))
+                    # THE SHEET'S OWN LINES, LEGEND REMOVED, FOR THE NOTE READER (D-397).
+                    try:
+                        from extractor_patterns import strip_specification_legend as _strip
+                        slot["notes"] = (str(slot.get("notes") or "") + " " + " ".join(
+                            _strip(text_by_baseline(page)).upper().split())).strip()
+                    except Exception:                                # noqa: BLE001
+                        pass
                     try:
                         _fin = str((_title_block_fields(page) or {}).get("finish") or "")
                     except Exception:                                # noqa: BLE001
@@ -724,6 +731,80 @@ def note_weld_process(part: Dict[str, Any], sheet_text: Any) -> str:
     if isinstance(flags, list) and _flag not in flags:
         flags.append(_flag)
     return str(read["process"])
+
+
+def sheet_weld_note(notes: Any) -> Dict[str, Any]:
+    """The weld note a sheet's own lines carry, or {} (D-397). {"note", "dress"}."""
+    text = " ".join(str(notes or "").upper().split())
+    if not text:
+        return {}
+    try:
+        import config as _cfg
+        pats = list(getattr(_cfg, "SHEET_WELD_NOTE_PATTERNS", None) or [])
+        dress = list(getattr(_cfg, "SHEET_WELD_DRESS_PATTERNS", None) or [])
+    except Exception:                                                # noqa: BLE001
+        return {}
+    for pat in pats:
+        try:
+            m = re.search(pat, text)
+        except re.error:
+            continue
+        if m:
+            _d = any(re.search(dp, text) for dp in dress if dp)
+            return {"note": m.group(0), "dress": bool(_d)}
+    return {}
+
+
+def apply_sheet_weld_notes(parts: Sequence[Dict[str, Any]],
+                           by_part: Mapping[str, Mapping[str, Any]]) -> List[str]:
+    """A weld NOTE on a part's own sheet states the weld, as a symbol or FINISH: WELDED does.
+
+    D-397: 9439-01-04-101's sheet prints "WELD & DRESS" and "TAC WELD UNDERSIDE" and draws
+    no symbol; the weld reached the book as the extract's reading and the engine's inference
+    and was asked as "inferred, not drawn". The words are the drawing's. Stamped welding (and
+    dress_welds where the note says so) at drawing_deterministic on the part whose own sheet
+    carries them, unless ruled out; the note is quoted. The legend was removed before the
+    read (sheet_weld_facts), so the pack's default sentence never puts a weld on a part."""
+    stated: List[str] = []
+    try:
+        import source_precedence as _sp
+    except Exception:                                                # noqa: BLE001
+        return stated
+    by_pn = {_clean_pn(p.get("part_number")): p for p in parts or () if isinstance(p, dict)}
+    for pn, facts in by_part.items():
+        part = by_pn.get(pn)
+        if part is None:
+            continue
+        hit = sheet_weld_note(facts.get("notes"))
+        if not hit:
+            continue
+        ruled = part.get("operations_ruled_out") or {}
+        if "welding" in ruled:
+            continue                          # a ruled-out weld takes its dressing with it
+        ops = part.setdefault("textual_operations", [])
+        if not isinstance(ops, list):
+            continue
+        _srcs = part.setdefault("operation_sources", {})
+        wanted = ["welding"] + (["dress_welds"] if hit.get("dress") else [])
+        added: List[str] = []
+        for op in wanted:
+            if op in ruled:
+                continue
+            if op not in ops:
+                ops.append(op)
+            if _sp.rank(_srcs.get(op)) < _sp.rank("drawing_deterministic"):
+                _srcs[op] = "drawing_deterministic"
+            added.append(op)
+        if not added:
+            continue
+        part["weld_stated_by_note"] = hit["note"]
+        _flag = (f"WELDED per its own sheet's note: '{hit['note']}' is printed on it — a stated "
+                 f"weld{' and its dressing' if hit.get('dress') else ''}, not an inference")
+        if _flag not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(_flag)
+        note_weld_process(part, facts.get("text"))
+        stated.append(str(part.get("part_number") or pn))
+    return stated
 
 
 def apply_finish_processes(parts: Sequence[Dict[str, Any]],

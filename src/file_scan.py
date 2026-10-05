@@ -3051,6 +3051,15 @@ def _finalize_scan_summary(
             _ws_ruled = _ws_apply(_pre_estimate_parts, _ws_by_part)
             _ws_fin = _ws_finish(_pre_estimate_parts, _ws_by_part)
             try:
+                # A weld note on the part's own sheet states the weld (D-397).
+                from weld_symbols import apply_sheet_weld_notes as _ws_notes
+                _ws_noted = _ws_notes(_pre_estimate_parts, _ws_by_part)
+                if _ws_noted:
+                    print(f"   [weld-symbols] welded per a note on its own sheet: "
+                          f"{', '.join(_ws_noted)}", flush=True)
+            except Exception as _wn_err:                             # noqa: BLE001
+                print(f"   [weld-symbols] sheet weld notes not read: {_wn_err}", flush=True)
+            try:
                 from weld_symbols import apply_finish_coats as _ws_coats
                 _ws_coated = _ws_coats(_pre_estimate_parts, _ws_by_part)
                 if _ws_coated:
@@ -3768,9 +3777,11 @@ def _finalize_scan_summary(
                     from weld_symbols import (apply_to_parts as _ws_apply_late,
                                               apply_finish_welds as _ws_finish_late,
                                               apply_finish_coats as _ws_coats_late,
-                                              apply_finish_processes as _ws_procs_late)
+                                              apply_finish_processes as _ws_procs_late,
+                                              apply_sheet_weld_notes as _ws_notes_late)
                     _ws_apply_late(_late_parts, _ws_by_part)
                     _ws_fin_late = _ws_finish_late(_late_parts, _ws_by_part)
+                    _ws_notes_late(_late_parts, _ws_by_part)
                     _ws_procs_late(_late_parts, _ws_by_part)
                     _ws_coated_late = _ws_coats_late(
                         summary["manufacturing_writeup"]["parts"], _ws_by_part)

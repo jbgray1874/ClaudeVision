@@ -276,6 +276,48 @@ def _is_named_consumable(part: Dict[str, Any]) -> bool:
     return bool(_CONSUMABLE_RE.search(text))
 
 
+def own_sheet_details_a_cut_part(part: Dict[str, Any]) -> bool:
+    """Does the part's OWN sheet state a material SDI cuts from stock, and detail the part
+    (a thickness, a size or a stated weight)? (D-397)
+
+    The material vocabulary is config's density table — the sheet and board materials the
+    engine prices by mass or area — so a PETG lens, a steel bracket and an MDF panel all
+    count and a "BOUGHT_IN" or inherited blank does not. Only the part's own fields are
+    read; an assembly's material carried down to a listed article is not its own."""
+    if not isinstance(part, dict):
+        return False
+    try:
+        import config as _cfg
+        dens = getattr(_cfg, "MATERIAL_DENSITY_KG_PER_M3", None) or {}
+    except Exception:                                                # noqa: BLE001
+        dens = {}
+    mat = _upper(part.get("normalized_material") or part.get("material")).replace("_", " ")
+    if not mat or mat in ("BOUGHT IN", "BOUGHT_IN"):
+        return False
+    if not (mat in dens or mat.replace(" ", "_") in dens):
+        return False
+    if part.get("material_inherited_from") or part.get("finish_inherited_from"):
+        return False
+    try:
+        from display_material import material_is_the_parts_own as _own
+        if not _own(part):
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    def _num(v: Any) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
+    _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    detailed = (_num(part.get("normalized_thickness_mm")) > 0
+                or _num(part.get("stated_weight_kg")) > 0 or _num(part.get("weight_kg")) > 0
+                or _num(part.get("overall_length_mm")) > 0 or _num(part.get("blank_length_mm")) > 0
+                or _num(_ng.get("blank_length_mm")) > 0
+                or bool(part.get("overall_sizes_mm")))
+    return bool(detailed)
+
+
 def bought_in_reason(part: Dict[str, Any]) -> str:
     """WHICH rule decided, in words, or "" for a part we make.
 
@@ -308,7 +350,15 @@ def bought_in_reason(part: Dict[str, Any]) -> str:
         # flag, a bought-in-only source, a BI- code family — is checked before this and is
         # untouched.
         _detailed = any(r in {"detail", "fabricated", "flat_pattern"} for r in _roles)
-        if not (_detailed and part_code_conventions.material_suffix(_upper(part.get("part_number")))):
+        # THE SECOND SIGNAL CAN BE THE SHEET'S OWN TITLE BLOCK (D-397). Harrods
+        # 9439-01-04-004, an A4 GRAPHIC LENS, has a detail sheet of its own: MATERIAL PETG,
+        # 297 x 212, 2 mm, 151 g. It carries no material suffix, so the bought-in role stood
+        # and the two lenses were priced from the parts table at £1.68 and never cut. A detail
+        # sheet that states a material SDI cuts from stock, with a thickness, a size or a
+        # weight on it, is a drawing of a part we make — a second statement from the drawing
+        # office, as the suffix is. A bought-in page lists an article; it does not detail one.
+        if not (_detailed and (part_code_conventions.material_suffix(_upper(part.get("part_number")))
+                               or own_sheet_details_a_cut_part(part))):
             return "the drawing page is a bought-in page"
     src = str(part.get("source") or "").lower()
     for tok in _BOUGHT_IN_SOURCE_TOKENS:
