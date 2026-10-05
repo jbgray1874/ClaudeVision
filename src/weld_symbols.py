@@ -315,6 +315,34 @@ def describe_weld_symbols(counts: Optional[Mapping[str, Any]], pages: Sequence[A
             + f" weld symbol(s) on {where}")
 
 
+def text_by_baseline(page: Any) -> str:
+    """The page's text with every physical line kept whole (D-394).
+
+    pdfplumber's extract_text merges characters whose tops lie within its y-tolerance into one
+    line and sorts them by x. The M&S border prints "WELD SPECIFICATION:" and "• ALL WELDS TO
+    BE TIG UNLESS STATED" in 7 pt a couple of points apart, so the two lines came out
+    interleaved letter by letter ("LEDCSIFTICOABTEIOTNIG:UNLESSSTATED") and no reader could
+    find the weld process, the legend heading or the grade sentences in them. Grouping the
+    characters by their own baseline and size, then reading each group left to right, gives
+    every line as it is printed. Returned beside the plain extraction, never instead of it."""
+    try:
+        chars = list(getattr(page, "chars", None) or [])
+    except Exception:                                                # noqa: BLE001
+        return ""
+    rows: Dict[Tuple[float, float], List[Any]] = {}
+    for c in chars:
+        try:
+            key = (round(float(c.get("top", 0.0)), 1), round(float(c.get("size", 0.0)), 1))
+        except (TypeError, ValueError):
+            continue
+        rows.setdefault(key, []).append(c)
+    lines: List[str] = []
+    for key in sorted(rows):
+        lines.append("".join(str(ch.get("text") or "")
+                             for ch in sorted(rows[key], key=lambda ch: float(ch.get("x0", 0.0)))))
+    return "\n".join(lines)
+
+
 def sheet_weld_symbols(pdf_path: Any) -> Dict[str, Dict[str, Any]]:
     """{part number: {"counts": {...}, "pages": [n, ...]}} for every sheet whose title block
     names its part and whose vectors carry a weld callout."""
@@ -373,7 +401,10 @@ def sheet_weld_facts(pdf_paths: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
                     for k, v in read_page(page).items():
                         slot["counts"][k] = slot["counts"].get(k, 0) + v
                     slot["pages"].append(i)
-                    slot["text"] += _clean_pn(text)
+                    # Both readings of the sheet's words: the plain one, and the one that keeps
+                    # each printed line whole (D-394) — the border's weld specification is
+                    # legible only in the second.
+                    slot["text"] += _clean_pn(text) + _clean_pn(text_by_baseline(page))
                     try:
                         _fin = str((_title_block_fields(page) or {}).get("finish") or "")
                     except Exception:                                # noqa: BLE001

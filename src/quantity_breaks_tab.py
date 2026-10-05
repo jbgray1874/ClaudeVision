@@ -86,14 +86,24 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
             charges = _money(row.get("order_charges_per_unit"))
             setup = _money(row.get("setup_per_unit"))
             labour = _money(row.get("labour"))
+            material = _money(row.get("material"))
             unit = _money(row.get("unit"))
             if key == "_run":
                 v = (round(labour - setup, 2)
                      if labour is not None and setup is not None else None)
             elif key == "_own":
+                # THROUGH THE UNIT CELL'S OWN ARITHMETIC (D-394). The spread money sits in
+                # material and labour, and the unit cell carries both through a divisor
+                # (absorption, rebate); taking it off the unit figure directly left £37.37 on
+                # 12696-01 at one off — not a making cost, and £24 above what the 2,500-off
+                # column falls to. So: (material + labour − spread) × unit / (material + labour),
+                # the same road quantity_sweep.commercial_correction takes.
                 spread = (charges or 0.0) + (setup or 0.0)
-                v = round(unit - spread, 2) if unit is not None and (
-                    charges is not None or setup is not None) else None
+                v = None
+                if (unit is not None and material is not None and labour is not None
+                        and (charges is not None or setup is not None)
+                        and (material + labour) > 0):
+                    v = round((material + labour - spread) * unit / (material + labour), 2)
             else:
                 v = _money(row.get(key))
             cell = ws.cell(row=r, column=col, value=v)

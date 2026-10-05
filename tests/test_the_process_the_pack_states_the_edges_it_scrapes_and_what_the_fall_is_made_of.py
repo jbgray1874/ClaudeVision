@@ -189,7 +189,10 @@ def test_the_breaks_sheet_lays_out_what_each_column_is_made_of(tmp_path):
     r = labels["Labour run £/unit"]
     assert [sh.cell(row=r, column=c).value for c in (2, 3)] == [9.17, 9.17]
     r = labels["Unit cost less the spread money £"]
-    assert [sh.cell(row=r, column=c).value for c in (2, 3)] == [35.48, 13.04]
+    # through the unit cell's own divisor (D-394): (material + labour − spread) × unit / (m + l)
+    assert [sh.cell(row=r, column=c).value for c in (2, 3)] == [
+        round((19.31 + 202.94 - 210.77) * 246.25 / (19.31 + 202.94), 2),
+        round((2.38 + 9.95 - 0.85) * 13.89 / (2.38 + 9.95), 2)]
     note = " ".join(str(sh.cell(row=r, column=1).value or "") for r in range(1, 30))
     assert "check that figure before quoting a break" in note
     # the rows above it are where they always were

@@ -1666,6 +1666,11 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     r"\bALL\s+WELDS?\b[^.;\n•]{0,60}?\bUNLESS\s+(?:OTHERWISE\s+)?(?:STATED|SPECIFIED|NOTED|SHOWN|INDICATED)\b",
     # The legend's how-to for wire-to-wire joints (json_normaliser strips the same line).
     r"\bRESISTANCE\s+WELDING\s+WIRE\s+TO\s+WIRE\b[^•\n]{0,80}",
+    # A GRADE FOR A THICKNESS RANGE IS NOT A GAUGE (D-394). The material legend's "Q195 UP TO
+    # 3mm THICK FOR POWDER COATED STEEL" / "Q235 OVER 3MM THICK ..." put "3" on 12696-01-01A's
+    # quality line as a stated thickness; the part is 1 mm PETG. The sentence names which steel
+    # grade serves a band of gauges and says nothing about the part on the sheet.
+    r"\b(?:UP\s+TO|OVER)\s+\d+(?:\.\d+)?\s*MM\s+THICK\s+FOR\b[^•\n.;:]{0,60}",
 ]
 
 # ── A FINISH NOTE THAT NAMES ONE FACE ─────────────────────────────────────────────────────
