@@ -2,7 +2,7 @@
 
 **Date:** Monday 5 October 2026
 **Roles:** James leads the software design; Jack is SDI's hardware advisor and builds the machine; the Technical Design team installs its own services on the Linux VM
-**Status:** plan agreed in principle; the order goes to Scan on 12 October on the reseller's licensing answer; hardware on site 26 October; go-live in the week commencing 2 November
+**Status:** plan agreed in principle; the order goes to Scan on 12 October once SDI has settled its SOLIDWORKS licence position; hardware on site 26 October; go-live in the week commencing 2 November
 **The full plan:** `docs/SDI_Intelligence_Server_Build_Who_Does_What.html` (and `.pdf`) in the repository, revision of 5 October
 
 ## The decision, in one paragraph
@@ -126,8 +126,8 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 
 | Question | Owner | Blocks |
 |---|---|---|
-| The reseller's written answers on licensing (activation in a VM; automated use; unattended STEP/PDF/DXF; Document Manager key terms) | James, with the reseller | The order to Scan on 12 October |
-| Server 2025 drivers for the 3XS board | Jack, with Scan | The host install |
+| SOLIDWORKS licensing, ours to answer from the licence agreement: activation in a Hyper-V VM; automated, server-side use; unattended STEP/PDF/DXF generation; the Document Manager API key terms. The reseller is asked only where the agreement is silent | James | The order to Scan on 12 October |
+| Scan's confirmation of the spec, Server 2025 drivers for the board, pass-through support, lead time and the 26 October delivery | Jack, with Scan | The order to Scan on 12 October |
 | The Linux VM's disk size (how much of W: the vault holds) | James, with Technical Design | VM 2 creation |
 | Ports and names | James gives, Jack opens | Firewall rules, every link |
 | Who is told before restarts; the remote-access rule | Jack and James | Day-to-day running |
@@ -138,8 +138,8 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 
 | Step | Who | When |
 |---|---|---|
-| Licensing questions to the reseller; written answers back | James | Mon 5 to Fri 9 October |
-| Scan confirms Server 2025 drivers for the board | Jack | by Fri 9 October |
+| SOLIDWORKS licence and activation position settled from the licence agreement | James | Mon 5 to Fri 9 October |
+| Scan confirms the spec, Server 2025 drivers for the board, pass-through support and the lead time | Jack | by Fri 9 October |
 | Order placed with Scan, 14-day lead time | Jack | Mon 12 October |
 | Licences ordered: Server 2025 Standard, CALs, Windows 11 Pro, Office, any SOLIDWORKS change | James | 12 to 16 October |
 | Preparation: Server media, accounts, firewall rules, installers, `.env`, Linux build scripts | Jack, James, Technical Design | 12 to 23 October |
@@ -150,4 +150,4 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 | Proving: known jobs, full restart, console test | James | 2 to 4 November |
 | Go-live; the laptop stood down as the production machine | James | Thu 5 November |
 
-Two things move every date: the reseller's answer to the first licensing question, which the order waits on, and Scan's 14-day lead time. A week's slip on either is a week's slip on go-live.
+Two things move every date: the licence position, which the order waits on, and Scan's 14-day lead time. A week's slip on either is a week's slip on go-live.

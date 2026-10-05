@@ -2,7 +2,7 @@
 
 **Date:** Monday 5 October 2026
 **From:** James Gray (software design lead); Jack, SDI's hardware advisor, builds the machine
-**What this asks for:** approval of the operating-system and licensing approach, and of the licence spend set out below, so the build can be booked as soon as the SOLIDWORKS reseller answers.
+**What this asks for:** approval of the operating-system and licensing approach, and of the licence spend set out below, so the order can go to Scan on 12 October.
 
 Matt, Charlotte,
 
@@ -37,24 +37,20 @@ Indicative figures, ex VAT, to be confirmed by the suppliers' quotes. The hardwa
 | Item | Indicative cost | Note |
 |---|---|---|
 | Windows Server 2025 Standard, licensed per core, two 16-core packs for the 32-core processor | about £2,000 one-off | The cost of choosing Server over Windows 11 Pro. Windows 11 Pro would have been free with the machine. |
-| Windows Server client access licences | about £40 each, number to confirm | Microsoft requires one per user or device that uses the server; Jack and the reseller will confirm the count. |
+| Windows Server client access licences | about £40 each, number to confirm | Microsoft requires one per user or device that uses the server; Jack will confirm the count. |
 | Windows 11 Pro licence for the virtual machine | about £200 one-off | The free copy with the workstation licenses the machine itself, not a virtual machine. |
 | Microsoft Office for the virtual machine | per our existing agreement | Excel is what the estimate books run in. |
-| SOLIDWORKS: possible conversion of our seat to a network licence, and any licence needed for unattended automated use | unknown until the reseller answers | This is the one figure we cannot give yet. The questions have gone to the reseller in writing. |
+| SOLIDWORKS: possible conversion of our seat to a network licence, and any licence needed for unattended automated use | unknown until the licence position is settled | This is the one figure we cannot give yet; see below. |
 | Linux virtual machine | nothing | Ubuntu is free. |
 | Second graphics card | not in this build | Only if Technical Design later runs models on the Linux side. |
 
 The Server licence is the only cost that the operating-system decision adds, and it buys the three requirements above.
 
-## What we are asking the SOLIDWORKS reseller, and why it matters
+## The SOLIDWORKS licence: ours to settle
 
-Dassault's published requirements confirm the technical platform. They do not say what our licence permits. Three questions have gone to the reseller in writing:
+Dassault's published requirements confirm the technical platform. They do not say what our licence permits, and that is for us to establish from our own licence agreement, not for a vendor. Three points are being settled this week: may our licence be activated and used in a virtual machine; does it permit SOLIDWORKS to be driven by our own software, unattended, as the estimating engine does all day; and what covers our software generating STEP, PDF and DXF files without a person present. The reseller is asked only where the agreement is silent.
 
-1. May our licence be activated and used in a virtual machine?
-2. Does it permit SOLIDWORKS to be driven by our own software, unattended, as the estimating engine does all day?
-3. What licence covers our software generating STEP, PDF and DXF files without a person present?
-
-The honest position is that SOLIDWORKS licences are written for a person at a screen, and we drive it by machine. The answer may be "yes, as you are", or it may name a different licence with a cost. We will not book the build until question 1 is answered, and we will bring the answer to the other two to you with its price before we commit to it.
+The honest position is that SOLIDWORKS licences are written for a person at a screen, and we drive it by machine. The answer may be "yes, as we are", or it may point to a different licence with a cost. The order to Scan waits on the first point, and if the other two carry a cost it comes back to you with the figure before we commit.
 
 ## Timeline
 
@@ -62,8 +58,8 @@ The honest position is that SOLIDWORKS licences are written for a person at a sc
 
 | Step | When |
 |---|---|
-| Licensing questions to the reseller; written answers back. Scan asked to confirm Server drivers for the board | This week, to Friday 9 October |
-| Order placed with Scan on the reseller's answer; 14-day lead time. Licences ordered | Monday 12 October |
+| SOLIDWORKS licence position settled from our agreement. Scan asked to confirm the spec, Server drivers for the board and the lead time | This week, to Friday 9 October |
+| Order placed with Scan; 14-day lead time. Microsoft licences ordered | Monday 12 October |
 | Preparation while the machine is built: accounts, firewall rules, installers | 12 to 23 October |
 | Hardware arrives on site | Monday 26 October |
 | Jack builds the host and the two virtual machines; handover checks | 26 to 29 October |
@@ -73,7 +69,7 @@ The honest position is that SOLIDWORKS licences are written for a person at a sc
 
 ## What could go wrong, and what we have done about it
 
-- **The licence does not permit automated use.** We learn this from the reseller before any money is spent on the build, and the choice is then the right licence at its price, or a different way of reading models. Nothing else in the build changes.
+- **The licence does not permit automated use.** We establish this ourselves before the order goes to Scan, and the choice is then the right licence at its price, or a different way of reading models. Nothing else in the build changes.
 - **One estimate at a time.** There is one runner, as today. If the queue backs up, a second Windows virtual machine with a runner can be added later for the cost of its Windows and Office licences; it is designed for and not built.
 - **Everything on the Windows virtual machine restarts together.** A Windows update mid-estimate loses that estimate. Updates are scheduled out of hours and James is told first.
 - **Run time.** An estimate currently takes much longer than it should on the laptop, and the server will be faster but will not fix that by itself. The engine's own timing table is being used to find where the minutes go; that work is separate from the build.
@@ -82,7 +78,7 @@ The honest position is that SOLIDWORKS licences are written for a person at a sc
 ## What we need from you
 
 1. Approval of the Windows Server 2025 approach and the licence spend in the table above, about £2,200 plus client access licences, plus Office under our existing agreement.
-2. Agreement in principle that if the reseller's answer to the automation questions carries a cost, it comes back to you with the figure before we commit.
-3. Nothing else is needed from you for the build to proceed on the reseller's answer.
+2. Agreement in principle that if the licence position on automation carries a cost, it comes back to you with the figure before we commit.
+3. Nothing else is needed from you for the build to proceed.
 
 James

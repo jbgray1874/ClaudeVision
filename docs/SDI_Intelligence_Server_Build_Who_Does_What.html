@@ -221,7 +221,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     </table></div>
 
     <h3>Timeline</h3>
-    <p class="note">The order goes to Scan on Monday 12 October, on the reseller's written answer to the first licensing question, for delivery on a 14-day lead time: hardware on site Monday 26 October. Jack builds that week, James and the Technical Design team install the week after, and go-live is in the week commencing 2 November.</p>
+    <p class="note">The order goes to Scan on Monday 12 October, once SDI has settled its own SOLIDWORKS licence and activation position, for delivery on a 14-day lead time: hardware on site Monday 26 October. Jack builds that week, James and the Technical Design team install the week after, and go-live is in the week commencing 2 November.</p>
     <div class="arch"><svg viewBox="0 0 827 374" role="img" aria-label="Build timeline, 5 October to 8 November 2026" style="font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:11px;display:block;width:100%;height:auto;">
 <style>.gl{stroke:#d8dee5;stroke-width:1}.we{fill:#eef1f4}.wk{font-weight:bold;fill:#5a6572}.lab{fill:#1d2328}.who{fill:#5a6572;font-size:10px}.bar{fill:#2f6b8a}.lead{fill:#9bbdd0}.ms{fill:#c47d12}</style>
 <line class="gl" x1="300.0" y1="32" x2="300.0" y2="340"/>
@@ -245,10 +245,10 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <rect class="we" x="781.8" y="48" width="14.6" height="292"/>
 <rect class="we" x="796.4" y="48" width="14.6" height="292"/>
 <line class="gl" x1="0" y1="76" x2="827.0" y2="76"/>
-<text class="lab" x="4" y="64">Licensing questions to the reseller; answers back</text><text class="who" x="4" y="75">James</text>
+<text class="lab" x="4" y="64">SOLIDWORKS licence and activation confirmed (ours)</text><text class="who" x="4" y="75">James</text>
 <rect class="bar" x="301.0" y="58" width="71.0" height="14" rx="3"/>
 <line class="gl" x1="0" y1="102" x2="827.0" y2="102"/>
-<text class="lab" x="4" y="90">Scan: Server 2025 drivers confirmed</text><text class="who" x="4" y="101">Jack</text>
+<text class="lab" x="4" y="90">Scan: spec, Server 2025 drivers, lead time confirmed</text><text class="who" x="4" y="101">Jack</text>
 <rect class="bar" x="301.0" y="84" width="71.0" height="14" rx="3"/>
 <line class="gl" x1="0" y1="128" x2="827.0" y2="128"/>
 <text class="lab" x="4" y="116">Order placed with Scan; 14-day lead time</text><text class="who" x="4" y="127">Jack</text>
@@ -279,7 +279,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 <text class="lab" x="4" y="324">Go-live; laptop stood down</text><text class="who" x="4" y="335">James</text>
 <polygon class="ms" points="759.9,317.0 767.9,325.0 759.9,333.0 751.9,325.0"/>
 <text class="lab" x="771.9" y="329.0" style="font-weight:bold">5 Nov</text>
-<text class="who" x="4" y="366">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Dates assume written licensing answers by Friday 9 October and a 14-day lead time from Scan.</text>
+<text class="who" x="4" y="366">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Dates assume the licence position settled by Friday 9 October and a 14-day lead time from Scan.</text>
 </svg></div>
 
     <h3>What can and cannot be shared</h3>
@@ -409,7 +409,7 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
     <div class="tbl"><table>
       <thead><tr><th>Question</th><th>Who leads</th><th>Why it matters</th></tr></thead>
       <tbody>
-        <tr><td>SOLIDWORKS licensing, in writing from the reseller before the build: (1) may this licence be activated and used in a Hyper-V VM; (2) does it permit automated, server-side use; (3) what licence is needed for unattended generation of STEP, PDF and DXF files. And, separately, the Document Manager API licence-key terms for SDI's use. Network (SolidNetWork) recommended, with the cost of converting</td><td>James, with the reseller</td><td>Hyper-V 2025 on Dassault's supported-platform list is technical support, not a licence right; the three rights are not inferred from it. A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. The runner holds a seat all day.</td></tr>
+        <tr><td>SOLIDWORKS licensing, settled by SDI itself from its licence agreement before the order: (1) may this licence be activated and used in a Hyper-V VM; (2) does it permit automated, server-side use; (3) what licence is needed for unattended generation of STEP, PDF and DXF files. And, separately, the Document Manager API licence-key terms for SDI's use. Network (SolidNetWork) if the agreement points that way. The reseller is asked only where the agreement is silent</td><td>James</td><td>Hyper-V 2025 on Dassault's supported-platform list is technical support, not a licence right; the three rights are not inferred from it. A network licence is the only way to share SOLIDWORKS: seats in a pool on the host, first come, first served, shared with designers if wanted. A standalone licence is tied to one VM and can need reactivating when the VM changes. The runner holds a seat all day.</td></tr>
         <tr><td>SOLIDWORKS version: 2026 or later</td><td>James, with the reseller</td><td>SOLIDWORKS lists Hyper-V 2025 (this host) for version 2026. The program runs only on Windows 10/11, never on the Server host.</td></tr>
         <tr><td>Server 2025 drivers for the 3XS board</td><td>Jack, with Scan</td><td>Scan supplies Windows&nbsp;11 drivers; the Server install may need the board maker's chipset and network drivers.</td></tr>
         <tr><td>The Linux VM's disk: how much of W:'s history the Design Vault will hold</td><td>James, with Technical Design</td><td>Sets the virtual disk size and the backup size. It can be grown later, but the NVMe is 2 × 2 TB in total.</td></tr>
