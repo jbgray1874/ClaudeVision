@@ -1998,6 +1998,22 @@ WELD_TIME_MODEL = {
 BOOK_MANM_INSERT_LABOUR = True
 MANM_INSERT_SECONDS_EACH = 15.0            # from Tim's 12120 sheet (clinch x4 @60/hr, pem x2 @120/hr)
 MANM_INSERT_PART_TOKENS = ["CLINCH", "PEM"]  # description/part-number tokens that mark a pressed insert
+# THE SHEET'S STATED WEIGHT AGAINST THE BLANK AT THE CHARGED GAUGE (D-392). A rectangular blank
+# weighs more than the finished part by the material cut away, and never less. Beyond these
+# bounds the engine names the gauge the stated weight fits and asks; it moves nothing.
+BLANK_WEIGHT_CHECK_OVER_PCT = 60.0    # a blank up to 60% heavier than the part is ordinary scrap
+BLANK_WEIGHT_CHECK_UNDER_PCT = 20.0   # allowance for a rounded title-block weight
+
+# A FASTENER THAT IS PRESSED OR SET INTO THE SHEET, by the words on its BOM row (D-392). The
+# route gives the lowest assembly holding one a hardware_insertion event. Nutserts and PEMs
+# came from 12614-01; the hank bush from 12696-01, which carried none and so was never pressed.
+HARDWARE_INSERTION_WORDS = [
+    "SELF-CLINCH", "SELF CLINCH", "CLINCH NUT", "CLINCH STUD", "PEM STUD", "PEM NUT",
+    "PRESS-IN", "PRESS IN", "PRESS NUT", "PRESS STUD",
+    "NUTSERT", "RIVNUT", "RIV NUT", "RIVET NUT", "BLIND NUT",
+    "THREADED INSERT", "THINSHEET INSERT", "THIN SHEET INSERT",
+    "HANK BUSH", "HANKBUSH",
+]
 
 # ── Material total: tolerate not-yet-dimensioned rows ────────────────────────────
 # When a fabricated part has no usable blank L/W (or gauge), the template's per-row material

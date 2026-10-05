@@ -141,7 +141,13 @@ def reference_lines(lines: Sequence[Mapping[str, Any]]) -> List[Dict[str, Any]]:
             if _ID_GAP[0] <= gap <= _ID_GAP[1] and overlap >= 0.6 * (x1 - x0):
                 ident = d
                 break
-        out.append({"x0": x0, "x1": x1, "y": y, "identification_line": ident is not None})
+        out.append({"x0": x0, "x1": x1, "y": y, "identification_line": ident is not None,
+                    # THE SYMBOL MAY SIT ON THE DASHED LINE (D-392). ISO 2553 puts the symbol
+                    # on the identification line for an other-side weld; 12696-01-101 draws
+                    # both its fillets there, and a reader that looked only on the reference
+                    # line called them "unclassified", so the weld reached the book as an
+                    # inference to be asked about instead of a drawn weld.
+                    "ident_y": float(ident["top"]) if ident is not None else None})
     return out
 
 
@@ -185,11 +191,14 @@ def read_weld_symbols(lines: Sequence[Mapping[str, Any]],
     horizontal = [ln for ln in lines if _is_horizontal(ln)]
     for ref in reference_lines(lines):
         y, x0, x1 = ref["y"], ref["x0"], ref["x1"]
+        # The lines a symbol may stand on: the reference line, and the identification line
+        # where the callout has one (an other-side weld, D-392).
+        _on = [y] + ([ref["ident_y"]] if ref.get("ident_y") is not None else [])
         kind = None
         at = None
         all_round = False
         for cx, cy, d in circles:
-            if abs(cy - y) > _ON_LINE:
+            if min(abs(cy - ly) for ly in _on) > _ON_LINE:
                 continue
             # THE CIRCLE AT THE ARROW JUNCTION IS "WELD ALL ROUND", NOT A SPOT. 12173-03 p.9
             # draws the tube frame's fillet all round: the circle sits on the reference line's
@@ -206,7 +215,7 @@ def read_weld_symbols(lines: Sequence[Mapping[str, Any]],
                 continue
             # A seam weld is the same circle with two parallel lines through it.
             crossing = [h for h in horizontal
-                        if abs(float(h["top"]) - y) > _ON_LINE
+                        if min(abs(float(h["top"]) - ly) for ly in _on) > _ON_LINE
                         and abs(float(h["top"]) - cy) <= d / 2.0
                         and float(h["x0"]) <= cx <= float(h["x1"])
                         and _length(h) <= 3.0 * d]
@@ -214,16 +223,21 @@ def read_weld_symbols(lines: Sequence[Mapping[str, Any]],
             break
         if kind is None:
             for cv in curves:
-                tri = _triangle_on(cv, y)
-                if tri and x0 - 0.5 <= tri[0] <= x1 + 0.5:
-                    kind, at = "fillet", tri[0]
+                for ly in _on:
+                    tri = _triangle_on(cv, ly)
+                    if tri and x0 - 0.5 <= tri[0] <= x1 + 0.5:
+                        kind, at = "fillet", tri[0]
+                        break
+                if kind:
                     break
         # Strokes are accepted only on an ISO callout (the dashed identification line): two
         # loose lines meeting a reference line are too common on a sheet to name a weld alone.
         if kind is None and ref["identification_line"]:
-            fx = _fillet_from_strokes(lines, y, x0, x1)
-            if fx is not None:
-                kind, at = "fillet", fx
+            for ly in _on:
+                fx = _fillet_from_strokes(lines, ly, x0, x1)
+                if fx is not None:
+                    kind, at = "fillet", fx
+                    break
         if kind is None and not ref["identification_line"]:
             continue                 # a line meeting a line is not a callout without a symbol
         found.append({"kind": kind or "unclassified", "x": round(at if at is not None
@@ -618,10 +632,20 @@ def apply_finish_coats(parts: Sequence[Dict[str, Any]],
                 part.setdefault("review_flags", []).append(
                     f"{op} NOT charged on this assembly: {_why_not}")
                 continue
+            _srcs = part.setdefault("operation_sources", {})
             if op in ops or op in (part.get("inferred_operations") or []):
+                # ALREADY THERE FROM A WEAKER READER (D-392). 12696-01-101's powder had been
+                # inferred from the page before this reader ran, so the sheet's own FINISH was
+                # never recorded and the book carried the coat at rank 20, "inference", while
+                # its words cited the title block. The statement is the stronger source.
+                if _sp.rank(_srcs.get(op)) < _sp.rank("drawing_deterministic"):
+                    _srcs[op] = "drawing_deterministic"
+                    if op not in ops:
+                        ops.append(op)
+                    added.append(op)
                 continue
             ops.append(op)
-            part.setdefault("operation_sources", {}).setdefault(op, "drawing_deterministic")
+            _srcs.setdefault(op, "drawing_deterministic")
             added.append(op)
         if added:
             part.setdefault("review_flags", []).append(

@@ -4061,6 +4061,26 @@ def _is_descendant(identity: str, ancestor: str, parents: Mapping[str, Set[str]]
     return identity != ancestor and ancestor in _ancestor_distances(identity, parents)
 
 
+_PRESSED_FASTENER_DEFAULT_WORDS = (
+    "SELF-CLINCH", "SELF CLINCH", "CLINCH NUT", "PEM STUD", "PEM NUT", "PRESS-IN", "PRESS IN",
+    "NUTSERT", "RIVNUT", "RIV NUT", "RIVET NUT", "BLIND NUT",
+    "THREADED INSERT", "THINSHEET INSERT", "THIN SHEET INSERT", "HANK BUSH", "HANKBUSH")
+
+
+def is_pressed_fastener(text: Any) -> bool:
+    """A bought row whose words name a fastener pressed or set into the sheet (D-392).
+
+    The vocabulary is config.HARDWARE_INSERTION_WORDS; the tuple above is only the fallback
+    when config is unreadable. Matched on the row's code and description, upper-cased."""
+    try:
+        import config as _cfg
+        words = list(getattr(_cfg, "HARDWARE_INSERTION_WORDS", None) or _PRESSED_FASTENER_DEFAULT_WORDS)
+    except Exception:                                            # noqa: BLE001
+        words = list(_PRESSED_FASTENER_DEFAULT_WORDS)
+    blob = " ".join(str(text or "").upper().split())
+    return any(str(w).upper() in blob for w in words if str(w).strip())
+
+
 def _lowest_common_assembly(
     participants: Sequence[str],
     parents: Mapping[str, Set[str]],
@@ -4909,12 +4929,10 @@ def compile_job_route(
         # AND THE ONES SET WITH A GUN RATHER THAN A PRESS. 12614-01 (26 Sep): two M5 thin-sheet
         # nutserts (FIXING48, "M5 THINSHEET THREADED INSERT") sat on the bill with no insertion
         # anywhere on the route while the four PEM studs beside them had one (D-256).
-        if any(token in description for token in (
-            "SELF-CLINCH", "SELF CLINCH", "CLINCH NUT", "PEM STUD",
-            "PEM NUT", "PRESS-IN", "PRESS IN",
-            "NUTSERT", "RIVNUT", "RIV NUT", "RIVET NUT", "BLIND NUT",
-            "THREADED INSERT", "THINSHEET INSERT", "THIN SHEET INSERT",
-        )):
+        # THE WORDS LIVE IN CONFIG (D-392): 12696-01's "M5 x18G ROUND HANK BUSH" is pressed
+        # into the weldment and nothing on the route pressed it, because the list here did
+        # not know a hank bush. config.HARDWARE_INSERTION_WORDS is the vocabulary.
+        if is_pressed_fastener(description):
             insertion_parts.append(part_number)
     if insertion_parts:
         existing_insertions = [

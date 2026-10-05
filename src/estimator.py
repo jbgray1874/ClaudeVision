@@ -2988,6 +2988,56 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
 
 
+def _model_bends_agree(part: Dict[str, Any], count: Any) -> bool:
+    """The SolidWorks feature tree counts the same bends as the charge (D-392)."""
+    try:
+        from fold_count import solidworks_bend_features as _swb       # noqa: PLC0415
+        _m = _swb(part)
+        return _m is not None and int(_m) == int(count)
+    except Exception:                                                 # noqa: BLE001
+        return False
+
+
+def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
+    """The blank at the charged gauge against the sheet's stated weight (D-392), or None.
+
+    12696-01-01M: no sheet states a thickness; the model's cut list said 2 mm and the
+    102.7 x 76 blank at 2 mm weighs 0.12 kg against WEIGHT: 0.06kg on the sheet, which 1 mm
+    fits exactly. The weight was the only check the pack offered and nothing read it. A blank
+    weighs more than its part, never less, and not twice as much unless half of it is cut
+    away; outside config.BLANK_WEIGHT_CHECK_TOLERANCE_PCT the gauge the weight fits is named
+    and the question is raised. No figure moves."""
+    try:
+        ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+        L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+        W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+        t = _safe_float(part.get("normalized_thickness_mm"))
+        stated = _stated_weight_kg_for_part(part)
+        if not (L and W and t and stated) or L <= 0 or W <= 0 or t <= 0 or stated <= 0:
+            return None
+        mat = str(part.get("normalized_material") or part.get("material") or "").upper().replace("_", " ")
+        dens = (MATERIAL_DENSITY_KG_PER_M3.get(mat)
+                or MATERIAL_DENSITY_KG_PER_M3.get(mat.replace(" ", "_")))
+        if not dens:
+            return None
+        blank_kg = L * W * t * float(dens) * 1e-9
+        over = float(getattr(config, "BLANK_WEIGHT_CHECK_OVER_PCT", 60.0)) / 100.0
+        under = float(getattr(config, "BLANK_WEIGHT_CHECK_UNDER_PCT", 20.0)) / 100.0
+        if stated * (1.0 - under) <= blank_kg <= stated * (1.0 + over):
+            return None
+        fit_t = stated / (L * W * float(dens) * 1e-9)
+        return (f"WEIGHT CHECK: the {L:g} x {W:g} blank at {t:g} mm weighs {blank_kg:.3f} kg; "
+                f"the sheet states {stated:.3f} kg. "
+                + (f"A blank cannot weigh less than its part, so the gauge is too thin: "
+                   if blank_kg < stated else
+                   f"A blank weighs more than its part but not this much more unless most of "
+                   f"it is cut away, so the gauge may be too thick: ")
+                + f"the stated weight fits {fit_t:.2g} mm on this blank. Confirm the gauge "
+                  f"against the model before this goes out")
+    except Exception:                                                 # noqa: BLE001
+        return None
+
+
 _MEASURED_BEND_SOURCES = {"solidworks_api", "solidworks", "native", "dxf_flat_pattern", "dxf",
                           # The BENDLINES layer itself — the narrowest and strongest of them.
                           "dxf_bendlines_layer",
@@ -7753,6 +7803,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         elif _bsrc.lower() in _MEASURED_BEND_SOURCES:
             part.setdefault("review_flags", []).append(
                 f"{bends:g} fold(s) charged, counted by {_bsrc} — measured, not inferred.")
+        elif _fr.get("count") and _model_bends_agree(part, _fr.get("count")):
+            # THE MODEL SAW THE PART (D-392). 12696-01-01M charged its one fold from the
+            # sheet's callout, and the model's feature tree counts one bend too; the sentence
+            # below still said nothing that can see the part had counted them. Where the
+            # model's bend features agree with the charged count, that is said instead.
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged, counted by {_fr.get('source_label')}; the "
+                f"SolidWorks model's bend features agree. No DXF bend lines reached this run, "
+                f"so the flat pattern did not count them.")
         else:
             _ng_fold = part.get("normalized_geometry") or {}
             _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
@@ -7769,6 +7828,22 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                    if not _layers_seen else
                    "Layers were read and none of them named bend lines. Confirm the count "
                    "against the drawing."))
+
+    # THE SHEET'S WEIGHT IS THE ONE CHECK ON A GAUGE NOBODY STATED (D-392).
+    _wc = _blank_weight_check(part)
+    if _wc and _wc not in (part.get("review_flags") or []):
+        part.setdefault("review_flags", []).append(_wc)
+        try:
+            from source_precedence import raise_manufacturing_question as _ask_w  # noqa: PLC0415
+            _ask_w(part,
+                   f"Gauge of {part.get('part_number')}: the blank at the charged gauge does "
+                   f"not weigh what its sheet states",
+                   _wc,
+                   "confirm the gauge from the model or the drawing office; the material "
+                   "and the cut rate both ride on it",
+                   "estimator._blank_weight_check")
+        except Exception:                                             # noqa: BLE001
+            pass
 
     # THE COAT IS CHARGED ON EVIDENCE, NOT ON CLASS. The first cut of this gate shed the
     # op from every bought-in and every area-less parent, and the reviewer's probes
@@ -10094,6 +10169,7 @@ def _recognise_sdi_coded_bought_in(
     """
     # Build a code -> quantity map from the STRUCTURED bom rows (genuine column, not text).
     _qty_by_code: Dict[str, int] = {}
+    _desc_by_code: Dict[str, str] = {}
     for _row in (bom_rows or []):
         _blob = f"{_row.get('part_number','')} {_row.get('description','')}"
         _cm = _SDI_BOUGHT_IN_CODE_RE.search(_blob)
@@ -10104,6 +10180,9 @@ def _recognise_sdi_coded_bought_in(
         if _q and _q > 0:
             # If the same code appears on multiple BOM rows (e.g. per-sub-assembly), sum them.
             _qty_by_code[_rcode] = _qty_by_code.get(_rcode, 0) + _q
+        _rdesc = " ".join(str(_row.get("description") or "").split())
+        if _rdesc and _rcode not in _desc_by_code:
+            _desc_by_code[_rcode] = _rdesc
 
     found: List[Dict[str, Any]] = []
     seen: set = set()
@@ -10133,6 +10212,20 @@ def _recognise_sdi_coded_bought_in(
             stub["price_verified"] = False
             _qnote = (f"qty {_use_qty} from BOM table" if _qty_known
                       else "qty defaulted to 1 (not in structured BOM) — estimator to confirm")
+            # THE CODE MATCHED; DO THE WORDS? (D-392). 12696-01's weldment lists "FIXING 297
+            # M5 x18G ROUND HANK BUSH"; the catalogue's FIXING297 is "HANK BUSH M5 x 18G -
+            # HEXAGON". The code is SDI's own and the price is the code's, so the line is
+            # priced — but the drawing office and the catalogue name different articles, and
+            # the book showed only the catalogue's words. Where each side carries a word the
+            # other lacks, the disagreement is written on the line for the estimator.
+            _mismatch = _catalogue_words_disagree(_desc_by_code.get(code), cat.get("description"))
+            if _mismatch:
+                stub["drawing_description"] = _desc_by_code.get(code)
+                stub.setdefault("review_flags", []).append(
+                    f"CODE MATCHED, WORDS DIFFER: the drawing calls {code} "
+                    f"'{_desc_by_code.get(code)}'; the catalogue row priced is "
+                    f"'{cat.get('description')}' ({_mismatch}). The price is the code's — "
+                    f"confirm the catalogue row is the article drawn")
 
             # ── CONSUMABLES: never invent a quantity ─────────────────────────────────
             # For a DISCRETE item (rivet, junction box, light) "assume 1" is a defensible
@@ -10254,6 +10347,24 @@ def _recognise_sdi_coded_bought_in(
                 f"— estimator to price; {_qnote}")
         found.append(stub)
     return found
+
+
+def _catalogue_words_disagree(drawing_desc: Any, catalogue_desc: Any) -> str:
+    """The words each description carries that the other lacks, as "ROUND v HEXAGON", or ""
+    when either is silent or neither names anything the other does not (D-392).
+
+    Letters only, four or more, so sizes, threads and punctuation ("M5", "18G", "x") never
+    count, and a difference of word order never does either. Both sides must have a word of
+    their own: a catalogue row that merely says more than the drawing is not a disagreement."""
+    def _words(text: Any) -> set:
+        return {w for w in re.findall(r"[A-Z]{4,}", str(text or "").upper())}
+    a, b = _words(drawing_desc), _words(catalogue_desc)
+    if not a or not b:
+        return ""
+    only_a, only_b = sorted(a - b), sorted(b - a)
+    if not only_a or not only_b:
+        return ""
+    return f"{' '.join(only_a)} v {' '.join(only_b)}"
 
 
 def extract_bought_in_from_pages(

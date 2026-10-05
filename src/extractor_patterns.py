@@ -818,8 +818,22 @@ def _extract_material_candidates(text: str) -> List[str]:
     return unique
 
 
+# A TOLERANCE IS NOT A GAUGE (D-392). The M&S border prints "OVER 120mm UP TO 1000mm +/-1.0mm"
+# beside the coating paragraph's "THICKNESS COVERAGE", and the text layer runs them together:
+# "+/-1.0mm THICKNESS" read as a 1 mm gauge on every sheet of 12696-01 and 12173-02, and the
+# fallback scan took every "+/-0.5mm ... +/-2.0mm" as a candidate too. A figure that follows a
+# tolerance sign is a tolerance, whatever word follows it.
+_TOLERANCE_FIGURE_RE = re.compile(r"(?:\+/-|±|\+-|-/\+|\+\s*/\s*-)\s*\d+(?:\.\d+)?\s*(?:MM|mm)?",
+                                  re.IGNORECASE)
+
+
+def _text_for_gauges(text: str) -> str:
+    """The page text a gauge may be read from: tolerances and the specification legend removed."""
+    return _TOLERANCE_FIGURE_RE.sub(" ", strip_specification_legend(normalize_text(text)))
+
+
 def _extract_thickness_fallbacks(text: str) -> List[str]:
-    normalized = normalize_text(text)
+    normalized = _text_for_gauges(text)
     values = _findall_unique(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE)
     filtered: List[str] = []
     for value in values:
@@ -1049,7 +1063,11 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
     material_values = [material for material in materials if material]
     finishes = _extract_finish_candidates(raw_text) or [_normalize_finish(value) for value in _findall_unique(FINISH_PATTERN, normalized_text, flags=re.IGNORECASE)]
-    thicknesses = _findall_unique(THICKNESS_PATTERN, normalized_text, flags=re.IGNORECASE) or _extract_thickness_fallbacks(raw_text)
+    # A GAUGE IS A SHEET OR BOARD THICKNESS (D-392): "UP TO 1000mm" running into the coating
+    # paragraph's "THICKNESS COVERAGE" is not one, whatever the words beside it.
+    thicknesses = [value for value in _findall_unique(THICKNESS_PATTERN, _text_for_gauges(raw_text), flags=re.IGNORECASE)
+                   if (_safe_float(value) is not None and 0.2 <= _safe_float(value) <= 50.0)] \
+        or _extract_thickness_fallbacks(raw_text)
     revision_updates = _extract_revision_update_thicknesses(raw_text)
     if revision_updates:
         ordered_thicknesses = revision_updates + [value for value in thicknesses if value not in revision_updates]
