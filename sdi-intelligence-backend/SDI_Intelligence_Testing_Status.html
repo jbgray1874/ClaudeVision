@@ -12,7 +12,8 @@
      Keep the card to a THEME, not a list of items, and end it with the
      "fed back into the model" sentence.
   4. When a pack moves (response arrives, re-sent, signed off), edit its row's
-     Status pill: class "s-sent", "s-review", "s-integrated" or "s-signed".
+     Status pill: class "s-sent", "s-review", "s-integrated", "s-signed"
+     or "s-held" (run internally, not issued).
   Nothing else needs touching — there is no script and no build step.
 -->
 <style>
@@ -21,6 +22,7 @@
     --line:#dde3ea; --accent:#0f7a5c; --accent-soft:#e4f3ee;
     --warn:#8a6d00; --warn-soft:#fdf4d7; --sent:#3d5a80; --sent-soft:#e6edf5;
     --gold:#7a5b0f; --gold-soft:#f6ecd4;
+    --held:#5e4a80; --held-soft:#efe9f5;
   }
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
@@ -28,6 +30,7 @@
       --line:#2c3542; --accent:#4cc39a; --accent-soft:#173327;
       --warn:#e3c96a; --warn-soft:#332d14; --sent:#8fb3d9; --sent-soft:#1d2836;
       --gold:#dbb95c; --gold-soft:#322a13;
+      --held:#b9a6dd; --held-soft:#2a2336;
     }
   }
   :root[data-theme="dark"]{
@@ -35,6 +38,7 @@
     --line:#2c3542; --accent:#4cc39a; --accent-soft:#173327;
     --warn:#e3c96a; --warn-soft:#332d14; --sent:#8fb3d9; --sent-soft:#1d2836;
     --gold:#dbb95c; --gold-soft:#322a13;
+    --held:#b9a6dd; --held-soft:#2a2336;
   }
   *{box-sizing:border-box}
   body{margin:0; background:var(--bg); color:var(--ink);
@@ -69,7 +73,9 @@
   .s-sent{background:var(--sent-soft); color:var(--sent)}
   .s-review{background:var(--warn-soft); color:var(--warn)}
   .s-integrated{background:var(--accent-soft); color:var(--accent)}
+  .s-reviewed{background:var(--sent-soft); color:var(--sent); font-weight:600}
   .s-signed{background:var(--gold-soft); color:var(--gold)}
+  .s-held{background:var(--held-soft); color:var(--held)}
   /* cards */
   .cards{display:grid; gap:14px; margin-top:14px}
   article{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
@@ -94,19 +100,23 @@
   <h1>SDI Intelligence — Estimating Validation Status</h1>
   <p class="sub">Estimate workbooks issued to the estimating team for review, the responses received, and how each review has strengthened the model.</p>
   <p class="sub">The running register of every workbook issued since the programme began in May 2026. Estimates and packs filed at <b>K:\Estimating\Completed\Live Enquiries\completed AI briefs</b>, one folder per client and job.</p>
-  <span class="stamp">Week ending 22 September 2026 · updated 22/09/2026</span>
+  <span class="stamp">Week ending 10 October 2026 · updated 05/10/2026</span>
 </header>
 
 <section>
   <h2>This cycle at a glance</h2>
   <div class="tiles">
-    <div class="tile"><div class="n">28</div><div class="l">estimate packs issued since May 2026</div></div>
-    <div class="tile"><div class="n">9</div><div class="l">issued in the September wave</div></div>
-    <div class="tile"><div class="n">6</div><div class="l">detailed reviews received this cycle — all fed back into the model</div></div>
+    <div class="tile"><div class="n">42</div><div class="l">estimate packs issued since May 2026</div></div>
+    <div class="tile"><div class="n">24</div><div class="l">packs since the September wave began (23 issued, one held back)</div></div>
+    <div class="tile"><div class="n">12</div><div class="l">reviews received this cycle</div></div>
     <div class="tile"><div class="n">4</div><div class="l">estimators actively reviewing (Howard, Tim, Dave, Tony)</div></div>
   </div>
-  <p>Every review received this cycle produced changes that were made <b>in the estimating engine itself</b>, not patched into a single workbook — so each estimator's knowledge now carries automatically to every comparable job. The direction of travel is exactly what this programme is for: reviewed estimates are converging on the manual figures, and the engine is accumulating the team's production knowledge as it goes.</p>
+  <p>Reviews are answered by changing <b>the estimating engine itself</b>, not by patching a single workbook — so each estimator's knowledge carries automatically to every comparable job. Twelve reviews have now come back this cycle. Nine are answered in the model; Howard's on 1176-02 and Tim's two on 30/09 (12614 and 12567) are the next set of changes. Dave's two latest, on 30/09, close 12645 (deprioritised as a pack, so no review needed) and confirm the M&amp;S render budget was a good estimate for a pack that is not an SDI drawing pack, which is now being re-run at 350 off. The direction of travel is what this programme is for: reviewed estimates are converging on the manual figures, and the engine is accumulating the team's production knowledge as it goes.</p>
   <div class="quotes">
+    <blockquote>The original estimate was a good estimate for a non-SDI drawing pack, and it helps with the overall estimate.
+      <footer>Dave Wright, 30/09, on bdab4adf-3340-40M&amp;S, the M&amp;S Clothes Recycling Unit priced from a customer render</footer></blockquote>
+    <blockquote>"This looks good now — could the sub drawings come out of material and into labour."
+      <footer>Dave Wright, 28/09, pencilled on the printed 11650-06-GA Boots Coffret Hospital Kit book</footer></blockquote>
     <blockquote>"That's pretty good now — only a simple unit but price would be usable."
       <footer>Dave Wright, 18/09, on 401912-02 Tesco Metal Divider — reviewed and answered within 19 minutes</footer></blockquote>
     <blockquote>"Just a few points on the above. Costs come out really close."
@@ -115,6 +125,8 @@
       <footer>10975-02 M&amp;S Table Top Graphic Holder, after Howard's review cycle</footer></blockquote>
     <blockquote>Within ~6% of the manual estimate at 50-off (£60.56 vs £57.09) — shown honestly rather than tuned to match.
       <footer>11908-21 Sunglasses Tray, after Tony's review</footer></blockquote>
+    <blockquote>"Disparity in graphic cost as major difference at £16.92" — take that one line out and the AI sits £5.22 <i>under</i> the manual estimate.
+      <footer>Howard Thurley, 22/09, on 1176-02 TTI</footer></blockquote>
   </div>
 </section>
 
@@ -251,22 +263,29 @@
       <tr>
         <td>04/09</td><td>1176-02 — TTI</td><td>Dave Wright</td>
         <td>21/09 (to Howard for review)</td>
-        <td>—</td>
-        <td>Brought into the active review cycle 21/09; earlier issues may already be addressed by the September engine improvements.</td>
-        <td><span class="pill s-sent">with reviewer</span></td>
+        <td>22/09 16:45 — Howard, full line-level comparison against his manual estimate</td>
+        <td>£35.82 manual against £47.52 AI at 10-off — and the graphic is the whole of it: the customer's own vinyl price is £5.50 each against the AI's £22.42. Strip that one line out and the AI sits <b>£5.22 under</b> the manual on everything else. Powder now has a named rate and a hanging-geometry method. Also asked: compact the spreadsheet view so estimating can check it more easily.</td>
+        <td><span class="pill s-review">review received · 4 actions open</span></td>
       </tr>
       <tr>
         <td>05/09</td><td>11732-17 — TTI Milwaukee</td><td>Dave Wright</td>
         <td>21/09 (to Howard for review)</td>
         <td>—</td>
-        <td>Brought into the active review cycle 21/09, alongside 1176-02.</td>
+        <td>Brought into the active review cycle 21/09, alongside 1176-02. Also asked: compact the spreadsheet view so estimating can check it more easily.</td>
         <td><span class="pill s-sent">with reviewer</span></td>
       </tr>
       <tr>
-        <td>08/09</td><td>11350-02 — Boots Comms Bar (and 11350-01 by extension)</td><td>Tim Wilkes</td>
+        <td>08/09</td><td>11350-02 — Boots Comms Bar (reads across to 11350-01)</td><td>Tim Wilkes</td>
         <td>—</td>
         <td>09/09 — Tim: "costs come out really close" + four sourcing queries</td>
         <td>Sourcing traceability: fixings and ticket strip from the system, powder reference on the drawing, visibility of the pemming rate. Tim confirmed the same findings read across to 11350-01.</td>
+        <td><span class="pill s-integrated">integrated</span></td>
+      </tr>
+      <tr>
+        <td>08/09</td><td>11350-01 — Boots Ladder Rack Comms Bar</td><td>Tim Wilkes</td>
+        <td>—</td>
+        <td>09/09 — covered by Tim's 11350-02 review: "costs come out really close"</td>
+        <td>One review covers both 11350 jobs. Sourcing traceability: fixings and ticket strip from the system, powder reference, pemming rate visibility — every line now names its source.</td>
         <td><span class="pill s-integrated">integrated</span></td>
       </tr>
       <tr>
@@ -284,6 +303,13 @@
         <td><span class="pill s-integrated">integrated · job rulings closing</span></td>
       </tr>
       <tr>
+        <td>09/09</td><td>0359342 — Edition Sunglasses Stand (Rev 4)</td><td>Not sent — run by James Gray</td>
+        <td>—</td>
+        <td>— (held back while estimating worked through the other packs)</td>
+        <td>Provisional £14,526.29 a unit at 1 off, with 10 and 25 off priced alongside. £10,672.14 of it rests on 27 AI market indications and 10 lines carry no price, so it was held rather than issued. The feedback on the other jobs in this wave is being used to improve it.</td>
+        <td><span class="pill s-held">held — not issued</span></td>
+      </tr>
+      <tr>
         <td>17/09</td><td>11908-21 — Sunglasses Tray (0359967)</td><td>Tony Ford</td>
         <td>—</td>
         <td>Reviewed by Tony; response and adoption summary issued 17/09</td>
@@ -294,8 +320,92 @@
         <td>18/09</td><td>401912-02 — Tesco Metal Divider Tall Rev B</td><td>Dave Wright</td>
         <td>—</td>
         <td>18/09 — Dave, same morning: "price would be usable"</td>
-        <td>One principle: never a near-match presumption on a bought-in item — a line with no confirmed source stays at £0 and is flagged for a person. Adopted as a standing rule of the pricing model.</td>
-        <td><span class="pill s-integrated">integrated</span></td>
+        <td>One principle: never a near-match presumption on a bought-in item — the book had matched the 450&nbsp;mm magnetic tape to <b>MAGNET45</b> on SDI's system, pairing on the &ldquo;45&rdquo;. A line with no confirmed source stays at £0 and is flagged for a person. Adopted as a standing rule of the pricing model. Sent as a quantity pair (£149.87 at 1 off, £55.87 at 3); five commercial inputs still with Dave.</td>
+        <td><span class="pill s-integrated">integrated · 5 commercial inputs open</span></td>
+      </tr>
+      <tr>
+        <td>22/09</td><td>bdab4adf-3340-40M&amp;S — M&amp;S Clothes Recycling Unit <i>(concept budget from a customer render)</i></td><td>Dave Wright</td>
+        <td>—</td>
+        <td>Sent 14:47 — &ldquo;pls do revert with comments / things to fix up&rdquo;; James's own line-by-line review followed at 14:52 · <b>30/09 — Dave: a good estimate for a non-SDI drawing pack, and it helps him with the overall estimate</b></td>
+        <td>The first estimate built from a picture rather than a drawing pack. James's review is the working list: a catalogue hit on a sighted print is the biggest single number, the box has no glue-up on it, and the castors and hinges stand at £0 &mdash; all four now engine changes. Re-run at 350 off, below.</td>
+        <td><span class="pill s-integrated">reviewed · integrated</span></td>
+      </tr>
+      <tr>
+        <td>24/09</td><td>11650-06-GA — Coffret Hospital Kit, Rev B (Boots) · 2 and 18 off</td><td>Tim Wilkes (cc Dave Wright)</td>
+        <td>25/09 17:10 — revised book <b>plus the BOMs and Routes Tim asked for</b></td>
+        <td>28/09 — Dave, pencil notes on the printed book: &ldquo;This looks good now&rdquo;</td>
+        <td>Tim's brief on 16/09: <i>&ldquo;cost the above, Qty 2 and 18 — we are looking to Route &amp; Bom this up as well.&rdquo;</i> The re-issue answers both halves. Revised to <b>£365.18 a unit at 2 off, £160.64 at 18 off</b> (was £376.25 and £171.70) — an internal estimating pass, not a final figure. Alongside it, a full <b>BOMs and Routes</b> output: 51 printed parts-list rows and 41 route decisions, each traced to its drawing and page, with what is charged and what is not. Open for Tim before the figure is relied on: the PEM stud and Yiree key rates, the powder scope and rate, and the six assembly/pack rows. <b>Dave's layout review (28/09), applied to every job:</b> sub-drawings off the bill of materials and described in full where they are priced, part numbers in a column of their own in labour, and the customer and drawing number beside their labels.</td>
+        <td><span class="pill s-integrated">Dave's review integrated · Tim's open</span></td>
+      </tr>
+      <tr>
+        <td>24/09</td><td>12312-01-GA — Tesco IMS Panel End Digital Header, Rev B · 1 off</td><td>Tim Wilkes</td>
+        <td>25/09 18:13 — <b>re-run at 200 off at Tim's request</b></td>
+        <td>— (first book sent 24/09)</td>
+        <td>Provisional <b>£639.28 a unit at 1 off</b> (£392.40 at 2 off). The steel case, its handed side panel and the hardware insertion read cleanly, and every purchased line on the drawing is now a line of its own, including the nine printed "P/P". Open for Tim: one price (the M5 serrated washer), 13 market figures (£198.18, mostly packaging, delivery and the lighting kit), the powder scope, the diffuser's and lighting assembly's own prices, the Foamex cutting machine, the card graphic's cut and gauge, and four electrical items listed twice and costed once. <b>Re-run at 200 off for Tim: £151.47 a unit</b> (material £107.24, labour £29.82), with set-ups, packaging and delivery spread across the order. The 3.944&nbsp;m diffuser is not in that figure — a fix made during the re-run (below) restores it on the next run.</td>
+        <td><span class="pill s-review">re-run at 200 · awaiting review</span></td>
+      </tr>
+      <tr>
+        <td>24/09</td><td>12633-10-GA — Avanti Consumable Holder (402476), Rev A · 1 off</td><td>Howard Thurley</td>
+        <td>—</td>
+        <td>— (sent 17:00)</td>
+        <td>Provisional <b>£199.81 a unit at 1 off</b>, £20.01 at 50 and £17.26 at 200. A clear acrylic tray of six laser-cut panels, each with polished edges, costed on its first run with no changes made for this job: the six parts at the right quantities, the general arrangement's own drawing kept out of the cutting, and the shop's acrylic laser rule applied. Open for Howard: packaging and delivery (£140, market figures), and the bonding of the six panels, which this book does not yet charge.</td>
+        <td><span class="pill s-review">awaiting review</span></td>
+      </tr>
+      <tr>
+        <td>24/09</td><td>12633-00-GA — Avanti Display Chiller Shelf (402476), Rev B · 1 off<br><i>one job covering three estimating lines: 12633-01-GA Wine Lifter, 12633-02-GA Beer Plinth, 12633-03-GA Choc Holder</i></td><td>Howard Thurley</td>
+        <td>—</td>
+        <td>— (sent 24/09)</td>
+        <td><b>One estimate, four drawing numbers.</b> Howard's register lists the Wine Lifter, Beer Plinth and Choc Holder as three jobs; this book prices all three together under their general arrangement, 12633-00-GA. Provisional <b>£260.25 a unit at 1 off</b> for the whole set, £39.65 at 50 and £36.05 at 250: ten clear acrylic parts, fifteen pieces, lasered and polished, one line-bent base, and each sub-assembly bonded. Open for Howard: packaging and delivery (£140, market figures) and how each of the three is joined.</td>
+        <td><span class="pill s-review">awaiting review</span></td>
+      </tr>
+      <tr>
+        <td>26/09</td><td>12614-01-GA — Tesco IMS Deep Panel End Digital Header, Rev A · 132 off</td><td>Tim Wilkes</td>
+        <td>—</td>
+        <td><b>30/09 16:23 — Tim:</b> the overall cost worked out very similar. Base all 0.9&nbsp;mm parts on 1.0&nbsp;mm from now on (SDI does not buy 0.9&nbsp;mm). Why is the PVC foam back panel (03A) expensive, and where did the price come from? Have the electrical costs come from the internet, and are they supplied as a kit or as individual items? Is the powder coat rate an average? Weld and dress rate very high — can the engine allow for spot welding? Only a small price for packaging and delivery — are we having no delivery going forward?</td>
+        <td>The deep version of 12312-01, and the first pack <b>assessed against the drawings before it was run</b>: a pass table written from the 17 sheets, then four runs the same morning scored against it until every line held. Internal working estimate <b>£228.61 a unit at 132 off</b> (material £118.38, labour £88.49). Every fold now as drawn — fascia 10, top and bottom 7, sides 11, lock plate 2 — the nutserts fitted, powder on the built case and the four loose coated parts. Open for Tim: weld or mechanical on the case (£48.98 a unit, inferred not drawn), the 3.944&nbsp;m diffuser's purchase unit, a Foamex rate, the card's print price, the M5 washer, and confirming 1.0&nbsp;mm in place of 0.9. <b>Tim, 30/09: the overall cost is very similar to his.</b></td>
+        <td><span class="pill s-reviewed">reviewed</span></td>
+      </tr>
+      <tr>
+        <td>27/09</td><td>12567-01-GA — Tesco Digital LED GCMP Header (full-bay kit), Rev B · 163 off</td><td>Tim Wilkes</td>
+        <td>—</td>
+        <td><b>30/09 16:47 — Tim:</b> the AI estimate was £240 more expensive than the manual one. The side graphic was costed at £95 each (Grok) against Motion's £13.19 each, two per unit, which is where most of the difference comes from. The LCD player is supplied by the client and should not be on the drawing. Weld and dress rate very high — can the engine allow for spot welding? Only a small price for packaging and delivery — are we having no delivery going forward?</td>
+        <td>A full-bay header kit — lit case, handed end caps, end headers and the Pixel display — and the job that exposed the most in the <b>bought-in path</b>. Internal working estimate <b>£701.14 a unit at 163 off</b> (material £497.79, labour £136.67). Every bill line now carries a price; the Pixel display, router and antenna are free-issue at £0, as the drawings say they are supplied by others; the EPDM tapes, studs and screws are on the bill at the drawing's counts. The channel is costed on its true flat blank, the handed cap nested, lasered and folded, and the powder taken over the cases' own members (9.43&nbsp;m²). Open for Tim: the side graphic (£95 each, an AI figure for a printed board), the case's weld and dress (£48.93 a unit, inferred not drawn), the splitter counts, the powder basis, the market figures, and nine quantity checks. <b>Tim, 30/09: £240 above the manual figure, most of it the side graphic.</b></td>
+        <td><span class="pill s-reviewed">reviewed</span></td>
+      </tr>
+      <tr>
+        <td>29/09</td><td>12645 — DRS External Shelter V2 (Tesco), Rev A · 1 off</td><td>Dave Wright</td>
+        <td>—</td>
+        <td>30/09 — Dave: 12645 has been <b>deprioritised as a pack</b>, so he will not need to review it</td>
+        <td>A large welded steel shelter with two bought-in roller shutters. It is the job where the book was <b>not handed over until the engine was fixed</b>: each fault found in the early books (28/09) was traced to a general cause and closed in the engine, not corrected by hand on the sheet. Provisional <b>£3,198.08 a unit at 1 off</b> (material £2,078.55, labour £815.36). That figure <b>excludes the two roller shutters and the 3,020&nbsp;mm covers</b>, which are unpriced and counted on the sheet's banner. Open for Dave: the shutters, how the covers are made, 15 provisional overflow steel lines (£534.11), packaging and delivery, the hinge (a historical match), six market figures, the bolt count (120 printed against 136 in the model), the powder basis (132&nbsp;m²), and one duplicate nut line to delete. <b>Re-run 29/09 21:27</b>; the ten engine fixes that came out of it (D-342 to D-351) stay in the model for every job, although the pack itself will not be reviewed.</td>
+        <td><span class="pill s-integrated">closed · deprioritised by Dave</span></td>
+      </tr>
+      <tr>
+        <td>30/09</td><td>bdab4adf-3340-40M&amp;S — M&amp;S Clothes Recycling Unit · <b>re-run at 350 off, plywood and mild-steel options</b> <i>(concept budget from a customer render)</i></td><td>Dave Wright</td>
+        <td>—</td>
+        <td>30/09 — Dave: the original estimate was a good estimate for a non-SDI drawing pack, and helps him with the overall estimate · <b>30/09 09:10 — Dave's brief:</b> 350 off, plywood with print or mild steel powder coated with print, 600&nbsp;×&nbsp;600&nbsp;×&nbsp;1200&nbsp;mm bump bin with lid and 1800&nbsp;mm back panel</td>
+        <td>Dave's brief went into the new <b>Enquiry brief</b> box and was read as stated facts. <b>Mild steel, powder coated, with print: £468.35 a unit</b> (18:36 book; tall back turned onto a stocked sheet, powder on the seven steel panels, two vinyl graphics, lid hinges). <b>Plywood with print: about £345</b> — the 17:30 book read £287.93 but lacked the 1800&nbsp;mm back's board and the lid hinges, both since fixed; a re-run will confirm. Thirteen general engine fixes came out of the day (D-357 to D-369). Open for Dave: a second back panel in the steel read, welded against folded or spot-welded, the 2&nbsp;mm gauge, the tall back's sheet, print faces and method, and the market prices. Powder labour now follows coated area (D-370, made on the riser job below), so the steel option&rsquo;s £1.03 for 9.36&nbsp;m² should come out near £18 a unit &mdash; a steel re-run will confirm. Still open in the engine: one saved book arrived without its calculated values.</td>
+        <td><span class="pill s-review">with Dave</span></td>
+      </tr>
+      <tr>
+        <td>30/09</td><td>12527-22-GA — M&amp;S TSE Footwear Hero Riser, Rev A <i>(enquiry 0359887)</i>, 72 off</td><td>Dave Wright</td>
+        <td>—</td>
+        <td>Sent 04/10 19:44 to Tim, cc Dave &mdash; under the 12173 Card Spinner subject line; the body and attachments are the riser&rsquo;s 09:06 book</td>
+        <td>Two folded 1&nbsp;mm panels spot-welded into a riser, powder coated, with four bump-ons and the customer&rsquo;s ticket. <b>£36.19 → £11.50 a unit</b> over five runs: the first book charged £19 of powder for 0.17&nbsp;m², arc welding and dressing on a part the drawing spot welds, and priced the customer&rsquo;s ticket as steel. Every line now follows the drawing; twelve general fixes (D-370 to D-374). Open: packaging, delivery and bump-on prices (£2.87 of AI figures), the spot count, and margin.</td>
+        <td><span class="pill s-sent">with Tim and Dave</span></td>
+      </tr>
+      <tr>
+        <td>04/10</td><td>12173-02-GA — M&amp;S Card Spinner, Rev A <i>(prototype)</i>, 1 / 10 / 50 / 100 / 200 / 500 off</td><td>Tim Wilkes</td>
+        <td>—</td>
+        <td>Sent 04/10 (19:37 book, engine 7c9cd2a). <b>Provisional £1,517.06 a unit at 1 off</b> (material £501.55, labour £869.02); £726.51 at 10 off, £640.43 at 500 off. Five books since 29/09 against James Gray&rsquo;s brief of 01/10, which is now a machine check: 150 of 155 facts hold. The welds are the frames, the pocket, the rail and the hook; the sheet leaves are asked at £0, not charged on the pack&rsquo;s &ldquo;ALL WELDS TIG&rdquo; note; powder once on four weldments; no Robomac on the mirrored hands; every part priced, the oak back for the first time. <b>Open for Tim:</b> ten market figures (£245.30: packaging, delivery, ticket strips, meshes, bearing, two fixings); a rate for the 30&nbsp;×&nbsp;30&nbsp;×&nbsp;2 frame tube, which SDI Live holds only as other jobs&rsquo; cut pieces, so the frames sit on the £7.29/kg hold; the oak&rsquo;s product price (no SDI Live row for Unilin 0H440); whether rail 05-01M has a seam of its own; edging on the base; margin.</td>
+        <td>Thirteen general rules (D-378 to D-390), none naming the job &mdash; see the card below.</td>
+        <td><span class="pill s-sent">with Tim</span></td>
+      </tr>
+      <tr>
+        <td>05/10</td><td>12696-01-GA — M&amp;S Bag Pricing Hook, Rev A, 1 / 250 / 500 / 1000 / 2500 off</td><td>Tim Wilkes / Dave Wright</td>
+        <td>—</td>
+        <td>Sent 05/10 (18:18 book, engine 3938b6d). <b>Provisional £262.29 a unit at 1 off</b> (material £19.53, labour £217.43, of which £207.92 is set-up); £14.33 at 250, £13.83 at 500, £13.58 at 1000, £13.43 at 2500 &mdash; five breaks on one workbook, and under the table a new block saying what the fall is made of: £17 packaging and delivery and £207.92 set-up at one off, run labour £9.51 at every quantity. Three books in one afternoon against James Gray&rsquo;s brief, written from the drawings before the first run: £246.25 (14:36) &rarr; £262.29 (17:50) &rarr; £262.29 (18:18). One weld and its dress on the weldment only, read from the two fillet symbols on its sheet, the row naming TIG per the pack and the Weld (CO2) rate; powder once; brackets lasered and folded raw; the PETG strip&rsquo;s scraped edges costed on the acrylic manual row; the hank bush pressed; nothing coated or welded off the border legend. <b>Open for Tim and Dave:</b> packaging and delivery (£17, market figures); the thumbscrew at the parts table&rsquo;s £2, not an Accu price; 01M&rsquo;s 2&nbsp;mm against a stated 0.06&nbsp;kg (1&nbsp;mm fits), raised on the sheet; how the hank bush is fitted; the P.Coat set-up (15&nbsp;min at the template&rsquo;s £355.43/hr); 01A&rsquo;s two model bends against three callouts. A marked-up costing draft with those questions, not a final estimate.</td>
+        <td>Three general rules sets (D-392 to D-394), none naming the job &mdash; see the card below.</td>
+        <td><span class="pill s-sent">with Tim and Dave</span></td>
       </tr>
     </tbody>
   </table>
@@ -344,16 +454,199 @@
 
     <article>
       <h3>401912-02 — Tesco Metal Divider · Dave Wright</h3>
-      <p class="meta">Sent 18/09 11:53 · reviewed 18/09 12:12 — the fastest turnaround of the programme</p>
-      <p>"Pretty good now — price would be usable." Dave's one substantive point was the most valuable kind: a matter of principle. A near-match presumption on a bought-in item is the real danger with automated estimating, and the rule he asked for — <b>leave it at £0 and flag it for a person rather than pick the closest alternative</b> — is precisely the discipline the pricing model is built around.</p>
+      <p class="meta">Sent 18/09 11:52 · reviewed 18/09 12:12 — the fastest turnaround of the programme</p>
+      <p>The pack Dave was given is the full-evidence case: <b>drawing, flat DXF and SolidWorks model all read through to the estimate</b>, the 2&nbsp;mm mild-steel part costed from a 460&nbsp;×&nbsp;356.61&nbsp;mm blank nested 15-up from a standard sheet, with Laser, one Fold, Powder Coat and Assembly/Pack on the route. It went out as a <b>quantity pair</b> — £149.87 at 1 off, £55.87 at 3 — and the gap between those two numbers is entirely set-up: 70 minutes of it, of which Powder Coat's 15 minutes alone is about £88.86 at one-off and £29.62 at three.</p>
+      <div class="scroll" style="margin:10px 0">
+        <table style="min-width:0">
+          <thead><tr><th>Per unit</th><th>1 off</th><th>3 off</th></tr></thead>
+          <tbody>
+            <tr><td>Setup labour</td><td>£127.60</td><td>£42.53</td></tr>
+            <tr><td>Run labour</td><td>£3.74</td><td>£3.74</td></tr>
+            <tr><td>Material</td><td>£4.28</td><td>£4.28</td></tr>
+            <tr><td>Cost before Tesco terms</td><td>£135.62</td><td>£50.55</td></tr>
+            <tr><td><b>Unit cost</b></td><td><b>£149.87</b></td><td><b>£55.87</b></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>"Pretty good now — only a simple unit but price would be usable." Dave's one substantive point was the most valuable kind: a matter of principle. The book had assumed that <b>MAGNET45</b> on SDI's system would do for the 450&nbsp;mm magnetic tape — matching the &ldquo;45&rdquo; as best it could. In his words: <i>&ldquo;Would need to stop it making presumptions — would be better left as zero cost and flagging it as needing looking at. I think that's where the most danger is with AI, when it using closest alternative.&rdquo;</i> A near-match presumption on a bought-in item is the real danger with automated estimating, and the rule he asked for — <b>leave it at £0 and flag it for a person rather than pick the closest alternative</b> — is precisely the discipline the pricing model is built around.</p>
+      <p>Five commercial inputs were put to him with the pack and remain open: the current magnetic-tape price (three 450&nbsp;mm lengths a unit), packaging method and cost, delivery basis and cost, the Powder Coat rate in the Estimate template, and margin. One question went back the other way — <b>whether Powder Coat really carries only a 15-minute batch set-up with no minimum external charge</b>, since that single template assumption is what shapes the whole quantity curve. Until those are settled this is an estimate-cost curve, not a selling price, and the customer quotation stays unissued.</p>
       <p class="fed">Dave's rule has been fed back into the model as a standing principle: no line is ever priced on a guessed match, and every unpriced line names itself for review.</p>
     </article>
 
     <article>
-      <h3>12552 · Tim Wilkes — and 1176-02 / 11732-17 (TTI) · with Howard</h3>
+      <h3>bdab4adf-3340-40M&amp;S — M&amp;S Clothes Recycling Unit · Dave Wright <span style="color:var(--dim);font-weight:400">(with James Gray)</span></h3>
+      <p class="meta">Sent 22/09 14:47 · James's own review 14:52 · Dave's comments invited · a concept budget, not a technical estimate</p>
+      <p>A new kind of enquiry entirely: M&amp;S asked for a ballpark on 350 units and sent <b>a picture, not a drawing pack</b>. There was nothing to measure — no DXF, no model, no parts list — so the vision model <b>sighted</b> the product instead: twelve parts, each with the cue its size was scaled from, priced down the ordinary waterfall. It produced a complete costed book where the same enquiry would previously have produced an empty one.</p>
+      <p>The theme of James's review is the one that matters for this path: <b>an assumption must never wear a measurement's clothes</b>. A catalogue row matched on a sighted print became the single biggest number on the sheet; the box was cut, banded and routed with nobody charged to glue it up; the castors and hinges sat at £0 because one word is not a specification. Every size, material and count on this job is an assumption, and the estimate now says so in the Basis row and lists all of them with a pre-filled answers file to confirm them.</p>
+      <p class="fed">All four points have been fed back into the model: a sighted description can no longer match a catalogue item, the unit is minted as an assembly so the shop's own bench rule times the build, edge banding is an editable assumption rather than a silent route, and bought-in items are briefed with the specification the render does give so they can be researched instead of left at zero.</p>
+      <p><b>Dave's feedback, 30/09, and the re-run at 350 off.</b> Dave's verdict on the first book was that it was <b>a good estimate for a non-SDI drawing pack, and it helps him with the overall estimate</b> — the use this path was built for. The job is now being run at the enquiry's 350 off. The 30/09 09:38 book came to <b>£193.27 a unit</b> (material £127.93, labour £46.68) with the margin not yet set; it is a concept budget, and it was built on the engine before the fixes below.</p>
+      <p><b>From Dave's brief to two options, 30/09.</b> Dave sent the build in words: 350 off, plywood with print or mild steel powder coated with print, a 600&nbsp;×&nbsp;600&nbsp;×&nbsp;1200&nbsp;mm bump bin with a lid and an 1800&nbsp;mm back panel. The portal now has an <b>Enquiry brief</b> box beside the render: what is typed there is filed with the pack and read as stated facts that outrank the picture, and a run whose brief did not reach the engine stops rather than pricing the render alone. The <b>mild-steel</b> book came to <b>£468.35 a unit</b> (material £371.52, labour £51.61). The <b>plywood</b> book read £287.93 but was missing the back panel's board and the lid hinges; with both it is about £345, to be confirmed by a re-run. Both carry M&amp;S's commercial terms.</p>
+      <p>Each book was checked line by line, and every fault was fixed in the engine as a general rule rather than on the sheet: the customer named on a run brings its terms; board is cut from the sheet it uses best; bench fitting is charged per part fitted; print is always its own line; a blank that fits no sheet as given is costed turned; a lid, flap or door brings its hinges; a busy Excel is retried and a refused e-mail says why in plain words; and a restarted runner no longer strands a job. Dave has the open questions: whether the steel read's second back panel is real, how the steel box is joined (weld and dress is most of its labour), the gauge, the tall back's sheet, which faces are printed, and the market prices.</p>
+      <p class="fed">Still open in the engine, and not yet changed: the powder row looks undercharged — £1.03 a unit for 9.36&nbsp;m², where time from the coated area would be about three minutes (around £18) — to be verified and then carried for every coated assembly; and one saved book arrived without its calculated values, so each book will be checked and repaired before it is filed. Dave's decisions on this job are recorded as his, not written into the engine.</p>
+      <div class="scroll" style="margin:10px 0">
+        <table style="min-width:0">
+          <thead><tr><th>Fix</th><th>What changes</th><th>Money</th></tr></thead>
+          <tbody>
+            <tr><td>D-352</td><td>The 18&nbsp;mm board sheet is priced from the researched £14/m², so a 2800&nbsp;×&nbsp;2070 sheet is £81.14 instead of the plain-MDF kilogram rate of £105.63</td><td>Board about £31.91 → £24.50; unit about £8 lower, near £185</td></tr>
+            <tr><td>D-353</td><td>The CNC and edge-banding rows say their 7/hr and 30/hr figures are the engine's estimate, and that the row is charged at the department's 12/hr</td><td>None</td></tr>
+            <tr><td>D-354</td><td>Packing and delivery read the quantity break the order falls in. Filling only the 350-off break now replaces the £14.86 and £9.14 placeholders; before, the empty 1-off cell kept them</td><td>Whatever is entered at 350 off</td></tr>
+            <tr><td>D-355</td><td>Four bought castors priced at £45.76 are no longer reported as a material that "costs nothing"</td><td>None</td></tr>
+            <tr><td>D-356</td><td>The banner also names sizes assumed from a render and failing consistency checks, so it agrees with the report (it said 5 items against 17 inputs and 7 failed checks)</td><td>None</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>D-352 and D-353 are in commit a6d86e6 and D-354 to D-356 in 7adc371; none of them is in the 09:38 book. Still open on the re-run: no base and no back, sizes taken from the render, castors at £11, the graphic at £22, the hinge at £3.25 with its SDI Live and config-default labels disagreeing, full-perimeter edge banding, and the 30-minute bench allowance. The £14/m² is still an AI rate for plain moisture-resistant MDF, not a bought price for melamine-faced board. Design has been asked for dimensions, construction, the split of the 350 between the two graphic designs, print coverage, and the castor, hinge and packing specification.</p>
+      <p class="fed">All five fixes are general rules, fed back into the model for every job: a researched board rate prices the whole sheet, a labour row says which rate it charges, a quantity break is read at the order's own quantity, a purchase price is money, and the banner counts everything the report does.</p>
+    </article>
+
+    <article>
+      <h3>1176-02 — TTI · Howard Thurley</h3>
+      <p class="meta">Re-issued to Howard 21/09 · reviewed 22/09 16:45 · full line-level comparison against his own manual estimate</p>
+      <p>The most instructive comparison yet, because of where the difference <em>isn't</em>. At 10-off the manual estimate is <b>£35.82</b> and the AI <b>£47.52</b> — and one line accounts for more than the whole gap. The customer's own price for the vinyl graphic, 858&nbsp;×&nbsp;72&nbsp;mm at a quantity break of 10, is <b>£5.50 each against the AI's £22.42</b>. Take that single line out and the AI lands at £25.10 against Howard's £30.32: <b>£5.22 under</b> on everything else. The engine is not running high; it is running blind on one input.</p>
+      <p>That input is the theme, and it is a structural one rather than a fault: <b>a price the customer has already given us is the third rung of the pricing waterfall, and nothing in the pack tells the engine it exists</b>. No catalogue, no supplier list and no market lookup will ever beat a price the account manager has been quoted — it has to be entered. The same review also hands over two things the engine can simply adopt: the powder rate is <b>POWDER5 on Access Supply Chain at £4.38/kg from Jotun Paints</b>, current with 800&nbsp;kg in stock, and the powder-coat throughput turns out to be a <b>hanging-geometry calculation</b> rather than a flat rate — the two holes on the long length are where the part hangs, and a 860&nbsp;mm component on a 420&nbsp;mm bar works out at three bars with spacing, 106 an hour against the engine's 319. Howard's arithmetic is reproducible, which is what makes it a rule rather than an override. Fold and laser differ only in rounding method.</p>
+      <p>One request is now on its second asking and belongs in the open column, not in a card: <b>a decision is still needed on 1.0&nbsp;mm sheet steel as a material</b>. Howard has also asked that the spreadsheet view be compacted so estimating can check a book more quickly — a presentation change that costs nothing and makes every future review faster.</p>
+      <p class="fed">Nothing from this review is in the model yet — it landed this afternoon. The two adoptable items (the Jotun powder rate and the bar-occupancy method for powder-coat throughput) are the next changes, and the customer-price gap is the one that needs a place in the workbook rather than a code fix.</p>
+    </article>
+
+    <article>
+      <h3>0359342 — Edition Sunglasses Stand (Rev 4) · run internally by James Gray</h3>
+      <p class="meta">Run 09/09 · held back, not issued · estimating's time went to the packs above</p>
+      <p>The one pack in the wave that was run and deliberately not sent. The book came to <b>£14,526.29 a unit at 1 off</b> (provisional), but most of that figure was not yet the engine's own working: <b>27 lines, £10,672.14 between them, were AI market indications</b> rather than catalogue or SDI prices, and 10 lines carried no price at all. A book resting that heavily on indications is not worth an estimator's review time, so it was held.</p>
+      <p>It is the job that benefits most from everyone else's reviews. Tony's board and joinery rules come from the Sunglasses Tray, a product from the same family. Dave's rule is that nothing is priced on a guessed match. Tim's is that every line names its source. Together they cover most of what kept this book from being sent.</p>
+      <p class="fed">Nothing from a review of its own — none was asked for. The lessons fed into the model from the other jobs apply to it the next time it is run.</p>
+    </article>
+
+    <article>
+      <h3>11650-06-GA — Boots Coffret Hospital Kit (Rev B) · Tim Wilkes</h3>
+      <p class="meta">Sent 24/09 08:34 · re-issued 25/09 17:10 with BOMs and Routes · costed at 2 and 18 off · awaiting Tim's review</p>
+      <p>A kit rather than a single product: the Drawing Number is one general arrangement, but the pack also holds the cabinet top that shares one of its sub-assemblies, and the kit sheet prints every loose part once for the whole kit. The theme of this job was <b>pricing exactly what the Drawing Number ships</b>. Only the kit is priced, and the cabinet top is set aside except where the kit uses its part. The counts come from the kit's printed parts list rather than being multiplied back up through the tree. Each handed part is its own charged line, cut from the same flat as its pair.</p>
+      <p>The book came to <b>£376.25 a unit at 2 off and £171.70 at 18 off</b>, with packaging and delivery divided across the order so the 18-off figure is not carrying the 2-off freight. It is provisional. Two purchase prices are still blank: the M4 PEM stud and the Yiree key, after the engine refused a £65 figure that had priced the key as a made part. Four lines rest on market figures, and the powder rate and the extender panel's gauge and route are for Tim to confirm.</p>
+      <p class="fed">Every correction found on this job was fed back into the model as a general rule: the Drawing Number is the only product priced, a printed parts list is the kit's count, a mirrored part is its own line, thread sizes are never merged, a researched price must answer the purchase asked, and freight divides by the order. The Estimate sheet now also opens on values with its unused rows folded away, as Howard asked.</p>
+      <p><b>Re-issued 25/09 — the estimate, and the BOMs and Routes Tim asked for.</b> When Tim sent this job on 16/09 he asked for more than a price: <i>&ldquo;We are looking to Route &amp; Bom this up as well.&rdquo;</i> That one line has been answered in full, proactively and in more depth than a costed workbook could give. Every run now writes a <b>BOMs and Routes</b> pair beside the estimate — a page to read and a workbook to filter — which prices nothing and answers the two questions that come before any price: <b>what parts are in the pack</b>, and <b>what work each one needs</b>. On this kit that is 51 printed parts-list rows, each with the drawing, page and reader it came from, nothing merged, and the quantity shown both as printed and as rolled up through the assemblies with the working; and 41 route decisions, each saying which parts it covers and whether it is charged — including the ones waiting for a person and the ones ruled out, with the reason. A third sheet says where every column comes from and what it does not mean. Tim has been asked what to add or show differently, so the format grows from the estimator who asked for it.</p>
+      <p>The estimate itself moved in the right direction: <b>£365.18 a unit at 2 off and £160.64 at 18 off</b>, material down £11.44. Both extender panels are now laser cut, the Yiree binding screw is priced from SDI's own parts catalogue (£0.70, replacing a £1.25 market figure), and each handed part and the arm assembly carry their powder correctly. It went to Tim as a good internal estimating pass rather than a final figure: the PEM stud and Yiree key rates, the powder scope and rate (£71.17 a unit at 2 off, the largest labour line) and the six assembly/pack rows are his to settle before £365.18 is relied on. Dave was asked to note the sheet layout estimating requested — compacted, showing values rather than formulas, and opening at the top left — now fully automatic.</p>
+      <p class="fed">Four more general rules came out of the re-run: an M4 part can never be merged into an M6 by code, description or alias; every piece of a part used more than once per unit is charged its run time; no assembly or part we make is ever sent for a researched market price (a false &pound;85 &ldquo;mirror unit&rdquo; on this book's review list is gone for every future job); and the BOMs and Routes are written on every run even if another report fails.</p>
+      <p><b>Dave's review, 28/09 — the sheet's layout, and a general rule.</b> Dave read the printed book and wrote across the top: <i>&ldquo;This looks good now — could the sub drawings come out of material and into labour.&rdquo;</i> The point was about every job, and this is where it was made. The bill of materials had listed each part the Sheet Steel and Other Sheet Material blocks price as a £0 &ldquo;costed in Sheet Steel below&rdquo; line — the RSB plate, the top locking tab, the slider, the arm, the handed arm bracket and both extender panels on this kit — so an estimator read past seven empty rows to reach the bought-in items. Those lines are gone. <b>No detail is lost</b>: each part keeps its part number and full description on the row that prices it, and on its labour rows. Dave also pencilled &ldquo;2 columns&rdquo; across the labour descriptions, and the labour block now carries the work and material in one column and the drawings it covers in a new <b>Part No.</b> column. And &ldquo;customer&rdquo;: the customer and drawing number had been written over the template's own labels, and now sit in the value cells beside them. No money changes; all three take effect from the next run.</p>
+      <p class="fed">Fed back into the model as standing layout rules for every job: a part priced in a material block is described there in full and not repeated in the bill (a setting estimating can reverse), labour rows name their drawings in their own column, and header values never overwrite a label.</p>
+    </article>
+
+    <article>
+      <h3>12312-01-GA — Tesco IMS Panel End Digital Header (Rev B) · Tim Wilkes</h3>
+      <p class="meta">Sent 24/09 · costed at 1 off (2, 5, 10 and 50 off on the same workbook) · re-run at 200 off on 25/09 at Tim's request · awaiting Tim's review</p>
+      <p>A steel case with a purchased lighting kit and a display, router and antenna supplied by Pixel Inspiration. The theme of this job was <b>every line on the drawing is a line on the sheet</b>. The case came through well from the first run: the right product, the handed side panel as its own line, 0.9&nbsp;mm parts costed at the 1.0&nbsp;mm the shop buys, and the Pixel items listed at £0 with the reason. The purchased side took the work. Two BOM readers had numbered the table differently and spliced one line's code onto another's description. Nine items printed "P/P" had been folded into one LED driver. And four lighting items were counted twice, once in the GA's table and once inside the lighting assembly.</p>
+      <p>The book came to <b>£639.28 a unit at 1 off</b>. It is provisional, and what is left to settle is now judgement rather than clean-up: packaging, delivery and the lighting-kit market prices, the M5 washer rate, which parts are powder coated before assembly and which after, the purchase unit for the 3.944&nbsp;m diffuser, the machine for the Foamex panel, and whether the card graphic is bought cut to shape.</p>
+      <p class="fed">Every correction found on this job was fed back into the model as a general rule: two readings of one table never splice two lines, a code printed over several articles ("P/P", "FIXING") gives each its own line, a sub-assembly's contents listed beside it are counted once and asked, a priced flat always has a way to be cut or a question, and every quantity difference and uncharged assembly price is put on the review list.</p>
+      <p><b>Re-run at 200 off, 25/09, at Tim's request.</b> The same pack, costed at the quantity Tim is quoting: <b>£151.47 a unit</b>, against £639.28 at 1 off and £392.40 at 2 off. The drop is the set-ups doing what they should — laser, folding, powder coat and assembly times spread across 200, packaging and delivery worked out for the order and divided by it — while the fixings come from SDI's own parts catalogue and the lighting items the drawing lists twice are still costed once. The re-run also caught one thing the engine had got wrong: the 3.944&nbsp;m silicone diffuser, which the SolidWorks model treats as the parent of the lighting parts, had been shut out of pricing by a rule written the day before to stop assemblies being given market prices — so it went at £0 with no question asked. It is flagged to Tim as excluded from this figure, and the rule has been corrected. What Tim settles before £151.47 is relied on: the diffuser, the Foamex back panel (costed at an acrylic sheet rate for want of a Foamex one, so probably high), the LED tape and driver at 200-off prices, the powder scope and the M5 washer.</p>
+      <p class="fed">Fixes made for and from the re-run, all general rules: every piece of a part used more than once per unit is charged its run time; an M4 part is never merged into an M6; no assembly or part we make is sent for a market price, while a purchased item that is also a parent in the model is still researched, so its price and the &ldquo;how is it bought&rdquo; question reach the review list; and the BOMs and Routes are written on every run.</p>
+    </article>
+
+    <article>
+      <h3>12633-10-GA — Avanti Consumable Holder (Rev A) · Howard Thurley</h3>
+      <p class="meta">Sent 24/09 17:00 · costed at 1 off (50, 100 and 200 off on the same workbook) · awaiting Howard's review</p>
+      <p>The first acrylic job since the rules built on the steel packs, and the test of whether they carry across. The theme was <b>transfer</b>. On its first run the book read the six panels at the right quantities, took the thickness from each DXF (5&nbsp;mm walls, 3&nbsp;mm floor and dividers), kept the general arrangement's own drawing and the STEP model out of the cutting, applied the shop's rule that acrylic is lasered, and charged diamond polish on every part for the polished edges the title block states. The panels' measured size comes to about 0.73&nbsp;kg of acrylic against the 0.7&nbsp;kg the drawing states, so the geometry checks out.</p>
+      <p>The book came to <b>£199.81 a unit at 1 off</b>, of which £140 is the packaging and delivery allowance; at 50 off it is £20.01. One thing was missing, and it was the engine's rather than the estimator's: the drawing's weld note had been removed as a metal process, and nothing charged the joining of the six panels.</p>
+      <p class="fed">That gap has been fed back into the model as a general rule: on acrylic and other plastics a weld note is a solvent weld, costed as one bonding event on the assembly and flagged for the joint method to be confirmed. Everything else on this job was costed by rules already in the model.</p>
+    </article>
+
+    <article>
+      <h3>12633-00-GA — Avanti Display Chiller Shelf (Rev B) · Howard Thurley</h3>
+      <p class="meta">Sent 24/09 · costed at 1 off (10, 50 and 250 off on the same workbook) · one job covering three lines on the estimating register · awaiting Howard's review</p>
+      <p><b>Read this as one job, not three.</b> Estimating logged the enquiry as three separate lines for Howard — the Wine Lifter (12633-01-GA), the Beer Plinth (12633-02-GA) and the Choc Holder (12633-03-GA). The drawing pack is a single general arrangement, 12633-00-GA, with those three as its sub-assemblies, so the engine priced the set as one product: <b>four drawing numbers, one book, one unit price</b>. Each sub-assembly's parts, labour and bonding are listed under it, so the book can still be read line by line against Howard's three.</p>
+      <p>The theme was <b>joining</b>. Acrylic parts cut and polished correctly from the first run, but nothing on the drawings says how the panels are held together, and two of the three sub-assemblies exist only in the SolidWorks model's tree. The engine now treats a plastic assembly with no fixings as bonded, costs one glue and flame-polish event for each assembly, and asks the estimator to confirm the joint method. It also stopped charging a line-bend on a flat panel whose model carried a bend feature that the drawing does not show. The book came to <b>£260.25 a unit at 1 off</b>, of which £140 is packaging and delivery; at 50 off it is £39.65.</p>
+      <p class="fed">Every correction found on this job was fed back into the model as a general rule: plastic assemblies are bonded once each and the joint is asked, a bend is charged only where the drawing shows it, a GA drawing's own DXF is never a part, a full sheet-material block nests its overflow with the template's own formulas, and every piece of a part used more than once per unit is charged its time.</p>
+    </article>
+
+    <article>
+      <h3>12614-01-GA — Tesco IMS Deep Panel End Digital Header (Rev A) · Tim Wilkes</h3>
+      <p class="meta">Drawings assessed 26/09 before the run · four runs the same morning, each scored against a pass table · sent 26/09 at 132 off · reviewed by Tim 30/09</p>
+      <p>A change of method as much as another job. The pack — the deep version of 12312-01, seventeen sheets — was <b>read and scored before the engine touched it</b>: what the parts list contains, which parts fold and how many times, what is powder coated and what is RAW, what Pixel supplies, and a written table of what the book must show to pass. The first run then failed that table in specific, nameable ways, and each was traced to a general cause rather than patched: the drawing's bend callouts were being counted from two copies of the same page text and so could never match the model; rotated callouts along vertical bend lines were being dropped by one text reader; an empty DXF bend layer had recorded &ldquo;does not fold&rdquo; on the lock plate before the drawing was read; a mirrored hand inherited the base's short DXF count but not its correction; and the two M5 nutserts had no fitting because the insertion vocabulary knew presses and not guns.</p>
+      <p>Four runs later every row of the table holds: <b>£228.61 a unit at 132 off</b>, with the fascia at 10 folds, top and bottom at 7, both sides at 11, the lock plate on a fold row at 2, the display bracket at 4, the nutserts on the insertion row with the PEM studs, and the book saying one thing per part about its folds. The case's weld and dress (£48.98 a unit) are charged because the engine inferred them from the drawing — <i>&ldquo;we always aim to price everything; our inference is always based on logic&rdquo;</i> — and put to Tim with the money named: if the case is studded and screwed, the weld is replaced by the mechanical joining labour, not merely removed.</p>
+      <p class="fed">Seven general rules came out of one morning: the drawing's callouts, confirmed by the model, outrank a DXF exported short; a page is read from every text layer and counted once; a DXF zero is lifted where the drawing and model say the part folds; a mirrored hand takes its base's readings where it has none; nutserts and threaded inserts are inserted hardware; an inferred weld is priced and asked, not dropped; and the fold resolver's verdict replaces any earlier sentence that contradicts it.</p>
+      <p><b>Tim's review, 30/09.</b> The overall cost worked out <b>very similar</b> to his. His points: base all 0.9&nbsp;mm parts on 1.0&nbsp;mm from now on, because SDI does not buy 0.9&nbsp;mm; the PVC foam back panel (03A) looks expensive, so where did its price come from; whether the electrical costs came from the internet, and whether they are bought as a kit or as individual items; whether the powder coat rate is an average; the weld and dress rate is very high, so can the engine allow for spot welding; and only a small price is included for packaging and delivery, so are we having no delivery going forward. These are the next set of changes.</p>
+    </article>
+
+    <article>
+      <h3>12567-01-GA — Tesco Digital LED GCMP Header, full-bay kit (Rev B) · Tim Wilkes</h3>
+      <p class="meta">Several runs 26–27/09, each book checked line by line against the drawings · sent 27/09 at 163 off · reviewed by Tim 30/09</p>
+      <p>The largest kit of the wave, and the one that tested <b>bought-in items end to end</b>: a lit case with its Pixel display, handed end caps, two end headers, EPDM sealing tapes, magnets, drivers, splitters and fixings, much of it existing only as rows on the drawings' tables. Early books showed prices found but never reaching the sheet, purchased items costed as sheet steel, display hardware charged when the drawing says it is supplied by others, and tape lengths listed on the routes but absent from the bill. Each was traced to a general cause and closed rather than patched.</p>
+      <p>The book now comes to <b>£701.14 a unit at 163 off</b> (material £497.79, labour £136.67). Every bill line carries a price with its source named; the display, router and antenna are shown as free-issue at £0; the channel is costed on its true flat blank, the handed end cap nested, lasered and folded, and the powder taken over each case's own members rather than its outline (9.43&nbsp;m²). The weld and dress on the case (£48.93 a unit) are priced because the drawing implies them and put to Tim with the money named, as on 12614. Twenty market figures remain indicative and are marked so; the side graphic's £95 is an AI figure for a printed board and is the first thing to confirm.</p>
+      <p><b>Tim's review, 30/09.</b> The AI estimate came out <b>£240 above his manual figure</b>, and he found the reason: the side graphic was costed at £95 each against Motion's price of £13.19, two per unit, which accounts for most of the gap. His other points: the LCD player is supplied by the client and should not be on the drawing; the weld and dress rate is very high, so can the engine allow for spot welding; and only a small price is included for packaging and delivery, so are we having no delivery going forward. These are the next set of changes.</p>
+      <p class="fed">General rules from this job: a price found for a bought-in line is the price the sheet charges; a supplier search matches what the item is, not the material it is made of, and never offers raw stock for a purchased article; a drawing's "supplied by others" holds at every stage, including late-costed items; every item the product reaches is either charged, free-issued or asked; a coat is measured over the members that carry it; and the workbook reads its block positions from the template itself, so added rows are used without a code change.</p>
+    </article>
+
+    <article>
+      <h3>12645 — Tesco DRS External Shelter V2 (Rev A) · Dave Wright</h3>
+      <p class="meta">Early books 28/09 kept back, not issued · engine fixed and re-run · 29/09 14:03 book sent at 1 off · re-run 29/09 21:27 · 30/09 deprioritised by Dave, no review needed</p>
+      <p>The biggest fabrication in the wave: a welded steel body, cover panels over 3&nbsp;m long, two purchased roller shutters, and the hinges, bolts, nuts and tek screws that hold it together. As on 12614, the drawings were read first and the result written up as a table the book had to pass. Dave's instruction for the steel went in as the job's material rule: standard mild steel. The theme of the job was <b>fix the engine, not the book</b>. The 28/09 books had faults an estimator could have corrected by hand in a few minutes. None of them went to Dave that way. Each was traced to a general cause and fixed in the engine, and the pack was re-run.</p>
+      <p>The book came to <b>£3,198.08 a unit at 1 off</b> (material £2,078.55, labour £815.36). It is provisional, and <b>the banner says exactly why</b>: the two roller shutters and the long covers have no price yet, and they are counted as open rather than left off quietly. The template's steel block is full, so the steel that did not fit is carried as 15 provisional lines (£534.11), each checked against a stocked sheet and counted. Department hours now match the labour rows they are totalled from. The rest is Dave's to settle: packaging and delivery, the hinge price (a historical match marked for checking), six market figures, the bolt count (120 printed on the drawing against 136 in the model), the powder basis (132&nbsp;m² at 0.2&nbsp;kg/m²), and one nut line that appears twice.</p>
+      <p class="fed">Eleven general rules came out of this job and are now in the model: a DWG is read only when it adds something the PDFs do not, and a general arrangement is not cut; one drawing is one part whatever its version mark; a purchased item is never absorbed by an assembly that shares a word with it; the title comes from the product's own top sheet; a weldment keeps its powder coat; overflow steel is checked against stock and counted; a historical price is used only when its code really matches; the banner counts items that have no line on the sheet, not only the priced ones, and never reports a line the sheet already carries as missing; department hours read every labour row, and the template has been corrected to match; and the crash that stopped one run writing its workbook is fixed.</p>
+      <p><b>Re-run 29/09 21:27, and Dave's decision on 30/09.</b> The re-run's book was checked line by line and ten more faults were traced to general causes (D-342 to D-351). Twenty steel rows had no sheet length because rows added to the template had no default, so they carried no cost and a default laser rate. Six long parts were wrongly called oversize because one stocked-sheet list was read under two spellings. A table's item number became a duplicate hinge line. The client carried over from the previous job. There were also a thread mismatch to ask about (Half Inch Whitworth against M8), a drawn plate called a nut that lost its laser, and a drawing missed because of its version mark. On 30/09 Dave said 12645 has been <b>deprioritised as a pack</b>, so he will not need to review it.</p>
+      <p class="fed">The pack is closed, but the ten fixes stay in the model for every job: a template's own sheet size fills rows added without one, one stocked-sheet lookup whatever the spelling, a table position is never a part, the portal warns when the client belongs to the previous job, handling is not a purchase price, a code and description naming different threads are asked, a drawn part keeps its fabrication whatever its name, one unpriced tally on every surface, a drawing's file name counts as the drawing, and an unpriced bought-in line says why the research did not price it.</p>
+    </article>
+
+    <article>
+      <h3>12527-22-GA — M&amp;S TSE Footwear Hero Riser (Rev A) · for Dave Wright</h3>
+      <p class="meta">Run 30/09 – 01/10 · five books · 72 off · sent 04/10 to Tim, cc Dave</p>
+      <p>A small part with a lot to read: two folded 1&nbsp;mm mild-steel panels joined into a riser, powder coated RAL&nbsp;9005, four bought-in bump-ons, and a printed ticket the customer supplies. The drawing says how the two panels are joined only in lines &mdash; <b>four ISO spot-weld symbols on the weldment&rsquo;s sheet, and no words</b> &mdash; beside a general note that reads &ldquo;ALL WELDS TO BE TIG UNLESS STATED&rdquo;.</p>
+      <p>The theme is <b>reading what the drawing actually states, in whatever form it states it</b>. The first book read none of it: it inferred a CO2 weld from the word WELMENT, dressed it under the M&amp;S standard, timed the coat with a floor meant for wire, took the weldment&rsquo;s whole cut path for its hanging length, and priced the customer&rsquo;s card as steel &mdash; £36.19 a unit, £19 of it powder for 0.17&nbsp;m². The engine now reads weld symbols off a sheet&rsquo;s vectors, so the four spot welds land on the Spotweld row with no dressing; the coat is timed by its area on the weldment as one object; and the ticket is listed at £0 because its own BOM line names its supplier. The 09:06 book is <b>£11.50 a unit</b>: material £3.92, labour £6.47.</p>
+      <div class="scroll" style="margin:10px 0">
+        <table style="min-width:0">
+          <thead><tr><th>Book</th><th>Engine</th><th>Unit</th><th>What changed</th></tr></thead>
+          <tbody>
+            <tr><td>30/09 19:07</td><td>92e32ea</td><td>£36.19</td><td>Powder £19.01 at 20/hr; Weld (CO2) £4.47 + Dress £2.11; ticket £0.08 as steel</td></tr>
+            <tr><td>30/09 19:29, 01/10 08:10</td><td>92e32ea</td><td>£36.19</td><td>Same book: the laptop&rsquo;s branch did not follow main-2026 (fixed 01/10)</td></tr>
+            <tr><td>01/10 08:30</td><td>92425cf</td><td>£14.01</td><td>Spotweld £0.87; ticket £0; header and gauge right. Coat moved to the two members, an extra assemble row, dressing still on</td></tr>
+            <tr><td>01/10 09:06</td><td>0b7f306</td><td><b>£11.50</b></td><td>P.Coat £2.35 on the weldment; one assemble and pack; no dressing; only the three market figures left</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Open for Tim and Dave: packaging (£1.46), delivery (£1.04) and the PD.2816 bump-ons (4 × £0.09) are AI market figures; the sheet prints no spot count, so each of the four symbols is read as one spot; and the margin is not set. No re-run is needed &mdash; the last fix (D-374) only clears a consistency check the customer&rsquo;s ticket tripped.</p>
+      <p class="fed">All twelve changes are general rules, fed back into the model for every job: weld symbols are read off the sheet, a spot weld is a weld for coating and assembly, a coat is timed by its area, a line naming its own supplier is free-issue, and the report shows the gauge and size the sheet actually costs.</p>
+    </article>
+
+    <article>
+      <h3>12173-02-GA — M&amp;S Card Spinner (Rev A) · Tim Wilkes</h3>
+      <p class="meta">Brief from James Gray 01/10 · five books 29/09 &ndash; 04/10 · sent 04/10 · six quantity breaks on one workbook</p>
+      <p>A card spinner on a lazy-susan base: an MDF base and spinner plate, two 30&nbsp;×&nbsp;30&nbsp;×&nbsp;2 tube frames welded into a powder-coated frame, eight sheet-metal card pockets with bought-in welded mesh, four rails, seven hooks, a wrapping-paper rack and trough, and an 18&nbsp;mm Unilin oak MFC back. James wrote the brief from the drawings before any book was read &mdash; what is welded, what is coated, what is bought, how many of each &mdash; and the brief became the job&rsquo;s acceptance facts and a checker any book can be scored against.</p>
+      <p>The theme is <b>a weld, a coat and a route need evidence of the part&rsquo;s own sheet</b>. The pack prints &ldquo;ALL WELDS TO BE TIG UNLESS STATED&rdquo; and &ldquo;RESISTANCE WELDING WIRE TO WIRE&rdquo; on every sheet, and the first books read those notes as work: every pocket side, shelf, tab and bracket was welded and dressed, the meshes were lasered and wire-formed, the MDF base was welded, and the two mirrored sheet hands went to the Robomac. The engine now charges a weld only where the part&rsquo;s own sheet states one &mdash; a symbol the reader finds, FINISH: WELDED, a note of its own &mdash; and asks about the rest at £0; dressing follows the weld; a member stated WELDED inside a welded assembly is that assembly&rsquo;s one joint; a coat stated on an assembly applies only where there is raw metal to coat, never a board; a mirrored hand is what its base is; and James&rsquo;s own rulings (the frame weld assembly carries no separate weld charge, the meshes are bought) reach the route directly and outrank every reading.</p>
+      <div class="scroll" style="margin:10px 0">
+        <table style="min-width:0">
+          <thead><tr><th>Book</th><th>Engine</th><th>Unit (1 off)</th><th>What changed</th></tr></thead>
+          <tbody>
+            <tr><td>01/10 17:34</td><td>D-377</td><td>£1,687.99</td><td>Frames priced as another job&rsquo;s L frame; a screw on the sheet twice; weld and dress on every sheet leaf</td></tr>
+            <tr><td>01/10 21:19</td><td>ab301be</td><td>£1,742.01</td><td>Frames from their own cut list; one line per article; the base&rsquo;s layers not yet priced</td></tr>
+            <tr><td>02/10 03:17</td><td>0906f30</td><td>£1,718.61</td><td>Base layers and tube on the sheet; Weld (CO2) £246.74 + Dress £140.06 still on the leaves; oak £0</td></tr>
+            <tr><td>04/10 19:37</td><td>7c9cd2a</td><td><b>£1,517.06</b></td><td>Welds on the frames, pocket, rail and hook only; powder once on four weldments; no Robomac on the hands; oak priced; 150 of 155 brief facts hold</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Open for Tim: ten market figures (£245.30), a rate for 30&nbsp;×&nbsp;30&nbsp;×&nbsp;2 tube &mdash; SDI Live holds the profile only as other jobs&rsquo; laser-cut pieces, each refused and named, so the frames sit on the £7.29/kg hold at £49.38 each &mdash; the oak&rsquo;s product price (no SDI Live row for Unilin 0H440; the market rung was refused this run), whether rail 05-01M has a seam of its own beside the rail assembly&rsquo;s joint, edging on the base once or per piece, and the margin. The next build also reads the rack and trough GAs&rsquo; own title blocks, which this book missed.</p>
+      <p class="fed">Thirteen changes (D-378 to D-390), all general rules fed back into the model for every job: a weld needs the part&rsquo;s own evidence and dressing follows it; a stated coat needs something to coat; a mirrored hand is sheet; a person&rsquo;s ruling reaches the route and ranks as the person&rsquo;s; a drawing&rsquo;s product code is asked of SDI Live before the material word; a section prices from the catalogue&rsquo;s stock length before any hold, and a hold says it is one; a catalogue row coded with another drawing&rsquo;s number prices only that item; a job&rsquo;s brief becomes facts a book is checked against.</p>
+    </article>
+
+    <article>
+      <h3>12696-01-GA — M&amp;S Bag Pricing Hook (Rev A) · Tim Wilkes and Dave Wright</h3>
+      <p class="meta">Brief from James Gray 05/10, written before the first run · three books the same afternoon · sent 05/10 · five quantity breaks on one workbook</p>
+      <p>A small, complete job and a sharper test of the weld and coat rules than another spinner run: a two-bracket mild-steel weldment, powder coated RAL 9007, a thumbscrew, a hank bush and a folded PETG ticket strip with scraped edges. Five sheets, no DXF, every fold on the drawing and in the model, and the same border legend &mdash; &ldquo;ALL WELDS TO BE TIG UNLESS STATED&rdquo;, the powder, chrome and zinc paragraph, the steel-grade table &mdash; printed on every sheet including the plastic one. The brief said what the right book had to show before the engine touched the pack, and the facts file now scores each book automatically.</p>
+      <p>The theme is <b>the book must say what the price is made of, in the drawing&rsquo;s own words</b>. The route was right from the first book; what was wrong was what the book said and left out. The weldment&rsquo;s two fillet symbols sit on the dashed identification line (ISO 2553, an other-side weld) and the reader looked only on the reference line; the border&rsquo;s &ldquo;+/-1.0mm&rdquo; tolerance read as a 1&nbsp;mm gauge on every sheet; the hank bush was priced from a catalogue row whose words say HEXAGON where the drawing says ROUND, and nobody fitted it; the weld row said only &ldquo;Weld (CO2)&rdquo; under a pack that says TIG; the strip&rsquo;s SCRAPED EDGES cost nothing; and the break table showed the fall from one off without saying that most of it is packaging, delivery and set-up divided by the quantity. The last of these took two books to land, because pdfplumber had merged the border&rsquo;s two small lines letter by letter and no reader could see the weld specification at all.</p>
+      <div class="scroll" style="margin:10px 0">
+        <table style="min-width:0">
+          <thead><tr><th>Book</th><th>Engine</th><th>Unit (1 off)</th><th>What changed</th></tr></thead>
+          <tbody>
+            <tr><td>05/10 14:36</td><td>169f792</td><td>£246.25</td><td>Route right; fillets unread so the weld was an inference; &ldquo;+/-1.0mm&rdquo; a gauge; bush unfitted and shown in the catalogue&rsquo;s words; scraped edges uncosted</td></tr>
+            <tr><td>05/10 17:50</td><td>811560b</td><td>£262.29</td><td>Fillets read; bush pressed (£7.92) and flagged ROUND v HEXAGON; scrape costed (£6.57); 01M&rsquo;s gauge questioned from its stated weight; breaks basis shown; weld row still silent on TIG</td></tr>
+            <tr><td>05/10 18:18</td><td>3938b6d</td><td><b>£262.29</b></td><td>Weld row names TIG and the rate it is charged at; the breaks sheet&rsquo;s &ldquo;unit cost less the spread money&rdquo; a making cost (£13.33) at every quantity</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Open for Tim and Dave: packaging and delivery (£5 and £12, market figures); the thumbscrew&rsquo;s £2, which is the parts table&rsquo;s allowance and not an Accu price; 01M at 2&nbsp;mm against a stated 0.06&nbsp;kg, which 1&nbsp;mm fits &mdash; a manufacturing decision on the sheet; how the hank bush is fitted; the P.Coat set-up of 15 minutes at the template&rsquo;s £355.43/hr, which is the £89.41 at one off and 36p at 250; and 01A&rsquo;s two model bends against three sheet callouts. Bought-in prices do not step down across the breaks. James&rsquo;s verdict on the book: a marked-up costing draft for Dave with those questions, not a final estimate.</p>
+      <p class="fed">Three sets of general rules (D-392 to D-394), all fed back into the model for every job: a weld symbol is read on either line of its callout; a tolerance is not a gauge, and a grade for a thickness band is not one either; a catalogue row that matched by code but not by words says so; a sheet&rsquo;s own FINISH outranks a page inference; a pressed fastener is fitted, and the words that say so live in config; a blank is weighed against its stated weight; the pack&rsquo;s weld process is named on the arc-weld row with the rate it is charged at; a finish that states hand work mints the work; a printed line is read whole; and a break table shows what the fall from one off is made of, through the unit cell&rsquo;s own arithmetic.</p>
+    </article>
+
+    <article>
+      <h3>12552 · Tim Wilkes — and 11732-17 (TTI) · with Howard</h3>
       <p class="meta">12552 sent 02/09 with the full quantity set · TTI pair re-issued to Howard 21/09</p>
-      <p>The 12552 exchange established the <b>quantity-break format</b> now used everywhere: one workbook, the set-up/run split published so the discount curve can be checked line by line, and briefs filed centrally so quantities are never in doubt. The two TTI jobs have been brought into Howard's review queue — and usefully, they were produced by an earlier build, so his review will double as a measure of how far the model has moved since.</p>
-      <p class="fed">The format improvements are already in the model; the TTI reviews will feed in the same way when they land.</p>
+      <p>The 12552 exchange established the <b>quantity-break format</b> now used everywhere: one workbook, the set-up/run split published so the discount curve can be checked line by line, and briefs filed centrally so quantities are never in doubt. Both TTI jobs went into Howard's review queue — and usefully, they were produced by an earlier build, so his review doubles as a measure of how far the model has moved since. 1176-02 came back on 22/09 and has its own card above; 11732-17 is still with him.</p>
+      <p class="fed">The format improvements are already in the model; the 11732-17 review will feed in the same way when it lands.</p>
     </article>
 
   </div>
@@ -368,7 +661,7 @@
   <p><b>4 · Rules, not patches.</b> Each correction lands in the engine, is recorded in the change register with the estimator's name against it, and is pinned by an automated test — so the same question is never asked twice.</p>
 </section>
 
-<p class="note">The register's own trend is the story worth reading twice: phase 1 sends (May–August) mostly went unanswered; the September wave has a 6-of-9 review rate with turnarounds as fast as 19 minutes. The estimating team is engaged, and the review loop is working.</p>
+<p class="note">The register's own trend is the story worth reading twice: phase 1 sends (May–August) mostly went unanswered; the September wave has twelve reviews across twenty-four packs (twenty-three issued, one held back) (one of Tim's covers both 11350 jobs) with turnarounds as fast as 19 minutes, and the newest pack went out the same afternoon it was produced. The estimating team is engaged, and the review loop is working.</p>
 
 <p class="note">Produced by SDI Intelligence. Customer quotations remain unissued on every job above until the estimator settles the open commercial inputs — reviews are of internal working estimates only.</p>
 
