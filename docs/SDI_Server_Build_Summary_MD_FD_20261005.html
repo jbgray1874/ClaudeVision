@@ -9,18 +9,17 @@
 <div style="font-size:13px;color:#5a6572;padding:6px 0 14px 0;">Monday 5 October 2026</div>
 </td></tr>
 <tr><td style="padding:18px 0 40px 0;">
-<p style="margin:0 0 12px 0;"><b>Date:</b> Monday 5 October 2026<br><b>From:</b> James Gray<br><b>What this asks for:</b> approval of the operating-system and licensing approach, and of the licence spend set out below, so the build can be booked as soon as the SOLIDWORKS reseller answers.</p>
+<p style="margin:0 0 12px 0;"><b>Date:</b> Monday 5 October 2026<br><b>From:</b> James Gray (software design lead); Jack, SDI's hardware advisor, builds the machine<br><b>What this asks for:</b> approval of the operating-system and licensing approach, and of the licence spend set out below, so the build can be booked as soon as the SOLIDWORKS reseller answers.</p>
 <p style="margin:0 0 12px 0;">Matt, Charlotte,</p>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">What we are building, and why</div>
 <p style="margin:0 0 12px 0;">The SDI Intelligence services run today on one estimating laptop. That laptop prices jobs, serves the estimating portal, holds the only SOLIDWORKS seat the engine can use, and is also James's development machine. It cannot be left running for the estimators and the studio, it cannot be reached from their desks reliably, and when it is busy with one estimate nothing else happens.</p>
 <p style="margin:0 0 12px 0;">The new machine, a Scan 3XS workstation (AMD Threadripper PRO, 32 cores, 128 GB, NVIDIA RTX 4000 Ada graphics card, 4 TB of fast storage), replaces that laptop as the production machine. It will carry four things:</p>
-<ul style="margin:0 0 12px 0;padding-left:1.4em;"><li style="margin:0 0 6px 0;"><b>AI estimating.</b> The estimating engine and its queue: an estimator starts a job from the portal at their desk, the server prices it, and the book and report come back.</li><li style="margin:0 0 6px 0;"><b>Client Briefing Intelligence.</b> A client brief arrives by e-mail, call or voice note and comes back as one structured brief with the gaps named.</li><li style="margin:0 0 6px 0;"><b>Drawing Search.</b> The Fixture Library: 455,000 fixtures across 188 brands, searchable by name, by brand or by a photograph, opening the drawing, the CAD model and the job folder in one click.</li><li style="margin:0 0 6px 0;"><b>Technical Design Intelligence.</b> Yogesh's work: the Document Manager that reads SOLIDWORKS project data directly, and the SDI Design Vault, our own product-data management, which goes to a go / no-go against the Dassault product at the end of October.</li></ul>
-<p style="margin:0 0 12px 0;">The 29 September programme note promised the first three live on the server by the end of October. This machine is what that promise rests on.</p>
+<ul style="margin:0 0 12px 0;padding-left:1.4em;"><li style="margin:0 0 6px 0;"><b>AI estimating.</b> The estimating engine and its queue: an estimator starts a job from the portal at their desk, the server prices it, and the book and report come back.</li><li style="margin:0 0 6px 0;"><b>Client Briefing Intelligence.</b> A client brief arrives by e-mail, call or voice note and comes back as one structured brief with the gaps named.</li><li style="margin:0 0 6px 0;"><b>Drawing Search.</b> The Fixture Library: 455,000 fixtures across 188 brands, searchable by name, by brand or by a photograph, opening the drawing, the CAD model and the job folder in one click.</li><li style="margin:0 0 6px 0;"><b>Technical Design Intelligence.</b> The Document Manager that reads SOLIDWORKS project data directly, and the SDI Design Vault, our own product-data management, which goes to a go / no-go against the Dassault product at the end of October.</li></ul>
+<p style="margin:0 0 12px 0;">The 29 September programme note promised the first three live on the server by the end of October. On Scan's 14-day lead time the hardware arrives on 26 October and go-live is the week commencing 2 November: a few days later than that note said, and this machine is what the promise rests on.</p>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">The decision we have made, and why it matters to the cost</div>
 <p style="margin:0 0 12px 0;">The machine will run <b>Windows Server 2025</b> as its operating system, with everything people use inside a <b>Windows 11 virtual machine</b>, and a second <b>Linux virtual machine</b> for Technical Design.</p>
 <p style="margin:0 0 12px 0;">We looked hard at the cheaper alternative, running Windows 11 Pro directly on the machine, because Windows 11 Pro comes free with the workstation and Windows Server does not. It was set aside for three reasons, each of which is a requirement, not a preference:</p>
 <ol start="1" style="margin:0 0 12px 0;padding-left:1.4em;"><li style="margin:0 0 6px 0;"><b>The graphics card must be usable inside a virtual machine.</b> SOLIDWORKS needs it, and SOLIDWORKS must run in a virtual machine so it can be rebuilt, backed up and moved without touching the operating system underneath. Only Windows Server can hand a graphics card to a virtual machine. Windows 11 Pro cannot.</li><li style="margin:0 0 6px 0;"><b>SOLIDWORKS must run in a virtual machine.</b> Dassault supports SOLIDWORKS 2026 on Windows 11 and on Hyper-V 2025, which is what Windows Server 2025 provides. It is not supported on Windows Server itself.</li><li style="margin:0 0 6px 0;"><b>More than one person must be able to administer the machine remotely</b> without interrupting the estimating run. Windows Server allows two administrator sessions; Windows 11 Pro allows one, and it is the one the estimating engine is using.</li></ol>
-<p style="margin:0 0 12px 0;">Yogesh reviewed this independently on 5 October and reached the same design.</p>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">What it costs</div>
 <p style="margin:0 0 12px 0;">Indicative figures, ex VAT, to be confirmed by the suppliers' quotes. The hardware itself is as quoted by Scan and is not repeated here.</p>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;font-size:14px;margin:8px 0 12px 0;">
@@ -35,18 +34,79 @@
 </table>
 <p style="margin:0 0 12px 0;">The Server licence is the only cost that the operating-system decision adds, and it buys the three requirements above.</p>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">What we are asking the SOLIDWORKS reseller, and why it matters</div>
-<p style="margin:0 0 12px 0;">Dassault's published requirements confirm the technical platform. They do not say what our licence permits. Three questions have gone to the reseller in writing, at Yogesh's prompting:</p>
+<p style="margin:0 0 12px 0;">Dassault's published requirements confirm the technical platform. They do not say what our licence permits. Three questions have gone to the reseller in writing:</p>
 <ol start="1" style="margin:0 0 12px 0;padding-left:1.4em;"><li style="margin:0 0 6px 0;">May our licence be activated and used in a virtual machine?</li><li style="margin:0 0 6px 0;">Does it permit SOLIDWORKS to be driven by our own software, unattended, as the estimating engine does all day?</li><li style="margin:0 0 6px 0;">What licence covers our software generating STEP, PDF and DXF files without a person present?</li></ol>
 <p style="margin:0 0 12px 0;">The honest position is that SOLIDWORKS licences are written for a person at a screen, and we drive it by machine. The answer may be "yes, as you are", or it may name a different licence with a cost. We will not book the build until question 1 is answered, and we will bring the answer to the other two to you with its price before we commit to it.</p>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">Timeline</div>
+<div style="border:1px solid #d8dee5;border-radius:6px;padding:10px;margin:8px 0 14px 0;"><svg viewBox="0 0 827 374" role="img" aria-label="Build timeline, 5 October to 8 November 2026" style="font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:11px;display:block;width:100%;height:auto;">
+<style>.gl{stroke:#d8dee5;stroke-width:1}.we{fill:#eef1f4}.wk{font-weight:bold;fill:#5a6572}.lab{fill:#1d2328}.who{fill:#5a6572;font-size:10px}.bar{fill:#2f6b8a}.lead{fill:#9bbdd0}.ms{fill:#c47d12}</style>
+<line class="gl" x1="300.0" y1="32" x2="300.0" y2="340"/>
+<text class="wk" x="303.0" y="44">w/c 5 Oct</text>
+<rect class="we" x="373.0" y="48" width="14.6" height="292"/>
+<rect class="we" x="387.6" y="48" width="14.6" height="292"/>
+<line class="gl" x1="402.2" y1="32" x2="402.2" y2="340"/>
+<text class="wk" x="405.2" y="44">w/c 12 Oct</text>
+<rect class="we" x="475.2" y="48" width="14.6" height="292"/>
+<rect class="we" x="489.8" y="48" width="14.6" height="292"/>
+<line class="gl" x1="504.4" y1="32" x2="504.4" y2="340"/>
+<text class="wk" x="507.4" y="44">w/c 19 Oct</text>
+<rect class="we" x="577.4" y="48" width="14.6" height="292"/>
+<rect class="we" x="592.0" y="48" width="14.6" height="292"/>
+<line class="gl" x1="606.6" y1="32" x2="606.6" y2="340"/>
+<text class="wk" x="609.6" y="44">w/c 26 Oct</text>
+<rect class="we" x="679.6" y="48" width="14.6" height="292"/>
+<rect class="we" x="694.2" y="48" width="14.6" height="292"/>
+<line class="gl" x1="708.8" y1="32" x2="708.8" y2="340"/>
+<text class="wk" x="711.8" y="44">w/c 2 Nov</text>
+<rect class="we" x="781.8" y="48" width="14.6" height="292"/>
+<rect class="we" x="796.4" y="48" width="14.6" height="292"/>
+<line class="gl" x1="0" y1="76" x2="827.0" y2="76"/>
+<text class="lab" x="4" y="64">Licensing questions to the reseller; answers back</text><text class="who" x="4" y="75">James</text>
+<rect class="bar" x="301.0" y="58" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="102" x2="827.0" y2="102"/>
+<text class="lab" x="4" y="90">Scan: Server 2025 drivers confirmed</text><text class="who" x="4" y="101">Jack</text>
+<rect class="bar" x="301.0" y="84" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="128" x2="827.0" y2="128"/>
+<text class="lab" x="4" y="116">Order placed with Scan; 14-day lead time</text><text class="who" x="4" y="127">Jack</text>
+<rect class="lead" x="403.2" y="110" width="202.4" height="14" rx="3"/>
+<line class="gl" x1="0" y1="154" x2="827.0" y2="154"/>
+<text class="lab" x="4" y="142">Licences ordered: Server, CALs, Win 11 Pro, Office</text><text class="who" x="4" y="153">James</text>
+<rect class="bar" x="403.2" y="136" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="180" x2="827.0" y2="180"/>
+<text class="lab" x="4" y="168">Preparation: media, accounts, firewall, installers</text><text class="who" x="4" y="179">Jack, James, Technical Design</text>
+<rect class="bar" x="403.2" y="162" width="173.2" height="14" rx="3"/>
+<line class="gl" x1="0" y1="206" x2="827.0" y2="206"/>
+<text class="lab" x="4" y="194">Hardware arrives on site</text><text class="who" x="4" y="205">Scan</text>
+<polygon class="ms" points="613.9,187.0 621.9,195.0 613.9,203.0 605.9,195.0"/>
+<text class="lab" x="625.9" y="199.0" style="font-weight:bold">26 Oct</text>
+<line class="gl" x1="0" y1="232" x2="827.0" y2="232"/>
+<text class="lab" x="4" y="220">Host and the two VMs built; handover checks</text><text class="who" x="4" y="231">Jack</text>
+<rect class="bar" x="607.6" y="214" width="56.4" height="14" rx="3"/>
+<line class="gl" x1="0" y1="258" x2="827.0" y2="258"/>
+<text class="lab" x="4" y="246">VM 1: estimating, portal, briefing, search, tools</text><text class="who" x="4" y="257">James</text>
+<rect class="bar" x="651.4" y="240" width="85.6" height="14" rx="3"/>
+<line class="gl" x1="0" y1="284" x2="827.0" y2="284"/>
+<text class="lab" x="4" y="272">VM 2: GitLab, PostgreSQL, FastAPI services</text><text class="who" x="4" y="283">Technical Design</text>
+<rect class="bar" x="651.4" y="266" width="85.6" height="14" rx="3"/>
+<line class="gl" x1="0" y1="310" x2="827.0" y2="310"/>
+<text class="lab" x="4" y="298">Proving: known jobs, full restart, console test</text><text class="who" x="4" y="309">James</text>
+<rect class="bar" x="709.8" y="292" width="41.8" height="14" rx="3"/>
+<line class="gl" x1="0" y1="336" x2="827.0" y2="336"/>
+<text class="lab" x="4" y="324">Go-live; laptop stood down</text><text class="who" x="4" y="335">James</text>
+<polygon class="ms" points="759.9,317.0 767.9,325.0 759.9,333.0 751.9,325.0"/>
+<text class="lab" x="771.9" y="329.0" style="font-weight:bold">5 Nov</text>
+<text class="who" x="4" y="366">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Dates assume written licensing answers by Friday 9 October and a 14-day lead time from Scan.</text>
+</svg></div>
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;font-size:14px;margin:8px 0 12px 0;">
 <tr><th style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#5a6572;">Step</th><th style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#5a6572;">When</th></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Licensing questions to the reseller; Scan asked about Server drivers</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">This week</td></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Build week booked (Jack)</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">On the reseller's answer to question 1</td></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Jack builds the host and the two virtual machines; handover checks</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Build week</td></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">James installs the estimating services, Client Briefing and Drawing Search; James and Yogesh install the Technical Design services</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">The following week</td></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Proving: known jobs re-run and compared with the laptop; a full restart; the laptop stood down as the production machine</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">The week after</td></tr>
-<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Live for estimators and the studio</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">End of October, as in the 29 September note</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Licensing questions to the reseller; written answers back. Scan asked to confirm Server drivers for the board</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">This week, to Friday 9 October</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Order placed with Scan on the reseller's answer; 14-day lead time. Licences ordered</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Monday 12 October</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Preparation while the machine is built: accounts, firewall rules, installers</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">12 to 23 October</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Hardware arrives on site</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Monday 26 October</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Jack builds the host and the two virtual machines; handover checks</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">26 to 29 October</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">I install the estimating services, Client Briefing and Drawing Search; the Technical Design team installs its services</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">29 October to 3 November</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Proving: known jobs re-run and compared with the laptop; a full restart</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">2 to 4 November</td></tr>
+<tr><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Live for estimators and the studio; the laptop stood down</td><td style="text-align:left;vertical-align:top;padding:7px 9px;border-bottom:1px solid #d8dee5;">Thursday 5 November, week commencing 2 November</td></tr>
 </table>
 <div style="border-top:1px solid #d8dee5;margin-top:18px;padding-top:14px;font-size:17px;font-weight:bold;">What could go wrong, and what we have done about it</div>
 <ul style="margin:0 0 12px 0;padding-left:1.4em;"><li style="margin:0 0 6px 0;"><b>The licence does not permit automated use.</b> We learn this from the reseller before any money is spent on the build, and the choice is then the right licence at its price, or a different way of reading models. Nothing else in the build changes.</li><li style="margin:0 0 6px 0;"><b>One estimate at a time.</b> There is one runner, as today. If the queue backs up, a second Windows virtual machine with a runner can be added later for the cost of its Windows and Office licences; it is designed for and not built.</li><li style="margin:0 0 6px 0;"><b>Everything on the Windows virtual machine restarts together.</b> A Windows update mid-estimate loses that estimate. Updates are scheduled out of hours and James is told first.</li><li style="margin:0 0 6px 0;"><b>Run time.</b> An estimate currently takes much longer than it should on the laptop, and the server will be faster but will not fix that by itself. The engine's own timing table is being used to find where the minutes go; that work is separate from the build.</li><li style="margin:0 0 6px 0;"><b>Drivers.</b> Scan supplies Windows 11 drivers for this workstation; the Server install may need the board maker's. Jack is confirming before the build week.</li></ul>

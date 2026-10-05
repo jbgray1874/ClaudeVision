@@ -1,7 +1,8 @@
 # SDI Intelligence server — build summary for Jack and James
 
 **Date:** Monday 5 October 2026
-**Status:** plan agreed in principle; waiting on the reseller's licensing answers before the build week is booked
+**Roles:** James leads the software design; Jack is SDI's hardware advisor and builds the machine; the Technical Design team installs its own services on the Linux VM
+**Status:** plan agreed in principle; the order goes to Scan on 12 October on the reseller's licensing answer; hardware on site 26 October; go-live in the week commencing 2 November
 **The full plan:** `docs/SDI_Intelligence_Server_Build_Who_Does_What.html` (and `.pdf`) in the repository, revision of 5 October
 
 ## The decision, in one paragraph
@@ -61,7 +62,7 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 **VM 2 (Linux)**
 
 17. Generation 2, Secure Boot on the Microsoft UEFI Certificate Authority template, no vTPM; 8 vCPU, 32 GB, 1 TB+ growable; automatic start.
-18. Ubuntu LTS server, fixed IP and DNS name, SSH for James and Yogesh with sudo accounts.
+18. Ubuntu LTS server, fixed IP and DNS name, SSH for James and the Technical Design team with sudo accounts.
 19. Firewall: GitLab (80/443 and its git-over-SSH port) and the FastAPI port from the office network; PostgreSQL 5432 from VM 1 only.
 20. A read-only mount of W: for the FastAPI services, credentials on the VM, not in scripts.
 
@@ -98,7 +99,7 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 10. The Document Manager API (with its licence key), the CAD Validator and the COM tools beside SOLIDWORKS, exposed to VM 2 over HTTPS; one DXF flat pattern tested from a model on W:.
 11. Antivirus exclusion paths and the ports, handed to Jack.
 
-**VM 2, with Yogesh**
+**VM 2, with the Technical Design team**
 
 12. GitLab with LFS, backups scheduled, the Design Vault repositories created.
 13. PostgreSQL, reachable from VM 1 only.
@@ -125,17 +126,28 @@ The Linux VM's disk is the one figure still open: it depends on how much of W:'s
 
 | Question | Owner | Blocks |
 |---|---|---|
-| The reseller's written answers on licensing (activation in a VM; automated use; unattended STEP/PDF/DXF; Document Manager key terms) | James, with the reseller | Booking the build week |
+| The reseller's written answers on licensing (activation in a VM; automated use; unattended STEP/PDF/DXF; Document Manager key terms) | James, with the reseller | The order to Scan on 12 October |
 | Server 2025 drivers for the 3XS board | Jack, with Scan | The host install |
-| The Linux VM's disk size (how much of W: the vault holds) | James and Yogesh | VM 2 creation |
-| Ports and names (James proposes; Yogesh's names UAT-SDI-CAD01 and UAT-SDI-PDM01) | James gives, Jack opens | Firewall rules, every link |
+| The Linux VM's disk size (how much of W: the vault holds) | James, with Technical Design | VM 2 creation |
+| Ports and names | James gives, Jack opens | Firewall rules, every link |
 | Who is told before restarts; the remote-access rule | Jack and James | Day-to-day running |
 
 ## Sequence and dates
 
-1. This week: the licensing e-mail goes to the reseller; Jack asks Scan about Server drivers.
-2. On the reseller's answer to question 1: Jack books the build week.
-3. Build week: Jack's list 1 to 25, then the handover checks.
-4. The following week: James's list on VM 1, Yogesh and James on VM 2.
-5. Proving: known jobs, the host restart, the laptop stood down.
-6. Target: the estimating engine, Drawing Search and the Technical Design services live on the server by the end of October, as promised in the 29 September programme note.
+[[GANTT]]
+
+| Step | Who | When |
+|---|---|---|
+| Licensing questions to the reseller; written answers back | James | Mon 5 to Fri 9 October |
+| Scan confirms Server 2025 drivers for the board | Jack | by Fri 9 October |
+| Order placed with Scan, 14-day lead time | Jack | Mon 12 October |
+| Licences ordered: Server 2025 Standard, CALs, Windows 11 Pro, Office, any SOLIDWORKS change | James | 12 to 16 October |
+| Preparation: Server media, accounts, firewall rules, installers, `.env`, Linux build scripts | Jack, James, Technical Design | 12 to 23 October |
+| Hardware arrives on site | Scan | Mon 26 October |
+| Host and the two VMs built; handover checks | Jack | 26 to 29 October |
+| VM 1 services installed: estimating, portal, Client Briefing, Drawing Search, DM API tools | James | 29 October to 3 November |
+| VM 2 services installed: GitLab, PostgreSQL, FastAPI | Technical Design | 29 October to 3 November |
+| Proving: known jobs, full restart, console test | James | 2 to 4 November |
+| Go-live; the laptop stood down as the production machine | James | Thu 5 November |
+
+Two things move every date: the reseller's answer to the first licensing question, which the order waits on, and Scan's 14-day lead time. A week's slip on either is a week's slip on go-live.

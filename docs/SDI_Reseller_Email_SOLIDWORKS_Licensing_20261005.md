@@ -1,7 +1,7 @@
 # E-mail to the SOLIDWORKS reseller — licensing for the SDI Intelligence server
 
 **To:** [reseller account manager], [reseller licensing desk]
-**Cc:** Yogesh Kumar; Jack [surname]
+**Cc:** Jack [surname], SDI's hardware advisor
 **From:** James Gray, SDI
 **Subject:** SOLIDWORKS 2026 licensing for a virtualised, automated server at SDI — three questions needing written answers
 
@@ -35,11 +35,11 @@ And separately:
 
 ## What we need back
 
-Written answers to the four points, with any quotations, by **[date, two weeks from sending]**. The server build is booked once question 1 is answered, and the rest determine what we order with it.
+Written answers to the four points, with any quotations, by **Friday 9 October**. The hardware order goes to Scan on Monday 12 October on your answer to question 1, on a 14-day lead time for delivery on 26 October; the other answers determine what we order alongside it.
 
 Two confirmations would also help, if you can give them from Dassault's documentation: that SOLIDWORKS 2026 lists Hyper-V 2025 as a supported virtual environment, and that a certified card passed through to the VM meets the GPU recommendation for virtual machines.
 
-Thank you. Happy to take a call if any of this is easier discussed; Yogesh Kumar, who leads the technical-design side, is copied.
+Thank you. Happy to take a call if any of this is easier discussed.
 
 Kind regards,
 

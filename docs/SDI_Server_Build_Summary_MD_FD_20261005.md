@@ -1,7 +1,7 @@
 # SDI Intelligence server — summary for the Managing Director and Finance Director
 
 **Date:** Monday 5 October 2026
-**From:** James Gray
+**From:** James Gray (software design lead); Jack, SDI's hardware advisor, builds the machine
 **What this asks for:** approval of the operating-system and licensing approach, and of the licence spend set out below, so the build can be booked as soon as the SOLIDWORKS reseller answers.
 
 Matt, Charlotte,
@@ -15,9 +15,9 @@ The new machine, a Scan 3XS workstation (AMD Threadripper PRO, 32 cores, 128 GB,
 - **AI estimating.** The estimating engine and its queue: an estimator starts a job from the portal at their desk, the server prices it, and the book and report come back.
 - **Client Briefing Intelligence.** A client brief arrives by e-mail, call or voice note and comes back as one structured brief with the gaps named.
 - **Drawing Search.** The Fixture Library: 455,000 fixtures across 188 brands, searchable by name, by brand or by a photograph, opening the drawing, the CAD model and the job folder in one click.
-- **Technical Design Intelligence.** Yogesh's work: the Document Manager that reads SOLIDWORKS project data directly, and the SDI Design Vault, our own product-data management, which goes to a go / no-go against the Dassault product at the end of October.
+- **Technical Design Intelligence.** The Document Manager that reads SOLIDWORKS project data directly, and the SDI Design Vault, our own product-data management, which goes to a go / no-go against the Dassault product at the end of October.
 
-The 29 September programme note promised the first three live on the server by the end of October. This machine is what that promise rests on.
+The 29 September programme note promised the first three live on the server by the end of October. On Scan's 14-day lead time the hardware arrives on 26 October and go-live is the week commencing 2 November: a few days later than that note said, and this machine is what the promise rests on.
 
 ## The decision we have made, and why it matters to the cost
 
@@ -29,7 +29,6 @@ We looked hard at the cheaper alternative, running Windows 11 Pro directly on th
 2. **SOLIDWORKS must run in a virtual machine.** Dassault supports SOLIDWORKS 2026 on Windows 11 and on Hyper-V 2025, which is what Windows Server 2025 provides. It is not supported on Windows Server itself.
 3. **More than one person must be able to administer the machine remotely** without interrupting the estimating run. Windows Server allows two administrator sessions; Windows 11 Pro allows one, and it is the one the estimating engine is using.
 
-Yogesh reviewed this independently on 5 October and reached the same design.
 
 ## What it costs
 
@@ -49,7 +48,7 @@ The Server licence is the only cost that the operating-system decision adds, and
 
 ## What we are asking the SOLIDWORKS reseller, and why it matters
 
-Dassault's published requirements confirm the technical platform. They do not say what our licence permits. Three questions have gone to the reseller in writing, at Yogesh's prompting:
+Dassault's published requirements confirm the technical platform. They do not say what our licence permits. Three questions have gone to the reseller in writing:
 
 1. May our licence be activated and used in a virtual machine?
 2. Does it permit SOLIDWORKS to be driven by our own software, unattended, as the estimating engine does all day?
@@ -59,14 +58,18 @@ The honest position is that SOLIDWORKS licences are written for a person at a sc
 
 ## Timeline
 
+[[GANTT]]
+
 | Step | When |
 |---|---|
-| Licensing questions to the reseller; Scan asked about Server drivers | This week |
-| Build week booked (Jack) | On the reseller's answer to question 1 |
-| Jack builds the host and the two virtual machines; handover checks | Build week |
-| James installs the estimating services, Client Briefing and Drawing Search; James and Yogesh install the Technical Design services | The following week |
-| Proving: known jobs re-run and compared with the laptop; a full restart; the laptop stood down as the production machine | The week after |
-| Live for estimators and the studio | End of October, as in the 29 September note |
+| Licensing questions to the reseller; written answers back. Scan asked to confirm Server drivers for the board | This week, to Friday 9 October |
+| Order placed with Scan on the reseller's answer; 14-day lead time. Licences ordered | Monday 12 October |
+| Preparation while the machine is built: accounts, firewall rules, installers | 12 to 23 October |
+| Hardware arrives on site | Monday 26 October |
+| Jack builds the host and the two virtual machines; handover checks | 26 to 29 October |
+| I install the estimating services, Client Briefing and Drawing Search; the Technical Design team installs its services | 29 October to 3 November |
+| Proving: known jobs re-run and compared with the laptop; a full restart | 2 to 4 November |
+| Live for estimators and the studio; the laptop stood down | Thursday 5 November, week commencing 2 November |
 
 ## What could go wrong, and what we have done about it
 

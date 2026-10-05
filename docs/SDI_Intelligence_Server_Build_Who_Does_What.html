@@ -125,8 +125,8 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
 
 <div class="wrap">
   <h1>SDI Intelligence server: the build plan</h1>
-  <p class="rev">Revised 5 October 2026 · The operating system installed on the machine is WINDOWS SERVER 2025. Windows&nbsp;11 Pro exists only inside VM&nbsp;1, the virtual machine that holds the graphics card and the tools people use. One Linux VM for Technical Design. No third VM.</p>
-  <p class="lede">Jack builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James takes them from there, exactly as he would set up a laptop. The first section says what runs where and why; then Jack's list, the handover checks, James's list, and the questions to settle together.</p>
+  <p class="rev">Revised 5 October 2026 · The operating system installed on the machine is WINDOWS SERVER 2025. Windows&nbsp;11 Pro exists only inside VM&nbsp;1, the virtual machine that holds the graphics card and the tools people use. One Linux VM for Technical Design. No third VM. Hardware on site Monday 26 October; go-live in the week commencing 2 November.</p>
+  <p class="lede">Jack, SDI's hardware advisor, builds the machine and hands over two virtual machines that behave like new computers on the network: a Windows&nbsp;11 Pro one with the graphics card inside it, and a Linux one. James, who leads the software design, takes them from there, exactly as he would set up a laptop. The first section says what runs where and why; then Jack's list, the handover checks, James's list, and the questions to settle together.</p>
   <div class="spec">Scan 3XS · Threadripper PRO 9975WX (32 cores) · 128 GB ECC · NVIDIA RTX 4000 Ada SFF 20 GB · 2 × 2 TB NVMe · Windows Server 2025 host (Hyper-V, SOLIDWORKS licence manager) · VM 1 Windows 11 Pro: the card, estimating, client estimating, Client Briefing, Drawing Search · VM 2 Linux: Technical Design services</div>
 
   <section class="design">
@@ -219,6 +219,68 @@ code{font:13px var(--mono);background:var(--surface);border:1px solid var(--line
         <tr><td>Host</td><td>the remaining 8</td><td>the remaining 32 GB</td><td>the OS drive</td><td>Hyper-V and the licence manager need little.</td></tr>
       </tbody>
     </table></div>
+
+    <h3>Timeline</h3>
+    <p class="note">The order goes to Scan on Monday 12 October, on the reseller's written answer to the first licensing question, for delivery on a 14-day lead time: hardware on site Monday 26 October. Jack builds that week, James and the Technical Design team install the week after, and go-live is in the week commencing 2 November.</p>
+    <div class="arch"><svg viewBox="0 0 827 374" role="img" aria-label="Build timeline, 5 October to 8 November 2026" style="font-family:Segoe UI,Calibri,Arial,sans-serif;font-size:11px;display:block;width:100%;height:auto;">
+<style>.gl{stroke:#d8dee5;stroke-width:1}.we{fill:#eef1f4}.wk{font-weight:bold;fill:#5a6572}.lab{fill:#1d2328}.who{fill:#5a6572;font-size:10px}.bar{fill:#2f6b8a}.lead{fill:#9bbdd0}.ms{fill:#c47d12}</style>
+<line class="gl" x1="300.0" y1="32" x2="300.0" y2="340"/>
+<text class="wk" x="303.0" y="44">w/c 5 Oct</text>
+<rect class="we" x="373.0" y="48" width="14.6" height="292"/>
+<rect class="we" x="387.6" y="48" width="14.6" height="292"/>
+<line class="gl" x1="402.2" y1="32" x2="402.2" y2="340"/>
+<text class="wk" x="405.2" y="44">w/c 12 Oct</text>
+<rect class="we" x="475.2" y="48" width="14.6" height="292"/>
+<rect class="we" x="489.8" y="48" width="14.6" height="292"/>
+<line class="gl" x1="504.4" y1="32" x2="504.4" y2="340"/>
+<text class="wk" x="507.4" y="44">w/c 19 Oct</text>
+<rect class="we" x="577.4" y="48" width="14.6" height="292"/>
+<rect class="we" x="592.0" y="48" width="14.6" height="292"/>
+<line class="gl" x1="606.6" y1="32" x2="606.6" y2="340"/>
+<text class="wk" x="609.6" y="44">w/c 26 Oct</text>
+<rect class="we" x="679.6" y="48" width="14.6" height="292"/>
+<rect class="we" x="694.2" y="48" width="14.6" height="292"/>
+<line class="gl" x1="708.8" y1="32" x2="708.8" y2="340"/>
+<text class="wk" x="711.8" y="44">w/c 2 Nov</text>
+<rect class="we" x="781.8" y="48" width="14.6" height="292"/>
+<rect class="we" x="796.4" y="48" width="14.6" height="292"/>
+<line class="gl" x1="0" y1="76" x2="827.0" y2="76"/>
+<text class="lab" x="4" y="64">Licensing questions to the reseller; answers back</text><text class="who" x="4" y="75">James</text>
+<rect class="bar" x="301.0" y="58" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="102" x2="827.0" y2="102"/>
+<text class="lab" x="4" y="90">Scan: Server 2025 drivers confirmed</text><text class="who" x="4" y="101">Jack</text>
+<rect class="bar" x="301.0" y="84" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="128" x2="827.0" y2="128"/>
+<text class="lab" x="4" y="116">Order placed with Scan; 14-day lead time</text><text class="who" x="4" y="127">Jack</text>
+<rect class="lead" x="403.2" y="110" width="202.4" height="14" rx="3"/>
+<line class="gl" x1="0" y1="154" x2="827.0" y2="154"/>
+<text class="lab" x="4" y="142">Licences ordered: Server, CALs, Win 11 Pro, Office</text><text class="who" x="4" y="153">James</text>
+<rect class="bar" x="403.2" y="136" width="71.0" height="14" rx="3"/>
+<line class="gl" x1="0" y1="180" x2="827.0" y2="180"/>
+<text class="lab" x="4" y="168">Preparation: media, accounts, firewall, installers</text><text class="who" x="4" y="179">Jack, James, Technical Design</text>
+<rect class="bar" x="403.2" y="162" width="173.2" height="14" rx="3"/>
+<line class="gl" x1="0" y1="206" x2="827.0" y2="206"/>
+<text class="lab" x="4" y="194">Hardware arrives on site</text><text class="who" x="4" y="205">Scan</text>
+<polygon class="ms" points="613.9,187.0 621.9,195.0 613.9,203.0 605.9,195.0"/>
+<text class="lab" x="625.9" y="199.0" style="font-weight:bold">26 Oct</text>
+<line class="gl" x1="0" y1="232" x2="827.0" y2="232"/>
+<text class="lab" x="4" y="220">Host and the two VMs built; handover checks</text><text class="who" x="4" y="231">Jack</text>
+<rect class="bar" x="607.6" y="214" width="56.4" height="14" rx="3"/>
+<line class="gl" x1="0" y1="258" x2="827.0" y2="258"/>
+<text class="lab" x="4" y="246">VM 1: estimating, portal, briefing, search, tools</text><text class="who" x="4" y="257">James</text>
+<rect class="bar" x="651.4" y="240" width="85.6" height="14" rx="3"/>
+<line class="gl" x1="0" y1="284" x2="827.0" y2="284"/>
+<text class="lab" x="4" y="272">VM 2: GitLab, PostgreSQL, FastAPI services</text><text class="who" x="4" y="283">Technical Design</text>
+<rect class="bar" x="651.4" y="266" width="85.6" height="14" rx="3"/>
+<line class="gl" x1="0" y1="310" x2="827.0" y2="310"/>
+<text class="lab" x="4" y="298">Proving: known jobs, full restart, console test</text><text class="who" x="4" y="309">James</text>
+<rect class="bar" x="709.8" y="292" width="41.8" height="14" rx="3"/>
+<line class="gl" x1="0" y1="336" x2="827.0" y2="336"/>
+<text class="lab" x="4" y="324">Go-live; laptop stood down</text><text class="who" x="4" y="335">James</text>
+<polygon class="ms" points="759.9,317.0 767.9,325.0 759.9,333.0 751.9,325.0"/>
+<text class="lab" x="771.9" y="329.0" style="font-weight:bold">5 Nov</text>
+<text class="who" x="4" y="366">Bars run Monday to Friday; diamonds are milestones; shaded columns are weekends. Dates assume written licensing answers by Friday 9 October and a 14-day lead time from Scan.</text>
+</svg></div>
 
     <h3>What can and cannot be shared</h3>
     <div class="facts">
