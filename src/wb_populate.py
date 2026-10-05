@@ -3033,6 +3033,19 @@ def allocate_laser_nest_setup(ws, groups: Dict[Any, Dict[str, Any]],
                   f"reduce it on the sheet.", flags)
 
 
+def row_parts_for(scope: Any, target_id: Any, participants: Any) -> Tuple[List[str], List[str]]:
+    """(the part numbers a labour row names, the members it covers) for one decision (D-398).
+
+    An assembly-scoped event names its target — the assembly the joint, the coat or the pack
+    is on — and lists the members it covers separately; a part-scoped event names its
+    participants as before. Participants that are the target itself are not members."""
+    _t = str(target_id or "").strip()
+    _p = [str(p).strip() for p in (participants or []) if str(p or "").strip()]
+    if str(scope or "").strip().lower() == "assembly" and _t:
+        return [_t], [p for p in _p if p != _t]
+    return (_p or ([_t] if _t else [])), []
+
+
 def canonical_labour_groups(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
@@ -3370,9 +3383,18 @@ def canonical_labour_groups(
             group["engine_ops"].append(operation)
         if target_id and target_id not in group["targets"]:
             group["targets"].append(target_id)
-        for part_number in participants or ([target_id] if target_id else []):
+        # THE ROW NAMES THE THING THE EVENT IS ON (D-398). An assembly-scoped joint is one
+        # charge on the assembly; naming its members in the Part No. cell ("001, 002, 003,
+        # 101" on 9439-01-04's weld row) reads as four charges, and an estimator would put
+        # the joint back on the leaves. The cell carries the target; the members go to the
+        # description as what it joins. A part-scoped row is unchanged.
+        _named, _joins = row_parts_for(scope, target_id, participants)
+        for part_number in _named:
             if part_number and part_number not in group["parts"]:
                 group["parts"].append(part_number)
+        for part_number in _joins:
+            if part_number and part_number not in group.setdefault("joins", []):
+                group["joins"].append(part_number)
         group["qty"] += qty
         if sequence is not None:
             group["route_sequence"] = (
@@ -7490,6 +7512,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         if _wp_note:
             _rd += _wp_note
             g["weld_process_note"] = _wp_note.strip(" []")
+        # WHAT THE EVENT COVERS, beside the one thing it is charged on (D-398).
+        if g.get("joins"):
+            _jl = [str(j) for j in g["joins"]]
+            _rd += (" [covers " + ", ".join(_jl[:6])
+                    + (f", +{len(_jl) - 6} more" if len(_jl) > 6 else "") + "]")
 
         ws.cell(row=row, column=lb["col_operation"], value=wb_op)
         _pcell = (free_labour_parts_cell(ws, row, int(lb["col_desc"]), _parts_col)

@@ -87,7 +87,42 @@ def names_the_product(declared: Any, identity: Any) -> bool:
     ds = str(declared or "").strip()
     if _BARE_JOB_NUMBER.match(ds):
         return _job_number_with_title(identity) == ds
-    return False
+    # A DRAWING NUMBER WITH ITS TITLE AFTER IT IS THAT DRAWING (D-398). Harrods 9439-01-04:
+    # the GA's identity in the graph was "9439-01-04-GA A4 CHAMPAGNE" — the sheet's number
+    # and then its title, as the title block prints them — and "9439-01-04" named nothing,
+    # so the book's first line said the number "matches no assembly in this pack" while
+    # costing that very assembly. The number before the title is the drawing; the title is
+    # words (three or more letters), never more numbering, so a sub-sheet is never named.
+    head, title = drawing_number_and_title(identity)
+    return bool(d) and bool(title) and d == _key(head)
+
+
+def drawing_number_and_title(identity: Any) -> "tuple[str, str]":
+    """("<drawing number>", "<title>") when an identity is a drawing number followed by its
+    title words ("9439-01-04-GA A4 CHAMPAGNE"), else ("", ""). The number is the first
+    token and must look like one; the title must carry a word of three or more letters and
+    must not continue the numbering with a digit."""
+    text = str(identity or "").strip()
+    m = re.match(r"^(\S+)\s+(.+)$", text)
+    if not m:
+        return "", ""
+    head, tail = m.group(1), m.group(2).strip()
+    if not looks_like_a_drawing_number(head) or re.match(r"^[-_]?\d", tail):
+        return "", ""
+    # a role token may follow the number as a word of its own ("9439-01-04 GA A4 CHAMPAGNE")
+    role = re.match(r"^([A-Za-z]+)\s+(.+)$", tail)
+    if role and role.group(1).upper() in ASSEMBLY_ROLE_TOKENS:
+        head, tail = head + "-" + role.group(1), role.group(2).strip()
+    tail = _REV_TAIL.sub("", tail).strip()
+    if not re.search(r"[A-Za-z]{3,}", tail):
+        return "", ""
+    # The title must be told from a sub-sheet number written with a space ("11650-06 SA01"):
+    # either the number is closed by a role token — nothing numbered follows a GA — or the
+    # title opens with a word, as 12645's "DRS EXTERNAL SHELTER" does.
+    _closed = strip_assembly_role(head) != head or bool(re.search(r"\d(GA|ASSY)$", head.upper()))
+    if not _closed and not re.match(r"^[A-Za-z]{3,}\b", tail):
+        return "", ""
+    return head, tail
 
 
 def job_number_only(declared: Any) -> str:

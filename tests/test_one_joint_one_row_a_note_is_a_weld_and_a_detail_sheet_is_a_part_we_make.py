@@ -137,3 +137,84 @@ def test_a_bom_line_traced_to_a_detail_sheet_is_in_the_pack():
     missing = {m["part_number"] for v in out for m in ((v.get("detail") or {}).get("missing") or [])}
     assert "9439-01-04-009" in missing
     assert "9439-01-04-101" not in missing and "9439-01-04-004" not in missing
+
+
+# ── D-398: the 19:20 book on 4dc941c ─────────────────────────────────────────────────────
+# One weld and one dress, but the lenses were still bought at £1.68: document_builder's
+# non-metal correction read "not steel" as "purchased" on any part, tagged the lens bought-in,
+# stripped its laser and cleared its gauge before bought_in_policy ever saw it. And the joint
+# rows' Part No. cells listed the three members instead of naming the frame.
+
+def _lens_pack():
+    import document_builder as db
+    page6 = ("A4 GRAPHIC LENS  9439-01-04-004  MATERIAL: PETG  THICKNESS: 2  FINISH: NATURAL  "
+             "297 x 212  151 g  SCALE 1 : 1")
+    summary = {"pages": [{"page_number": 1, "text_preview": "TABLE STANDING POS HOLDER MILD STEEL"},
+                         {"page_number": 6, "text_preview": page6}]}
+    lens = {"part_number": "9439-01-04-004", "description": "A4 GRAPHIC LENS", "quantity": 2,
+            "materials": ["MILD STEEL"], "material_inherited_from": "9439-01-04-GA",
+            "normalized_material": "MILD_STEEL", "normalized_thickness_mm": 2.0,
+            "pages": [6], "page_roles": ["detail"],
+            "textual_operations": ["laser_cutting", "powder_coating"],
+            "overall_length_mm": 297.0, "overall_width_mm": 212.0, "geometry_rollup": {}}
+    return db, summary, lens
+
+
+def test_a_petg_lens_with_its_own_sheet_is_cut_here_not_bought():
+    db, summary, lens = _lens_pack()
+    db._apply_post_build_fixes([lens], summary)
+    assert "bought_in" not in (lens.get("page_roles") or []), lens.get("page_roles")
+    assert "detail" in lens["page_roles"]
+    assert "laser_cutting" in (lens.get("textual_operations") or [])
+    assert "powder_coating" not in (lens.get("textual_operations") or [])   # a metal coat
+    assert str(lens.get("normalized_material") or "").upper() == "PETG"
+    assert lens.get("normalized_thickness_mm") == 2.0                        # its own gauge
+    assert lens.get("material_inherited_from") is None
+    assert any("never bought" in f for f in lens.get("review_flags") or [])
+    assert not bip.bought_in_reason(lens), bip.bought_in_reason(lens)
+
+
+def test_a_graphic_or_an_led_with_no_sheet_material_is_still_a_purchase():
+    db, summary, lens = _lens_pack()
+    summary["pages"][1]["text_preview"] = "A4 GRAPHIC  9439-01-04-005  SUPPLIED BY OTHERS  VINYL"
+    graphic = dict(lens, part_number="9439-01-04-005", description="GRAPHIC A4",
+                   normalized_thickness_mm=None)
+    db._apply_post_build_fixes([graphic], summary)
+    assert "bought_in" in graphic["page_roles"]
+    assert "laser_cutting" not in (graphic.get("textual_operations") or [])
+
+
+# ── an assembly-scoped row names the assembly and lists what it covers ───────────────────
+
+def test_an_assembly_rows_part_cell_names_the_assembly_and_the_members_it_covers():
+    import wb_populate as wp
+    named, joins = wp.row_parts_for("assembly", "9439-01-04-101",
+                                    ["9439-01-04-001", "9439-01-04-002", "9439-01-04-003",
+                                     "9439-01-04-101"])
+    assert named == ["9439-01-04-101"]
+    assert joins == ["9439-01-04-001", "9439-01-04-002", "9439-01-04-003"]
+    # a part-scoped row names its participants as before, and covers nothing
+    assert wp.row_parts_for("part", "9439-01-04-002", ["9439-01-04-002"]) == \
+        (["9439-01-04-002"], [])
+    assert wp.row_parts_for("part", "9439-01-04-002", []) == (["9439-01-04-002"], [])
+    assert wp.row_parts_for("assembly", "", ["A", "B"]) == (["A", "B"], [])
+
+
+# ── a drawing number with its title after it is that drawing ─────────────────────────────
+
+def test_the_gas_number_with_its_title_is_the_ga():
+    import product_identity as pi
+    ga = "9439-01-04-GA A4 CHAMPAGNE"
+    assert pi.drawing_number_and_title(ga) == ("9439-01-04-GA", "A4 CHAMPAGNE")
+    assert pi.names_the_product("9439-01-04", ga)
+    assert pi.names_the_product("9439-01-04-GA", ga)
+    assert pi.names_the_product("9439-01-04", "9439-01-04 GA A4 CHAMPAGNE REV C")
+    # never a sheet under it, and never a sub-sheet written with a space
+    assert not pi.names_the_product("9439-01-04", "9439-01-04-101 FRAME ASSEMBLY")
+    assert not pi.names_the_product("11650-06", "11650-06 SA01 CABINET TOP")
+    assert not pi.names_the_product("9439-01", ga)
+    assert pi.drawing_number_and_title("9439-01-04-GA") == ("", "")
+    # so the job's numbering resolves the GA with no "matches no assembly" left to say
+    ids = {ga, "9439-01-04-101", "9439-01-04-001", "9439-01-04-004"}
+    assert pi.numbering_prefix("9439-01-04", ids) == ""
+    assert [i for i in ids if pi.names_the_product("9439-01-04", i)] == [ga]

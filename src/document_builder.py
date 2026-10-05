@@ -1915,20 +1915,53 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     _apply_field(part, "normalized_material", _nm, "drawing_deterministic")
                 else:
                     part["normalized_material"] = None   # precedence: direct-write ok — clears a wrong metal, adds no evidence
-                part["normalized_thickness_mm"] = None   # precedence: direct-write ok — a metal gauge cannot describe this part
+                # A NON-METAL SHEET WITH ITS OWN DETAIL SHEET IS CUT HERE, NOT BOUGHT (D-398).
+                # Harrods 9439-01-04-004, an A4 GRAPHIC LENS: PETG, 297 x 212 x 2, 151 g on
+                # its own sheet. This block read "not steel" as "purchased": it tagged the
+                # lens bought-in, stripped its laser and cleared its gauge, and the two lenses
+                # were priced from the parts table at £1.68 instead of cut on the acrylic
+                # side. Not metal and not made are different facts. A material the Other Sheet
+                # block prices (plastic sheet, board — costed_facts.is_other_sheet_material)
+                # on a part with a detail sheet of its own is a part we cut: it keeps its
+                # laser, loses only the metal joining and coating, and is never tagged bought.
+                # An LED, a vinyl, a paper graphic — no sheet material — is still a purchase.
+                try:
+                    from costed_facts import is_other_sheet_material as _is_other_sheet
+                    _cut_sheet = (bool(non_metal_label) and bool(_is_other_sheet(non_metal_label))
+                                  and any(r in ("detail", "flat_pattern", "fabricated")
+                                          for r in page_roles))
+                except Exception:                                    # noqa: BLE001
+                    _cut_sheet = False
+                if not _cut_sheet:
+                    part["normalized_thickness_mm"] = None   # precedence: direct-write ok — a metal gauge cannot describe this part
                 part["material_inherited_from"] = None
                 fabrication_ops = {
                     "laser_cutting", "folding", "welding", "hole_machining",
                     "tapping", "countersinking", "dress_welds", "powder_coating",
                 }
+                if _cut_sheet:
+                    fabrication_ops = {"welding", "dress_welds", "powder_coating",
+                                       "tapping", "countersinking"}
                 kept_ops = [
                     op
                     for op in (part.get("textual_operations") or [])
                     if op not in fabrication_ops
                 ]
+                if _cut_sheet and "laser_cutting" not in kept_ops:
+                    kept_ops.append("laser_cutting")
+                    part.setdefault("operation_sources", {}).setdefault("laser_cutting", "inference")
                 if kept_ops != part.get("textual_operations"):
                     part["textual_operations"] = kept_ops
-                if "bought_in" not in page_roles:
+                if _cut_sheet:
+                    part["page_roles"] = [r for r in page_roles if r != "bought_in"]
+                    part.setdefault("review_flags", [])
+                    _cs_flag = (f"{non_metal_label} with a detail sheet of its own: a sheet "
+                                f"material SDI cuts, so it is made on the acrylic side and "
+                                f"never bought — the laser stays; metal joining and coating "
+                                f"come off")
+                    if _cs_flag not in part["review_flags"]:
+                        part["review_flags"].append(_cs_flag)
+                elif "bought_in" not in page_roles:
                     part["page_roles"] = list(page_roles) + ["bought_in"]
                 part.setdefault("review_flags", [])
                 if "non_metal_material_corrected" not in part["review_flags"]:

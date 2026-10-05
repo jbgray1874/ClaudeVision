@@ -310,8 +310,11 @@ def own_sheet_details_a_cut_part(part: Dict[str, Any]) -> bool:
         except (TypeError, ValueError):
             return 0.0
     _ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    _weights = part.get("weights") if isinstance(part.get("weights"), (list, tuple)) else []
     detailed = (_num(part.get("normalized_thickness_mm")) > 0
                 or _num(part.get("stated_weight_kg")) > 0 or _num(part.get("weight_kg")) > 0
+                or _num(part.get("stated_weight_g")) > 0
+                or any(_num(w) > 0 for w in _weights)
                 or _num(part.get("overall_length_mm")) > 0 or _num(part.get("blank_length_mm")) > 0
                 or _num(_ng.get("blank_length_mm")) > 0
                 or bool(part.get("overall_sizes_mm")))
