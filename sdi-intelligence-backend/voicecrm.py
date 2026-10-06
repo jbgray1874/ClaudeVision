@@ -28,6 +28,7 @@ The delegated scope Sites.Read.All (or Sites.Selected, scoped to this one site)
 must be in SDI_GRAPH_SCOPES and consented, or every call returns no_token.
 """
 
+import json
 import os
 from typing import Any
 
@@ -37,6 +38,7 @@ from pydantic import BaseModel
 
 import auth
 import journal
+import voicecrm_excel
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -45,25 +47,43 @@ def _opt(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
 
+# ── Storage backend ──────────────────────────────────────────────────────────
+# "list"  — a SharePoint List (the original design)
+# "excel" — a workbook in the site's document library (what Nick's sandbox
+#           actually is). Same propose/confirm/journal loop either way; only
+#           how a record is fetched, versioned and written differs.
+STORE = _opt("SDI_VOICECRM_STORE", "list").lower()
+EXCEL = voicecrm_excel.ExcelStore() if STORE == "excel" else None
+
 SITE = _opt("SDI_VOICECRM_SITE")
 LIST = _opt("SDI_VOICECRM_LIST")
 OWNER = _opt("SDI_VOICECRM_OWNER", "NG")
-OWNER_FIELD = _opt("SDI_VOICECRM_OWNER_FIELD", "AMOwner")
+# A List column has an internal name ("AMOwner"); a sheet header is the
+# literal text in the cell ("AM Owner").
+OWNER_FIELD = _opt("SDI_VOICECRM_OWNER_FIELD",
+                   "AM Owner" if STORE == "excel" else "AMOwner")
 
-CONFIGURED = bool(SITE and LIST)
+CONFIGURED = EXCEL.configured if EXCEL else bool(SITE and LIST)
 
 router = APIRouter()
 
 
 def _status_payload() -> dict[str, Any]:
-    missing = []
-    if not SITE:
-        missing.append("SDI_VOICECRM_SITE")
-    if not LIST:
-        missing.append("SDI_VOICECRM_LIST")
-    scopes_ok = any(s.lower().startswith("sites.") for s in auth.GRAPH_SCOPES)
+    if EXCEL:
+        missing = list(EXCEL.missing)
+    else:
+        missing = []
+        if not SITE:
+            missing.append("SDI_VOICECRM_SITE")
+        if not LIST:
+            missing.append("SDI_VOICECRM_LIST")
+    scopes_ok = any(s.lower().startswith(("sites.", "files."))
+                    for s in auth.GRAPH_SCOPES)
     return {
         "configured": CONFIGURED,
+        "store": STORE,
+        "workbook": EXCEL.xlsx if EXCEL else "",
+        "interpret_ready": _interpret_ready(),
         "missing_settings": missing,
         "sso_enabled": auth.ENABLED,
         "graph_scopes": auth.GRAPH_SCOPES,
@@ -107,6 +127,22 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
                 "detail": ("No Microsoft Graph token for this session. Sign in again, and "
                            "check that a Sites.* scope is in SDI_GRAPH_SCOPES and has been "
                            "consented for this application.")}
+
+    if EXCEL:
+        data = EXCEL.rows(token)
+        if data.get("state") != "ok":
+            return data
+        rows, skipped = [], 0
+        for item in data["items"]:
+            owner = str(item["fields"].get(OWNER_FIELD, "")).strip()
+            if OWNER and owner.upper() != OWNER.upper():
+                skipped += 1
+                continue
+            rows.append(item)
+        return {"state": "ok", "items": rows, "owner_filter": OWNER,
+                "skipped_other_owner": skipped, "sheet": data.get("sheet", ""),
+                "owner_field_found": (any(OWNER_FIELD in r["fields"] for r in rows)
+                                      if rows else None)}
 
     headers = {"Authorization": f"Bearer {token}"}
     try:
@@ -177,8 +213,10 @@ APPROVED_BY = _opt("SDI_VOICECRM_APPROVED_BY")
 
 # Only these columns may ever be written. An open-ended write endpoint against a
 # List is how a pilot quietly becomes an incident.
+_EDITABLE_DEFAULT = ("Status,Action date,End date" if STORE == "excel"
+                     else "Status,NextAction,NextActionDate")
 EDITABLE = [f.strip() for f in
-            _opt("SDI_VOICECRM_EDITABLE", "Status,NextAction,NextActionDate").split(",")
+            _opt("SDI_VOICECRM_EDITABLE", _EDITABLE_DEFAULT).split(",")
             if f.strip()]
 
 _journal = journal.UpdateJournal()
@@ -211,7 +249,9 @@ def _write_gate() -> dict | None:
 
 
 def _fetch_item(token: str, item_id: str) -> tuple[dict | None, dict | None]:
-    """One List item with its fields, or (None, error-payload)."""
+    """One record with its fields, or (None, error-payload)."""
+    if EXCEL:
+        return EXCEL.fetch(token, item_id)
     headers = {"Authorization": f"Bearer {token}"}
     try:
         with httpx.Client(timeout=20) as client:
@@ -237,7 +277,11 @@ def _owner_ok(fields: dict) -> bool:
 
 
 def _project_ref(fields: dict) -> str:
-    for key in ("ProjectID", "ProjectId", "Project_x0020_ID", "Title"):
+    # Excel headers first (Nick's tracker — Project codes are currently blank,
+    # so Client + Project is the spoken reference), then List internal names.
+    if fields.get("Client") or fields.get("Project"):
+        return " — ".join(str(fields[k]) for k in ("Client", "Project") if fields.get(k))
+    for key in ("Project code", "ProjectID", "ProjectId", "Project_x0020_ID", "Title"):
         if fields.get(key):
             return str(fields[key])
     return ""
@@ -338,26 +382,38 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
                 "detail": ("Someone changed that record while we were talking. Nothing was "
                            "written. Read it again and re-propose.")}
 
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    if item.get("eTag"):
-        headers["If-Match"] = item["eTag"]      # belt and braces alongside the check above
-    url = f"{GRAPH}/sites/{item['_site_id']}/lists/{LIST}/items/{entry['item_id']}/fields"
-    try:
-        with httpx.Client(timeout=20) as client:
-            res = client.patch(url, headers=headers, json={entry["field"]: entry["new_value"]})
-    except httpx.HTTPError as exc:
-        _journal.finish(body.proposal_id, "failed", f"Graph unreachable: {exc}")
-        return {"state": "unreachable", "detail": f"Could not reach Microsoft Graph: {exc}"}
+    if EXCEL:
+        # A workbook write cannot carry If-Match; the fingerprint comparison
+        # above is the version check. voicecrm_excel.py documents the residual
+        # read-to-write window this leaves open.
+        err = EXCEL.apply(token, item, entry["field"], entry["new_value"])
+        if err:
+            _journal.finish(body.proposal_id, "failed",
+                            f"{err.get('state')}: {str(err.get('detail', ''))[:300]}")
+            return err
+    else:
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        if item.get("eTag"):
+            headers["If-Match"] = item["eTag"]  # belt and braces alongside the check above
+        url = f"{GRAPH}/sites/{item['_site_id']}/lists/{LIST}/items/{entry['item_id']}/fields"
+        try:
+            with httpx.Client(timeout=20) as client:
+                res = client.patch(url, headers=headers,
+                                   json={entry["field"]: entry["new_value"]})
+        except httpx.HTTPError as exc:
+            _journal.finish(body.proposal_id, "failed", f"Graph unreachable: {exc}")
+            return {"state": "unreachable", "detail": f"Could not reach Microsoft Graph: {exc}"}
 
-    if res.status_code == 412:
-        _journal.finish(body.proposal_id, "conflict", "Precondition failed on write.")
-        return {"state": "conflict", "detail": "The record changed as we wrote. Nothing was saved."}
+        if res.status_code == 412:
+            _journal.finish(body.proposal_id, "conflict", "Precondition failed on write.")
+            return {"state": "conflict",
+                    "detail": "The record changed as we wrote. Nothing was saved."}
 
-    if res.status_code >= 300:
-        detail = _graph_detail(res)
-        _journal.finish(body.proposal_id, "failed", f"HTTP {res.status_code}: {detail}")
-        # Never report success for a write that did not happen.
-        return {"state": "failed", "status": res.status_code, "detail": detail}
+        if res.status_code >= 300:
+            detail = _graph_detail(res)
+            _journal.finish(body.proposal_id, "failed", f"HTTP {res.status_code}: {detail}")
+            # Never report success for a write that did not happen.
+            return {"state": "failed", "status": res.status_code, "detail": detail}
 
     _journal.finish(body.proposal_id, "applied",
                     f"{entry['field']}: '{entry['old_value']}' -> '{entry['new_value']}' "
@@ -373,3 +429,123 @@ def journal_view(request: Request, limit: int = 25, user: dict = Depends(auth.re
     return {"writes_enabled": WRITE_ENABLED, "approved_by": APPROVED_BY,
             "editable_fields": EDITABLE, "counts": _journal.counts(),
             "entries": _journal.recent(limit)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Interpret — one spoken sentence in, one structured instruction out.
+#
+# The browser does the listening (Web Speech API) and the talking
+# (speechSynthesis); this endpoint only turns the transcript into either a
+# proposal the normal propose/confirm loop can run, an answer to read aloud,
+# or a clarifying question. It never writes anything itself — every update
+# still goes through /propose and /confirm with all their checks.
+# ═══════════════════════════════════════════════════════════════════════════
+
+INTERPRET_MODEL = _opt("SDI_VOICECRM_MODEL", "claude-opus-5-5")
+
+
+def _interpret_ready() -> bool:
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return False
+    try:
+        import anthropic  # noqa: F401 — availability probe
+        return True
+    except ImportError:
+        return False
+
+
+class InterpretIn(BaseModel):
+    transcript: str
+    # The records the screen is currently showing, trimmed by the browser to
+    # {id, ref, fields-of-interest}. The model matches against these only.
+    projects: list[dict] = []
+
+
+_INTERPRET_SYSTEM = """You turn one spoken sentence from an account manager into a structured
+instruction against their project tracker. You receive the sentence (a voice
+transcript, so expect recognition errors) and their current records.
+
+Reply with ONLY a JSON object, no prose, no code fences:
+  {"action": "update" | "read" | "clarify",
+   "item_id": "<id of the matched record, or null>",
+   "field": "<one of the editable fields, or null>",
+   "new_value": "<the value to set, or null>",
+   "say": "<one short sentence to speak to the person>"}
+
+Rules:
+- "update": only when one record clearly matches AND the field is in the
+  editable list AND the new value is clear. item_id must be an id that was
+  given to you; never invent one.
+- "read": they asked about their records. Put the answer in "say" (keep it
+  under three sentences; it is spoken aloud).
+- "clarify": the record, field or value is ambiguous or missing. Ask one
+  specific question in "say" (e.g. name the candidate records).
+- Dates: write them as the person would in the sheet, e.g. "14/10/2026".
+- Never guess. A wrong update read confidently is worse than a question."""
+
+
+@router.post("/api/voicecrm/interpret")
+def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.require_user)):
+    """Parse a transcript into update/read/clarify. Writes nothing."""
+    if not _interpret_ready():
+        return {"state": "interpret_unavailable",
+                "detail": ("Voice interpretation needs ANTHROPIC_API_KEY in the service "
+                           "environment and the 'anthropic' package installed.")}
+    transcript = body.transcript.strip()
+    if not transcript:
+        return {"state": "clarify", "say": "I didn't catch that. Say it again?"}
+
+    import anthropic
+
+    payload = json.dumps({
+        "transcript": transcript,
+        "editable_fields": EDITABLE,
+        "records": body.projects[:150],
+    }, ensure_ascii=False)
+
+    client = anthropic.Anthropic()
+    try:
+        resp = client.messages.create(
+            model=INTERPRET_MODEL,
+            max_tokens=1000,
+            thinking={"type": "adaptive"},
+            system=_INTERPRET_SYSTEM,
+            messages=[{"role": "user", "content": payload}],
+        )
+    except anthropic.APIError as exc:
+        return {"state": "interpret_failed",
+                "detail": f"The language model refused the request: {exc}"[:400]}
+
+    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        parsed = json.loads(text)
+        action = parsed.get("action")
+        if action not in ("update", "read", "clarify"):
+            raise ValueError(f"unknown action {action!r}")
+    except (ValueError, json.JSONDecodeError):
+        return {"state": "clarify",
+                "say": "I couldn't make sense of that. Could you rephrase it?"}
+
+    say = str(parsed.get("say") or "")[:400]
+
+    if action == "update":
+        item_id = str(parsed.get("item_id") or "")
+        field = str(parsed.get("field") or "")
+        new_value = str(parsed.get("new_value") or "")
+        known_ids = {str(p.get("id")) for p in body.projects}
+        # The model proposes; this code decides. An id or field it was not
+        # given is discarded, not trusted.
+        if item_id not in known_ids:
+            return {"state": "clarify",
+                    "say": say or "I couldn't match that to one of your records. Which client was it?"}
+        if field not in EDITABLE:
+            return {"state": "clarify",
+                    "say": f"I can only update {', '.join(EDITABLE)} in this pilot."}
+        if not new_value:
+            return {"state": "clarify", "say": f"What should {field} be set to?"}
+        return {"state": "update", "item_id": item_id, "field": field,
+                "new_value": new_value, "say": say}
+
+    return {"state": action, "say": say or "Sorry, I have nothing useful to say about that."}

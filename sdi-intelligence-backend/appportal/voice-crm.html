@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0d0d0f">
-<title>Voice CRM · SDI Intelligence</title>
+<title>AM CRM · SDI Intelligence</title>
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -63,6 +63,37 @@
   .msg{color:var(--ink-faint);font-size:14px;padding:26px 2px;text-align:center}
   .foot{margin-top:26px;padding-top:15px;border-top:1px solid var(--line-soft);
         font-size:11px;color:var(--ink-faint);font-family:var(--mono)}
+
+  /* ── Voice console ── */
+  .vc{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);
+      padding:15px;margin-top:14px}
+  .vc h4{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--ink-faint);
+         text-transform:uppercase;font-weight:500;margin-bottom:10px}
+  .vc-row{display:flex;gap:10px;align-items:center}
+  .mic{flex:0 0 auto;width:58px;height:58px;border-radius:50%;border:1px solid var(--line);
+       background:var(--surface-2);color:var(--ink);cursor:pointer;display:flex;
+       align-items:center;justify-content:center;transition:all .15s}
+  .mic svg{width:24px;height:24px}
+  .mic.live{background:rgba(255,93,93,.18);border-color:var(--fail);color:var(--fail);
+            animation:pulse 1.2s infinite}
+  .mic:disabled{opacity:.35;cursor:not-allowed}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,93,93,.35)}50%{box-shadow:0 0 0 10px rgba(255,93,93,0)}}
+  .vc-state{font-size:13.5px;color:var(--ink-dim);min-height:20px}
+  .vc-log{margin-top:12px;max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:7px}
+  .turn{font-size:13.5px;padding:8px 11px;border-radius:var(--r);max-width:92%}
+  .t-you{align-self:flex-end;background:rgba(255,212,0,.1);border:1px solid rgba(255,212,0,.25);color:var(--ink)}
+  .t-app{align-self:flex-start;background:var(--surface-2);border:1px solid var(--line-soft);color:var(--ink-dim)}
+  .t-app b{color:var(--ink)}
+  .vc-confirm{display:none;gap:9px;margin-top:11px}
+  .vc-confirm.show{display:flex}
+  .btn{font-family:var(--body);font-size:14px;font-weight:600;padding:9px 18px;border-radius:var(--r);
+       border:1px solid var(--line);background:var(--surface-2);color:var(--ink);cursor:pointer}
+  .btn.yes{background:rgba(95,208,138,.14);border-color:rgba(95,208,138,.4);color:var(--ok)}
+  .btn.no{background:rgba(255,93,93,.1);border-color:rgba(255,93,93,.35);color:var(--fail)}
+  .vc-type{display:flex;gap:8px;margin-top:11px}
+  .vc-type input{flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
+                 color:var(--ink);font-family:var(--body);font-size:14px;padding:9px 11px;outline:none}
+  .vc-type input:focus{border-color:var(--accent)}
 </style>
 </head>
 <body>
@@ -76,9 +107,35 @@
 
 <div class="wrap">
   <div class="kicker">SDI Intelligence app</div>
-  <h1>Voice-Activated CRM</h1>
-  <p class="sub">Sandbox project records, read live from SharePoint as the signed-in user.</p>
+  <h1>SDI Intelligence AM CRM</h1>
+  <p class="sub">Nick's sandbox tracker, read live through Microsoft Graph as the signed-in user —
+     with a spoken update loop: say it, hear it back, confirm it, and it is written and journalled.</p>
   <div class="meta" id="badges"></div>
+
+  <div class="vc" id="vc" style="display:none">
+    <h4>Talk to the tracker</h4>
+    <div class="vc-row">
+      <button class="mic" id="mic" title="Hold a conversation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>
+        </svg>
+      </button>
+      <div>
+        <div class="vc-state" id="vcstate">Tap the mic and say something like
+          “set the status on the Acme project to invoiced”.</div>
+      </div>
+    </div>
+    <div class="vc-log" id="vclog"></div>
+    <div class="vc-confirm" id="vcconfirm">
+      <button class="btn yes" onclick="answerConfirm(true)">Yes — write it</button>
+      <button class="btn no" onclick="answerConfirm(false)">No — cancel</button>
+    </div>
+    <div class="vc-type">
+      <input id="vctext" placeholder="…or type the instruction" autocomplete="off">
+      <button class="btn" onclick="sendTyped()">Send</button>
+    </div>
+  </div>
+
   <div id="body"><div class="msg">Checking…</div></div>
   <div class="foot" id="foot"></div>
 </div>
@@ -86,16 +143,18 @@
 <script>
 // Nothing on this screen is invented. If a record cannot be read, the screen
 // says why instead of showing a plausible-looking row. A confidently wrong
-// project status is worse than an honest gap.
+// project status is worse than an honest gap — and the same rule runs through
+// the voice loop: nothing is written without a read-back and a yes.
 const $=id=>document.getElementById(id);
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 // SharePoint returns plenty of plumbing alongside the real columns.
 const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|FolderChildCount|AppAuthor|AppEditor|ComplianceAssetId|FileSystemObjectType|ServerRedirectedEmbedUrl)/i;
-const PID=['ProjectID','ProjectId','Project_x0020_ID','Title'];
+const PID=['Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
+
+let ST={}, PROJECTS=[], PENDING=null, LISTEN_MODE='command';
 
 function badge(text,cls){ return '<span class="chip '+cls+'">'+esc(text)+'</span>'; }
-
 function panel(title,html,warn){
   return '<div class="panel'+(warn?' warn':'')+'"><h4>'+esc(title)+'</h4>'+html+'</div>';
 }
@@ -105,13 +164,13 @@ function explain(d){
   switch(d.state){
     case 'not_configured':
       return panel('Not connected yet',
-        '<p>The SharePoint sandbox List has not been pointed at this service. '
+        '<p>The sandbox has not been pointed at this service. '
         +'Set these in <code>.env</code> on the server and restart it:</p><ul>'
         +(s.missing_settings||[]).map(k=>'<li><code>'+esc(k)+'</code></li>').join('')
         +'</ul><p style="margin-top:10px">'
-        +'<code>SDI_VOICECRM_SITE</code> is the site in the form '
-        +'<code>hostname:/sites/SiteName</code>. <code>SDI_VOICECRM_LIST</code> is the '
-        +'List display name or its ID.</p>',true);
+        +'For Nick\'s spreadsheet sandbox: <code>SDI_VOICECRM_STORE=excel</code>, '
+        +'<code>SDI_VOICECRM_SITE</code> as <code>hostname:/sites/SiteName</code>, and '
+        +'<code>SDI_VOICECRM_XLSX</code> as the workbook\'s path in the document library.</p>',true);
     case 'sso_disabled':
       return panel('Sign-in not configured',
         '<p>These records are read as the signed-in person, so Entra SSO has to be '
@@ -119,14 +178,16 @@ function explain(d){
     case 'no_token':
       return panel('No Microsoft Graph access',
         '<p>'+esc(d.detail||'')+'</p><p style="margin-top:10px">Most often this means the '
-        +'app registration has not been granted a <code>Sites.*</code> delegated permission, '
-        +'or the scope was added after this session started. Sign out and back in after '
-        +'granting it.</p>',true);
+        +'app registration has not been granted a <code>Sites.*</code> or <code>Files.*</code> '
+        +'delegated permission, or the scope was added after this session started. Sign out '
+        +'and back in after granting it.</p>',true);
     case 'graph_error':
       return panel('Microsoft Graph refused the request',
         '<p><code>HTTP '+esc(d.status)+'</code></p><p style="margin-top:8px">'+esc(d.detail)+'</p>'
         +'<p style="margin-top:10px">A 403 here usually means the account can sign in but has '
-        +'no rights on that site; a 404 usually means the site or List name is wrong.</p>',true);
+        +'no rights on that site; a 404 usually means the site, List or workbook path is wrong.</p>',true);
+    case 'empty_sheet':
+      return panel('The worksheet is empty','<p>'+esc(d.detail||'')+'</p>',true);
     case 'unreachable':
       return panel('Could not reach Microsoft Graph','<p>'+esc(d.detail||'')+'</p>',true);
     default:
@@ -136,7 +197,7 @@ function explain(d){
 
 function record(r){
   const f=r.fields||{};
-  const pidKey=PID.find(k=>f[k]!=null);
+  const pidKey=PID.find(k=>f[k]!=null&&String(f[k]).trim());
   const keys=Object.keys(f).filter(k=>!HIDE.test(k)&&k!==pidKey);
   return '<div class="rec"><div class="rh">'
     +'<span class="pid">'+esc(pidKey?f[pidKey]:('Item '+r.id))+'</span>'
@@ -147,59 +208,237 @@ function record(r){
 }
 
 function fmt(v){
-  if(v==null) return '—';
+  if(v==null||v==='') return '—';
   if(typeof v==='object') return v.Title||v.DisplayName||v.LookupValue||JSON.stringify(v).slice(0,120);
   if(typeof v==='string'&&/^\d{4}-\d{2}-\d{2}T/.test(v)) return v.slice(0,10);
   return v;
 }
 
-async function main(){
-  let st={};
+async function post(url,data){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+                           body:JSON.stringify(data)});
+  if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); throw new Error('signed out'); }
+  return r.json();
+}
+
+// ── Voice loop ──────────────────────────────────────────────────────────────
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null;
+
+function say(text, then){
+  log('app', text);
   try{
-    const r=await fetch('../api/voicecrm/status',{cache:'no-store'});
-    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); return; }
-    st=await r.json();
-  }catch(e){
-    $('body').innerHTML=panel('Service unreachable','<p>'+esc(e.message)+'</p>',true); return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang='en-GB';
+    if(then) u.onend = then;
+    speechSynthesis.speak(u);
+    if(then){ // belt and braces: some engines drop onend
+      u.onerror = then;
+    }
+  }catch(e){ if(then) then(); }
+}
+
+function log(who, text){
+  const div=document.createElement('div');
+  div.className='turn '+(who==='you'?'t-you':'t-app');
+  div.innerHTML=(who==='you'?'':'<b>CRM</b> · ')+esc(text);
+  $('vclog').appendChild(div);
+  $('vclog').scrollTop=$('vclog').scrollHeight;
+}
+
+function setState(t){ $('vcstate').textContent=t; }
+
+function startListening(mode){
+  if(!SR) return;
+  LISTEN_MODE=mode||'command';
+  if(rec){ try{rec.abort();}catch(e){} }
+  rec=new SR();
+  rec.lang='en-GB'; rec.interimResults=false; rec.maxAlternatives=1;
+  rec.onstart=()=>{ $('mic').classList.add('live');
+    setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening…'); };
+  rec.onend=()=>{ $('mic').classList.remove('live'); };
+  rec.onerror=e=>{ $('mic').classList.remove('live');
+    if(e.error!=='aborted') setState('Mic error: '+e.error+'. Tap to try again, or type below.'); };
+  rec.onresult=e=>{
+    const t=e.results[0][0].transcript.trim();
+    if(LISTEN_MODE==='confirm') handleConfirmSpeech(t);
+    else handleTranscript(t);
+  };
+  try{ rec.start(); }catch(e){ setState('Could not start the mic: '+e.message); }
+}
+
+function projSummary(){
+  // Just enough for the model to match and act on — not the whole sheet.
+  const KEEP=['Client','Project','Description','Status','AM Owner','Action date','End date','Budget'];
+  return PROJECTS.map(r=>{
+    const f={}; KEEP.forEach(k=>{ const v=(r.fields||{})[k];
+      if(v!=null&&String(v).trim()) f[k]=String(v).slice(0,120); });
+    return {id:r.id, fields:f};
+  });
+}
+
+async function handleTranscript(t){
+  log('you', t);
+  setState('Working out what you meant…');
+  let r;
+  try{ r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary()}); }
+  catch(e){ setState('The service did not answer: '+e.message); return; }
+
+  if(r.state==='update'){
+    let p;
+    try{ p=await post('../api/voicecrm/propose',{item_id:r.item_id,field:r.field,new_value:r.new_value}); }
+    catch(e){ setState('The service did not answer: '+e.message); return; }
+    if(p.state==='proposed'){
+      PENDING=p;
+      $('vcconfirm').classList.add('show');
+      setState('Say “yes” to write it or “no” to cancel — or use the buttons.');
+      say(p.readback, ()=>startListening('confirm'));
+    }else if(p.state==='no_change'){
+      say(p.detail);
+      setState('Nothing to do.');
+    }else{
+      say('I can\'t make that change: '+(p.detail&&typeof p.detail==='string'?p.detail:p.state));
+      setState('state: '+p.state);
+    }
+  }else if(r.say){
+    say(r.say);
+    setState(r.state==='clarify'?'Tap the mic to answer.':'Done. Tap the mic for the next one.');
+  }else{
+    say('Something went wrong: '+(r.detail||r.state||'no answer.'));
+    setState('state: '+(r.state||'unknown'));
   }
+}
 
-  $('badges').innerHTML =
-      badge(st.configured?'List configured':'List not configured', st.configured?'c-ok':'c-warn')
-    + badge(st.sso_enabled?'SSO on':'SSO off', st.sso_enabled?'c-ok':'c-warn')
-    + badge('Owner = '+(st.owner_filter||'—'),'c-off')
-    + badge('Read-only','c-off');
+function handleConfirmSpeech(t){
+  log('you', t);
+  if(/\b(yes|yeah|yep|correct|confirm|go ahead|do it|write it)\b/i.test(t)) answerConfirm(true);
+  else if(/\b(no|nope|cancel|stop|don'?t|wrong)\b/i.test(t)) answerConfirm(false);
+  else{
+    setState('I need a clear yes or no — or use the buttons.');
+    say('Sorry — yes or no?', ()=>startListening('confirm'));
+  }
+}
 
+async function answerConfirm(yes){
+  if(!PENDING) return;
+  $('vcconfirm').classList.remove('show');
+  const pid=PENDING.proposal_id; PENDING=null;
+  setState(yes?'Writing…':'Cancelling…');
+  let c;
+  try{ c=await post('../api/voicecrm/confirm',{proposal_id:pid,confirmed:yes}); }
+  catch(e){ setState('The service did not answer: '+e.message); return; }
+  if(c.state==='applied'){
+    say('Done. '+c.field+' on '+(c.project_ref||'that record')+' is now '+c.new_value+'.');
+    setState('Written and journalled.');
+    loadRecords();          // show the sheet as it now is
+  }else if(c.state==='declined'){
+    say('Okay — nothing was changed.');
+    setState('Cancelled.');
+  }else if(c.state==='conflict'){
+    say('That record changed while we were talking, so nothing was written. I\'ve re-read it — try again.');
+    setState('Conflict — nothing written.');
+    loadRecords();
+  }else{
+    say('That did not save: '+(typeof c.detail==='string'?c.detail:c.state));
+    setState('state: '+c.state);
+  }
+}
+
+function sendTyped(){
+  const t=$('vctext').value.trim();
+  if(!t) return;
+  $('vctext').value='';
+  if(PENDING){
+    // A typed yes/no answers an open read-back just like a spoken one.
+    handleConfirmSpeech(t);
+  }else{
+    handleTranscript(t);
+  }
+}
+document.addEventListener('DOMContentLoaded',()=>{
+  $('vctext').addEventListener('keydown',e=>{ if(e.key==='Enter') sendTyped(); });
+  $('mic').addEventListener('click',()=>startListening(PENDING?'confirm':'command'));
+});
+
+// ── Records + status ────────────────────────────────────────────────────────
+async function loadRecords(){
   const r2=await fetch('../api/voicecrm/projects',{cache:'no-store'});
   const d=await r2.json();
 
   let h='';
   if(d.state!=='ok'){
+    PROJECTS=[];
     h=explain(d);
   }else if(!d.items.length){
+    PROJECTS=[];
     h=panel('No matching records',
-      '<p>The List was read successfully, but no record has <code>'+esc(st.owner_field)
-      +'</code> set to <b>'+esc(d.owner_filter)+'</b>.'
+      '<p>The '+(ST.store==='excel'?'sheet':'List')+' was read successfully, but no record has '
+      +'<code>'+esc(ST.owner_field)+'</code> set to <b>'+esc(d.owner_filter)+'</b>.'
       +(d.skipped_other_owner?' '+d.skipped_other_owner+' record(s) belong to other owners.':'')
-      +'</p><p style="margin-top:10px">If the records are there, the owner column\'s internal '
-      +'name probably differs — set <code>SDI_VOICECRM_OWNER_FIELD</code> to match.</p>');
+      +'</p><p style="margin-top:10px">If the records are there, the owner column\'s name '
+      +'probably differs — set <code>SDI_VOICECRM_OWNER_FIELD</code> to match.</p>');
   }else{
+    PROJECTS=d.items;
     h='<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';
     if(d.skipped_other_owner)
       h+='<p class="msg">'+d.skipped_other_owner+' record(s) hidden — owned by someone other than '
         +esc(d.owner_filter)+'.</p>';
   }
 
-  h+=panel('Why this is read-only',
-    '<p>Updating a record by voice needs the full loop from the agreed architecture: validate '
-    +'the change, read it back, take explicit confirmation, re-check the owner and the record '
-    +'version, then write and journal the outcome so a retry cannot repeat a saved change.</p>'
-    +'<p style="margin-top:10px">Until that exists and is approved, this screen reads and does '
-    +'not write. The live tracker is untouched either way.</p>');
+  if(ST.writes_enabled){
+    h+=panel('How writing works',
+      '<p>Nothing is written from a sentence alone. Every change is validated, read back to '
+      +'you, written only on your explicit yes, version-checked against the record as it is '
+      +'at that moment, and journalled — so a dropped call or a retry can never save the same '
+      +'change twice.</p>'
+      +'<p style="margin-top:10px">Editable in this pilot: '
+      +(ST.editable_fields||[]).map(f=>'<code>'+esc(f)+'</code>').join(' ')+'</p>');
+  }else{
+    h+=panel('Why this is read-only',
+      '<p>The write loop (propose → read back → confirm → journal) is built, but switched '
+      +'off until the sandbox pilot is approved: <code>SDI_VOICECRM_WRITE=yes</code> and '
+      +'<code>SDI_VOICECRM_APPROVED_BY</code> on the server turn it on.</p>'
+      +'<p style="margin-top:10px">Until then you can ask questions by voice; updates are '
+      +'refused at the server. The live tracker is untouched either way.</p>');
+  }
 
   $('body').innerHTML=h;
   $('foot').textContent = d.state==='ok'
-    ? d.items.length+' record(s) · live from SharePoint'
+    ? d.items.length+' record(s) · live from '+(ST.store==='excel'?('"'+(ST.workbook||'the workbook')+'"'):'SharePoint')
     : 'state: '+d.state;
+}
+
+async function main(){
+  try{
+    const r=await fetch('../api/voicecrm/status',{cache:'no-store'});
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); return; }
+    ST=await r.json();
+  }catch(e){
+    $('body').innerHTML=panel('Service unreachable','<p>'+esc(e.message)+'</p>',true); return;
+  }
+
+  $('badges').innerHTML =
+      badge(ST.store==='excel'?'Excel workbook':'SharePoint List','c-off')
+    + badge(ST.configured?'Connected':'Not configured', ST.configured?'c-ok':'c-warn')
+    + badge(ST.sso_enabled?'SSO on':'SSO off', ST.sso_enabled?'c-ok':'c-warn')
+    + badge('Owner = '+(ST.owner_filter||'—'),'c-off')
+    + badge(ST.writes_enabled?'Writes on · confirmed & journalled':'Read-only',
+            ST.writes_enabled?'c-ok':'c-off')
+    + badge(ST.interpret_ready?'Voice brain ready':'Voice brain off',
+            ST.interpret_ready?'c-ok':'c-warn');
+
+  // The console appears whenever the service can interpret; without a mic the
+  // typed input still works, so only the mic button is disabled.
+  if(ST.interpret_ready){
+    $('vc').style.display='block';
+    if(!SR){
+      $('mic').disabled=true;
+      setState('This browser has no speech recognition (Safari and Chrome do) — type below instead.');
+    }
+  }
+
+  await loadRecords();
 }
 main();
 </script>
