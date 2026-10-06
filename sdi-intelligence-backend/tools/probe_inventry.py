@@ -79,6 +79,14 @@ def main():
                     help="required for any write - this is a live reception system")
     args = ap.parse_args()
 
+    # Said before anything else: a setting added to the wrong worktree's .env
+    # is indistinguishable from a setting that did not work.
+    print(f"settings from: {cfg.ENV_FILE}"
+          f"{'' if cfg.ENV_FILE_FOUND else '   <-- DOES NOT EXIST'}")
+    print(f"  base_url  {cfg.INVENTRY_API_BASE_URL or '(unset)'}")
+    print(f"  ca_bundle {cfg.INVENTRY_API_CA_BUNDLE or '(unset)'}")
+    print(f"  check_hostname {cfg.INVENTRY_API_CHECK_HOSTNAME}\n")
+
     client = api.InVentryAPI()
 
     # Credentials first. Everything else is noise until this passes.

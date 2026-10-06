@@ -405,6 +405,7 @@ class InVentryAPI:
         ours = [p for p in on_site if signed_in_by_us(p)]
         return {
             "status": "ok",
+            "env_file": str(cfg.ENV_FILE) if cfg.ENV_FILE_FOUND else f"{cfg.ENV_FILE} (MISSING)",
             "base_url": self.base_url,
             "auth": auth if auth else "CheckAuth OK",
             "tls_verification": self.verify if self.verify is not False else "OFF (self-signed)",

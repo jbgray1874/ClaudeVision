@@ -6,7 +6,13 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).with_name(".env"))
+# Which .env this is matters more than it looks. A git worktree gets its own
+# copy, .env is deliberately untracked, and the two drift - a setting added to
+# the wrong one looks exactly like a setting that did not work. Both are
+# reported, so the answer is one line of output rather than an afternoon.
+ENV_FILE = Path(__file__).with_name(".env")
+ENV_FILE_FOUND = ENV_FILE.is_file()
+load_dotenv(ENV_FILE)
 
 
 def _opt(name: str, default: str = "") -> str:
