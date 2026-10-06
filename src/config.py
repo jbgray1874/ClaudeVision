@@ -1672,6 +1672,24 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     # grade serves a band of gauges and says nothing about the part on the sheet.
     r"\b(?:UP\s+TO|OVER)\s+\d+(?:\.\d+)?\s*MM\s+THICK\s+FOR\b[^•\n.;:]{0,60}",
 ]
+# ── THE LEGEND'S MATERIAL WORDS ARE NOT A PART'S MATERIAL (D-402) ────────────────────────
+# M&S 9598-02-02G GRAPHIC: its own sheet states MATERIAL: 400 MIC, a value the keyword list
+# did not know, so the reader fell back to scanning the whole page and took TIMBER from the
+# legend's "WHERE SPECIFIED ALL TIMBER-BASED PRODUCTS MUST BE FSC CERTIFIED", with STAINLESS
+# STEEL and ALUMINIUM from "• 304 - STAINLESS STEEL" and "• 6063 - ALUMINIUM FOR EXTRUSION".
+# The card was costed as an 18 mm timber panel (£9.19 material, £9.34 CNC). Phrases the border
+# prints on every sheet, blanked before any page-wide material scan. A labelled callout is
+# never touched by the bulleted forms: a part's MATERIAL field does not start with a bullet.
+MATERIAL_LEGEND_PHRASES = [
+    r"\bTIMBER[\s\-]+BASED\s+PRODUCTS?\b",
+    r"•\s*\d{3}\s*[-–]\s*STAINLESS\s+STEEL\b",
+    r"•\s*\d{4}\s*[-–]\s*ALUMINI?UM\b",
+    r"\bALUMINI?UM\s+FOR\s+EXTRUSION\b",
+]
+# A MATERIAL NAMED BY WEIGHT OR THICKNESS IN MICRONS IS A PRINT STOCK (D-402). "400 MIC",
+# "400 MICRON", "300 GSM SILK": card or paper a printer supplies, never a sheet SDI cuts. The
+# callout is the sheet's answer and is kept as printed; the lexicon reads it as bought.
+PRINT_STOCK_WEIGHT_PATTERN = r"^\s*\d+(?:\.\d+)?\s*(?:MIC|MICRONS?|MU|GSM|G/?M2)\b"
 
 # ── A FINISH NOTE THAT NAMES ONE FACE ─────────────────────────────────────────────────────
 # 12173-03-02J's sheet says "PAINTED TOP FACE": one face is sprayed, not both. A finish verb

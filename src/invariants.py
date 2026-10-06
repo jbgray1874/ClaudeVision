@@ -23,7 +23,7 @@ outputs to each other, so a drawing nobody has seen yet is held to the same stan
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 # The one place that decides what a price source IS. Shared with the estimator and the
 # pricing service so a writer and a checker cannot reach different verdicts about the same
@@ -3796,6 +3796,23 @@ def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, A
     parts = _parts(summary)
     if not parts:
         return []
+    # THE GAUGE THE SHEET CHARGED, NOT THE ONE THE RECORD HOLDS (D-402). The raw record's
+    # thickness is what the readers resolved; costing may take another (estimator's
+    # _safe_thickness_and_stage: a DXF filename or the drawing's thickness list over a reading
+    # it refuses) and the costed row says which. 9598-02-02G's record held 0.4 mm from the
+    # model while the sheet nested it at 18, and this advisory said "costed at 0.4" beside a
+    # Other Sheet row at 18 — two statements about one gauge, on one page. The costed row is
+    # the gauge the money rides on; the raw reading joins the argument as one more source.
+    _costed: Dict[str, Tuple[float, str]] = {}
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if not isinstance(_pe, dict):
+            continue
+        try:
+            _ct = float(_pe.get("normalized_thickness_mm"))
+        except (TypeError, ValueError):
+            continue
+        if _ct > 0 and _pe.get("part_number"):
+            _costed[str(_pe.get("part_number"))] = (_ct, str(_pe.get("thickness_source") or ""))
     disputed = []
     for part in parts:
         won = part.get("normalized_thickness_mm")
@@ -3805,24 +3822,32 @@ def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, A
             continue
         if won <= 0:
             continue
-        for entry in ((part.get("_displaced") or {}).get("normalized_thickness_mm") or []):
-            if not isinstance(entry, dict):
-                continue
+        others = [(e.get("value"), e.get("source") or "an earlier pass")
+                  for e in ((part.get("_displaced") or {}).get("normalized_thickness_mm") or [])
+                  if isinstance(e, dict)]
+        _charged = _costed.get(str(part.get("part_number")))
+        costed_from = part.get("thickness_source") or "the winning source"
+        if _charged and abs(_charged[0] - won) > 0.05:
+            others.append((won, costed_from))
+            won, costed_from = _charged[0], (_charged[1] or "the costed row")
+        _seen_other: set = set()
+        for _val, _src in others:
             try:
-                other = float(entry.get("value"))
+                other = float(_val)
             except (TypeError, ValueError):
                 continue
-            if other <= 0:
+            if other <= 0 or round(other, 3) in _seen_other:
                 continue
             ratio = max(won, other) / min(won, other)
             if ratio < _GAUGE_WORTH_SAYING:
                 continue
+            _seen_other.add(round(other, 3))
             disputed.append({
                 "part_number": part.get("part_number"),
                 "costed_mm": won,
-                "costed_from": part.get("thickness_source") or "the winning source",
+                "costed_from": costed_from,
                 "other_mm": other,
-                "other_from": entry.get("source") or "an earlier pass",
+                "other_from": _src,
                 "ratio": round(ratio, 2),
             })
     if not disputed:
@@ -3836,8 +3861,8 @@ def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, A
                     f"{d['costed_from']}, but {d['other_from']} says {d['other_mm']}mm"
                     for d in disputed[:6])
         + ". Gauge drives material directly and steps the cut rate, so a part costed at the "
-          "wrong one is wrong twice. The higher-ranked source has been used and the figure "
-          "stands -- confirm which gauge the part is actually made from.",
+          "wrong one is wrong twice. The gauge named first is the one the sheet charges and "
+          "the figure stands -- confirm which gauge the part is actually made from.",
         parts=disputed)]
 
 

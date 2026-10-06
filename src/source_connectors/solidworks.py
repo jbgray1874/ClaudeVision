@@ -2386,6 +2386,33 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                              f"sheet one thickness thick, in a material the Other Sheet block "
                              f"prices — no flat pattern because it is not sheet metal")
                 out["thickness"] += 1
+            # A FLAT SOLID'S EXTENTS ARE ITS BLANK (D-402). A sheet one thickness thick has
+            # nowhere to fold, so its envelope IS the rectangle it is cut from — and with no
+            # flat pattern and no DXF the part was otherwise left to the document-text scan,
+            # which handed 9598-02-02G (a 210 x 148.5 card) the frame's 471.61 flat length and
+            # the sheet's 841 as an 841 x 471.61 blank. The model's extents at model rank,
+            # where nothing measured the blank; a DXF or a native flat still wins.
+            if not _dxf_backed(part) and not nat.has_flat():
+                _ext = sorted([v for v in (_num(x) for x in (nat.bbox_mm or [])) if v],
+                              reverse=True)[:2]
+                if len(_ext) == 2 and all(_plausible_mm(v) for v in _ext):
+                    _was = (_num(part.get("blank_length_mm")), _num(part.get("blank_width_mm")))
+                    _wrote = _apply_field(part, "blank_length_mm", _ext[0], SOURCE_NAME)
+                    _wrote = _apply_field(part, "blank_width_mm", _ext[1], SOURCE_NAME) or _wrote
+                    if _wrote:
+                        ng = part.get("normalized_geometry")
+                        ng = dict(ng) if isinstance(ng, dict) else {}
+                        ng["blank_length_mm"], ng["blank_width_mm"] = _ext[0], _ext[1]
+                        part["normalized_geometry"] = ng
+                        part["overall_length_mm"], part["overall_width_mm"] = _ext[0], _ext[1]
+                        flags.append(
+                            f"blank {_ext[0]:g} x {_ext[1]:g}mm from the SolidWorks solid's "
+                            f"extents — a flat sheet one thickness thick, so its envelope is "
+                            f"the rectangle it is cut from"
+                            + (f"; replaces {_was[0]:g} x {_was[1]:g}mm read off the document "
+                               f"text, which was another part's size"
+                               if _was[0] and _was[1] else ""))
+                        out["flat"] += 1
         elif _plausible_thk(nat.thickness_mm) and _no_sheet_body:
             flags.append(
                 f"the model reports {float(nat.thickness_mm):g}mm as thickness for a part with "

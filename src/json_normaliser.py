@@ -253,6 +253,15 @@ def normalise_material(text: Optional[str]) -> Optional[str]:
         return None
     cleaned = re.sub(r"[^A-Z0-9 ]", " ", str(text).upper()).strip()
     cleaned = re.sub(r" {2,}", " ", cleaned)
+    # A STOCK NAMED BY WEIGHT IS A PRINT STOCK (D-402). "400 MIC" / "300 GSM" is card or paper
+    # a printer supplies; it resolves to bought, as PAPER does, with the callout kept as printed.
+    try:
+        import config as _cfg
+        _print_stock = getattr(_cfg, "PRINT_STOCK_WEIGHT_PATTERN", None)
+    except Exception:                                                # noqa: BLE001
+        _print_stock = None
+    if re.search(_print_stock or r"^\s*\d+(?:\.\d+)?\s*(?:MIC|MICRONS?|MU|GSM|G/?M2)\b", cleaned):
+        return "BOUGHT_IN"
     for key in _MATERIAL_KEYS_SORTED:
         code = MATERIAL_NORMALISATION[key]
         if key in cleaned:

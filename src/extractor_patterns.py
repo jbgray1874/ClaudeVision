@@ -850,6 +850,11 @@ def _extract_material_candidates(text: str) -> List[str]:
             # a GA/parent sheet puts in its MATERIAL field. Those fall through to the
             # keyword fallback / engine default instead of becoming a bogus material.
             out.append(v)
+        elif len(v) <= 40 and _print_stock_weight_re().search(v.upper()):
+            # A STOCK NAMED BY ITS WEIGHT (D-402): "400 MIC", "300 GSM SILK". The alpha arm
+            # refused it for its digits, the page scan ran instead, and the legend's words
+            # became the part's material. The callout is the sheet's answer; kept as printed.
+            out.append(v)
     seen: set = set()
     unique: List[str] = []
     for token in out:
@@ -1073,11 +1078,58 @@ def _strip_negated_materials(text: str) -> str:
     return "".join(out)
 
 
+_VOCAB_RES: Dict[str, Any] = {}
+
+
+def _print_stock_weight_re():
+    if "print_stock" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _pat = getattr(_cfg, "PRINT_STOCK_WEIGHT_PATTERN", None)
+        except Exception:                                            # noqa: BLE001
+            _pat = None
+        _VOCAB_RES["print_stock"] = re.compile(
+            _pat or r"^\s*\d+(?:\.\d+)?\s*(?:MIC|MICRONS?|MU|GSM|G/?M2)\b", re.IGNORECASE)
+    return _VOCAB_RES["print_stock"]
+
+
+def _material_legend_re():
+    if "legend" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _phr = list(getattr(_cfg, "MATERIAL_LEGEND_PHRASES", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _phr = []
+        _VOCAB_RES["legend"] = re.compile("|".join(_phr), re.IGNORECASE) if _phr else None
+    return _VOCAB_RES["legend"]
+
+
 def _strip_material_boilerplate(text: str) -> str:
     """Blank out standard spec-legend phrases that carry a material word in a
     non-part context (legend headers, grade-rule bullets) so they cannot set the
     part's material family. Genuine part callouts are untouched."""
-    return _strip_negated_materials(_MATERIAL_BOILERPLATE_RE.sub(" ", text or ""))
+    out = _MATERIAL_BOILERPLATE_RE.sub(" ", text or "")
+    _legend = _material_legend_re()
+    if _legend is not None:
+        out = _legend.sub(" ", out)
+    return _strip_negated_materials(out)
+
+
+def material_field_states_something(text: str) -> bool:
+    """Does a labelled MATERIAL field on this text name a material — resolved or not (D-402)?
+
+    A field that names something is the sheet's answer, and the whole-page keyword scan must
+    not run over it: 9598-02-02G's "MATERIAL: 400 MIC" was refused by the keyword list, the
+    page was scanned instead, and the legend's TIMBER became the graphic's material. A
+    pointer ("REFER TO INDIVIDUAL COMPONENT DRAWINGS") or a bare gauge ("2MM") names nothing."""
+    for value in _extract_labeled_values(text or "", r"MATERIAL(?!\s*SPEC)\s*[:\-]",
+                                         TITLE_BLOCK_STOP_LABELS):
+        v = _strip_material_boilerplate(_truncate_at_drawing_note(normalize_text(value))).strip(" :;-,.")
+        if not v or _MATERIAL_REF_NOTE_RE.search(v):
+            continue
+        if re.search(r"[A-Za-z]{3,}", v) and not re.fullmatch(r"[\d.\s]*MM\s*(?:THK|THICK)?", v, re.IGNORECASE):
+            return True
+    return False
 
 
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
@@ -1097,8 +1149,16 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
     labelled_materials = _extract_material_candidates(raw_text)
     if labelled_materials:
         materials = [canonical_material(value) for value in labelled_materials]
+    elif material_field_states_something(raw_text):
+        # THE FIELD NAMED SOMETHING THE READER COULD NOT RESOLVE (D-402). That is the sheet's
+        # answer, recorded as unresolved by the readers downstream; the page is NOT scanned,
+        # because the page's other material words are the legend's and another part's.
+        materials = []
     else:
-        material_scan_text = _strip_material_boilerplate(normalized_text)
+        # The page scan runs with the specification legend removed as well as the standing
+        # phrases: "• 304 - STAINLESS STEEL" and "WHERE SPECIFIED ALL TIMBER-BASED PRODUCTS"
+        # are the border's words on every sheet, never this part's (D-402).
+        material_scan_text = _strip_material_boilerplate(strip_specification_legend(normalized_text))
         materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
     revisions = _extract_revision_candidates(raw_text)

@@ -295,3 +295,120 @@ def test_a_blob_weld_at_both_ends_is_the_sheets_statement_of_the_weld():
     assert ws.sheet_weld_note("WELD EACH END")["note"]
     assert ws.sheet_weld_note("TO STOP FOLD OPENING") == {}            # the reason, not a weld
     assert ws.sheet_weld_note("BLOB OF SEALANT BOTH ENDS") == {}
+
+
+# ── D-402: the 6 Oct 14:15 book on e21761e — the graphic's own material and size ─────────
+#
+# 9598-02-02G GRAPHIC: its sheet states MATERIAL: 400 MIC, 210 x 148.5 x 0.40, 1.95 g. The
+# book charged it as an 18 mm TIMBER panel, 841 x 471.61 — £9.19 of board and £9.34 of CNC
+# on a printed card, about £20.52 of the £47.38 unit figure. Boilerplate text and the frame's
+# geometry overrode the part's own field and its own model.
+
+def test_the_sheets_own_material_field_is_its_answer_however_unresolved():
+    import extractor_patterns as ep
+    legend = ("FINISH: TBC COLOUR: TBC WEIGHT: 1.95g GENERAL TOLERANCES: LINEAR DIMENSIONS UP TO "
+              "120mm +/-0.5mm CHINA MATERIAL SPECIFICATIONS: • Q195 UP TO 3mm THICK FOR POWDER "
+              "COATED STEEL • 304 - STAINLESS STEEL • 6063 - ALUMINIUM FOR EXTRUSION TIMBER "
+              "PRODUCTS: • WHERE SPECIFIED ALL TIMBER-BASED PRODUCTS MUST BE FSC CERTIFIED "
+              "DRAWING No 9598-02-02G")
+    assert ep.extract_title_block_fields("MATERIAL: 400 MIC " + legend)["materials"] == ["400 MIC"]
+    # the same sheet read with the value before its label (PyMuPDF's order): no labelled
+    # value, and the page scan runs — the legend's words are never a part's material
+    assert ep.extract_title_block_fields("400 MIC FINISH: MATERIAL: " + legend)["materials"] == []
+    # a GA that points at its components, and a field naming a stock the arms do not take
+    assert ep.extract_title_block_fields(
+        "MATERIAL: REFER TO INDIVIDUAL COMPONENT DRAWINGS " + legend)["materials"] == []
+    assert ep.extract_title_block_fields(
+        "MATERIAL: CORIAN GLACIER WHITE SOLID SURFACE 12 MM " + legend)["materials"] == []
+    assert ep.material_field_states_something("MATERIAL: CORIAN GLACIER WHITE SOLID SURFACE 12 MM")
+    assert not ep.material_field_states_something("MATERIAL: 2MM FINISH: TBC")
+    # a real callout still reads, including one that shares a word with the legend's grade
+    assert ep.extract_title_block_fields("MATERIAL: MILD STEEL " + legend)["materials"] == ["MILD STEEL"]
+    assert ep.extract_title_block_fields(
+        "MATERIAL: STAINLESS STEEL 304 " + legend)["materials"] == ["STAINLESS STEEL"]
+
+
+def test_a_stock_named_by_weight_is_a_print_stock_and_the_name_rule_agrees():
+    import estimator as est
+    import json_normaliser as jn
+    assert jn.normalise_material("400 MIC") == "BOUGHT_IN"
+    assert jn.normalise_material("300 GSM SILK") == "BOUGHT_IN"
+    assert jn.normalise_material("BETWEEN 80 - 120 MICRON") is None     # a coating band, not a stock
+    graphic = {"part_number": "9598-02-02G", "description": "GRAPHIC", "materials": ["400 MIC"],
+               "page_roles": ["detail"], "quantity": 1}
+    assert jn.normalise_material_for_part(graphic) == "BOUGHT_IN"
+    assert est._is_special_bought_in_item({**graphic, "normalized_material": "BOUGHT_IN"})
+    assert not bip.own_sheet_states_a_stock_material({**graphic, "normalized_material": "BOUGHT_IN"})
+
+
+def test_a_family_default_gauge_never_re_enters_as_the_drawings_reading():
+    import document_builder as db
+    import estimator as est
+    part = {"part_number": "X-01J", "description": "BACK PANEL", "materials": ["MDF"],
+            "pages": [1], "page_roles": ["detail"], "quantity": 1, "thicknesses_mm": [],
+            "geometry_rollup": {}, "textual_operations": [], "review_flags": []}
+    summary = {"pages": [{"page_number": 1, "text": "MATERIAL: MDF",
+                          "page_role": {"primary_role": "detail"}}],
+               "document_analysis": {}}
+    db._apply_post_build_fixes([part], summary)
+    assert part.get("normalized_thickness_mm") == 18.0
+    assert part.get("thickness_source") == "inference"
+    assert not part.get("thicknesses_mm")
+    # the estimator charges the reading the record holds, not a list entry nobody printed
+    assert est._safe_thickness_and_stage(part) == (18.0, "normalized")
+
+
+def test_a_flat_plastic_solid_gives_its_blank_from_its_own_extents():
+    from source_connectors import solidworks as sw
+    lens = {"part_number": "9439-01-04-004", "description": "A4 GRAPHIC LENS",
+            "materials": ["PETG"], "normalized_material": "ACRYLIC", "page_roles": ["detail"],
+            "pages": [6], "quantity": 2, "blank_length_mm": 841.0, "blank_width_mm": 471.61,
+            "blank_length_mm_source": "document_text_largest_numbers",
+            "blank_width_mm_source": "document_text_largest_numbers"}
+    nat = sw.NativePart(part_number="9439-01-04-004", material="Acrylic (Medium-high impact)",
+                        material_source="applied_library", thickness_mm=2.0,
+                        bbox_mm=[297.0, 212.0, 2.0], mass_kg=None)
+    sw.apply_native_to_pre_estimate([lens], sw.NativeJob(found=True, part_signals={"9439-01-04-004": nat}))
+    assert (lens["blank_length_mm"], lens["blank_width_mm"]) == (297.0, 212.0)
+    assert lens["blank_length_mm_source"] == "solidworks_api"
+    assert lens["normalized_geometry"]["blank_length_mm"] == 297.0
+    assert any("extents" in f and "replaces 841 x 471.61mm" in f for f in lens["review_flags"])
+    # a DXF-backed part keeps its measured flat: the extents are a fallback, never an override
+    cut = {"part_number": "9439-01-04-005", "description": "LENS", "materials": ["PETG"],
+           "normalized_material": "ACRYLIC", "page_roles": ["detail"], "pages": [7], "quantity": 1,
+           "geometry_source": "dxf", "blank_length_mm": 300.0, "blank_width_mm": 210.0}
+    nat2 = sw.NativePart(part_number="9439-01-04-005", material="PETG", thickness_mm=2.0,
+                         bbox_mm=[297.0, 212.0, 2.0], mass_kg=None)
+    sw.apply_native_to_pre_estimate([cut], sw.NativeJob(found=True, part_signals={"9439-01-04-005": nat2}))
+    assert (cut["blank_length_mm"], cut["blank_width_mm"]) == (300.0, 210.0)
+
+
+def test_the_gauge_advisory_names_the_gauge_the_sheet_charged():
+    raw = {"part_number": "X-02G", "normalized_thickness_mm": 0.4, "thickness_source": "solidworks_api",
+           "_displaced": {"normalized_thickness_mm": [{"value": 18.0, "source": "inference"}]}}
+    charged = {"part_number": "X-02G", "normalized_thickness_mm": 18.0,
+               "thickness_source": "thicknesses_mm_list"}
+    out = invariants.check_two_sources_disagree_about_the_gauge(
+        {"parts": [raw], "estimate_summary": {"part_estimates": [charged]}})
+    assert out and "X-02G costed at 18.0mm from thicknesses_mm_list, but solidworks_api says 0.4mm" in out[0]["message"]
+    assert "higher-ranked" not in out[0]["message"]
+    # the control: costed row and raw record agree, the displaced reading is the other side
+    agree = {"part_number": "X-02G", "normalized_thickness_mm": 0.4, "thickness_source": "solidworks_api"}
+    out2 = invariants.check_two_sources_disagree_about_the_gauge(
+        {"parts": [raw], "estimate_summary": {"part_estimates": [agree]}})
+    assert out2 and "costed at 0.4mm from solidworks_api, but inference says 18.0mm" in out2[0]["message"]
+
+
+def test_bend_callouts_are_counted_on_the_layer_that_reads_every_glyph(monkeypatch):
+    import drawing_job_merge as djm
+    summary = {"pages": [{"page_number": 2, "source_pdf_path": "",
+                          "pdfplumber_text": "UP 90° R 1 DOWN 180° R 0.5 DOWN 180° R 0.5"}]}
+    monkeypatch.setattr(djm, "_mupdf_page_text", lambda pg, d: "UP  90°  R 1 \nDOWN  180°  R 0.5 \n")
+    part = {"part_number": "X-01M", "pages": [2], "page_roles": ["detail"]}
+    assert djm.stamp_drawing_bend_callouts([part], summary) == 1
+    assert part["drawing_bend_callouts"] == 2
+    # no PDF on disk: the text layers are all there is, and the largest reading stands (D-259)
+    monkeypatch.setattr(djm, "_mupdf_page_text", lambda pg, d: "")
+    part = {"part_number": "X-01M", "pages": [2], "page_roles": ["detail"]}
+    djm.stamp_drawing_bend_callouts([part], summary)
+    assert part["drawing_bend_callouts"] == 3

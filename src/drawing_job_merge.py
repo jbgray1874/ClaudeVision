@@ -2545,9 +2545,18 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
             continue
         layers = [str(pg.get(k) or "") for k in ("pdfplumber_text", "normalized_text",
                                                  "pypdf_text", "text")]
-        layers.append(_mupdf_page_text(pg, _mupdf_docs))
-        count_by_page[pg.get("page_number")] = max(
-            len(_BEND_CALLOUT.findall(t)) for t in layers)
+        _mu = _mupdf_page_text(pg, _mupdf_docs)
+        # THE LAYER THAT READS EVERY GLYPH DECIDES (D-402). The max over layers was taken
+        # because pdfplumber DROPS rotated callouts; PyMuPDF reads them, so where it read the
+        # page its count is complete and a layer counting MORE has read a callout twice (an
+        # overlaid glyph run), not found one PyMuPDF missed. 9598-02-01M prints UP 90° and
+        # DOWN 180° and was charged against "callouts read 3". Without the page's own PDF the
+        # text layers are all there is, and the largest reading still stands.
+        if _mu.strip():
+            count_by_page[pg.get("page_number")] = len(_BEND_CALLOUT.findall(_mu))
+        else:
+            count_by_page[pg.get("page_number")] = max(
+                len(_BEND_CALLOUT.findall(t)) for t in layers)
     for _doc in _mupdf_docs.values():
         try:
             _doc.close()

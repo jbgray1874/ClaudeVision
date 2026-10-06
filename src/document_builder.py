@@ -1566,10 +1566,15 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
                     if _mk in mat_upper_joined:
                         # A family DEFAULT (18mm for MDF) — not a reading of this part at
                         # all, so it fills a gap and never displaces anything.
+                        #
+                        # AND IT IS NEVER WRITTEN INTO THE DRAWING'S OWN LIST (D-402). This
+                        # used to put the default into part["thicknesses_mm"] as well, where
+                        # the estimator reads it back as the drawing's reading
+                        # ("thicknesses_mm_list") — so on 9598-02-02G the model's 0.4 mm,
+                        # refused below the board floor for a material the page scan had
+                        # got wrong, gave way to an 18 that no sheet printed, and the card
+                        # was nested at 18 mm with the advisory saying it was costed at 0.4.
                         _apply_field(part, "normalized_thickness_mm", _mv, "inference")
-                        part["thicknesses_mm"] = [
-                            str(int(_mv)) if float(_mv) == int(_mv) else str(_mv)
-                        ]
                         break
             _blank_l = _safe_float(part.get("blank_length_mm"))
             _blank_w = _safe_float(part.get("blank_width_mm"))
