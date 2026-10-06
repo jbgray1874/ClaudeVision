@@ -580,3 +580,97 @@ Console state verified the same day, from the live system:
 >
 > Thanks,
 > James
+
+## Round 7 — escalation, 6 Oct 2026
+
+Rounds 5 and 6 asked about the partner secret as one question among several.
+This one states the consequence plainly: the 401 is at the authentication
+layer, so **no endpoint is reachable at all**. GetPersonnel is as blocked as
+AddPersonnelAction. There is no partial path into InVentry — we cannot even
+read the personnel list.
+
+It also reverses the earlier decline of their support connection. That was
+right when the open question was which host serves the API; it is wrong now
+that the open question is authentication on their side.
+
+Everything claimed in it was verified first, and the list is included so the
+question cannot come back as "are you sure it isn't your end?".
+
+> Hi Charlotte,
+>
+> I need to escalate this, and I'd rather set out exactly where we are than
+> keep asking the same question.
+>
+> The integration is finished. It is built, tested, configured, and installed
+> against our system at 10.0.0.241:4816. It is blocked on one credential, and
+> it is not one we can create or obtain ourselves.
+>
+> **`GET /PartnerAPI/CheckAuth` returns HTTP 401.**
+>
+> The important part is where that 401 sits. It is at the authentication layer,
+> before any endpoint, and both headers go on every call — so this is not a
+> problem with one request or one feature. `GetPersonnel` is as blocked as
+> `AddPersonnelAction`. We cannot write to InVentry, and we cannot read from it
+> either. At the moment we have no working path into the system at all, so
+> there is nothing further we can test or build around it.
+>
+> Everything on our side has been checked rather than assumed:
+>
+> * The API is reachable — 10.0.0.241 on port 4816, confirmed from our network.
+> * TLS completes, with your certificate exported from the V4 folder and
+>   verified against the connection.
+> * "Enable partner API" is On in the console.
+> * There is one API key, with the partner set to **End User Developer** — the
+>   option you identified for a customer's own integration.
+> * That key matches the console character for character; it is not a stale one.
+> * `apikey` and `partnersecret` are sent as lowercase request headers, exactly
+>   as your documentation and Postman collection specify.
+> * The 401 is a response from your software, not a network or TLS failure.
+>
+> The only value in that chain we have not been able to verify independently is
+> the **partner secret**. We are sending the one pre-filled in your Postman
+> collection, on the basis that your overview describes it as common across
+> on-premises installations.
+>
+> So, three questions:
+>
+> 1. Is the partner secret in the collection the one we should be using, or is
+>    one issued per site? If per site, could you issue ours?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active? If so, that alone would explain this, and we will arrange
+>    the downtime.
+> 3. Is "End User Developer" definitely the right partner for a key that will
+>    be used against `/PartnerAPI/` endpoints? Your earlier note said this use
+>    wouldn't require the Partner API, but every endpoint in the collection
+>    sits under that path and is rejected without a `partnersecret` header, so
+>    I may have misunderstood which pairing is intended.
+>
+> **I'd now welcome the support connection you offered.** I declined it last
+> month because the open question then was which machine serves the API, and we
+> had answered that ourselves. The open question now is authentication inside
+> your software, which we cannot see from outside. Any day this week suits, and
+> I'm happy to be on the call.
+>
+> Two smaller things, neither urgent:
+>
+> * **`ActionLocation` on `AddPersonnelAction`** — does it accept free text, or
+>   must it name an existing location? I have been through Settings end to end
+>   and there is no Locations list I can add to, so I cannot make our value a
+>   real location. We send a distinctive value so the integration can recognise
+>   its own sign-ins and never sign out someone who signed in at reception —
+>   without that, we have to leave automatic sign-out switched off.
+> * **The certificate** is `CN=InVentry-PC` with no `subjectAltName`. Modern
+>   TLS stacks ignore the common name entirely, so verification fails for any
+>   hostname. `curl` still falls back to it, which disguises the problem. We've
+>   worked around it by pinning your certificate, so this isn't holding us up —
+>   but it will catch every customer who integrates this way, and it would be
+>   worth your development team reissuing with a SAN.
+>
+> For context on why I'm pushing: this feeds our fire evacuation list. The
+> point of it is that the roll call reflects who is actually in the building
+> rather than who remembered to sign in at reception. That's the reason it
+> matters to us rather than being a nice-to-have.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
