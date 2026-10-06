@@ -1671,7 +1671,20 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     # quality line as a stated thickness; the part is 1 mm PETG. The sentence names which steel
     # grade serves a band of gauges and says nothing about the part on the sheet.
     r"\b(?:UP\s+TO|OVER)\s+\d+(?:\.\d+)?\s*MM\s+THICK\s+FOR\b[^•\n.;:]{0,60}",
+    # THE BORDER'S DEBURR LINE (D-403). "ALWAYS REMOVE BURRS AND SHARP CORNERS" sits in the M&S
+    # weld specification on every sheet; the vision read quoted it as this part's note and a
+    # Manual labour row stood on it as "read from the drawing pack (high)". It is the pack's
+    # standing instruction, which a route may rest on only as an inference that says so.
+    r"\b(?:ALWAYS\s+)?REMOVE\s+(?:ALL\s+)?BURRS?\s+AND\s+SHARP\s+(?:CORNERS|EDGES)\b",
 ]
+# ── A FLAT PATTERN IS NOT A TUBE (D-403) ─────────────────────────────────────────────────
+# 9598-03-01M: a 1.2 mm frame with a measured DXF flat and a sheet-metal cut list was given
+# Tube (£8.79) and Tubebend (£25.72) rows at one off, inferred by the vision read from "radii
+# visible on page 2" — the press-brake's R1 and R0.5 — and "a frame requires several cut
+# pieces". The operations a flat pattern rules out: the part is one sheet, cut on the laser
+# and bent on the brake, and nothing on it is a section. Vocabulary, not a rule about one job.
+TUBE_OPERATIONS = ["tube_cut", "tube_cutting", "tube_bending", "tube_bend", "tubebend",
+                   "tube_notching", "tube_laser", "section_cutting"]
 # ── THE LEGEND'S MATERIAL WORDS ARE NOT A PART'S MATERIAL (D-402) ────────────────────────
 # M&S 9598-02-02G GRAPHIC: its own sheet states MATERIAL: 400 MIC, a value the keyword list
 # did not know, so the reader fell back to scanning the whole page and took TIMBER from the

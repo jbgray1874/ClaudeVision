@@ -1030,6 +1030,26 @@ def _same_token(a: Any, b: Any) -> bool:
     return bool(na) and na == nb
 
 
+def _same_material(a: Any, b: Any) -> bool:
+    """A callout and its lexicon reading are one fact (D-403). '400 MIC' from the sheet and
+    BOUGHT_IN from the normaliser, 'MILD STEEL' and MILD_STEEL: the second is what the first
+    resolves to, not a second opinion. 9598-02-02G's sheet asked "confirm which is right"
+    between the two. True when the lexicon reads both to one code, or one IS the other's code."""
+    if _same_token(a, b):
+        return True
+    try:
+        from json_normaliser import normalise_material as _nm             # noqa: PLC0415
+    except Exception:                                                    # noqa: BLE001
+        return False
+    sa, sb = str(a or "").strip(), str(b or "").strip()
+    if not sa or not sb:
+        return False
+    ca, cb = _nm(sa), _nm(sb)
+    if ca and cb and ca == cb:
+        return True
+    return bool((ca and _same_token(ca, sb)) or (cb and _same_token(cb, sa)))
+
+
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
                 note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
     """Set a datum if this source is entitled to, and record where it came from.
@@ -1056,7 +1076,12 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     # the datum kept the weaker source's name, so a later medium-ranked pass could still
     # displace a figure the model had independently confirmed. Submitting agreement is how
     # the strong source's rank actually attaches to the value.
-    if _cur is not MISSING and _same_value(_cur, value):
+    # A CALLOUT AND ITS LEXICON READING ARE ONE FACT (D-403): on normalized_material the
+    # agreement test reads both through the lexicon, so '400 MIC' held from the sheet and
+    # BOUGHT_IN offered by the normaliser agree instead of asking a person to choose.
+    _material_field = (leaf == "normalized_material")
+    if _cur is not MISSING and (_same_value(_cur, value)
+                                or (_material_field and _same_material(_cur, value))):
         # CONFIRMATION IS EVIDENCE AND HAS TO BE COUNTED. Without this the value's support is
         # stuck at one however many readers confirm it, and a quorum of two would overrule a
         # figure three sources had independently agreed on.
@@ -1104,6 +1129,7 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
             and str(source) not in _NOT_A_READING
             and field_rank(source, field) < _DECISION_RANK
             and not _same_token(_cur, value)
+            and not (_material_field and _same_material(_cur, value))
             and str(source) in support_for(part, field, _cur)):
         _observe(part, field, value, source, applied=False)
         part.setdefault("_self_revisions", {}).setdefault(field, []).append(
@@ -1197,7 +1223,7 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
     # 'MILD STEEL' from the drawing are the same token; asking an estimator to "confirm
     # which is right" between an underscore and a space is noise dressed as a decision.
     # The refusal above still records the observation — only the flag is withheld.
-    if _same_token(_cur, value):
+    if _same_token(_cur, value) or (_material_field and _same_material(_cur, value)):
         return False
     if field_rank(source, field) == field_rank(_cur_src, field):
         # EQUAL RANK, DIFFERENT ANSWERS. Neither observation outranks the other, so nothing

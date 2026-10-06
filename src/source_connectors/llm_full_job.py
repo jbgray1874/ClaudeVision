@@ -19,7 +19,7 @@ an invented number.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Mapping, Any, Dict, List, Optional
 
 # THE SAME ANSWER THE REST OF THE ENGINE USES. bought_in_policy is the union of every
 # bought-in rule in the codebase, and FABRICATION_OPS is its own list of what a purchased
@@ -434,6 +434,30 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     return out
 
 
+def _tube_operations() -> set:
+    try:
+        import config as _cfg
+        return {str(o).strip().lower() for o in (getattr(_cfg, "TUBE_OPERATIONS", None) or [])}
+    except Exception:                                                    # noqa: BLE001
+        return {"tube_cut", "tube_bending", "tube_bend", "tubebend"}
+
+
+def _dxf_backed_part(part: Mapping[str, Any]) -> bool:
+    return bool("dxf" in str(part.get("geometry_source") or "").lower()
+                or part.get("dxf_augmented") or part.get("dxf_source_file"))
+
+
+def _has_flat_pattern(part: Mapping[str, Any]) -> bool:
+    """A measured flat: a DXF flat pattern or the model's sheet-metal cut list."""
+    return bool(_dxf_backed_part(part) or part.get("native_flat_pattern")
+                or part.get("flat_pattern_detected"))
+
+
+def _has_section(part: Mapping[str, Any]) -> bool:
+    ss = part.get("section_stock")
+    return isinstance(ss, dict) and bool(ss.get("a") or ss.get("length_mm"))
+
+
 def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> int:
     """Fold the extracted ROUTE onto the parts it names.
 
@@ -460,13 +484,15 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
         # THE PACK'S WELD SPECIFICATION IS NOT A WELD ON THE PARTS IT IS PRINTED BESIDE. A
         # "stated" weld whose only quoted evidence is "ALL WELDS TO BE TIG UNLESS STATED" is a
         # reading of HOW, offered as THAT; it stays priced, as an inference, and is asked.
+        # AND NOT ONLY A WELD (D-403): "ALWAYS REMOVE BURRS AND SHARP CORNERS" quoted for a
+        # deburr is the same border, read as this sheet's note; any operation whose only
+        # evidence is the legend is an inference that says so.
         _legend_only = False
-        if "weld" in op:
-            try:
-                from extractor_patterns import cites_only_specification_legend as _legend_cite
-                _legend_only = _legend_cite(route.get("evidence"))
-            except Exception:                                        # noqa: BLE001
-                _legend_only = False
+        try:
+            from extractor_patterns import cites_only_specification_legend as _legend_cite
+            _legend_only = _legend_cite(route.get("evidence"))
+        except Exception:                                            # noqa: BLE001
+            _legend_only = False
         if _legend_only:
             src = "inference"
         wanted = {_clean_pn(p) for p in (route.get("part_numbers") or []) if p}
@@ -484,6 +510,25 @@ def apply_routes_to_parts(parts: List[Dict[str, Any]], job: Dict[str, Any]) -> i
             # one of them is wrong about a part we are costing. The commonest cause is a
             # flat exported as a block, where the bend layer is real but unreadable — which
             # is worth an estimator's attention, not a quiet drop.
+            # A FLAT PATTERN IS NOT A TUBE (D-403). 9598-03-01M, a 1.2 mm frame with a measured
+            # DXF flat and a sheet-metal cut list, was given tube_cut and tube_bending by the
+            # vision read ("radii visible on page 2" — the press-brake's R1 and R0.5; "a frame
+            # requires several cut pieces"), £34.51 at one off beside the Fold row for the same
+            # two bends. A part with a flat pattern is one sheet, cut on the laser and bent on
+            # the brake; nothing on it is a section. Ruled out on the record at the flat's rank
+            # so the compiled route refuses it too, and said.
+            if op in _tube_operations() and _has_flat_pattern(part) and not _has_section(part):
+                _why = ("the part has a measured flat pattern "
+                        + ("(DXF)" if _dxf_backed_part(part) else "(the model's cut list)")
+                        + " — one sheet, cut on the laser and bent on the brake; a flat has no "
+                          "tube to cut or bend, and the radii on its sheet are the press-brake's")
+                part.setdefault("operations_ruled_out", {}).setdefault(op, _why)
+                part.setdefault("operation_ruling_sources", {}).setdefault(
+                    op, "dxf" if _dxf_backed_part(part) else "solidworks_api")
+                part.setdefault("review_flags", []).append(
+                    f"operation '{op}' was read from the drawing pack but NOT applied to "
+                    f"{part.get('part_number') or 'this line'}: {_why}")
+                continue
             _ruled = (part.get("operations_ruled_out") or {}).get(op)
             if _ruled:
                 part.setdefault("review_flags", []).append(

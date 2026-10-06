@@ -412,3 +412,103 @@ def test_bend_callouts_are_counted_on_the_layer_that_reads_every_glyph(monkeypat
     part = {"part_number": "X-01M", "pages": [2], "page_roles": ["detail"]}
     djm.stamp_drawing_bend_callouts([part], summary)
     assert part["drawing_bend_callouts"] == 3
+
+
+# ── D-403: the 6 Oct 15:44 (9598-02) and 16:35 (9598-03) books on 5e0e065 ───────────────
+#
+# 9598-03-01M, a 1.2 mm frame with a measured DXF flat, was given Tube and Tubebend rows
+# (£34.51 at one off) inferred by the vision read from the press-brake radii on its sheet;
+# 9598-02-02G's sheet asked "confirm which is right" between its own "400 MIC" and the
+# lexicon's BOUGHT_IN; a deburr row stood on the border's "REMOVE BURRS AND SHARP CORNERS" as
+# a note read from the sheet; and "callouts read 3" named neither its layer nor its strings.
+
+def test_a_flat_pattern_is_not_a_tube():
+    from source_connectors import llm_full_job as lfj
+    frame = {"part_number": "9598-03-01M", "description": "METAL FRAME", "quantity": 1,
+             "geometry_source": "dxf_flat_pattern", "dxf_augmented": True,
+             "textual_operations": ["laser_cutting"]}
+    routes = [{"operation": "tube_bending", "part_numbers": ["9598-03-01M"], "inferred": True,
+               "evidence": "Bend notes and radii visible on part drawing page 2", "sequence": 20},
+              {"operation": "tube_cut", "part_numbers": ["9598-03-01M"], "inferred": True, "sequence": 10},
+              {"operation": "folding", "part_numbers": ["9598-03-01M"], "inferred": False,
+               "evidence": "UP 90° R 1", "sequence": 20}]
+    lfj.apply_routes_to_parts([frame], {"routes": routes})
+    assert "folding" in frame["textual_operations"]
+    assert not {"tube_bending", "tube_cut"} & set(frame["textual_operations"])
+    assert set(frame["operations_ruled_out"]) == {"tube_bending", "tube_cut"}
+    assert frame["operation_ruling_sources"] == {"tube_bending": "dxf", "tube_cut": "dxf"}
+    assert any("press-brake" in f for f in frame["review_flags"])
+    # and the compiled route meets the ruling, not the claim
+    res = rc.compile_job_route([frame], {"routes": routes})
+    status = {d["operation"]: d["status"] for d in res["decisions"]}
+    assert status["tube_bending"] == rc.RULED_OUT and status["tube_cut"] == rc.RULED_OUT
+    assert status["folding"] == rc.REQUIRED and status["laser_cutting"] == rc.REQUIRED
+    # the control: a tube with a section and no flat keeps its tube work
+    tube = {"part_number": "T-01M", "description": "FRAME TUBE", "quantity": 1,
+            "section_stock": {"a": 30, "b": 30, "t": 2, "length_mm": 1532},
+            "textual_operations": []}
+    lfj.apply_routes_to_parts([tube], {"routes": [
+        {"operation": "tube_bending", "part_numbers": ["T-01M"], "inferred": True, "sequence": 20}]})
+    assert "tube_bending" in tube["textual_operations"] and not tube.get("operations_ruled_out")
+
+
+def test_a_legend_only_cue_is_an_inference_for_every_operation():
+    import extractor_patterns as ep
+    from source_connectors import llm_full_job as lfj
+    assert ep.cites_only_specification_legend("ALWAYS REMOVE BURRS AND SHARP CORNERS")
+    assert ep.cites_only_specification_legend("REMOVE BURRS AND SHARP CORNERS")
+    assert ep.cites_only_specification_legend("ALL WELDS TO BE TIG UNLESS STATED")
+    for own in ("WELD & DRESS", "BLOB WELD BOTH ENDS TO STOP FOLD OPENING", "UP 90° R 1",
+                "Bend notes and radii visible on part drawing page 2", ""):
+        assert not ep.cites_only_specification_legend(own), own
+    part = {"part_number": "X-01M", "quantity": 1, "textual_operations": []}
+    routes = [{"operation": "deburring", "part_numbers": ["X-01M"], "inferred": False,
+               "evidence": "REMOVE BURRS AND SHARP CORNERS", "sequence": 30},
+              {"operation": "folding", "part_numbers": ["X-01M"], "inferred": False,
+               "evidence": "UP 90° R 1", "sequence": 20}]
+    lfj.apply_routes_to_parts([part], {"routes": routes})
+    assert part["operation_sources"] == {"deburring": "inference", "folding": "llm_full_extract"}
+    res = rc.compile_job_route([part], {"routes": routes})
+    by_op = {d["operation"]: d for d in res["decisions"]}
+    assert by_op["deburring"]["source"] == "inference"
+    assert by_op["folding"]["source"] == "llm_full_extract"
+    assert any(i.get("code") == "route_cites_only_the_specification_legend"
+               and i.get("operation") == "deburring" for i in res["issues"])
+
+
+def test_a_callout_and_its_lexicon_reading_are_one_fact():
+    import source_precedence as sp
+    card = {"part_number": "9598-02-02G", "normalized_material": "400 MIC",
+            "material_source": "drawing_deterministic"}
+    assert sp.apply_field(card, "normalized_material", "BOUGHT_IN", "inference") is False
+    assert card["normalized_material"] == "400 MIC" and not card.get("review_flags")
+    steel = {"part_number": "X", "normalized_material": "MILD STEEL",
+             "material_source": "drawing_deterministic"}
+    sp.apply_field(steel, "normalized_material", "MILD_STEEL", "dxf_filename")
+    assert not steel.get("review_flags")
+    sp.apply_field(steel, "normalized_material", "ACRYLIC", "inference")          # a real disagreement
+    assert any("confirm which is right" in f for f in steel["review_flags"])
+
+
+def test_the_callout_count_names_its_layer_and_its_strings(monkeypatch):
+    import drawing_job_merge as djm
+    import fold_count as fc
+    summary = {"pages": [{"page_number": 2, "source_pdf_path": "",
+                          "pdfplumber_text": "UP 90° R 1 DOWN 180° R 0.5 DOWN 180° R 0.5"}]}
+    monkeypatch.setattr(djm, "_mupdf_page_text", lambda pg, d: "")
+    part = {"part_number": "X-01M", "pages": [2], "page_roles": ["detail"], "bend_count_dxf": 2,
+            "geometry_source": "dxf", "dxf_augmented": True}
+    djm.stamp_drawing_bend_callouts([part], summary)
+    assert part["drawing_bend_callout_evidence"] == {
+        "layer": "pdfplumber_text", "callouts": ["UP 90°", "DOWN 180°", "DOWN 180°"], "page": 2}
+    folds = fc.press_brake_folds(part)
+    assert folds["count"] == 2
+    assert "read 3 (UP 90°, DOWN 180°, DOWN 180° on the pdfplumber_text layer of page 2)" in folds["disagreement"]
+
+
+def test_a_bought_lines_description_carries_the_size_its_own_record_holds():
+    import wb_populate as wb
+    assert wb._own_size_mm({"normalized_geometry": {"bbox_mm": [210.0, 148.5, 0.4]}}) == (210.0, 148.5)
+    assert wb._own_size_mm({"blank_length_mm": 471.61, "blank_width_mm": 212}) == (471.61, 212.0)
+    assert wb._own_size_mm({"normalized_geometry": {"bbox_mm": [19.0, 1.9]}}) is None   # one dimension is not a size
+    assert wb._own_size_mm({}) is None

@@ -197,7 +197,16 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
         _others.append((_CALLOUTS_LABEL, _callouts))
     disagreement = None
     if _others:
-        _said = "; ".join(f"{n} read {int(v)}" for n, v in _others)
+        # THE CALLOUT COUNT SAYS WHAT IT COUNTED AND WHERE (D-403): "read 3" on a sheet that
+        # prints two was unanswerable until the strings and the text layer travelled with it.
+        _ev = part.get("drawing_bend_callout_evidence") if isinstance(part, dict) else None
+        _ev_txt = ""
+        if isinstance(_ev, dict) and _ev.get("callouts"):
+            _ev_txt = (" (" + ", ".join(str(c) for c in _ev["callouts"][:8])
+                       + (f" on the {_ev['layer']} layer" if _ev.get("layer") else "")
+                       + (f" of page {_ev['page']}" if _ev.get("page") else "") + ")")
+        _said = "; ".join(f"{n} read {int(v)}" + (_ev_txt if n == _CALLOUTS_LABEL else "")
+                          for n, v in _others)
         # AND IT DOES NOT ASK FOR A CONFIRMATION IT ALREADY HAS.
         #
         # James Gray, 18 Sep 2026: "it still says 'confirm the fold count if this matters.'

@@ -115,9 +115,22 @@ def strip_specification_legend(text: Any) -> str:
 
 
 def cites_only_specification_legend(evidence: Any) -> bool:
-    """A quoted reason for a weld that is the pack's weld specification and nothing else
-    ("ALL WELDS TO BE TIG UNLESS STATED"): a statement of how, not that."""
-    return bool(str(evidence or "").strip()) and bool(legend_cues_set_aside(evidence))
+    """A quoted reason that is the pack's specification legend and nothing else: a statement
+    of how, not that. "ALL WELDS TO BE TIG UNLESS STATED" for a weld (D-393); since D-403 any
+    operation — "ALWAYS REMOVE BURRS AND SHARP CORNERS" quoted for a deburr is the border's
+    standing instruction, not this sheet's note. True when the legend's default sentences and
+    blocks account for every word of the evidence."""
+    text = str(evidence or "").strip()
+    if not text:
+        return False
+    if legend_cues_set_aside(text):
+        return True
+    kept = strip_specification_legend(text)
+    for rx in _legend_res()["sentences"]:
+        kept = rx.sub(" ", kept)
+    if normalize_text(kept).upper() == normalize_text(text).upper():
+        return False                      # nothing in it was the legend ("UP 90° R 1")
+    return not re.search(r"[A-Za-z]{3,}", kept)
 
 
 def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:

@@ -2539,6 +2539,7 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
     # carries is counted separately (never concatenated, which would double a page read
     # twice), and the page's own PDF is read with PyMuPDF where it is available.
     count_by_page: Dict[Any, int] = {}
+    evidence_by_page: Dict[Any, Dict[str, Any]] = {}
     _mupdf_docs: Dict[str, Any] = {}
     for pg in pages or []:
         if not isinstance(pg, dict):
@@ -2552,11 +2553,18 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
         # overlaid glyph run), not found one PyMuPDF missed. 9598-02-01M prints UP 90° and
         # DOWN 180° and was charged against "callouts read 3". Without the page's own PDF the
         # text layers are all there is, and the largest reading still stands.
+        # AND THE COUNT NAMES ITS LAYER AND ITS STRINGS (D-403), so a "callouts read 3" on a
+        # sheet that prints two can be traced to the read that doubled one.
         if _mu.strip():
-            count_by_page[pg.get("page_number")] = len(_BEND_CALLOUT.findall(_mu))
+            _found = [" ".join(m.split()) for m in _BEND_CALLOUT.findall(_mu)]
+            _layer = "PyMuPDF"
         else:
-            count_by_page[pg.get("page_number")] = max(
-                len(_BEND_CALLOUT.findall(t)) for t in layers)
+            _names = ("pdfplumber_text", "normalized_text", "pypdf_text", "text")
+            _reads = [(n, [" ".join(m.split()) for m in _BEND_CALLOUT.findall(t)])
+                      for n, t in zip(_names, layers)]
+            _layer, _found = max(_reads, key=lambda nt: len(nt[1])) if _reads else ("", [])
+        count_by_page[pg.get("page_number")] = len(_found)
+        evidence_by_page[pg.get("page_number")] = {"layer": _layer, "callouts": _found}
     for _doc in _mupdf_docs.values():
         try:
             _doc.close()
@@ -2573,9 +2581,14 @@ def stamp_drawing_bend_callouts(parts: List[Dict[str, Any]], summary: Any) -> in
     for part in parts or []:
         if not isinstance(part, dict):
             continue
-        counts = [count_by_page.get(p, 0) for p in own_detail_pages(part, _ctx)]
+        _own_pages = own_detail_pages(part, _ctx)
+        counts = [count_by_page.get(p, 0) for p in _own_pages]
         if counts and max(counts):
             part["drawing_bend_callouts"] = max(counts)
+            _best = max(_own_pages, key=lambda p: count_by_page.get(p, 0))
+            _ev = dict(evidence_by_page.get(_best) or {})
+            _ev["page"] = _best
+            part["drawing_bend_callout_evidence"] = _ev
             n += 1
     # A HAND WITH NO SHEET OF ITS OWN BENDS LIKE THE HAND IT MIRRORS. 12614-01-06M-H: one
     # DXF and one sheet were issued for the pair, so the mirror carried the base's short

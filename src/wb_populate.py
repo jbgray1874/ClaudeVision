@@ -649,6 +649,22 @@ def pin_lines_that_price_themselves(bom_parts: List[Dict[str, Any]], n_rows: int
     return rest[:head] + pinned + rest[head:]
 
 
+def _own_size_mm(pe: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """The two largest plausible dimensions a part's own record holds (its blank, its overall,
+    or its model's extents), or None. Never a sheet size and never a guess."""
+    ng = pe.get("normalized_geometry") if isinstance(pe.get("normalized_geometry"), dict) else {}
+    for pair in ((pe.get("blank_length_mm"), pe.get("blank_width_mm")),
+                 (ng.get("blank_length_mm"), ng.get("blank_width_mm")),
+                 (pe.get("overall_length_mm"), pe.get("overall_width_mm"))):
+        vals = [_safe(v, 0) for v in pair]
+        if all(5.0 <= v <= 3000.0 for v in vals):
+            return (max(vals), min(vals))
+    bbox = sorted([_safe(v, 0) for v in (ng.get("bbox_mm") or [])], reverse=True)[:2]
+    if len(bbox) == 2 and all(5.0 <= v <= 3000.0 for v in bbox):
+        return (bbox[0], bbox[1])
+    return None
+
+
 def _bom_line_price(_pe: Dict[str, Any]) -> Optional[float]:
     """Best-available unit price for a BOM line. Withheld/unpriced -> None.
 
@@ -5802,6 +5818,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                     desc = f"{desc} (cat ref: {_size})"
         else:
             desc = _cat_desc or _own_pn
+        # THE SIZE THE PART'S OWN SHEET OR MODEL GIVES, ON THE LINE (D-403). A bought line
+        # read "9598-02-02G GRAPHIC" while its sheet prints 210 x 148.5 and its model carries
+        # the same extents; the estimator pricing the print had to open the pack to learn
+        # what size it was. Written where the record holds two plausible dimensions and the
+        # description does not already say them; never invented.
+        _dims = _own_size_mm(pe)
+        if _dims and not re.search(r"\d+(?:\.\d+)?\s*[x×]\s*\d+", str(desc or "")):
+            desc = f"{desc}  {_dims[0]:g} × {_dims[1]:g}"
         # code: THIS part's own number; fall back to catalogue code only if the part has none
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate

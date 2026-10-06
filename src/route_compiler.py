@@ -4514,17 +4514,25 @@ def compile_job_route(
         _route_evidence = (route.get("evidence") or route.get("drawing_note")
                            or route.get("quote") or "")
         _route_reason = route.get("notes") or route.get("description")
-        if "weld" in operation and source == "llm_full_extract":
+        # AND FOR EVERY OPERATION, NOT WELDS ALONE (D-403). 9598-02-01M's deburr row stood on
+        # "REMOVE BURRS AND SHARP CORNERS", the border's standing instruction quoted by the
+        # vision read as this sheet's note and ranked "read from the drawing pack (high)".
+        if source == "llm_full_extract":
             try:
                 from extractor_patterns import cites_only_specification_legend as _legend_cite
                 if _legend_cite(_route_evidence):
                     source = "inference"
+                    _what = ("weld specification" if "weld" in operation
+                             else "specification legend")
                     _route_reason = ((str(_route_reason) + "; ") if _route_reason else "") + (
-                        f"the extract quoted only the pack's weld specification "
-                        f"('{str(_route_evidence).strip()[:80]}'), which says how welds are "
-                        f"made, not that these parts are welded")
+                        f"the extract quoted only the pack's {_what} "
+                        f"('{str(_route_evidence).strip()[:80]}'), the border's standing "
+                        f"instruction printed on every sheet — it says how work is done, not "
+                        f"that this part needs it; charged as an inference, to confirm")
                     _route_evidence = ""
-                    issues.append({"code": "weld_route_cites_only_the_specification_legend",
+                    issues.append({"code": ("weld_route_cites_only_the_specification_legend"
+                                            if "weld" in operation else
+                                            "route_cites_only_the_specification_legend"),
                                    "operation": operation, "participants": participants})
             except Exception:                                        # noqa: BLE001
                 pass
@@ -4674,6 +4682,33 @@ def compile_job_route(
             return "".join(ch for ch in str(_o).lower() if ch.isalnum())
 
         _rulings: Dict[str, str] = dict(part.get("operations_ruled_out") or {})
+        # A FLAT PATTERN IS NOT A TUBE (D-403). Whatever reader offered a tube operation on a
+        # part with a measured flat and no section stock, the flat answers it: one sheet,
+        # lasered and folded. Ruled out here at the flat's rank, so an explicit route claim
+        # (the vision read's "radii visible on page 2" on 9598-03-01M) meets a ruling event.
+        try:
+            import config as _cfg_rc
+            _tube_ops = {str(o).strip().lower() for o in (getattr(_cfg_rc, "TUBE_OPERATIONS", None) or [])}
+        except Exception:                                            # noqa: BLE001
+            _tube_ops = set()
+        _flat = bool("dxf" in str(part.get("geometry_source") or "").lower()
+                     or part.get("dxf_augmented") or part.get("dxf_source_file")
+                     or part.get("native_flat_pattern") or part.get("flat_pattern_detected"))
+        _sect = part.get("section_stock")
+        _sect = isinstance(_sect, dict) and bool(_sect.get("a") or _sect.get("length_mm"))
+        if _flat and not _sect and _tube_ops:
+            _offered = {clean_operation(o) for f in ("textual_operations", "operations",
+                                                     "inferred_operations")
+                        for o in (part.get(f) or [])}
+            _offered |= {op for (op, pn) in explicit_memberships if pn == part_number}
+            for _top in sorted(_tube_ops & _offered):
+                _rulings.setdefault(_top, (
+                    "the part has a measured flat pattern"
+                    + (" (DXF)" if (part.get("dxf_augmented") or part.get("dxf_source_file")
+                                    or "dxf" in str(part.get("geometry_source") or "").lower())
+                       else " (the model's cut list)")
+                    + " — one sheet, cut on the laser and bent on the brake; a flat has no "
+                      "tube to cut or bend, and the radii on its sheet are the press-brake's"))
         _ruled_keys = {_spelled(k) for k in _rulings}
         # THE PERSON'S RULING RANKS AS THE PERSON'S, WHICHEVER FIELD CARRIES IT. On the saved
         # 03:17 job 12173-03-201 held welding in BOTH fields (the estimator had written the
