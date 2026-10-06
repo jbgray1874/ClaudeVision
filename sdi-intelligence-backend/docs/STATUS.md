@@ -1,31 +1,62 @@
 # BrightHR → InVentry — status
 
-Updated 28 Sep 2026.
+Updated 6 Oct 2026.
 
 ## Where it stands
 
 BrightHR extraction works and has for months. The InVentry side is built,
-tested and configured. **One thing is missing: an API key**, which is created in
-the InVentry Console. Everything else is either done or waiting on that.
+tested and configured, and as of 6 Oct **everything on SDI's side is verified
+working against the live system**. `CheckAuth` reaches InVentry and returns a
+clean **HTTP 401**.
+
+That 401 is the whole remaining project. One credential is wrong, and it is not
+one we hold.
 
 ---
 
-## 1. Blocking — nothing else can be proven until these are in
+## 1. Blocking — one credential, and it is InVentry's to issue
 
-| # | Item | Owner | Notes |
+| # | Item | Owner | State |
 |---|---|---|---|
-| 1.1 | **InVentry API key** | James | Created in the InVentry Console (Setup & Options → System → Partner API → Add API key → "End User Development"). Console not installed locally — the share password from the 2025 engineer email no longer works. Three routes: phone InVentry support 0113 322 9253 and have them create it remotely; borrow Simon's console; or use the reception touchscreen. |
-| 1.2 | **Partner secret** | James | Almost certainly the value pre-filled in InVentry's Postman collection (AddPersonnelAction headers). Cannot be validated on its own — `CheckAuth` checks both credentials together. |
+| 1.1 | **Partner secret** | **InVentry** | The only unverified value left. We send the one pre-filled in their Postman collection; their overview says it is common across on-premises installations. Asked 28 Sep and 6 Oct. |
+| 1.2 | Does a new API key need the InVentry service restarted? | **InVentry** | Would explain the 401 on its own. Asked with 1.1. |
 
-## 2. Next, once the key exists — all quick
+### Verified on SDI's side — 6 Oct 2026
+
+Listed because a 401 invites the question "are you sure it isn't your end?",
+and each of these was checked rather than assumed:
+
+| What | How it was proven |
+|---|---|
+| Network | `Test-NetConnection 10.0.0.241 -Port 4816` from 10.0.0.91 |
+| TLS | Certificate pinned and verified — see below; connection now completes |
+| Partner API enabled | Console, Settings → System → Partner API, toggle On |
+| Key correctly scoped | One key, partner **"End User Developer"**, the option InVentry named |
+| Key is the current one | `hr_config.INVENTRY_API_KEY` matches the console character for character |
+| Headers | `apikey` + `partnersecret`, lowercase, as request headers — 84 tests |
+| Reached InVentry | Response is an HTTP 401 from their server, not a transport failure |
+
+**TLS took a correction.** The notes claimed a hosts entry plus a pinned
+certificate would verify. It does not: their certificate is `CN=InVentry-PC`
+with no `subjectAltName`, which modern TLS ignores, so no hostname can ever
+match. `curl` falls back to `CN` and appeared to prove otherwise. Fixed with
+`INVENTRY_API_CHECK_HOSTNAME=false` alongside the pinned bundle — the
+certificate is still verified, only its name is not. See
+`docs/INVENTRY_API_NOTES.md`.
+
+## 2. The moment the secret lands
 
 | # | Item | Notes |
 |---|---|---|
-| 2.1 | `git pull` on DESKTOP-GFAAP80 | Branch is behind; then restart whatever serves port 8072 |
-| 2.2 | Put key + secret in `.env` | `INVENTRY_API_KEY`, `INVENTRY_PARTNER_SECRET` |
-| 2.3 | `CheckAuth` | `curl.exe --cacert C:\SDIIntelligence\inventry.pem -H "apikey: …" -H "partnersecret: …" https://InVentry-PC:4816/PartnerAPI/CheckAuth` |
-| 2.4 | **Dry run, and read `matched_by`** | The one genuinely unknown outcome — see 5.1 |
-| 2.5 | `HR_PUSH_APPLY = true` in the portal | Go live on sign-ins |
+| 2.1 | `python tools\probe_inventry.py` | Read-only. Prints which `.env` it loaded, then credentials, personnel and on-site counts |
+| 2.2 | `python tools\probe_inventry.py --sign-in "<you>" --confirm` | **One** record. Answers whether `ActionLocation` is accepted, and whether the marker round-trips — see 5.2 |
+| 2.3 | **Dry run, and read `matched_by`** | `python hr_onsite_push.py`. The one genuinely unknown outcome — see 5.1 |
+| 2.4 | `HR_PUSH_APPLY = true` in the portal | Go live on sign-ins |
+
+> Two `.env` files exist — `C:\ClaudeVision\...` and `C:\ClaudeVision-HR\...`.
+> They are untracked by design and drift, and a setting added to the wrong one
+> is indistinguishable from a setting that did not work. It has cost time twice.
+> The probe now prints the path it loaded as its first line.
 
 ## 3. Production deployment (SDI-APP01) — not started
 
