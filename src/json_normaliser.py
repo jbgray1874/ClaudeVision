@@ -514,16 +514,25 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
         or "MILD STEEL" in blob
         or _METAL_PANEL_RE.search(pn_u)
     )
-    if not _fabricated_metal:
-        if any(k in _desc_upper or k in pn_u for k in ("GRAPHIC", "ARTWORK", "POSTER", "PRINT INSERT")):
+    # A NAME IS WHAT THE PART HOLDS, NOT WHAT IT IS MADE OF (D-399). Harrods 9439-01-04-004,
+    # "A4 GRAPHIC LENS": its own sheet states MATERIAL: PETG, 297 x 212, 151 g, and this
+    # returned BOUGHT_IN on the word GRAPHIC before the material was looked at, so the
+    # lens was priced from the parts table at £1.68 and never cut. The same reading as
+    # D-391 (a card pocket is not made of card): where the part's OWN material text names a
+    # stock SDI cuts, the name does not decide. Where it names nothing, or names a thing
+    # that is bought (PAPER, DISPA, FOAMEX), the name still does.
+    _own_stock = bool(_raw_says_something) and normalise_material(_raw_mat_upper) != "BOUGHT_IN"
+    if not _own_stock:
+        if not _fabricated_metal:
+            if any(k in _desc_upper or k in pn_u for k in ("GRAPHIC", "ARTWORK", "POSTER", "PRINT INSERT")):
+                return "BOUGHT_IN"
+        else:
+            if any(k in _desc_upper for k in ("ARTWORK", "POSTER", "PRINT INSERT")):
+                return "BOUGHT_IN"
+            if "GRAPHIC" in _desc_upper and "SUPPLIED" in _desc_upper:
+                return "BOUGHT_IN"
+        if "TICKET" in _desc_upper and "PLATE" not in _desc_upper and "HOLDER" not in _desc_upper:
             return "BOUGHT_IN"
-    else:
-        if any(k in _desc_upper for k in ("ARTWORK", "POSTER", "PRINT INSERT")):
-            return "BOUGHT_IN"
-        if "GRAPHIC" in _desc_upper and "SUPPLIED" in _desc_upper:
-            return "BOUGHT_IN"
-    if "TICKET" in _desc_upper and "PLATE" not in _desc_upper and "HOLDER" not in _desc_upper:
-        return "BOUGHT_IN"
 
     if "PLAS518" in pn_u or "PLAS518" in blob or "GREENCAST" in blob or "CAST ACRYLIC" in blob:
         return "ACRYLIC"

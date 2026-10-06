@@ -218,3 +218,69 @@ def test_the_gas_number_with_its_title_is_the_ga():
     ids = {ga, "9439-01-04-101", "9439-01-04-001", "9439-01-04-004"}
     assert pi.numbering_prefix("9439-01-04", ids) == ""
     assert [i for i in ids if pi.names_the_product("9439-01-04", i)] == [ga]
+
+
+# ── D-399: the 6 Oct 08:16 book on cfc2b2c ───────────────────────────────────────────────
+# One weld, one dress, the product resolved — and the lens still bought at £1.68, now with a
+# Diamond Polish row beside it. The sheet's MATERIAL: PETG was read (page 6 yields PETG,
+# NATURAL, 151g) and never reached the record: two readers let the word GRAPHIC in "A4
+# GRAPHIC LENS" call the part bought before the material was looked at, and the SolidWorks
+# connector refused the solid's 2 mm because a plastic sheet has no flat pattern and no mass.
+
+def test_a_name_is_what_the_part_holds_when_its_sheet_states_a_stock():
+    import json_normaliser as jn
+    lens = {"part_number": "9439-01-04-004", "description": "A4 GRAPHIC LENS",
+            "materials": ["PETG"], "page_roles": ["detail"], "quantity": 2}
+    assert bip.own_sheet_states_a_stock_material(lens)
+    assert jn.normalise_material_for_part(lens) != "BOUGHT_IN"
+    # the name still decides where the sheet states nothing, or states a thing we buy
+    graphic = {"part_number": "9439-01-04-005", "description": "GRAPHIC A4-SUPPLIED BY OTHERS",
+               "materials": [], "page_roles": ["detail"]}
+    assert jn.normalise_material_for_part(graphic) == "BOUGHT_IN"
+    ticket = {"part_number": "12527-22-03X", "description": "TICKET", "materials": ["PAPER"],
+              "page_roles": ["detail"]}
+    assert jn.normalise_material_for_part(ticket) == "BOUGHT_IN"
+    assert not bip.own_sheet_states_a_stock_material(ticket)
+    inherited = {"part_number": "H-9", "description": "GRAPHIC PANEL", "materials": [],
+                 "normalized_material": "MILD_STEEL", "material_inherited_from": "document_level",
+                 "page_roles": ["detail"]}
+    assert not bip.own_sheet_states_a_stock_material(inherited)
+
+
+def test_the_special_finishing_rule_yields_to_the_parts_own_sheet():
+    import estimator as est
+    lens = {"part_number": "9439-01-04-004", "description": "A4 GRAPHIC LENS",
+            "materials": ["PETG"], "page_roles": ["detail"], "quantity": 2}
+    assert not est._is_special_bought_in_item(lens)
+    assert any("what it holds" in f for f in lens["review_flags"])
+    # SDI's own -X purchasing suffix still decides, and so does a graphic with no material
+    assert est._is_special_bought_in_item({"part_number": "12552-01-01X",
+                                           "description": "62012RS Ball Bearing",
+                                           "page_roles": ["assembly"]})
+    assert est._is_special_bought_in_item({"part_number": "12301-08-04X",
+                                           "description": "HEADER GRAPHIC SET",
+                                           "materials": ["VINYL"], "page_roles": ["detail"]})
+    assert est._is_special_bought_in_item({"part_number": "P/P-GRAPHIC", "description": "GRAPHIC PANEL",
+                                           "materials": [], "page_roles": ["bought_in"]})
+
+
+def test_a_plastic_sheets_solid_thickness_is_its_gauge():
+    from source_connectors import solidworks as sw
+    lens = {"part_number": "9439-01-04-004", "description": "A4 GRAPHIC LENS",
+            "materials": ["PETG"], "normalized_material": "ACRYLIC", "page_roles": ["detail"],
+            "pages": [6], "quantity": 2}
+    nat = sw.NativePart(part_number="9439-01-04-004", material="Acrylic (Medium-high impact)",
+                        material_source="applied_library", thickness_mm=2.0,
+                        bbox_mm=[297.0, 212.0, 2.0], mass_kg=None)
+    job = sw.NativeJob(found=True, part_signals={"9439-01-04-004": nat})
+    sw.apply_native_to_pre_estimate([lens], job)
+    assert lens.get("normalized_thickness_mm") == 2.0, lens.get("review_flags")
+    assert not any("NOT used as the gauge" in f for f in lens.get("review_flags") or [])
+    # a folded steel end cap with no sheet body is still refused (D-265)
+    cap = {"part_number": "12567-05-02M", "description": "END CAP", "materials": ["MILD STEEL"],
+           "normalized_material": "MILD_STEEL", "page_roles": ["detail"], "pages": [3]}
+    nat2 = sw.NativePart(part_number="12567-05-02M", material="Mild Steel", thickness_mm=12.0,
+                         bbox_mm=[120.0, 60.0, 12.0], mass_kg=None)
+    sw.apply_native_to_pre_estimate([cap], sw.NativeJob(found=True, part_signals={"12567-05-02M": nat2}))
+    assert cap.get("normalized_thickness_mm") in (None, 0, "")
+    assert any("NOT used as the gauge" in f for f in cap.get("review_flags") or [])

@@ -2360,7 +2360,33 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         # on the record as a note and not offered as the gauge (D-265).
         _no_sheet_body = (not (nat.flat_length_mm or nat.flat_width_mm)
                           and not (nat.mass_kg and nat.mass_kg > 0))
-        if _plausible_thk(nat.thickness_mm) and _no_sheet_body:
+        # A PLASTIC OR BOARD SHEET HAS NO FLAT PATTERN AND MAY HAVE NO MASS (D-399). The
+        # rule above is a sheet-METAL rule: a flat pattern is what SolidWorks gives a
+        # sheet-metal body, and a library appearance carries no density, so a 2 mm PETG lens
+        # modelled as a 297 x 212 x 2 box fails both tests and its one true gauge was
+        # refused, leaving the family default (3 mm) to fill the gap. Where the part's own
+        # material is a sheet the Other Sheet block prices and the solid is one thickness
+        # thick (_is_flat_solid), the model's thickness IS the gauge, at model rank.
+        _plastic_sheet_solid = False
+        if _plausible_thk(nat.thickness_mm) and _no_sheet_body and _is_flat_solid(nat):
+            try:
+                from costed_facts import is_other_sheet_material as _other_sheet
+                _own_mats = [str(m.get("raw") if isinstance(m, dict) else m)
+                             for m in (part.get("materials") or [])]
+                _plastic_sheet_solid = any(_other_sheet(m) for m in _own_mats) or (
+                    not part.get("material_inherited_from")
+                    and _other_sheet(part.get("normalized_material") or "")) or bool(
+                    _other_sheet(_norm_sw_material(nat.material)) and not _own_mats)
+            except Exception:                                        # noqa: BLE001
+                _plastic_sheet_solid = False
+        if _plastic_sheet_solid:
+            thk = float(nat.thickness_mm)
+            if _apply_field(part, "normalized_thickness_mm", thk, SOURCE_NAME):
+                flags.append(f"thickness {thk:g}mm from the SolidWorks solid: a {_bbox_text(nat)} "
+                             f"sheet one thickness thick, in a material the Other Sheet block "
+                             f"prices — no flat pattern because it is not sheet metal")
+                out["thickness"] += 1
+        elif _plausible_thk(nat.thickness_mm) and _no_sheet_body:
             flags.append(
                 f"the model reports {float(nat.thickness_mm):g}mm as thickness for a part with "
                 f"no flat pattern and no mass — not a sheet-metal cut-list reading, so it is "

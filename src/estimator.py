@@ -6806,7 +6806,28 @@ def _is_special_bought_in_item(part: Dict[str, Any]) -> bool:
     ]).upper()
     _suffix = re.search(r"\d([A-Z])$", pn)
     x_suffix = bool(_suffix and _suffix.group(1) == "X")
-    return x_suffix or bool(_SPECIAL_ITEM_DESC_RE.search(desc))
+    if x_suffix:
+        return True
+    if not _SPECIAL_ITEM_DESC_RE.search(desc):
+        return False
+    # A NAME IS WHAT THE PART HOLDS (D-399). 9439-01-04-004 "A4 GRAPHIC LENS" has a detail
+    # sheet stating MATERIAL: PETG, 297 x 212, 2 mm, 151 g; the word GRAPHIC stripped its
+    # laser and tagged it bought, and the two lenses were a £1.68 parts-table line. Where
+    # the part's own sheet states a stock SDI cuts, the description arm does not fire; the
+    # -X suffix above is SDI's own purchasing convention and still does.
+    try:
+        from bought_in_policy import own_sheet_states_a_stock_material as _own_stock
+        if _own_stock(part):
+            part.setdefault("review_flags", [])
+            _msg = (f"named '{part.get('description')}' — read as what it holds, not what it "
+                    f"is made of: its own sheet states {str(part.get('normalized_material') or (part.get('materials') or [''])[0]).replace('_', ' ')}, "
+                    f"a stock SDI cuts, so it is made here and not bought")
+            if _msg not in part["review_flags"]:
+                part["review_flags"].append(_msg)
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True
 
 
 _SPECIAL_ITEM_FAB_OPS = {

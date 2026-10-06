@@ -321,6 +321,54 @@ def own_sheet_details_a_cut_part(part: Dict[str, Any]) -> bool:
     return bool(detailed)
 
 
+def own_sheet_states_a_stock_material(part: Dict[str, Any]) -> bool:
+    """Does the part's OWN drawing state a material SDI cuts from stock? (D-399)
+
+    The weaker sibling of own_sheet_details_a_cut_part: it asks only whether the sheet's
+    MATERIAL field (the part's own `materials` text, or a normalized material that is the
+    part's own) names a stock in config's density table, on a part with a detail, flat-pattern
+    or fabricated page. It needs no size or weight, because the question it answers is
+    narrower: may a WORD IN THE NAME (GRAPHIC, VINYL, TILE, TICKET) call this part bought?
+    A sheet that states PETG has answered what the part is made of; the name says what it
+    holds."""
+    if not isinstance(part, dict):
+        return False
+    roles = {str(r).strip().lower() for r in (part.get("page_roles") or [])}
+    if not roles & {"detail", "flat_pattern", "fabricated"}:
+        return False
+    try:
+        import config as _cfg
+        dens = getattr(_cfg, "MATERIAL_DENSITY_KG_PER_M3", None) or {}
+    except Exception:                                                # noqa: BLE001
+        dens = {}
+    candidates: List[str] = []
+    mats = part.get("materials") or []
+    if mats:
+        first = mats[0]
+        candidates.append(str(first.get("raw") or first.get("text") or first.get("value") or "")
+                          if isinstance(first, dict) else str(first))
+    if not part.get("material_inherited_from"):
+        try:
+            from display_material import material_is_the_parts_own as _own
+            if _own(part):
+                candidates.append(str(part.get("normalized_material") or ""))
+        except Exception:                                            # noqa: BLE001
+            candidates.append(str(part.get("normalized_material") or ""))
+    try:
+        from json_normaliser import normalise_material as _norm
+    except Exception:                                                # noqa: BLE001
+        _norm = None
+    for raw in candidates:
+        u = _upper(raw).replace("_", " ").strip()
+        if not u or u in ("BOUGHT IN",):
+            continue
+        norm = _norm(u) if _norm else None
+        for cand in (u, u.replace(" ", "_"), str(norm or "").upper(), str(norm or "").upper().replace("_", " ")):
+            if cand and cand != "BOUGHT_IN" and cand != "BOUGHT IN" and cand in dens:
+                return True
+    return False
+
+
 def bought_in_reason(part: Dict[str, Any]) -> str:
     """WHICH rule decided, in words, or "" for a part we make.
 
