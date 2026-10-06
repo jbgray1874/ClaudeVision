@@ -71,12 +71,37 @@
     },
     {
       "id": "client-brief-lite",
-      "name": "SDI Intelligence ClientBriefLite",
-      "status": "New direction from Matt · in build",
+      "name": "SDI Intelligence Brief to Book",
+      "status": "Built · in testing",
       "cls": "c-prog",
       "category": "Apps",
       "surface": "app",
-      "desc": "Brief Lite: an account or project manager describes the client's brief after a meeting and gets back the full pack, concept visuals based on SDI's own indexed jobs, renders and estimates, a concept GA at the asked size, a one-page client sheet and an internal brief PDF. Blocker: OpenAI API credits for the 3D visuals, arranged w/c 12 Oct; the SolidWorks assembly and part automation it needs has started in Technical Design."
+      "desc": "Type a client brief — what it is, sizes, materials, finish, how many — and the estimating engine reads it as stated facts, sights the parts and files a provisional costing workbook for the estimators to look over. No drawings needed.",
+      "app_url": "brief-estimate.html",
+      "app_category": "Apps",
+      "requires": "Runs on the estimating service and its runner (the estimating laptop until the SDI Intelligence server is live on 2 Nov). A signed-in user, or a partner site with its own key. The book is provisional and never goes to a customer from here.",
+      "invoke": "Open the app, fill in customer, reference, quantity and the brief, press Run. The page follows the run and lists the workbook, report and covering note when it finishes. Another site queues the same run with POST /api/estimate/brief under its own key — see docs/Brief_to_Book_API.md.",
+      "phase": "Workstream 1 · BRIEF-ONLY RUNS FROM 6 OCT 2026",
+      "detail": "A brief alone is a pack (D-401). The service stages the brief as its own page beside the brief text, the runner reads it as an LLM-only run, the concept read is given the words and told there are no images, and the ordinary waterfall prices what it sights: every size the brief fixes is stamped <code>enquiry_brief</code>, every size it leaves open is an assumption the sheet names for confirmation, and nothing is ever stated as a price by the model. The finished book, report and covering note are fetched by run id, never by path, so a partner site sees its own run's files and nothing else on the share.",
+      "inputs": [
+        "Customer",
+        "Enquiry or drawing number",
+        "Quantity, and the breaks to price at",
+        "The brief, up to 4,000 characters",
+        "Recipients for the finished book (optional)"
+      ],
+      "outputs": [
+        "Costed workbook — five tabs, marked provisional",
+        "Job report HTML",
+        "Covering note",
+        "The run's log, live on the page"
+      ],
+      "tech": [
+        "Estimating service (FastAPI)",
+        "Estimating runner",
+        "xAI Grok concept read",
+        "Excel COM"
+      ]
     },
     {
       "id": "technical-design",

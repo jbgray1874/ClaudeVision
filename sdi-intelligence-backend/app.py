@@ -226,7 +226,13 @@ def check_key(x_sdi_key: str | None, request: Request | None = None) -> None:
     """
     if request is not None and auth.ENABLED and auth.current_user(request) is not None:
         return
-    if config.API_KEY and x_sdi_key != config.API_KEY:
+    if config.API_KEY and x_sdi_key == config.API_KEY:
+        return
+    # A partner site's key (config.PARTNER_KEYS, D-401) opens the estimating endpoints and
+    # the catalogue; it is checked here only so /api/services answers that site's app page.
+    if x_sdi_key and x_sdi_key in set((getattr(config, "PARTNER_KEYS", None) or {}).values()):
+        return
+    if config.API_KEY:
         raise HTTPException(status_code=401, detail="Sign in, or present a valid X-SDI-Key")
 
 

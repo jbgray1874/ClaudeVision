@@ -251,6 +251,37 @@ class ConceptUnavailable(RuntimeError):
 
 # ── the call, isolated exactly as _bom_vision_reader isolates its own ───────────────
 
+BRIEF_PAGE_STEM = "ENQUIRY_BRIEF"
+
+# NO IMAGES, ONLY WORDS (D-401). The make-list prompt is written for renders; a brief typed
+# on a site or the portal with nothing attached has no picture to sight from, and the model
+# must be told so rather than left to invent cues it was promised.
+_TEXT_ONLY_PREAMBLE = """There are NO images with this request. Everything you know about the
+product is in the ENQUIRY BRIEF below, which SDI estimating wrote as stated facts. Build the
+make list from the brief alone: size every part from the dimensions it states, and where it
+leaves a size open, give a plausible figure for a retail display of this kind and say "assumed —
+not in the brief" in why_size. Do not describe visual cues: there are none.
+
+"""
+
+
+def is_brief_page(path: Any) -> bool:
+    """Is this document the staged brief's own page, and not a drawing or a render?"""
+    return BRIEF_PAGE_STEM in Path(str(path or "")).stem.upper()
+
+
+def concept_prompt_text(png_pages: List[bytes], brief: str = "") -> str:
+    """The words put to the model: the make-list prompt, the text-only preamble where there
+    is no image, and the brief section where there is a brief."""
+    _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
+    _text = _PROMPT.format(n=len(png_pages), ops=_ops)
+    if not png_pages:
+        _text = _TEXT_ONLY_PREAMBLE + _text
+    if brief:
+        _text += _BRIEF_SECTION.format(brief=brief)
+    return _text
+
+
 def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "") -> str:
     if os.getenv("SDI_OFFLINE", "").strip().lower() in {"1", "true", "yes"}:
         raise ConceptUnavailable(
@@ -264,10 +295,7 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "") -> str
     from openai import OpenAI                                       # noqa: WPS433
 
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
-    _text = _PROMPT.format(n=len(png_pages), ops=_ops)
-    if brief:
-        _text += _BRIEF_SECTION.format(brief=brief)
+    _text = concept_prompt_text(png_pages, brief)
     content: List[Dict[str, Any]] = [{"type": "text", "text": _text}]
     for png in png_pages:
         b64 = base64.b64encode(png).decode("ascii")
@@ -328,14 +356,21 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
 
     if model is None:
         model = os.environ.get("XAI_VISION_MODEL", "grok-4.3")
+    brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     pngs: List[bytes] = []
     for pdf in pdf_paths:
+        # A BRIEF ALONE IS A PACK (D-401). A run queued from a typed brief with no drawings
+        # is staged as the brief's own page (ENQUIRY_BRIEF.png beside ENQUIRY_BRIEF.txt) so
+        # every stage downstream — listing, wrapping, the render gate, the runner — carries
+        # it unchanged. The model is not shown a picture of its own text: that page is
+        # skipped here and the brief goes as words, under a preamble that says there are
+        # no images.
+        if is_brief_page(pdf):
+            continue
         for index in range(pathB.count_pages(str(pdf))):
             pngs.append(pathB.render_page_to_png(str(pdf), index))
-    if not pngs:
+    if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
-
-    brief = str(brief or "").strip()[:BRIEF_MAX_CHARS]
     key = _cache_key(pngs, model, brief)
     path = _cache_dir() / (key + ".json")
     if not refresh and path.is_file():

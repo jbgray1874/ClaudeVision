@@ -208,9 +208,14 @@ def test_every_route_that_delivers_a_file_is_covered():
     assert known_file_responses["app.py"] == 9, (
         f"a new file-serving route appeared in app.py ({known_file_responses['app.py']} "
         f"FileResponse calls, was 5) — does it need the release gate?")
-    # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation.
-    assert known_file_responses["estimate_routes.py"] == 1, (
+    # estimate_routes.py: the drawings-print PDF, which is a drawing pack and not a quotation;
+    # and, since 6 Oct 2026 (D-401), /{run_id}/deliverables/{name}, which serves one of a
+    # run's own filed files to the site that queued it and holds an unreleased quotation
+    # behind the same gate as /api/file (quote_release.may_go_to_a_customer).
+    assert known_file_responses["estimate_routes.py"] == 2, (
         f"a new file-serving route appeared in estimate_routes.py — does it need the gate?")
+    routes_at = routes_src.index("def deliverable(")
+    assert "quote_release.may_go_to_a_customer" in routes_src[routes_at:routes_at + 2600]
 
 
 def test_the_engine_side_still_agrees_with_the_document(tmp_path):

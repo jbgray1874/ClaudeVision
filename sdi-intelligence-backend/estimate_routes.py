@@ -45,6 +45,7 @@ Endpoints (all require header  X-SDI-Key: <SDI_API_KEY> when a key is set):
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import subprocess
@@ -127,9 +128,17 @@ RUNNER_CONFLICT_SECONDS = int(os.getenv("SDI_RUNNER_CONFLICT_SECONDS", "20"))
 
 
 # ── access gate, identical to app.py's ───────────────────────────────────────
-def _check_key(x_sdi_key: Optional[str]) -> None:
-    if config.API_KEY and x_sdi_key != config.API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
+def _check_key(x_sdi_key: Optional[str]) -> str:
+    """Admit the portal's key or a partner site's (config.PARTNER_KEYS, D-401), and say
+    which: "" for the portal, the site's name for a partner, so a run can carry who asked."""
+    if not config.API_KEY and not getattr(config, "PARTNER_KEYS", None):
+        return ""
+    if config.API_KEY and x_sdi_key == config.API_KEY:
+        return ""
+    for _name, _key in (getattr(config, "PARTNER_KEYS", None) or {}).items():
+        if x_sdi_key and x_sdi_key == _key:
+            return str(_name)
+    raise HTTPException(status_code=401, detail="Invalid or missing X-SDI-Key")
 
 
 # ── path safety ──────────────────────────────────────────────────────────────
@@ -260,6 +269,8 @@ class Run:
     email_to: List[str] = field(default_factory=list)
     email_quote: bool = False
     email_result: Dict[str, Any] = field(default_factory=dict)
+    # WHO ASKED (D-401): "" for the portal, else the partner site whose key queued the run.
+    requested_by: str = ""
     lease_until: float = 0.0
     # WHICH RUNNER PROCESS CLAIMED IT (D-369). The runner's id is the machine's (host and
     # network card), so a runner restarted mid-job comes back under the same id; only the
@@ -287,6 +298,7 @@ class Run:
             "engine_price_gbp": self.engine_price_gbp,
             "log": self.log, "deliverables": self.deliverables,
             "email_to": list(self.email_to), "email_result": dict(self.email_result),
+            "requested_by": self.requested_by,
             "queued_at": self.queued_at, "started_at": self.started_at,
             "finished_at": self.finished_at,
             "seconds": round((self.finished_at or time.time()) - ref, 1),
@@ -1382,9 +1394,36 @@ def materials_check(req: MaterialCheckRequest, x_sdi_key: Optional[str] = Header
     return {"ok": not errors, "errors": errors, "parts": (data or {}).get("parts") or {}}
 
 
+class BriefRequest(BaseModel):
+    """A run queued from a typed brief with no drawings (D-401) — the shape another site
+    posts. `reference` is the enquiry or drawing number the job is filed under."""
+    client: str
+    reference: str
+    units: int
+    brief: str
+    quantity_breaks: List[int] = []
+    email_to: Optional[str] = None
+    fresh_read: bool = False
+
+
+@router.post("/brief")
+def start_from_brief(req: BriefRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """Queue an LLM-only run from a brief alone. The same run as the page's LLM-only
+    method with the brief box filled and nothing attached; the book reaches the estimators
+    named in `email_to` and is fetched by run id from /{run_id}/deliverables/{name}."""
+    if not str(req.brief or "").strip():
+        raise HTTPException(400, "The brief is empty. Describe the product: what it is, its "
+                                 "sizes, materials, finish and how many.")
+    return start(EstimateRequest(client=req.client, drawing_number=req.reference,
+                                 units=req.units, quantity_breaks=list(req.quantity_breaks),
+                                 method="llm", enquiry_brief=req.brief, email_to=req.email_to,
+                                 fresh_read=bool(req.fresh_read)),
+                 x_sdi_key=x_sdi_key)
+
+
 @router.post("")
 def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None)):
-    _check_key(x_sdi_key)
+    _caller = _check_key(x_sdi_key)
 
     client = safe_segment(req.client)
     drawing = safe_segment(req.drawing_number)
@@ -1441,8 +1480,13 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if req.job_folder and str(req.job_folder).strip():
         _sources.append(str(req.job_folder).strip())
     _sources += [str(f).strip() for f in (req.files or []) if str(f).strip()]
-    if not _sources:
-        raise HTTPException(400, "Add a job folder, or the drawings for this job.")
+    # A BRIEF ALONE IS A PACK (D-401) — on the LLM method only, because the drawing readers
+    # have nothing to read and the concept read is the one reader a brief can feed.
+    _brief_only = (not _sources and method == "llm"
+                   and bool(str(req.enquiry_brief or "").strip()))
+    if not _sources and not _brief_only:
+        raise HTTPException(400, "Add a job folder, or the drawings for this job — or, for "
+                                 "an LLM-only read, an enquiry brief with no drawings.")
 
     # Everything the page offers has already come from a listing this service produced, but it
     # arrives back over HTTP and is checked again — the page can be bypassed.
@@ -1485,7 +1529,11 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         _material_file = _mfile
 
     try:
-        staged = staging.stage(_sources, client=client, drawing=drawing)
+        if _brief_only:
+            staged = staging.stage_brief_only(client=client, drawing=drawing,
+                                              brief=str(req.enquiry_brief or ""))
+        else:
+            staged = staging.stage(_sources, client=client, drawing=drawing)
     except staging.StagingInUse as exc:
         raise HTTPException(409, str(exc))
     except staging.StagingError as exc:
@@ -1563,10 +1611,17 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                   manual_workbook=manual_wb, queued_at=queued_at,
                   llm_only=(method == "llm"),
                   fresh_read=bool(req.fresh_read),
-                  email_to=_email_to, email_quote=bool(req.email_quote))
+                  email_to=_email_to, email_quote=bool(req.email_quote),
+                  requested_by=_caller)
         _RUNS[run.run_id] = run
 
     run.line(f"{drawing} · {client} · {run.units} off")
+    if _caller:
+        run.line(f"Queued by the {_caller} site under its own key.")
+    if _brief_only:
+        run.line("BRIEF ONLY: no drawings were given. The brief is staged as its own page and "
+                 "read by the concept read as stated facts; every size and count on this book "
+                 "comes from the brief or is an assumption the sheet names for confirmation.")
     if _email_to:
         run.line(f"On completion: emailed to {', '.join(_email_to)}"
                  + ("" if req.email_quote else " — the customer quote is not attached"))
@@ -2549,6 +2604,42 @@ def status(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
     if run is None:
         raise HTTPException(404, "No such run. The service may have restarted.")
     return run.as_json()
+
+
+@router.get("/{run_id}/deliverables/{name}")
+def deliverable(run_id: str, name: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """One of a finished run's own deliverables, by the file name the run reported (D-401).
+
+    A site that queued a run fetches the book here, by run id and name, and nothing else:
+    the path served is the one the runner filed for THIS run, never a path the caller typed,
+    so the shared file API and the shares behind it stay closed to a partner key."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        items = list(run.deliverables) if run is not None else []
+    if run is None:
+        raise HTTPException(404, "No such run. The service may have restarted.")
+    if run.status != "done":
+        raise HTTPException(409, f"The run is {run.status}; its deliverables are filed when "
+                                 f"it finishes.")
+    want = str(name or "").strip()
+    hit = next((d for d in items if str(d.get("name") or "") == want), None)
+    if hit is None or "/" in want or "\\" in want:
+        raise HTTPException(404, f"{want!r} is not one of this run's deliverables: "
+                                 + ", ".join(str(d.get("name")) for d in items))
+    path = Path(str(hit.get("path") or ""))
+    if not path.is_file():
+        raise HTTPException(404, f"{want} was filed at {path} and is not there now.")
+    # THE RELEASE GATE, AS ON /api/file. A quotation is a deliverable too, and a site that
+    # queued a provisional run must not be able to hand the customer quote out as a download;
+    # it is released by an estimator on the estimating page and nowhere else.
+    if quote_release.looks_like_a_quote(path) and not quote_release.may_go_to_a_customer(path):
+        raise HTTPException(403, "That is the customer quotation and it has not been released: "
+                                 + (quote_release.why_held(path) or "an estimator releases it on "
+                                    "the estimating page."))
+    media, _ = mimetypes.guess_type(path.name)
+    return FileResponse(str(path), media_type=media or "application/octet-stream",
+                        filename=path.name)
 
 
 @router.get("")

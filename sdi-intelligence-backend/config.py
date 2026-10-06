@@ -97,6 +97,16 @@ ALLOWED_ORIGINS = [o.strip() for o in _opt("SDI_ALLOWED_ORIGINS").split(",") if 
 
 # ── Access gate ─────────────────────────────────────────────────────────────
 API_KEY = _opt("SDI_API_KEY")  # empty disables the gate (not recommended)
+# KEYS FOR OTHER SITES THAT QUEUE A RUN (D-401). "name=key,name=key" — one key per calling
+# site, never the portal's own, so a run queued from a site is attributable to that site and
+# one site's key can be withdrawn without touching another's. A partner key opens the
+# estimating endpoints only; the file browser and the database stay behind the portal's key.
+PARTNER_KEYS = {}
+for _pair in _opt("SDI_PARTNER_KEYS").split(","):
+    if "=" in _pair:
+        _n, _k = _pair.split("=", 1)
+        if _n.strip() and _k.strip():
+            PARTNER_KEYS[_n.strip()] = _k.strip()
 
 # ── File shares ─────────────────────────────────────────────────────────────
 FILE_ROOTS = [r.strip() for r in _opt("SDI_FILE_ROOTS").split("|") if r.strip()]

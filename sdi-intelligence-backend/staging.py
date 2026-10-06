@@ -336,6 +336,55 @@ _EXCLUDED_DIR_TOKENS = ("archive", "archived", "obsolete", "superseded", "old", 
 _EXCLUDED_DIR_PHRASES = ("do not use", "not for manufacture")
 
 
+BRIEF_PAGE_NAME = "ENQUIRY_BRIEF.png"
+
+
+def stage_brief_only(*, client: str, drawing: str, brief: str) -> Dict[str, Any]:
+    """Stage a run that has a brief and no drawings (D-401).
+
+    A brief typed on a site or the portal with nothing attached is still a pack: it is
+    rendered as its own page, ENQUIRY_BRIEF.png, in the job's staging folder, so that
+    listing, wrapping, the render gate, the concept read and the runner all carry it exactly
+    as they carry a customer's render. The text itself is filed beside it by the service as
+    ENQUIRY_BRIEF.txt (D-360) and is what the model reads; the page is the pack's existence,
+    and the concept read skips it as an image. Returns the same shape as stage()."""
+    text = str(brief or "").strip()
+    if not text:
+        raise StagingError("A run with no drawings needs an enquiry brief to read.")
+    folder = job_folder_for(client, drawing)
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        replaced = _clear_folder(folder)
+        _render_brief_page(text, folder / BRIEF_PAGE_NAME)
+    except PermissionError as exc:
+        raise StagingInUse(
+            f"The staged pack for {drawing} ({folder}) is still open in another program, so "
+            f"it cannot be replaced: {Path(str(getattr(exc, 'filename', '') or exc)).name}. "
+            f"Let the run of this job finish or abandon it, then press again.") from exc
+    return {"folder": str(folder), "copied": [BRIEF_PAGE_NAME], "copied_count": 1,
+            "replaced_count": replaced, "skipped": [], "sidecars": [],
+            "native_staged": [], "native_unselected_count": 0, "native_unselected_folders": [],
+            "extract_carried_forward": False, "brief_only": True}
+
+
+def _render_brief_page(text: str, out: Path) -> None:
+    """The brief as one A4 page image. Shrinks the type until the text fits; a brief is
+    capped at a few thousand characters upstream, so it always does."""
+    import pymupdf                                                   # noqa: WPS433
+    body = "ENQUIRY BRIEF\n\n" + text
+    for size in (11.0, 9.5, 8.0, 6.5, 5.0):
+        doc = pymupdf.open()
+        try:
+            page = doc.new_page(width=595, height=842)
+            rc = page.insert_textbox(pymupdf.Rect(42, 42, 553, 800), body,
+                                     fontsize=size, fontname="helv")
+            if rc >= 0 or size == 5.0:                 # fits, or as small as it goes
+                page.get_pixmap(dpi=150).save(str(out))
+                return
+        finally:
+            doc.close()
+
+
 def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
     """Copy the chosen drawings into this job's staging folder and describe what happened.
 
