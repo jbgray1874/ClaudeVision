@@ -512,3 +512,42 @@ def test_a_bought_lines_description_carries_the_size_its_own_record_holds():
     assert wb._own_size_mm({"blank_length_mm": 471.61, "blank_width_mm": 212}) == (471.61, 212.0)
     assert wb._own_size_mm({"normalized_geometry": {"bbox_mm": [19.0, 1.9]}}) is None   # one dimension is not a size
     assert wb._own_size_mm({}) is None
+
+
+# ── D-404: the 6 Oct 17:10 book's portal quotation (9598-03, 20 off) ─────────────────────
+#
+# "Material: Mild Steel, 400 Mic, Refer To Individual Component Drawings". The last phrase is
+# the GA's title-block pointer: the extract returned it as the drawing's general material, the
+# bumpers inherited it, and the quotation listed it as what the product is made of.
+
+def test_a_pointer_note_is_never_a_material_on_the_quotation():
+    import display_material as dm
+    import drawing_facts as df
+    from client_quote_html import _materials_line
+    import extractor_patterns as ep
+    assert ep.is_cross_reference_note("REFER TO INDIVIDUAL COMPONENT DRAWINGS")
+    assert df._is_pointer("REFER TO INDIVIDUAL COMPONENT DRAWINGS")
+    assert df._is_pointer("SEE ASSEMBLY DRAWING") and not df._is_pointer("MILD STEEL")
+    bumper = {"part_number": "FIXING1270", "description": "BUMPER", "page_roles": ["bought_in"],
+              "normalized_material": "REFER TO INDIVIDUAL COMPONENT DRAWINGS",
+              "material_source": "llm_full_extract"}
+    assert dm.display_material(bumper, "bought_in")["basis"] == dm.NOTHING
+    assert dm.describes_the_product(bumper, "bought_in") is None
+    frame = {"part_number": "9598-03-01M", "description": "METAL FRAME", "page_roles": ["detail"],
+             "normalized_material": "MILD STEEL", "material_source": "drawing_deterministic"}
+    assert _materials_line([frame, bumper]) == "Mild Steel"
+
+
+def test_a_general_note_that_points_elsewhere_is_not_inherited():
+    from source_connectors import llm_full_job as lfj
+    parts = [{"part_number": "FIXING1270", "description": "BUMPER", "quantity": 4,
+              "page_roles": ["bought_in"]}]
+    job = {"found": True,
+           "drawing_info": {"material_general": "REFER TO INDIVIDUAL COMPONENT DRAWINGS",
+                            "finish_general": "REFER TO INDIVIDUAL COMPONENT DRAWINGS"},
+           "parts": [{"part_number": "FIXING1270", "description": "BUMPER", "qty": 4}],
+           "routes": []}
+    lfj.apply_full_job_to_pre_estimate(parts, job)
+    assert not parts[0].get("normalized_material")
+    assert not parts[0].get("normalized_finish")
+    assert not any("GENERAL" in f for f in parts[0].get("review_flags") or [])

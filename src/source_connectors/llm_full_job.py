@@ -217,6 +217,19 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
     _di = job.get("drawing_info") or {}
     _job_material = str(_di.get("material_general") or "").strip()
     _job_finish = str(_di.get("finish_general") or "").strip()
+    # A POINTER IS NOT A GENERAL NOTE (D-404). The M&S GA prints MATERIAL / FINISH / COLOUR as
+    # "REFER TO INDIVIDUAL COMPONENT DRAWINGS", and the extract returned it as the drawing's
+    # general material; it was inherited by the bumpers on 9598-03 and reached the customer's
+    # quotation as the product's material ("Mild Steel, 400 Mic, Refer To Individual Component
+    # Drawings"). A value that sends the reader elsewhere states nothing to inherit.
+    try:
+        from extractor_patterns import is_cross_reference_note as _xref_note
+        if _job_material and _xref_note(_job_material):
+            _job_material = ""
+        if _job_finish and _xref_note(_job_finish):
+            _job_finish = ""
+    except Exception:                                                # noqa: BLE001
+        pass
 
     by_pn = {_clean_pn(p.get("part_number")): p for p in (job.get("parts") or []) if isinstance(p, dict)}
     assembly_pns = {_clean_pn(a.get("part_number")) for a in (job.get("assemblies") or []) if isinstance(a, dict)}

@@ -130,7 +130,19 @@ def _title_block_fields(page) -> Dict[str, Optional[str]]:
 
 
 def _is_pointer(v: Optional[str]) -> bool:
-    return bool(v) and ("SEE " in str(v).upper())  # SEE ASSEMBLY / SEE INDIVIDUAL DRAWING(S)
+    """A title-block value that points elsewhere instead of stating a material or finish:
+    SEE ASSEMBLY, SEE INDIVIDUAL DRAWING(S), and since D-404 REFER TO INDIVIDUAL COMPONENT
+    DRAWINGS — the M&S GA's phrasing, which "SEE " alone let through to the quotation as the
+    product's material. One definition, extractor_patterns.is_cross_reference_note."""
+    if not v:
+        return False
+    try:
+        from extractor_patterns import is_cross_reference_note as _xref
+        if _xref(v):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
+    return "SEE " in str(v).upper()
 
 
 def _tube_and_length(page, text: str) -> tuple[Optional[str], Optional[float]]:

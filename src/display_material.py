@@ -87,6 +87,14 @@ def is_roll_goods(part: Mapping[str, Any]) -> bool:
             or _clean(me.get("cost_method")).lower().startswith("roll_goods"))
 
 
+def _is_cross_reference(value: Any) -> bool:
+    try:
+        from extractor_patterns import is_cross_reference_note as _xref
+        return bool(_xref(value))
+    except Exception:                                                # noqa: BLE001
+        return "SEE " in str(value or "").upper() or "REFER TO" in str(value or "").upper()
+
+
 def display_material(part: Mapping[str, Any], kind: Any = "") -> Dict[str, Any]:
     """{text, basis, source, inherited, why} — what this line's Material column may say.
 
@@ -112,6 +120,14 @@ def display_material(part: Mapping[str, Any], kind: Any = "") -> Dict[str, Any]:
 
     stated = _clean(part.get("normalized_material") or part.get("material"))
     source = _source_of(part)
+    # A CROSS-REFERENCE IS NOT A MATERIAL (D-404). "REFER TO INDIVIDUAL COMPONENT DRAWINGS"
+    # on a record is the GA's pointer, however it got there; the Material column and the
+    # quotation's material line say nothing rather than print it.
+    if stated and _is_cross_reference(stated):
+        return {"text": "— (bought-in)" if kind == "bought_in" else "Unknown",
+                "basis": NOTHING, "source": source, "inherited": False,
+                "why": (f"the only material on this line is '{stated}', which points at the "
+                        f"component drawings instead of naming a material")}
 
     if kind == "bought_in":
         if not stated or stated.upper() == "BOUGHT_IN":
