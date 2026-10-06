@@ -201,6 +201,10 @@ def test_the_nodes_run_in_date_order():
         # The Sage X3 DATA MIGRATION, added 17 Sep 2026. Distinct from the ERP go-live below
         # and deliberately earlier: all data lands in X3 before the business runs on it.
         "30 OCT 2026": _dt.date(2026, 10, 30),
+        # 6 Oct 2026: the server is ordered for Monday 2 November, so estimating, P2 and Drawing
+        # Search go live on that day — after the X3 data migration's 30 October, which now sits
+        # to their left.
+        "2 NOV 2026": _dt.date(2026, 11, 2),
         "~NOV 2026": _dt.date(2026, 11, 1),
         "4 JAN 2027": _dt.date(2027, 1, 4),
     }
