@@ -89,6 +89,19 @@ def rejected_the_request(exc):
     return status is not None and 400 <= status < 500 and status not in (401, 403, 404, 429)
 
 
+class PinnedCertAdapter(requests.adapters.HTTPAdapter):
+    """Verify the certificate, but not the hostname on it.
+
+    For a single pinned self-signed certificate this is not a downgrade: the
+    pin already names one exact certificate, and hostname checking exists to
+    stop a CA vouching for the wrong name. Here the certificate is its own CA.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["assert_hostname"] = False
+        return super().init_poolmanager(*args, **kwargs)
+
+
 class RateLimiter:
     """Sliding-window limiter for GET calls (POST is exempt)."""
 
@@ -141,7 +154,8 @@ class InVentryAPI:
     """Thin wrapper over the InVentry Partner API."""
 
     def __init__(self, base_url=None, api_key=None, partner_secret=None,
-                 verify=None, timeout=None, session=None, limiter=None):
+                 verify=None, timeout=None, session=None, limiter=None,
+                 check_hostname=None):
         self.base_url = (base_url if base_url is not None else cfg.INVENTRY_API_BASE_URL).rstrip("/")
         self.api_key = api_key if api_key is not None else cfg.INVENTRY_API_KEY
         self.partner_secret = partner_secret if partner_secret is not None else cfg.INVENTRY_PARTNER_SECRET
@@ -166,6 +180,20 @@ class InVentryAPI:
                 "TLS verification is OFF for InVentry (self-signed certificate). "
                 "Set INVENTRY_API_CA_BUNDLE to the exported certificate to turn it back on."
             )
+
+        # Their certificate has no subjectAltName, so the hostname can never
+        # match. Pinning the certificate and skipping the name check keeps the
+        # connection verified; skipping it without a pin does not.
+        self.check_hostname = (cfg.INVENTRY_API_CHECK_HOSTNAME
+                               if check_hostname is None else check_hostname)
+        if not self.check_hostname:
+            if self.verify is False:
+                self.warnings.append(
+                    "INVENTRY_API_CHECK_HOSTNAME is off and no certificate is pinned, so "
+                    "nothing about the server is being verified. Set INVENTRY_API_CA_BUNDLE."
+                )
+            elif hasattr(self.session, "mount"):
+                self.session.mount("https://", PinnedCertAdapter())
 
     # ── plumbing ─────────────────────────────────────────────────────────
 
@@ -202,6 +230,20 @@ class InVentryAPI:
                     method, url, headers=self._headers(), params=params, data=data,
                     timeout=self.timeout, verify=self.verify,
                 )
+            except requests.exceptions.SSLError as exc:
+                if "not valid for" in str(exc) or "Hostname mismatch" in str(exc):
+                    raise InVentryAPIError(
+                        f"InVentry's certificate does not carry the name {self.base_url!r}. "
+                        f"It is self-signed with CN=InVentry-PC and no subjectAltName, which "
+                        f"modern TLS ignores, so no hostname will ever match. Keep "
+                        f"INVENTRY_API_CA_BUNDLE pointed at the exported certificate and set "
+                        f"INVENTRY_API_CHECK_HOSTNAME=false - the certificate is still verified, "
+                        f"only its name is not. ({exc})"
+                    ) from exc
+                raise InVentryAPIError(
+                    f"TLS failed talking to {url}: {exc}. If the certificate was re-exported, "
+                    f"update INVENTRY_API_CA_BUNDLE."
+                ) from exc
             except requests.RequestException as exc:
                 last = exc
                 if attempt < retries:

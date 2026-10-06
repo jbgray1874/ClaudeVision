@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -619,3 +620,56 @@ def test_a_warning_raised_during_the_writes_reaches_the_summary(snapshot):
                      warn_on_write="InVentry rejected ActionLocation")
     summary = push.run_push(apply=True, client=client)
     assert any("ActionLocation" in w for w in summary["warnings"])
+
+
+# ── TLS: a certificate with no subjectAltName ────────────────────────────
+# InVentry's is CN=InVentry-PC with no SAN. Modern TLS ignores CN, so no
+# hostname ever matches. Verified against the live system, 6 Oct 2026.
+
+class ExplodingSession(StubSession):
+    """Raises the SSLError a CN-only certificate actually produces."""
+
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+
+    def request(self, *a, **kw):
+        raise requests.exceptions.SSLError(self.message)
+
+
+def test_hostname_mismatch_names_the_setting_that_fixes_it():
+    client = api.InVentryAPI(
+        base_url="https://InVentry-PC:4816", api_key="k", partner_secret="s",
+        session=ExplodingSession(
+            "certificate verify failed: Hostname mismatch, certificate is not valid "
+            "for 'inventry-pc'."),
+        limiter=NoWaitLimiter(), verify="/path/to/inventry.pem")
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_API_CHECK_HOSTNAME=false" in str(exc.value)
+    assert "subjectAltName" in str(exc.value)
+
+
+def test_a_tls_failure_is_not_retried_three_times():
+    """A bad certificate will be just as bad two seconds later."""
+    session = ExplodingSession("certificate verify failed: unable to get local issuer")
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             session=session, limiter=NoWaitLimiter(), verify=True)
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_API_CA_BUNDLE" in str(exc.value)
+
+
+def test_skipping_the_hostname_check_without_a_pin_is_called_out():
+    """Pinned + no hostname check is fine. Neither one is not."""
+    client, _ = make_client(verify=False, check_hostname=False)
+    assert any("nothing about the server is being verified" in w for w in client.warnings)
+
+
+def test_skipping_the_hostname_check_with_a_pin_does_not_warn_about_it():
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             verify="/path/to/inventry.pem", check_hostname=False,
+                             limiter=NoWaitLimiter())
+    assert not any("nothing about the server" in w for w in client.warnings)
+    # The adapter is what actually turns the name check off.
+    assert isinstance(client.session.get_adapter("https://x"), api.PinnedCertAdapter)

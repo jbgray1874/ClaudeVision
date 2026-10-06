@@ -96,6 +96,26 @@ INVENTRY_API_TIMEOUT = int(_opt("INVENTRY_API_TIMEOUT", "30"))
 INVENTRY_API_CA_BUNDLE = _opt("INVENTRY_API_CA_BUNDLE")
 INVENTRY_API_VERIFY = _opt("INVENTRY_API_VERIFY", "false").lower() not in ("false", "0", "no", "off")
 
+# Check the hostname against the certificate as well as the certificate itself?
+#
+# InVentry's certificate carries CN=InVentry-PC and NO subjectAltName. Modern
+# TLS stacks ignore CN entirely, so the name can never match, however the host
+# is addressed - by IP, or by a hosts entry for InVentry-PC. Proven on the live
+# system 6 Oct 2026: "certificate is not valid for 'inventry-pc'". curl still
+# falls back to CN and so appears to work, which is what misled us.
+#
+# Turning this off is NOT the same as turning verification off. With
+# INVENTRY_API_CA_BUNDLE pinned to their exported certificate, the connection
+# is still refused unless the server presents that exact certificate - verified
+# against a CN-only certificate before this was committed. Hostname checking
+# guards against a CA issuing a certificate for the wrong name, which means
+# nothing when the "CA" is the one self-signed certificate we pinned.
+#
+# The proper fix is InVentry reissuing with a subjectAltName. Until then, set
+# this false AND keep INVENTRY_API_CA_BUNDLE set. Setting it false WITHOUT a
+# pinned bundle is the genuinely weak configuration, and is warned about.
+INVENTRY_API_CHECK_HOSTNAME = _opt("INVENTRY_API_CHECK_HOSTNAME", "true").lower() not in ("false", "0", "no", "off")
+
 # Endpoint paths, from the Postman collection.
 INVENTRY_PATH_CHECK_AUTH = _opt("INVENTRY_PATH_CHECK_AUTH", "/PartnerAPI/CheckAuth")
 INVENTRY_PATH_PERSONNEL = _opt("INVENTRY_PATH_PERSONNEL", "/PartnerAPI/GetPersonnel/")
