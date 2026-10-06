@@ -552,11 +552,11 @@
     {
       "id": "voice-crm",
       "name": "SDI Voice CRM Intelligence · Sandbox Pilot",
-      "status": "Pilot · read-only",
+      "status": "Pilot · voice",
       "cls": "c-prog",
       "category": "Co-worker agents",
       "surface": "both",
-      "desc": "Morning outbound call updates Nick’s NG project records by voice — read back, confirmed, audited.",
+      "desc": "Nick’s sandbox tracker, read and updated by voice from the app portal — every change read back, confirmed, version-checked and journalled.",
       "detail": "The first concrete voice pilot, requested by Nick Garrish (Account Director). Between 08:30 and 09:30 the system calls Nick, reads out his highest-priority or most out-of-date projects, takes the updates by voice, reads each proposed change back for explicit confirmation, and only then writes it to a SharePoint sandbox List. Every change is journalled (old value, new value, time, user, source) and a daily summary is emailed. <b>A custom Azure application is the workflow owner</b> — Microsoft Graph is the data path into Microsoft 365, not the application, and the speech/AI layer never writes records directly. Scope is deliberately narrow: the sandbox List only, records whose AM Owner is exactly <code>NG</code>, and the live project tracker in Teams is untouched until testing is approved.",
       "sections": [
         {
@@ -626,8 +626,8 @@
         "Python or C# on Azure",
         "Power Automate or Azure timer"
       ],
-      "phase": "Proposed · sandbox pilot — gated on IT approval and SharePoint access",
-      "invoke": "Not yet built. Next steps: confirm the sandbox List schema and unique Project IDs, grant the application selected-permissions access to that List only, and agree the Azure spend allowance. The live tracker stays untouched until the pilot is reviewed and formally approved.",
+      "phase": "Pilot · voice loop built against the sandbox workbook — writes gated until Nick approves",
+      "invoke": "Open the app, tap the mic and speak — e.g. “set the status on the Acme project to invoiced”. The change is read back and written only on an explicit yes, then journalled. Reads work as soon as the sandbox is configured; writes stay off until SDI_VOICECRM_WRITE and SDI_VOICECRM_APPROVED_BY are set. The live tracker is never touched. The outbound morning-call architecture described below is the next stage, not this build.",
       "app_url": "voice-crm.html"
     },
     {

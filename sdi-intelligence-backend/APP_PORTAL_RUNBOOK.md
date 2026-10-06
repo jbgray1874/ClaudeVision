@@ -290,12 +290,53 @@ is the worked example. Every screen there is gated — only the manifest, icons 
 
 ### 4.4 Nick's Voice CRM app specifically
 
-The screen exists and is wired to Microsoft Graph. It is **read-only** — see
-"Why it does not write" below. To make it show real records:
+The screen exists, is wired to Microsoft Graph, and carries the full voice
+loop: mic → interpret → read-back → explicit yes → write → journal. Writing is
+**off by default** behind two gates (below). The backend supports two shapes of
+sandbox, selected by `SDI_VOICECRM_STORE`:
 
-**Step 1 — build the List.** In Nick's sandbox site, create a SharePoint **List**
-(not a spreadsheet in a document library — his sandbox link currently points at
-`Shared Documents`, which is the wrong shape for this).
+- **`excel`** — a workbook in the site's document library. This is what Nick's
+  sandbox actually is (`CRM TEST - 2026 Account and Project Tracker.xlsx`), so
+  it is the path of least resistance: zero migration, his team keeps their
+  spreadsheet.
+- **`list`** — a SharePoint List. Structurally better (real row ids, real
+  eTags, column types, version history) but means rebuilding the tracker.
+
+#### Option A — Excel, pointing at the sandbox as it is today
+
+```ini
+SDI_VOICECRM_STORE=excel
+SDI_GRAPH_SCOPES=User.Read Files.Read.All
+SDI_VOICECRM_SITE=sdidisplays.sharepoint.com:/sites/NickGarrish-ACCOUNTSANDPROJECTTRACKER2026
+# Path inside the site's default document library — include the folder if any:
+SDI_VOICECRM_XLSX=CRM TEST - 2026 Account and Project Tracker.xlsx
+SDI_VOICECRM_SHEET=            # empty = first worksheet
+SDI_VOICECRM_OWNER=NG
+SDI_VOICECRM_OWNER_FIELD=AM Owner      # the literal header cell text
+```
+
+For writes, the scope becomes `Files.ReadWrite.All` (fresh admin consent) and
+the editable columns default to `Status,Action date,End date` — override with
+`SDI_VOICECRM_EDITABLE` using the literal header texts.
+
+How a spreadsheet row is kept safe without a List's ids and eTags: a row is
+addressed by its sheet row number and versioned by a **fingerprint** of its
+rendered cell text. If the row is edited between propose and confirm — or a row
+is inserted/deleted above it, shifting different data under the same number —
+the fingerprint no longer matches and the confirm refuses with `conflict`.
+Both cases are covered by tests. One honest limit: Graph cannot make the cell
+write itself conditional (no `If-Match` on a range), so a change landing in the
+few hundred milliseconds between the final re-read and the write is not
+detectable. Acceptable for a single-owner sandbox; one more reason the live
+tracker stays out of scope.
+
+Two asks for Nick that make matching stronger: fill in the **Project code**
+column (rows currently have none, which is why fingerprints are needed), and
+avoid re-sorting the sheet mid-call.
+
+#### Option B — a SharePoint List
+
+**Step 1 — build the List.** In Nick's sandbox site, create a SharePoint **List**.
 
 Columns, at minimum:
 
@@ -321,6 +362,7 @@ settings → click the column → read `Field=` at the end of the URL.
 **Step 4 — configure and restart:**
 
 ```ini
+SDI_VOICECRM_STORE=list
 SDI_GRAPH_SCOPES=User.Read Sites.Read.All
 SDI_VOICECRM_SITE=sdidisplays.sharepoint.com:/sites/NickGarrish-ACCOUNTSANDPROJECTTRACKER2026
 SDI_VOICECRM_LIST=Project Tracker
@@ -336,29 +378,50 @@ is: which setting is missing, whether the scope was consented, what Graph itself
 said, or that the List read fine but no record has `AMOwner = NG`. It never shows
 an invented record to look finished.
 
-#### Turning writing on (only when the List exists and Nick has approved)
+#### The voice layer
+
+The listening and speaking happen in the browser (Web Speech API — Chrome,
+Edge and Safari have it; the screen falls back to a typed input where they do
+not). Turning a sentence into a structured instruction happens server-side at
+`POST /api/voicecrm/interpret`, which calls the Claude API and returns one of
+`update` / `read` / `clarify`. It needs:
+
+```ini
+ANTHROPIC_API_KEY=...            # already set for the estimating engine
+# optional: SDI_VOICECRM_MODEL=claude-opus-5-5
+```
+
+The model only ever *proposes*: the server discards any record id or field it
+was not given, and an `update` still has to pass the whole propose/confirm
+loop below. The interpret endpoint writes nothing.
+
+#### Turning writing on (only when Nick has approved)
 
 The write path is built and tested, and **off** behind two independent gates:
 
 ```ini
 SDI_VOICECRM_WRITE=yes
-SDI_VOICECRM_APPROVED_BY=Nick Garrish, 2026-09-__   # stamped on every entry
-SDI_VOICECRM_EDITABLE=Status,NextAction,NextActionDate
-SDI_GRAPH_SCOPES=User.Read Sites.ReadWrite.All
+SDI_VOICECRM_APPROVED_BY=Nick Garrish, 2026-10-__   # stamped on every entry
+# allow-list of writable columns; defaults:
+#   excel: Status,Action date,End date      list: Status,NextAction,NextActionDate
+SDI_VOICECRM_EDITABLE=Status,Action date,End date
+# scope upgrade + fresh admin consent:
+#   excel: Files.ReadWrite.All              list: Sites.ReadWrite.All
+SDI_GRAPH_SCOPES=User.Read Files.ReadWrite.All
 ```
 
-Both gates must be open, `SDI_VOICECRM_EDITABLE` is an allow-list (nothing
-outside it can ever be written), and the Graph scope must be upgraded from
-`Sites.Read.All` to `Sites.ReadWrite.All` with fresh admin consent.
+Both gates must be open and `SDI_VOICECRM_EDITABLE` is an allow-list — nothing
+outside it can ever be written.
 
 How a change is made — this is the loop from the architecture, and it is what
-the voice agent will drive:
+the voice screen drives:
 
 | Step | Endpoint | What happens |
 |------|----------|--------------|
-| 1 | `POST /api/voicecrm/propose` | Validates the field is editable and the record is Nick's, reads the current value, records a proposal, returns a `readback` sentence and a `proposal_id`. **Writes nothing.** |
-| 2 | — | The agent reads the sentence back and takes an explicit yes. |
-| 3 | `POST /api/voicecrm/confirm` | Re-reads the record, re-checks the owner, checks the version has not moved, writes with `If-Match`, journals the outcome. |
+| 1 | `POST /api/voicecrm/interpret` | Transcript + current records in, `{item, field, new value}` or a clarifying question out. **Writes nothing.** |
+| 2 | `POST /api/voicecrm/propose` | Validates the field is editable and the record is Nick's, reads the current value, records a proposal, returns a `readback` sentence and a `proposal_id`. **Writes nothing.** |
+| 3 | — | The screen speaks the sentence back and takes an explicit yes (spoken or tapped). |
+| 4 | `POST /api/voicecrm/confirm` | Re-reads the record, re-checks the owner, checks the version has not moved (eTag on a List, row fingerprint on Excel), writes, journals the outcome. |
 | — | `GET /api/voicecrm/journal` | The audit trail: who, when, old value, new value, and what actually happened. |
 
 The guarantees, each tested:
@@ -373,17 +436,16 @@ The guarantees, each tested:
   with the real reason from Graph.
 - **Only the proposer can confirm**, and only their own records.
 
-#### Why it does not write *yet*
+#### Why it ships read-only
 
-Writing a record by voice needs the loop the architecture specifies: validate the
-change, read it back, take explicit confirmation, re-check the owner and the
-record version, write, and journal the outcome durably so a retry cannot repeat a
-saved change. None of that exists yet, and a write endpoint without it would be
-worse than no endpoint — it is exactly the "confidently wrong value" failure the
-programme has been avoiding everywhere else.
+The whole write loop exists and is tested, but it stays switched off until Nick
+approves the pilot, because a write endpoint that had skipped any of those
+checks would be worse than no endpoint — it is exactly the "confidently wrong
+value" failure the programme has been avoiding everywhere else.
 
 Read-only also means the pilot cannot damage anything while it is being tested,
-which makes it a much easier approval to get.
+which makes it a much easier approval to get. The live tracker is never in
+scope either way: this only ever touches the sandbox named in the settings.
 
 #### And on ChatGPT updating SharePoint
 
@@ -476,6 +538,10 @@ Honest list, so none of these surprise you later.
   assignment (2.4) does not have this problem — prefer it.
 - **The catalogue is a file.** `services.json` is read from disk per request. Fine
   at this size; it is not a database.
-- **No write path for Voice CRM.** Deliberate. See above.
+- **Voice CRM writes are double-gated.** The propose/confirm/journal write path
+  exists for both stores but does nothing until `SDI_VOICECRM_WRITE` and
+  `SDI_VOICECRM_APPROVED_BY` are both set. On Excel there is additionally a
+  small unavoidable read-to-write window Graph cannot close (no `If-Match` on a
+  cell) — see 4.4.
 - **Offline cache is per device.** The app portal caches the last catalogue it
   saw. File-share traffic is never cached.
