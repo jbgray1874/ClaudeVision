@@ -551,8 +551,8 @@
     },
     {
       "id": "voice-crm",
-      "name": "SDI Voice CRM Intelligence · Sandbox Pilot",
-      "status": "Pilot · voice",
+      "name": "SDI Intelligence AM CRM",
+      "status": "Live · sandbox pilot",
       "cls": "c-prog",
       "category": "Co-worker agents",
       "surface": "both",
