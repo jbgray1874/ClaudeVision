@@ -3650,8 +3650,11 @@ FINISH_FIELD_PROCESS_STATEMENTS = {
 SHEET_WELD_NOTE_PATTERNS = [
     r"\bWELD\s*(?:&|AND|\+)\s*DRESS\b",
     r"\bTAC?K?\s+WELD(?:ED|S)?\b",
+    # "BLOB WELD BOTH ENDS TO STOP FOLD OPENING" (M&S 9598-02-01M, D-400): a blob is the
+    # draughtsman's word for a tack that fills, and both ends says where
+    r"\bBLOB\s+WELD(?:ED|S)?\b",
     r"\bWELDED\b",
-    r"\bWELD\s+(?:INT|INTERNAL|FLUSH|CLOSED|ALL\s+ROUND|CORNERS?|HERE|BOTH\s+SIDES?)\b",
+    r"\bWELD\s+(?:INT|INTERNAL|FLUSH|CLOSED|ALL\s+ROUND|CORNERS?|HERE|BOTH\s+SIDES?|BOTH\s+ENDS?|EACH\s+END|AT\s+(?:BOTH|EACH)\s+ENDS?)\b",
     r"\bTO\s+BE\s+WELDED\b",
 ]
 #   the dressing that goes with it, where the note says so

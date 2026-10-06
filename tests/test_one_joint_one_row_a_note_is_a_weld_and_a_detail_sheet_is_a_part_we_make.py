@@ -284,3 +284,14 @@ def test_a_plastic_sheets_solid_thickness_is_its_gauge():
     sw.apply_native_to_pre_estimate([cap], sw.NativeJob(found=True, part_signals={"12567-05-02M": nat2}))
     assert cap.get("normalized_thickness_mm") in (None, 0, "")
     assert any("NOT used as the gauge" in f for f in cap.get("review_flags") or [])
+
+
+# ── D-400: a blob weld is a weld note (M&S 9598-02-01M, read before the first run) ───────
+
+def test_a_blob_weld_at_both_ends_is_the_sheets_statement_of_the_weld():
+    assert ws.sheet_weld_note("BLOB WELD BOTH ENDS TO STOP FOLD OPENING DOWN 180° R 0.5 UP 90° R 1") == \
+        {"note": "BLOB WELD", "dress": False}
+    assert ws.sheet_weld_note("WELD BOTH ENDS")["note"]
+    assert ws.sheet_weld_note("WELD EACH END")["note"]
+    assert ws.sheet_weld_note("TO STOP FOLD OPENING") == {}            # the reason, not a weld
+    assert ws.sheet_weld_note("BLOB OF SEALANT BOTH ENDS") == {}
