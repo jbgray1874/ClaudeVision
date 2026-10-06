@@ -1145,6 +1145,26 @@ def material_field_states_something(text: str) -> bool:
     return False
 
 
+def fold_note_count(text: str) -> Dict[str, Any]:
+    """What the sheet's own words say about folds: {count, evidence} (D-405).
+
+    FOLD_PATTERN matches the bare words FOLD / BEND as well as an UP/DOWN angle callout, and
+    every match was a fold: 9598-02-01M prints "UP 90° R 1", "DOWN 180° R 0.5" and "BLOB WELD
+    BOTH ENDS TO STOP FOLD OPENING", and the note rung read three on a sheet with two bends —
+    the word FOLD in the weld note names the hem the callout already counts. Where a sheet
+    prints callouts, the callouts are its statement and a bare word is a reference to one of
+    them; a bare word counts only on a sheet that prints no callout at all. The strings are
+    kept so the sentence that quotes the count can say what it counted."""
+    t = text or ""
+    callouts = [" ".join(m.split()) for m in re.findall(
+        r"(?:\bUP\b|\bDOWN\b)\s+\d+(?:\.\d+)?\s*°", t, flags=re.IGNORECASE)]
+    if callouts:
+        return {"count": len(callouts), "evidence": callouts}
+    words = [m.upper() for m in re.findall(r"\b(?:EXT\s+FOLD|INT\s+FOLD|FOLD|BEND)\b", t,
+                                           flags=re.IGNORECASE)]
+    return {"count": len(words), "evidence": words}
+
+
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
     raw_text = text or ""
     normalized_text = normalize_text(raw_text)
@@ -1470,6 +1490,7 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
     text = normalize_text(text)
     dimensions = classify_dimensions(text)
 
+    _fold_note = fold_note_count(text)
     return {
         "angles_deg": dimensions["angles_deg"],
         "hole_sizes_mm": dimensions["hole_sizes_mm"],
@@ -1479,7 +1500,8 @@ def extract_feature_cues(text: str) -> Dict[str, Any]:
         "all_dimensions_mm": dimensions["all_dimensions_mm"],
         "slot_sizes_mm": dimensions["slot_sizes_mm"],
         "edge_distances_mm": dimensions["edge_distances_mm"],
-        "fold_count_textual": len(re.findall(FOLD_PATTERN, text, flags=re.IGNORECASE)),
+        "fold_count_textual": _fold_note["count"],
+        "fold_count_textual_evidence": _fold_note["evidence"],
         "flat_pattern_detected": bool(re.search(FLAT_PATTERN_PATTERN, text, flags=re.IGNORECASE)),
         "slot_detected": bool(re.search(SLOT_PATTERN, text, flags=re.IGNORECASE)),
         "laser_text_detected": bool(re.search(LASER_PATTERN, text, flags=re.IGNORECASE)),

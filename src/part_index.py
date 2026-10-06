@@ -290,6 +290,10 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
             part["fold_values_mm"].extend(cues.get("fold_values_mm", []))
             part["slot_sizes_mm"].extend(cues.get("slot_sizes_mm", []))
             part["edge_distances_mm"].extend(cues.get("edge_distances_mm", []))
+            # The strings behind the count travel with it (D-405), and the larger reading's
+            # strings are the ones kept — the sentence that quotes the number names them.
+            if int(cues.get("fold_count_textual", 0) or 0) > int(part.get("fold_count_textual", 0) or 0):
+                part["fold_count_textual_evidence"] = list(cues.get("fold_count_textual_evidence") or [])
             part["fold_count_textual"] = max(part.get("fold_count_textual", 0), cues.get("fold_count_textual", 0))
             part["process_notes"].extend(process_notes.get("note_snippets", []))
             part["process_note_types"].extend(process_notes.get("detected_note_types", []))

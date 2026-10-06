@@ -551,3 +551,30 @@ def test_a_general_note_that_points_elsewhere_is_not_inherited():
     assert not parts[0].get("normalized_material")
     assert not parts[0].get("normalized_finish")
     assert not any("GENERAL" in f for f in parts[0].get("review_flags") or [])
+
+
+# ── D-405: the 6 Oct 17:30 book on ad4259c (9598-03, 20 off) ─────────────────────────────
+#
+# "the drawing's fold callouts read 3" on a sheet printing UP 90° and DOWN 180°: the note rung
+# counted the word FOLD in "BLOB WELD BOTH ENDS TO STOP FOLD OPENING" beside the two callouts.
+
+def test_a_sheets_fold_statement_is_its_callouts_and_a_bare_word_beside_them_is_a_reference():
+    import extractor_patterns as ep
+    note = ep.fold_note_count(
+        "BLOB WELD BOTH ENDS TO STOP FOLD OPENING  471.61  212  UP  90°  R 1  DOWN  180°  R 0.5")
+    assert note == {"count": 2, "evidence": ["UP 90°", "DOWN 180°"]}
+    assert ep.fold_note_count("FOLD 20mm RETURN, BEND AS SHOWN")["count"] == 2   # no callouts: words count
+    assert ep.fold_note_count("MILD STEEL 1.2")["count"] == 0
+    cues = ep.extract_feature_cues("UP 90° R 1 DOWN 180° R 0.5 TO STOP FOLD OPENING")
+    assert cues["fold_count_textual"] == 2
+    assert cues["fold_count_textual_evidence"] == ["UP 90°", "DOWN 180°"]
+
+
+def test_the_fold_sentence_names_what_the_note_rung_counted():
+    import fold_count as fc
+    part = {"part_number": "X-01M", "fold_count_textual": 3,
+            "fold_count_textual_evidence": ["UP 90°", "DOWN 180°", "FOLD"],
+            "bend_count_dxf": 2, "geometry_source": "dxf", "dxf_augmented": True}
+    out = fc.press_brake_folds(part)
+    assert out["count"] == 2
+    assert "read 3 (UP 90°, DOWN 180°, FOLD on its own sheet)" in out["disagreement"]

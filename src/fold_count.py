@@ -205,7 +205,15 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
             _ev_txt = (" (" + ", ".join(str(c) for c in _ev["callouts"][:8])
                        + (f" on the {_ev['layer']} layer" if _ev.get("layer") else "")
                        + (f" of page {_ev['page']}" if _ev.get("page") else "") + ")")
-        _said = "; ".join(f"{n} read {int(v)}" + (_ev_txt if n == _CALLOUTS_LABEL else "")
+        # AND SO DOES THE NOTE RUNG (D-405): "the drawing's fold callouts read 3" on 9598-02-01M
+        # was the weld note's "TO STOP FOLD OPENING" counted beside two callouts.
+        _note_ev = part.get("fold_count_textual_evidence") if isinstance(part, dict) else None
+        _note_txt = ""
+        if isinstance(_note_ev, list) and _note_ev and _int(part.get("fold_count_textual")) == len(_note_ev):
+            _note_txt = " (" + ", ".join(str(c) for c in _note_ev[:8]) + " on its own sheet)"
+        _said = "; ".join(f"{n} read {int(v)}"
+                          + (_ev_txt if n == _CALLOUTS_LABEL else "")
+                          + (_note_txt if n == _LABEL[DRAWING_NOTE] and int(v) == _int(part.get("fold_count_textual")) else "")
                           for n, v in _others)
         # AND IT DOES NOT ASK FOR A CONFIRMATION IT ALREADY HAS.
         #
