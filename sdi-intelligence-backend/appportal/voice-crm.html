@@ -152,7 +152,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|FolderChildCount|AppAuthor|AppEditor|ComplianceAssetId|FileSystemObjectType|ServerRedirectedEmbedUrl)/i;
 const PID=['ACCOUNT','Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
 
-let ST={}, PROJECTS=[], PENDING=null, LISTEN_MODE='command';
+let ST={}, PROJECTS=[], COLUMNS=[], PENDING=null, LISTEN_MODE='command';
 // The records' load in flight. A question asked before it lands must wait for
 // it: sent early, the model gets no records and truthfully finds nothing.
 let RECORDS_LOADING=null;
@@ -380,7 +380,7 @@ function startListening(mode){
 
 // Never sent to the language model: people's contact details, and the
 // sheet's own helper columns (formulas that restate other columns).
-const NOT_FOR_MODEL=/contact|e-?mail|phone|telephone|_upper$|_num$|clean|key$|^stat$/i;
+const NOT_FOR_MODEL=/contact(?!.*date)|e-?mail|phone|telephone|_upper$|_num$|clean|key$|^stat$/i;
 function projSummary(){
   // The working columns of each record, blanks dropped, long text trimmed.
   return PROJECTS.map(r=>{
@@ -406,25 +406,34 @@ async function handleTranscript(t){
   }
   setState('Working out what you meant…');
   let r;
-  try{ r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary()}); }
+  try{ r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS}); }
   catch(e){ setState('The service did not answer: '+e.message); return; }
 
   if(r.state==='update'){
-    let p;
-    try{ p=await post('../api/voicecrm/propose',{item_id:r.item_id,field:r.field,new_value:r.new_value}); }
-    catch(e){ setState('The service did not answer: '+e.message); return; }
-    if(p.state==='proposed'){
-      PENDING=p;
-      $('vcconfirm').classList.add('show');
-      setState('Say “yes” to write it or “no” to cancel — or use the buttons.');
-      say(p.readback, ()=>startListening('confirm'));
-    }else if(p.state==='no_change'){
-      say(p.detail);
-      setState('Nothing to do.');
-    }else{
-      say('I can\'t make that change: '+(p.detail&&typeof p.detail==='string'?p.detail:p.state));
-      setState('state: '+p.state);
+    // One sentence can carry several changes ("spoke to them today, confidence
+    // 80, next step revised quote"). Each is proposed and checked separately,
+    // then all are read back together and saved on one yes.
+    const changes=r.changes&&r.changes.length?r.changes:[{item_id:r.item_id,field:r.field,new_value:r.new_value}];
+    const ok=[], same=[];
+    for(const c of changes){
+      let p;
+      try{ p=await post('../api/voicecrm/propose',c); }
+      catch(e){ setState('The service did not answer: '+e.message); await declineAll(ok); return; }
+      if(p.state==='proposed') ok.push(p);
+      else if(p.state==='no_change') same.push(p.detail);
+      else{
+        await declineAll(ok);
+        say('I can\'t make that change: '+(p.detail&&typeof p.detail==='string'?p.detail:p.state)
+            +(ok.length?' So nothing was changed.':''));
+        setState('state: '+p.state);
+        return;
+      }
     }
+    if(!ok.length){ say(same.join(' ')||'Nothing to change.'); setState('Nothing to do.'); return; }
+    PENDING={list:ok};
+    $('vcconfirm').classList.add('show');
+    setState('Say “yes” to write '+(ok.length>1?'them':'it')+' or “no” to cancel — or use the buttons.');
+    say(readbackFor(ok, same), ()=>startListening('confirm'));
   }else if(r.say){
     say(r.say);
     setState(r.state==='clarify'?'Tap the mic to answer.':'Done. Tap the mic for the next one.');
@@ -440,14 +449,30 @@ async function handleTranscript(t){
 // sentence without yes/no left the page waiting for an answer forever.
 const YES=/\b(yes|yeah|yep|correct|confirm|go ahead|do it|write it|save it)\b/i;
 const NO=/\b(no|nope|cancel|stop|don'?t|wrong)\b/i;
+function readbackFor(list, same){
+  const pre=(same&&same.length?same.join(' ')+' ':'');
+  if(list.length===1) return pre+list[0].readback;
+  const refs=[...new Set(list.map(p=>p.project_ref||p.item_id))];
+  const one=refs.length===1;
+  const parts=list.map(p=>p.field+(one?'':' on '+(p.project_ref||p.item_id))
+                       +' to '+(p.new_value||'blank'));
+  return pre+list.length+' changes'+(one?' on '+refs[0]:'')+': '+parts.join('; ')
+         +'. Is that right?';
+}
+async function declineAll(list){
+  for(const p of list||[]){
+    try{ await post('../api/voicecrm/confirm',{proposal_id:p.proposal_id,confirmed:false}); }catch(e){}
+  }
+}
+
 async function handleConfirmSpeech(t){
   const short=t.trim().split(/\s+/).length<=4;
   if(short&&YES.test(t)){ log('you', t); return answerConfirm(true); }
   if(short&&NO.test(t)){ log('you', t); return answerConfirm(false); }
   if(!short&&PENDING){
-    const pid=PENDING.proposal_id; PENDING=null;
+    const list=PENDING.list; PENDING=null;
     $('vcconfirm').classList.remove('show');
-    try{ await post('../api/voicecrm/confirm',{proposal_id:pid,confirmed:false}); }catch(e){}
+    await declineAll(list);
     log('app','(Previous change cancelled — nothing was saved.)');
     return handleTranscript(t);
   }
@@ -459,26 +484,50 @@ async function handleConfirmSpeech(t){
 async function answerConfirm(yes){
   if(!PENDING) return;
   $('vcconfirm').classList.remove('show');
-  const pid=PENDING.proposal_id; PENDING=null;
-  setState(yes?'Writing…':'Cancelling…');
-  let c;
-  try{ c=await post('../api/voicecrm/confirm',{proposal_id:pid,confirmed:yes}); }
-  catch(e){ setState('The service did not answer: '+e.message); return; }
-  if(c.state==='applied'){
-    say('Done. '+c.field+' on '+(c.project_ref||'that record')+' is now '+c.new_value+'.');
-    setState('Written and journalled.');
-    loadRecords();          // show the sheet as it now is
-  }else if(c.state==='declined'){
+  const list=PENDING.list; PENDING=null;
+  if(!yes){
+    setState('Cancelling…');
+    await declineAll(list);
     say('Okay — nothing was changed.');
     setState('Cancelled.');
-  }else if(c.state==='conflict'){
-    say('That record changed while we were talking, so nothing was written. I\'ve re-read it — try again.');
-    setState('Conflict — nothing written.');
-    loadRecords();
-  }else{
-    say('That did not save: '+(typeof c.detail==='string'?c.detail:c.state));
-    setState('state: '+c.state);
+    return;
   }
+  // Save one cell at a time and call each one out as it lands, so the
+  // conversation shows exactly which lines of the tracker were updated.
+  const saved=[], problems=[];
+  for(let i=0;i<list.length;i++){
+    const p=list[i];
+    setState('Writing '+(i+1)+' of '+list.length+'…');
+    let c;
+    try{ c=await post('../api/voicecrm/confirm',{proposal_id:p.proposal_id,confirmed:true}); }
+    catch(e){ problems.push(p.field+': the service did not answer'); continue; }
+    if(c.state==='applied'){
+      saved.push(c);
+      log('app','✓ Updated '+c.field+' on '+(c.project_ref||'that record')+': '
+          +(c.old_value||'blank')+' → '+c.new_value);
+    }else if(c.state==='conflict'){
+      problems.push(p.field+': the record changed while we were talking');
+      log('app','✗ '+p.field+' not saved — the record changed while we were talking.');
+    }else{
+      const why=typeof c.detail==='string'?c.detail:c.state;
+      problems.push(p.field+': '+why);
+      log('app','✗ '+p.field+' not saved — '+why);
+    }
+  }
+  const spoken=saved.map(c=>c.field+' is now '+c.new_value+'.').join(' ');
+  if(saved.length&&!problems.length){
+    say(saved.length===1
+        ? 'Done. '+saved[0].field+' on '+(saved[0].project_ref||'that record')+' is now '+saved[0].new_value+'.'
+        : 'Done — I updated '+saved.length+' lines. '+spoken);
+    setState('Written and journalled.');
+  }else if(saved.length){
+    say('I saved '+saved.length+' of '+list.length+'. '+spoken+' Not saved: '+problems.join('; ')+'.');
+    setState('Partly written — see the log.');
+  }else{
+    say('That did not save: '+problems.join('; ')+'.');
+    setState('Nothing written.');
+  }
+  loadRecords();          // show the sheet as it now is
 }
 
 function sendTyped(){
@@ -538,7 +587,7 @@ async function _loadRecords(){
         +'</p><p style="margin-top:8px">If Nick appears under a different value, set '
         +'<code>SDI_VOICECRM_OWNER</code> to it.</p>':''));
   }else{
-    PROJECTS=d.items;
+    PROJECTS=d.items; COLUMNS=d.columns||[];
     h='<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';
     if(d.skipped_other_owner)
       h+='<p class="msg">'+d.skipped_other_owner+' record(s) hidden — owned by someone other than '
@@ -552,7 +601,8 @@ async function _loadRecords(){
       +'at that moment, and journalled — so a dropped call or a retry can never save the same '
       +'change twice.</p>'
       +'<p style="margin-top:10px">Editable in this pilot: '
-      +(ST.editable_fields||[]).map(f=>'<code>'+esc(f)+'</code>').join(' ')+'</p>');
+      +((ST.editable_fields||[]).join()==='*'?esc(ST.editable_label||'any column')
+        :(ST.editable_fields||[]).map(f=>'<code>'+esc(f)+'</code>').join(' '))+'</p>');
   }else{
     h+=panel('Why this is read-only',
       '<p>The write loop (propose → read back → confirm → journal) is built, but switched '

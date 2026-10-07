@@ -96,6 +96,7 @@ def _status_payload() -> dict[str, Any]:
         "writes_enabled": WRITE_ENABLED,
         "approved_by": APPROVED_BY,
         "editable_fields": EDITABLE,
+        "editable_label": _editable_label(),
         "write_note": ("Writing runs propose -> read back -> confirm, with an owner and "
                        "version re-check and a durable journal. Off until the List exists "
                        "and the pilot is approved."),
@@ -160,7 +161,8 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
             rows.append(item)
         out = {"state": "ok", "items": rows, "owner_filter": OWNER,
                "skipped_other_owner": skipped, "sheet": data.get("sheet", ""),
-               "owner_field_found": OWNER_FIELD in data.get("headers", [])}
+               "owner_field_found": OWNER_FIELD in data.get("headers", []),
+               "columns": data.get("headers", [])}
         if not rows:
             # Say what WAS there, so the fix is one look rather than a guess.
             counts = Counter(str(i["fields"].get(OWNER_FIELD, "")).strip() or "(blank)"
@@ -238,19 +240,45 @@ def _graph_detail(response: httpx.Response) -> str:
 WRITE_ENABLED = _opt("SDI_VOICECRM_WRITE", "no").lower() in ("1", "yes", "true", "on")
 APPROVED_BY = _opt("SDI_VOICECRM_APPROVED_BY")
 
-# Only these columns may ever be written. An open-ended write endpoint against a
-# List is how a pilot quietly becomes an incident.
-# Excel default = the working columns of Nick's tracker. Helper columns
-# (AM_Upper, Budget_Num, Contact Key...) are formulas and must not be written.
-_EDITABLE_DEFAULT = ("Status,NEXT STEPS,KEY DATES FOR NEXT STEPS,Commercial Status,"
-                     "Confidence to Order,Last Client Contact Date,BUDGET COST"
-                     if STORE == "excel"
-                     else "Status,NextAction,NextActionDate")
+# Which columns may be written. For the Excel sandbox the default is "*":
+# every column of the tracker, because a call update can touch any of them -
+# EXCEPT the owner column (changing it would hand the record away and defeats
+# the owner check), the sheet's helper columns (AM_Upper, Budget_Num, Contact
+# Key... restate other columns), and any cell holding a formula (checked per
+# cell at propose time, so a calculated cell is never overwritten with a value).
+# A comma list in SDI_VOICECRM_EDITABLE narrows it back to named columns.
+_EDITABLE_DEFAULT = "*" if STORE == "excel" else "Status,NextAction,NextActionDate"
 EDITABLE = [f.strip() for f in
             _opt("SDI_VOICECRM_EDITABLE", _EDITABLE_DEFAULT).split(",")
             if f.strip()]
+ALL_COLUMNS = EDITABLE == ["*"]
+# Columns that identify the tracker's header row (not a write list).
+_KEY_COLUMNS = ["Status", "NEXT STEPS", "KEY DATES FOR NEXT STEPS", "Commercial Status",
+                "Confidence to Order", "Last Client Contact Date", "BUDGET COST"]
 if EXCEL:
-    EXCEL.key_columns = [OWNER_FIELD, *EDITABLE]
+    EXCEL.key_columns = [OWNER_FIELD, *(_KEY_COLUMNS if ALL_COLUMNS else EDITABLE)]
+
+_HELPER_COLUMN = re.compile(r"_upper$|_num$|clean|key$|^stat$|^(id|row|#)$", re.I)
+
+
+def _protected(field: str) -> bool:
+    """Never written, whatever the editable setting says."""
+    return (" ".join(field.split()).lower() == " ".join(OWNER_FIELD.split()).lower()
+            or bool(_HELPER_COLUMN.search(field.strip())))
+
+
+def _editable(field: str, columns=None) -> bool:
+    """May this column be written? `columns` = the sheet's actual headers."""
+    if not field or _protected(field):
+        return False
+    if ALL_COLUMNS:
+        return columns is None or field in columns
+    return field in EDITABLE
+
+
+def _editable_label() -> str:
+    return ("any column except " + OWNER_FIELD + " and calculated columns"
+            if ALL_COLUMNS else ", ".join(EDITABLE))
 
 _journal = journal.UpdateJournal()
 
@@ -368,9 +396,10 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
     if blocked:
         return blocked
 
-    if body.field not in EDITABLE:
+    if not _editable(body.field):
         return {"state": "field_not_editable", "field": body.field, "editable": EDITABLE,
-                "detail": f"'{body.field}' is not in the editable set for this pilot."}
+                "detail": (f"{body.field} can't be changed from here. "
+                           f"You can change {_editable_label()}.")}
 
     if _is_money(body.field):
         amount = _money_value(body.new_value)
@@ -393,6 +422,13 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
         # The owner check is enforced here, not by the view the records came from.
         return {"state": "not_your_record",
                 "detail": f"That record's {OWNER_FIELD} is not {OWNER}."}
+    if body.field not in fields:
+        return {"state": "field_not_editable", "field": body.field,
+                "detail": f"There is no column called {body.field} in the tracker."}
+    if EXCEL and EXCEL.is_formula(token, item, body.field):
+        return {"state": "field_not_editable", "field": body.field,
+                "detail": (f"{body.field} is calculated by a formula in the sheet, "
+                           f"so it can't be typed over.")}
 
     old_value = fields.get(body.field)
     if str(old_value or "") == body.new_value:
@@ -411,6 +447,9 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
         # What the voice agent reads back, verbatim, before taking a yes.
         "readback": (f"On {ref or 'item ' + body.item_id}, change {body.field} "
                      f"from '{old_value or 'blank'}' to '{body.new_value}'. Is that right?"),
+        # The parts, so the app can read several changes back as one.
+        "item_id": body.item_id, "project_ref": ref, "field": body.field,
+        "old_value": old_value or "", "new_value": body.new_value,
         "expires_in_seconds": journal.PROPOSAL_TTL_SECONDS,
     }
 
@@ -553,10 +592,10 @@ def _canonical_id(raw, known_ids: set) -> str:
     return ""
 
 
-def _canonical_field(raw) -> str:
-    """The model's column name as the editable column it means, or as given."""
+def _canonical_field(raw, columns=None) -> str:
+    """The model's column name as the real column it means, or as given."""
     wanted = " ".join(str(raw or "").replace("_", " ").split()).lower()
-    for f in EDITABLE:
+    for f in (columns if ALL_COLUMNS and columns else EDITABLE):
         if " ".join(f.split()).lower() == wanted:
             return f
     return str(raw or "")
@@ -567,19 +606,22 @@ class InterpretIn(BaseModel):
     # The records the screen is currently showing, trimmed by the browser to
     # {id, ref, fields-of-interest}. The model matches against these only.
     projects: list[dict] = []
+    # Every column of the sheet, including ones blank on every record shown.
+    columns: list[str] = []
 
 
 _INTERPRET_SYSTEM = """You are the voice of an account manager's project tracker. You receive one
 spoken sentence (a voice transcript, so expect recognition errors), today's
 date, the columns that may be changed, and their records. You either answer a
-question about the records, propose one change, or ask one question back.
+question about the records, propose changes, or ask one question back.
 
 Reply with ONLY a JSON object, no prose, no code fences:
   {"action": "read" | "update" | "clarify",
-   "item_id": "<id of the one record to change, or null>",
-   "field": "<one of the editable fields, or null>",
-   "new_value": "<the value to set, or null>",
+   "changes": [{"item_id": "<id of the record>",
+                "field": "<an editable column, spelled exactly as given>",
+                "new_value": "<the value to set>"}],
    "say": "<what to speak to the person>"}
+"changes" is [] unless action is "update".
 
 How the tracker is laid out:
 Speech recognition misspells names. Match by SOUND and meaning, not exact
@@ -611,12 +653,18 @@ most five short sentences - it is spoken aloud, so no lists, symbols or
 markdown; say amounts as words a person would say ("about fifty thousand
 pounds"). If there are more than you can say, say how many more there are.
 
-"update" - they want to change a value. Only when exactly one record matches,
-the field is in the editable list, and the new value is clear. item_id must be
-an id you were given; never invent one. In "say", briefly confirm what you
-understood; the change is read back and confirmed separately before saving.
+"update" - they want to change one or more values. A single sentence often
+carries several: "spoke to Tesco Bank today, they want a revised quote by
+Friday, confidence 80 percent" is three changes - Last Client Contact Date,
+NEXT STEPS (and its KEY DATES FOR NEXT STEPS), Confidence to Order. Put every
+change in "changes", one entry per cell (at most 8). Each must name exactly one
+record, an editable column and a clear value. item_id must be an id you were
+given; never invent one. When they add to notes-like text (NEXT STEPS, Status,
+descriptions) and say "add" or "also", new_value is the existing text plus the
+new words; otherwise it replaces it. In "say", briefly confirm what you
+understood; the changes are read back and confirmed before saving.
 
-"clarify" - an update whose record, field or value is ambiguous, or a request
+"clarify" - an update whose record, column or value is ambiguous, or a request
 you genuinely cannot match. Ask ONE specific question, naming the candidates
 (at most three).
 
@@ -647,9 +695,10 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
 
     import anthropic
 
+    columns = [c for c in body.columns if c and _editable(c)] if ALL_COLUMNS else EDITABLE
     payload = json.dumps({
         "transcript": transcript,
-        "editable_fields": EDITABLE,
+        "editable_fields": columns or _editable_label(),
         "today": date.today().isoformat(),
         "records": body.projects[:150],
     }, ensure_ascii=False)
@@ -683,28 +732,47 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
                 "say": "I couldn't make sense of that. Could you rephrase it?"}
 
     say = str(parsed.get("say") or "")[:900]
+    raw_changes = parsed.get("changes")
+    if not isinstance(raw_changes, list):
+        raw_changes = []
+    if not raw_changes and parsed.get("item_id"):        # the older one-change shape
+        raw_changes = [{k: parsed.get(k) for k in ("item_id", "field", "new_value")}]
     # One line per request in the service log: what was heard, how many
     # records the model was given, and what it decided. No record contents.
     print(f"[voicecrm.interpret] user={user.get('email','')} records={len(body.projects)} "
-          f"heard={transcript[:120]!r} action={action} item_id={parsed.get('item_id')!r} "
-          f"field={parsed.get('field')!r} say={say[:120]!r}", flush=True)
+          f"heard={transcript[:120]!r} action={action} "
+          f"changes={[(c.get('item_id'), c.get('field')) for c in raw_changes if isinstance(c, dict)]!r} "
+          f"say={say[:120]!r}", flush=True)
 
     if action == "update":
         known_ids = {str(p.get("id")) for p in body.projects}
-        item_id = _canonical_id(parsed.get("item_id"), known_ids)
-        field = _canonical_field(parsed.get("field"))
-        new_value = str(parsed.get("new_value") or "")
-        # The model proposes; this code decides. An id or field it was not
+        sheet_cols = body.columns or sorted({k for p in body.projects
+                                             for k in (p.get("fields") or {})})
+        changes = []
+        # The model proposes; this code decides. An id or column it was not
         # given is discarded, not trusted.
-        if item_id not in known_ids:
-            return {"state": "clarify",
-                    "say": say or "I couldn't match that to one of your records. Which client was it?"}
-        if field not in EDITABLE:
-            return {"state": "clarify",
-                    "say": f"I can only update {', '.join(EDITABLE)} in this pilot."}
-        if not new_value:
-            return {"state": "clarify", "say": f"What should {field} be set to?"}
-        return {"state": "update", "item_id": item_id, "field": field,
-                "new_value": new_value, "say": say}
+        for c in raw_changes[:8]:
+            if not isinstance(c, dict):
+                continue
+            item_id = _canonical_id(c.get("item_id"), known_ids)
+            field = _canonical_field(c.get("field"), sheet_cols)
+            new_value = str(c.get("new_value") or "")
+            if item_id not in known_ids:
+                return {"state": "clarify",
+                        "say": say or "I couldn't match that to one of your records. Which client was it?"}
+            if not _editable(field, sheet_cols if ALL_COLUMNS else None):
+                return {"state": "clarify",
+                        "say": (f"I can't change {field or 'that column'} from here. "
+                                f"I can change {_editable_label()}.")}
+            if not new_value:
+                return {"state": "clarify", "say": f"What should {field} be set to?"}
+            changes.append({"item_id": item_id, "field": field, "new_value": new_value})
+        if not changes:
+            return {"state": "clarify", "say": say or "What would you like to change?"}
+        first = changes[0]
+        return {"state": "update", "changes": changes, "say": say,
+                # single-change fields kept for older copies of the page
+                "item_id": first["item_id"], "field": first["field"],
+                "new_value": first["new_value"]}
 
     return {"state": action, "say": say or "Sorry, I have nothing useful to say about that."}

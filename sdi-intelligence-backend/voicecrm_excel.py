@@ -366,6 +366,25 @@ class ExcelStore:
             "_addr": addr,
         }, None
 
+    def is_formula(self, token: str, item: dict, field: str) -> bool:
+        """True when the cell holds a formula. A calculated cell is never typed
+        over: it would silently replace the calculation with a fixed value.
+        Unreadable counts as a formula - refusing is the safe side."""
+        addr = item.get("_addr", {}).get(field)
+        if not addr:
+            return False
+        wb = item["_wb"]
+        try:
+            with httpx.Client(timeout=30) as client:
+                res = client.get(f"{wb['base']}/worksheets('{wb['sheet']}')/range(address='{addr}')",
+                                 params={"$select": "formulas"}, headers=self._headers(token))
+        except httpx.HTTPError:
+            return True
+        if res.status_code != 200:
+            return True
+        cell = ((res.json().get("formulas") or [[""]])[0] or [""])[0]
+        return isinstance(cell, str) and cell.startswith("=")
+
     def apply(self, token: str, item: dict, field: str, new_value: str) -> Optional[dict]:
         """Write one cell. Returns None on success, an error payload otherwise.
 
