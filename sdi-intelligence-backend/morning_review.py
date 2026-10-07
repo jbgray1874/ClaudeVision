@@ -554,11 +554,11 @@ def rows_from_xlsx(data: bytes, key_columns: list[str]) -> tuple[list[dict], lis
     import voicecrm_excel
 
     import warnings
-    with warnings.catch_warnings():
-        # "Data Validation extension is not supported": the sheet's dropdown
-        # lists, which a read of the values does not need.
-        warnings.simplefilter("ignore", UserWarning)
-        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+    # "Data Validation extension is not supported": the sheet's dropdown lists,
+    # which a read of the values does not need. Raised while rows are read
+    # (read-only mode parses lazily), so filtered for the whole run.
+    warnings.filterwarnings("ignore", message="Data Validation extension", category=UserWarning)
+    wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     store = voicecrm_excel.ExcelStore.__new__(voicecrm_excel.ExcelStore)
     store.key_columns = key_columns
     best = None
