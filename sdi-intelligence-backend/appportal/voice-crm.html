@@ -334,7 +334,23 @@ function isEcho(t){
 // people stop to think mid-sentence and were being answered too early.
 const PAUSE_MS=3000, CONFIRM_PAUSE_MS=1200, FIRST_WORD_MS=10000;
 let CONVO=false, SILENT_RUNS=0;
-const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
+const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?|thank you|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
+// Some Android phones report one sentence as a run of growing pieces
+// ("what's", "what's most", "what's most at risk"), and joining them all gave
+// "what's what's most what's most at risk". A piece that repeats the start of
+// the next is replaced by it; separate sentences are still joined.
+function joinHeard(parts){
+  const n=s=>String(s).toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+  const out=[];
+  for(const raw of parts){
+    const t=String(raw||'').trim(); if(!t) continue;
+    const last=out[out.length-1];
+    if(last!==undefined&&n(t).startsWith(n(last))){ out[out.length-1]=t; continue; }
+    if(last!==undefined&&n(last).startsWith(n(t))) continue;
+    out.push(t);
+  }
+  return out.join(' ');
+}
 function endConversation(msg){
   CONVO=false; SILENT_RUNS=0;
   if(rec&&rec._cancel) rec._cancel();
@@ -374,11 +390,13 @@ function startListening(mode){
     setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
     firstT=setTimeout(finish, FIRST_WORD_MS); };
   r.onresult=e=>{
-    clearTimeout(firstT); finalText=''; interim='';
+    clearTimeout(firstT);
+    const fin=[], tmp=[];
     for(let i=0;i<e.results.length;i++){
       const x=e.results[i];
-      if(x.isFinal) finalText+=x[0].transcript+' '; else interim+=x[0].transcript;
+      (x.isFinal?fin:tmp).push(x[0].transcript);
     }
+    finalText=joinHeard(fin)+' '; interim=joinHeard(tmp);
     setState('“'+(finalText+interim).trim()+'”');
     clearTimeout(silenceT);
     silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS);

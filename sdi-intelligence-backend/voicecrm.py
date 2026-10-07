@@ -703,11 +703,17 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     import anthropic
 
     columns = [c for c in body.columns if c and _editable(c)] if ALL_COLUMNS else EDITABLE
-    payload = json.dumps({
-        "transcript": transcript,
+    # The records go first, marked for caching: within a conversation they are
+    # the same from one question to the next, so the model reuses its reading
+    # of them instead of processing ~80 records again each time. Only the
+    # sentence and the date follow the cache point.
+    records_block = json.dumps({
         "editable_fields": columns or _editable_label(),
-        "today": date.today().isoformat(),
         "records": body.projects[:150],
+    }, ensure_ascii=False, sort_keys=True)
+    question_block = json.dumps({
+        "transcript": transcript,
+        "today": date.today().isoformat(),
     }, ensure_ascii=False)
 
     client = anthropic.Anthropic()
@@ -719,7 +725,10 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
             thinking={"type": "adaptive"},
             output_config={"effort": INTERPRET_EFFORT},
             system=_INTERPRET_SYSTEM,
-            messages=[{"role": "user", "content": payload}],
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": records_block, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": question_block},
+            ]}],
         )
     except anthropic.APIError as exc:
         return {"state": "interpret_failed",
@@ -751,7 +760,8 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     print(f"[voicecrm.interpret] user={user.get('email','')} records={len(body.projects)} "
           f"heard={transcript[:120]!r} action={action} "
           f"changes={[(c.get('item_id'), c.get('field')) for c in raw_changes if isinstance(c, dict)]!r} "
-          f"say={say[:120]!r} effort={INTERPRET_EFFORT} secs={time.monotonic() - started:.1f}",
+          f"say={say[:120]!r} effort={INTERPRET_EFFORT} secs={time.monotonic() - started:.1f} "
+          f"cached={getattr(getattr(resp, 'usage', None), 'cache_read_input_tokens', 0) or 0}",
           flush=True)
 
     if action == "update":
