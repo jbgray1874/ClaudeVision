@@ -4337,11 +4337,13 @@ def _finalize_scan_summary(
         summary.setdefault("review_flags", []).append(
             f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
             f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
-            f"readers have nothing to cost and this book is empty by mode, not by content. Run "
-            f"the design being priced as LLM SCAN ONLY with an enquiry brief, one design per "
-            f"run, or have Design detail it into a GA with a parts list and part sheets.")
+            f"readers have nothing to cost and this book is empty by mode, not by content. The "
+            f"design being priced is taken off from its own SolidWorks assembly (the model is the "
+            f"parts list where the pack has none) or detailed by Design into a GA with a parts "
+            f"list and part sheets; an LLM scan with an enquiry brief is a fallback budget only, "
+            f"one design per run.")
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
-              "Run it as LLM SCAN ONLY with an enquiry brief, one design per run.", flush=True)
+              "Take the chosen design off from its own model, or have Design detail it.", flush=True)
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
