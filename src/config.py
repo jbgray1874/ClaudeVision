@@ -1677,6 +1677,11 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     # standing instruction, which a route may rest on only as an inference that says so.
     r"\b(?:ALWAYS\s+)?REMOVE\s+(?:ALL\s+)?BURRS?\s+AND\s+SHARP\s+(?:CORNERS|EDGES)\b",
 ]
+# ── THE SHEET'S CHARGE AND THE ENGINE'S MATERIAL BASIS MUST BE THE SAME ORDER OF MAGNITUDE (D-407)
+# 12675-01-02: the engine carried about £112 of stainless for the part and the Sheet Steel block
+# charged £0.05 for a 20 x 18 blank nested 2,542 to a sheet; the book reconciled and said nothing.
+# A nested line whose two readings differ by this factor (or more) fails a check, both named.
+MATERIAL_BASIS_DISAGREEMENT_FACTOR = 5.0
 # ── A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406) ──────────────────────────────────
 # M&S 12675-01: three concept sheets titled "… — DESIGN INTENT" / "DESIGN INTENT ONLY", every
 # MATERIAL / FINISH / COLOUR field "SEE PART DRAWINGS", no parts list and no part sheets. The

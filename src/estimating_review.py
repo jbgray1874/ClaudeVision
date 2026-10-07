@@ -91,6 +91,10 @@ _ACTION = {
                                   "assembly: confirm it is charged elsewhere, or add or "
                                   "rule out the operation.",
     "two_sources_disagree_about_the_gauge": "Confirm which gauge the part is made from.",
+    "sheet_charge_disagrees_with_engine_material_basis": "The sheet and the engine read this "
+                                  "line's material an order of magnitude apart: confirm the "
+                                  "blank, gauge, weight or stock form, then re-run or correct "
+                                  "the line.",
     "two_sources_disagree_about_the_material": "Confirm which material the part is made from.",
     "handed_pair_disagrees": "The two hands read differently and the evidence is even. "
                              "Confirm which is right.",
