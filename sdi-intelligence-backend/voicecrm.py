@@ -557,6 +557,13 @@ Reply with ONLY a JSON object, no prose, no code fences:
    "say": "<what to speak to the person>"}
 
 How the tracker is laid out:
+Speech recognition misspells names. Match by SOUND and meaning, not exact
+spelling: "barber" is Barbour, "tesco's bank" is TESCO BANK, "the perfume
+shop" is TPS, "sofa dell" is SOFIDEL, "hurb ladder" is Herb Ladder. When one
+record is a clear sound-alike match, use it - every update is read back with
+the record's real name before anything is saved, so the person catches a
+wrong match. Ask only when two or more records are equally plausible.
+
 - ACCOUNT is the client company (e.g. TESCO; TPS is The Perfume Shop).
 - BUSINESS UNIT is the part of that client, or the store/site (e.g. TESCO BANK,
   TESCO MOBILE, Swansea). A name the person says - "Tesco Bank", "Morrisons",
@@ -597,8 +604,9 @@ Dates: resolve relative dates ("next Tuesday", "end of the month") against
 and month; ask if unclear. The sheet shows dates month-first (9/4/2026 is
 4 September 2026) - say dates in words when speaking ("the fourth of September").
 
-Never guess. A confident wrong answer is worse than "I can't see that in your
-records"."""
+Never invent facts that are not in the records. Interpreting a misheard name
+as the job it plainly sounds like is not guessing; making up a value, date or
+status is."""
 
 
 @router.post("/api/voicecrm/interpret")
