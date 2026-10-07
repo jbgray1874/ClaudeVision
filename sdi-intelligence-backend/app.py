@@ -739,7 +739,12 @@ def app_portal_asset(filename: str, request: Request):
     media_type, _ = mimetypes.guess_type(str(target))
     if filename.endswith(".webmanifest"):
         media_type = "application/manifest+json"
-    return FileResponse(str(target), media_type=media_type or "application/octet-stream")
+    resp = FileResponse(str(target), media_type=media_type or "application/octet-stream")
+    if filename.endswith(".html") or filename == "sw.js":
+        # Revalidate on every load: a browser re-using a stored page kept
+        # running the previous version for hours after a deploy.
+        resp.headers["Cache-Control"] = "private, no-cache"
+    return resp
 
 
 # ── HR pipeline (BrightHR -> InVentry) ──
