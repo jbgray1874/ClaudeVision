@@ -420,9 +420,76 @@ def _delta(now: int, before: Optional[int]) -> str:
     return f" — {'up' if now > before else 'down'} from {before}"
 
 
+def listen_url() -> str:
+    """Where the email's Listen link goes: the app, which reads the briefing aloud."""
+    explicit = _opt("SDI_REVIEW_LISTEN_URL")
+    if explicit:
+        return explicit
+    hosts = sorted(h.strip().lower() for h in _opt("SDI_PUBLIC_HOSTS").split(",") if h.strip())
+    return f"https://{hosts[0]}/app/voice-crm.html?briefing=1" if hosts else ""
+
+
+def _speak(text: Any) -> str:
+    """Sheet text as it should be heard: capitalised words of four letters or
+    more become ordinary words ("TESCO BANK" -> "Tesco Bank"), short ones stay
+    as letters ("KD", "FSU", "TPS"), dashes and quotes become pauses."""
+    words = []
+    for w in str(text or "").replace(" — ", ", ").replace("'", "").split():
+        core = re.sub(r"[^A-Za-z]", "", w)
+        words.append(w.capitalize() if core.isupper() and len(core) >= 4 else w)
+    return " ".join(words)
+
+
+def _say_money(f: dict) -> str:
+    v = f.get("budget_value") or 0
+    if not v:
+        return ""
+    if v >= 1000:
+        return f", worth about {round(v / 1000):,} thousand pounds"
+    return f", worth {int(v)} pounds"
+
+
+def spoken_briefing(review: dict, changes: list[dict], first_name: str = "Nick") -> str:
+    """The briefing read aloud: what changed in the last 24 hours, what moved in
+    the sheet, the headline counts and the top three. Plain sentences, no
+    symbols - it goes straight to the phone's speech engine."""
+    d = date.fromisoformat(review["date"])
+    out = [f"Good morning {first_name}. Here's your briefing for {d:%A} {d.day} {d:%B}."]
+    if changes:
+        n = len(changes)
+        out.append(f"In the last 24 hours, {n} update{'s were' if n != 1 else ' was'} saved.")
+        for c in changes[:6]:
+            who = f", by {c['user_name']}" if c.get("user_name") else ""
+            old = c.get("old_value") or "blank"
+            out.append(f"On {_speak(c.get('project_ref')) or 'a record'}, {_speak(c['field'])} changed "
+                       f"from {old} to {c.get('new_value') or 'blank'}{who}.")
+        if n > 6:
+            out.append(f"And {n - 6} more.")
+    else:
+        out.append("No updates were saved through the app in the last 24 hours.")
+    if review["movement"]:
+        out.append("In the sheet since the last review: " + " ".join(_speak(m) for m in review["movement"][:3]))
+        if len(review["movement"]) > 3:
+            out.append(f"Plus {len(review['movement']) - 3} other changes.")
+    c = review["counts"]
+    out.append(f"You have {c['active']} active records. {c['overdue']} have overdue actions, "
+               f"{c['conflicts']} have status or invoice conflicts, and {c['ordered_past_end']} "
+               f"ordered jobs are past their end date.")
+    out.append("Nothing is due in the next seven days." if not c["due"] else
+               f"{c['due']} {'is' if c['due'] == 1 else 'are'} due in the next seven days.")
+    for label, a in zip(("First", "Second", "Third"), review["top"][:3]):
+        f = a["facts"]
+        what = a["issues"][0]["text"] if a["issues"] else ""
+        out.append(f"{label} priority: {_speak(f['account'])}, {_speak(f['unit'])}, "
+                   f"{_speak(f['job'])}{_say_money(f)}. {what}.")
+    out.append("That's your briefing. What would you like to update?")
+    return " ".join(s.replace("..", ".") for s in out)
+
+
 def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
     """Subject, plain text and HTML, laid out like Nick's own review."""
     d = date.fromisoformat(review["date"])
+    listen = listen_url()
     c, p = review["counts"], review["previous_counts"]
     lines = [
         ("Active NG records reviewed", c["active"], p.get("active")),
@@ -434,7 +501,10 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
         ("Due within seven days", c["due"], p.get("due")),
     ]
     subject = f"NG Sandbox CRM — Morning Review ({d.day} {d:%B})"
-    text = [f"Morning {first_name},", "", f"{d:%A} sandbox-only {review['owner']} review:", ""]
+    text = [f"Morning {first_name},", ""]
+    if listen:
+        text += [f"Listen to this briefing: {listen}", ""]
+    text += [f"{d:%A} sandbox-only {review['owner']} review:", ""]
     text += [f"• {label}: {n}{_delta(n, b)}" for label, n, b in lines]
     text += ["", f"New movement: {words['movement']}", "", "Today's five questions", ""]
     blocks = []
@@ -450,7 +520,12 @@ def render(review: dict, words: dict, first_name: str = "Nick") -> dict:
              "nothing in the tracker was changed."]
 
     e = html.escape
-    h = [f"<p>Morning {e(first_name)},</p><p>{d:%A} sandbox-only {e(review['owner'])} review:</p><ul>"]
+    h = [f"<p>Morning {e(first_name)},</p>"]
+    if listen:
+        h.append(f"<p><a href='{e(listen)}' style='display:inline-block;padding:8px 14px;"
+                 f"background:#0b5cad;color:#fff;border-radius:6px;text-decoration:none'>"
+                 f"&#9654; Listen to this briefing</a></p>")
+    h += [f"<p>{d:%A} sandbox-only {e(review['owner'])} review:</p><ul>"]
     h += [f"<li>{e(label)}: <b>{n}</b>{e(_delta(n, b))}</li>" for label, n, b in lines]
     h += [f"</ul><p><b>New movement:</b> {e(words['movement'])}</p><p><b>Today's five questions</b></p><ol>"]
     for head, meta, w in blocks:

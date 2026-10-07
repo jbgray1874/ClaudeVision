@@ -815,6 +815,34 @@ def review_preview(request: Request, user: dict = Depends(auth.require_user)):
             "can_send": _may_write(user)}
 
 
+@router.get("/api/voicecrm/briefing")
+def briefing(request: Request, user: dict = Depends(auth.require_user)):
+    """The spoken briefing: changes saved in the last 24 hours, movement in the
+    sheet since the last review, the headline counts and the top three.
+    Rule-based only (no model call), so it starts speaking in a second or two."""
+    import time
+    import morning_review
+    if not EXCEL:
+        return {"state": "not_excel", "detail": "The briefing reads the Excel tracker."}
+    if not auth.sso_applies(request):
+        return {"state": "sign_in_elsewhere",
+                "detail": "Open the app on its published address to hear the briefing."}
+    token = auth.graph_token(request)
+    if not token:
+        return {"state": "no_token", "detail": "No Microsoft Graph token for this session."}
+    data = EXCEL.rows(token)
+    if data.get("state") != "ok":
+        return data
+    today = date.today()
+    review = morning_review.build_review([i["fields"] for i in data["items"]],
+                                         data.get("headers", []), OWNER_FIELD, OWNER or "NG",
+                                         today, morning_review.last_snapshot(today))
+    changes = _journal.applied_since(time.time() - 24 * 3600)
+    first = str((user or {}).get("name") or "").split(" ")[0] or "there"
+    return {"state": "ok", "say": morning_review.spoken_briefing(review, changes, first),
+            "changes": len(changes), "counts": review["counts"]}
+
+
 @router.post("/api/voicecrm/review/send")
 def review_send(request: Request, user: dict = Depends(auth.require_user)):
     """Build the review now and email it to SDI_REVIEW_TO. Pilot writers only."""

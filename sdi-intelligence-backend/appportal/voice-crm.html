@@ -141,6 +141,7 @@
     <div class="vc-state" id="mrstate">Today's review of your records, the same one that is emailed each
       weekday morning: what is overdue or inconsistent, and the five to decide on.</div>
     <div class="vc-confirm show" style="margin-top:10px">
+      <button class="btn yes" id="mrlisten" onclick="playBriefing()">&#9654; Listen to my briefing</button>
       <button class="btn" onclick="loadReview()">Show today's review</button>
       <button class="btn" id="mrsend" style="display:none" onclick="sendReview()">Email it now</button>
     </div>
@@ -281,7 +282,7 @@ async function post(url,data){
     if(renewSignIn()) throw new Error('refreshing sign-in');
     throw new Error('your sign-in needs renewing. Reload the page');
   }
-  if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); throw new Error('signed out'); }
+  if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'+location.search); throw new Error('signed out'); }
   try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}
   return r.json();
 }
@@ -556,6 +557,25 @@ async function loadReview(){
   $('mrbody').textContent=r.text;
   $('mrsend').style.display=r.can_send&&r.recipients&&r.recipients.length?'':'none';
 }
+// The spoken briefing: read aloud, then straight into conversation mode so
+// "move that date to Friday" can follow without touching the screen.
+async function playBriefing(){
+  $('mrstate').textContent='Getting your briefing…';
+  try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance('')); }catch(e){}  // unlock audio on this tap
+  let r;
+  try{ const res=await fetch('../api/voicecrm/briefing',{cache:'no-store',redirect:'manual'});
+       if(res.type==='opaqueredirect'||res.status===0){ renewSignIn(); return; }
+       r=await res.json(); }
+  catch(e){ $('mrstate').textContent='The service did not answer: '+e.message; return; }
+  if(r.state!=='ok'){ $('mrstate').textContent='Could not build the briefing: '+(typeof r.detail==='string'?r.detail:r.state); return; }
+  $('mrstate').textContent='Reading your briefing — tap the mic to stop.';
+  $('vc').scrollIntoView({behavior:'smooth',block:'start'});
+  say(r.say, ()=>{
+    $('mrstate').textContent='Briefing done.';
+    if(SR){ CONVO=true; SILENT_RUNS=0; startListening('command'); }
+  });
+}
+
 async function sendReview(){
   $('mrstate').textContent='Sending…';
   let r;
@@ -656,7 +676,7 @@ async function _loadRecords(){
 async function main(){
   try{
     const r=await fetch('../api/voicecrm/status',{cache:'no-store'});
-    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); return; }
+    if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'+location.search); return; }
     ST=await r.json();
     try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}   // fresh page load = renewed
   }catch(e){
@@ -673,7 +693,15 @@ async function main(){
     + badge(ST.interpret_ready?'Voice brain ready':'Voice brain off',
             ST.interpret_ready?'c-ok':'c-warn');
 
-  if(ST.store==='excel'&&ST.sso_enabled) $('mr').style.display='block';
+  if(ST.store==='excel'&&ST.sso_enabled){
+    $('mr').style.display='block';
+    // From the email's "Listen to this briefing" link. Phones only allow
+    // speech after a tap, so point at the button rather than auto-playing.
+    if(new URLSearchParams(location.search).get('briefing')){
+      $('mrstate').textContent='Tap “Listen to my briefing” to hear it.';
+      $('mr').scrollIntoView({block:'start'});
+    }
+  }
 
   // The console appears whenever the service can interpret; without a mic the
   // typed input still works, so only the mic button is disabled.

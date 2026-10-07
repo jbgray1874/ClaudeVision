@@ -117,6 +117,14 @@ class UpdateJournal:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def applied_since(self, since: float) -> list[dict]:
+        """Changes actually written since a time, oldest first (the spoken briefing)."""
+        rows = self._conn().execute(
+            "SELECT * FROM updates WHERE state = 'applied' AND applied >= ? ORDER BY applied",
+            (float(since),)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def counts(self) -> dict[str, int]:
         rows = self._conn().execute("SELECT state, COUNT(*) c FROM updates GROUP BY state").fetchall()
         return {r["state"]: r["c"] for r in rows}
