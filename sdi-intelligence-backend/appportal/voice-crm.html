@@ -242,10 +242,33 @@ function fmt(v){
   return v;
 }
 
+// The Microsoft gateway in front of the app renews its sign-in by redirecting
+// to the login page. A page load follows that silently; a fetch cannot (it is
+// a cross-site redirect) and fails with a bare network error. Re-run the
+// renewal with a real page load, once - a second failure is a real outage.
+function renewSignIn(){
+  let tried=false;
+  try{ tried=sessionStorage.getItem('sdiRenew')==='1'; sessionStorage.setItem('sdiRenew','1'); }catch(e){}
+  if(tried) return false;
+  setState('Refreshing your sign-in…');
+  setTimeout(()=>location.reload(),600);
+  return true;
+}
 async function post(url,data){
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
-                           body:JSON.stringify(data)});
+  let r;
+  try{
+    r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+                       body:JSON.stringify(data),redirect:'manual'});
+  }catch(e){
+    if(renewSignIn()) throw new Error('refreshing sign-in');
+    throw new Error('the connection to the server dropped. Check your signal and try again');
+  }
+  if(r.type==='opaqueredirect'||r.status===0){
+    if(renewSignIn()) throw new Error('refreshing sign-in');
+    throw new Error('your sign-in needs renewing. Reload the page');
+  }
   if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); throw new Error('signed out'); }
+  try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}
   return r.json();
 }
 
@@ -458,6 +481,7 @@ async function main(){
     const r=await fetch('../api/voicecrm/status',{cache:'no-store'});
     if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'); return; }
     ST=await r.json();
+    try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}   // fresh page load = renewed
   }catch(e){
     $('body').innerHTML=panel('Service unreachable','<p>'+esc(e.message)+'</p>',true); return;
   }
