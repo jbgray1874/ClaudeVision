@@ -90,6 +90,10 @@ _NOT_OURS = _PACK | _COMMERCE | _ESTIMATOR
 # Would a perfect engine still raise it? NO. These are confessions: something was invented,
 # lost, guessed, or written where nothing can weigh it. This is the number that must fall.
 _OURS = {
+    # Two readings of one nested line an order of magnitude apart (D-407): the engine's own
+    # material basis and the sheet's charge. One of them is our wrong blank, gauge, weight or
+    # stock form; never the drawing office's and never the estimator's to settle by hand.
+    "sheet_charge_disagrees_with_engine_material_basis",
     "canonical_route_bom_node_disconnected",
     "bom_node_disconnected",
     "datum_written_without_source",
