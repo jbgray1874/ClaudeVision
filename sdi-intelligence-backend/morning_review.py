@@ -32,7 +32,9 @@ Configuration (.env):
                              contact review (default 14)
     SDI_REVIEW_DUE_DAYS      "due within" window in days (default 7)
     SDI_REVIEW_MODEL         model that words the five items (default claude-opus-5-5)
-    SMTP_*                   the service's existing mail settings
+    SDI_REVIEW_FROM          mailbox to send from via Microsoft Graph (app-only,
+                             Mail.Send restricted to that mailbox). Empty =
+                             use the service's SMTP_* settings instead.
 """
 from __future__ import annotations
 
@@ -501,10 +503,47 @@ def send(composed: dict) -> dict:
     import estimate_email
     to = recipients()
     e = composed["email"]
-    result = estimate_email.send(to, e["subject"], e["html"], e["text"])
+    if _opt("SDI_REVIEW_FROM"):
+        result = send_via_graph(to, e["subject"], e["html"])
+    else:
+        result = estimate_email.send(to, e["subject"], e["html"], e["text"])
     if result.get("sent"):
         save_snapshot(composed["review"]["snapshot"])
     return result
+
+
+def send_via_graph(to: list[str], subject: str, body_html: str) -> dict:
+    """Send from the SDI_REVIEW_FROM mailbox through Microsoft Graph, app-only.
+
+    Office 365 SMTP needs a mailbox password and SMTP AUTH switched on, which
+    MFA and security defaults usually block. Graph needs the Mail.Send
+    application permission instead - restricted in Exchange to this one
+    mailbox (see MORNING_REVIEW.md) so the app cannot send as anyone else.
+    """
+    import httpx
+    if not to:
+        return {"sent": False, "reason": "no recipients - nothing was sent"}
+    token, why = app_only_token()
+    if not token:
+        return {"sent": False, "reason": f"No app-only Graph token: {why}"}
+    sender = _opt("SDI_REVIEW_FROM")
+    msg = {"message": {"subject": subject,
+                       "body": {"contentType": "HTML", "content": body_html},
+                       "toRecipients": [{"emailAddress": {"address": a}} for a in to]},
+           "saveToSentItems": True}
+    try:
+        res = httpx.post(f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+                         headers={"Authorization": f"Bearer {token}"}, json=msg, timeout=60)
+    except httpx.HTTPError as exc:
+        return {"sent": False, "reason": f"Could not reach Microsoft Graph: {exc}"}
+    if res.status_code != 202:
+        try:
+            err = res.json().get("error", {})
+            detail = f"{err.get('code')}: {err.get('message')}"
+        except ValueError:
+            detail = res.text[:300]
+        return {"sent": False, "reason": f"Graph sendMail {res.status_code} - {detail}"}
+    return {"sent": True, "recipients": to, "via": f"Graph as {sender}"}
 
 
 # ── The scheduled run ────────────────────────────────────────────────────────

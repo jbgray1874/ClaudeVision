@@ -67,20 +67,37 @@ At 07:50 nobody is signed in, so the server needs its own read access to **the s
 
    The response should be `201 Created`.
 
-### 2. Server: install openpyxl and set who gets it
+### 2. Email: let the app send from the sdi-intelligence mailbox
 
-Run on SDI-App01:
+Office 365 SMTP needs a mailbox password with SMTP AUTH switched on. MFA and security defaults normally block that, and `SMTP_PASSWORD` is empty on SDI-App01. So the review is sent through Microsoft Graph instead, **from `sdi-intelligence@wearesdi.com` only**.
+
+1. Go to **App registrations → SDI Intelligence Portal → API permissions → Add a permission**.
+2. Choose **Microsoft Graph → Application permissions → Mail.Send → Add**, then **Grant admin consent**.
+3. Restrict it to that one mailbox. Without this step, Mail.Send can send as anyone. Run this in Exchange Online PowerShell:
+
+   ```powershell
+   Connect-ExchangeOnline
+   New-ApplicationAccessPolicy -AppId 9cb2810e-9aad-4904-ba1a-506ce9efa322 `
+       -PolicyScopeGroupId sdi-intelligence@wearesdi.com -AccessRight RestrictAccess `
+       -Description "SDI Intelligence may send only as sdi-intelligence@"
+   Test-ApplicationAccessPolicy -Identity sdi-intelligence@wearesdi.com -AppId 9cb2810e-9aad-4904-ba1a-506ce9efa322   # Granted
+   Test-ApplicationAccessPolicy -Identity james.gray@wearesdi.com -AppId 9cb2810e-9aad-4904-ba1a-506ce9efa322         # Denied
+   ```
+
+   The policy can take up to an hour to apply.
+
+### 3. Server: who gets it, and who it's from
 
 ```powershell
 cd C:\ClaudeVision\sdi-intelligence-backend
-.\.venv\Scripts\python.exe -m pip install "openpyxl>=3.1,<4.0"
 Add-Content .env "`nSDI_REVIEW_TO=nick.garrish@wearesdi.com,james.gray@wearesdi.com"
-Select-String -Path .env -Pattern '^SMTP_HOST=|^SMTP_FROM=|^SDI_REVIEW_TO='
+Add-Content .env "SDI_REVIEW_FROM=sdi-intelligence@wearesdi.com"
+Select-String -Path .env -Pattern '^SDI_REVIEW_'
 ```
 
-`SMTP_HOST` and `SMTP_FROM` must both show a value. These are the same mail settings the estimate emails use.
+`openpyxl` must be installed in the service's virtualenv (`pip install "openpyxl>=3.1,<4.0"`).
 
-### 3. Test, then schedule
+### 4. Test, then schedule
 
 ```powershell
 .\.venv\Scripts\python.exe morning_review.py          # preview only, nothing sent
@@ -88,4 +105,4 @@ Select-String -Path .env -Pattern '^SMTP_HOST=|^SMTP_FROM=|^SDI_REVIEW_TO='
 .\deploy\install_morning_review_task.ps1              # weekdays 07:50 from now on
 ```
 
-If the preview says **No app-only Graph token** or **401/403**, step 1 isn't finished.
+If the preview says **No app-only Graph token** or **401/403**, step 1 isn't finished. If sending says **ErrorAccessDenied**, step 2 isn't finished, or the policy hasn't applied yet.
