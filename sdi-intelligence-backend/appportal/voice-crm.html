@@ -153,6 +153,9 @@ const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|F
 const PID=['ACCOUNT','Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
 
 let ST={}, PROJECTS=[], PENDING=null, LISTEN_MODE='command';
+// The records' load in flight. A question asked before it lands must wait for
+// it: sent early, the model gets no records and truthfully finds nothing.
+let RECORDS_LOADING=null;
 
 function badge(text,cls){ return '<span class="chip '+cls+'">'+esc(text)+'</span>'; }
 function panel(title,html,warn){
@@ -349,6 +352,15 @@ function projSummary(){
 
 async function handleTranscript(t){
   log('you', t);
+  if(RECORDS_LOADING){
+    setState('Loading your records…');
+    try{ await RECORDS_LOADING; }catch(e){}
+  }
+  if(!PROJECTS.length){
+    say('Your records haven\'t loaded, so I can\'t answer yet. Check the message below the box, or reload the page.');
+    setState('No records loaded.');
+    return;
+  }
   setState('Working out what you meant…');
   let r;
   try{ r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary()}); }
@@ -443,7 +455,11 @@ document.addEventListener('DOMContentLoaded',()=>{
 });
 
 // ── Records + status ────────────────────────────────────────────────────────
-async function loadRecords(){
+function loadRecords(){
+  RECORDS_LOADING=_loadRecords().finally(()=>{ RECORDS_LOADING=null; });
+  return RECORDS_LOADING;
+}
+async function _loadRecords(){
   const r2=await fetch('../api/voicecrm/projects',{cache:'no-store'});
   const d=await r2.json();
 
