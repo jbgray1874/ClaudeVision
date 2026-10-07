@@ -449,12 +449,19 @@ def _say_money(f: dict) -> str:
     return f", worth {int(v)} pounds"
 
 
-def spoken_briefing(review: dict, changes: list[dict], first_name: str = "Nick") -> str:
+def greeting(hour: Optional[int] = None) -> str:
+    """Good morning / afternoon / evening, by the server's clock (UK time)."""
+    hour = datetime.now().hour if hour is None else hour
+    return "Good morning" if hour < 12 else "Good afternoon" if hour < 18 else "Good evening"
+
+
+def spoken_briefing(review: dict, changes: list[dict], first_name: str = "Nick",
+                    hour: Optional[int] = None) -> str:
     """The briefing read aloud: what changed in the last 24 hours, what moved in
     the sheet, the headline counts and the top three. Plain sentences, no
     symbols - it goes straight to the phone's speech engine."""
     d = date.fromisoformat(review["date"])
-    out = [f"Good morning {first_name}. Here's your briefing for {d:%A} {d.day} {d:%B}."]
+    out = [f"{greeting(hour)} {first_name}. Here's your briefing for {d:%A} {d.day} {d:%B}."]
     if changes:
         n = len(changes)
         out.append(f"In the last 24 hours, {n} update{'s were' if n != 1 else ' was'} saved.")
