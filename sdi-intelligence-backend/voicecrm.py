@@ -106,6 +106,8 @@ def status(request: Request, user: dict = Depends(auth.require_user)):
     """What is wired up and what is not — used by the app screen to explain itself."""
     user = auth.current_user(request)
     return {**_status_payload(), "sso_enabled": auth.sso_applies(request),
+            "writes_enabled": WRITE_ENABLED and _may_write(user or {}),
+            "writers_restricted": True,
             "signed_in": bool(user) and user.get("kind") == "user",
             "user": (user or {}).get("name", "")}
 
@@ -262,8 +264,24 @@ class ConfirmIn(BaseModel):
     confirmed: bool
 
 
-def _write_gate() -> dict | None:
+# Who may change records through the app, by sign-in email. Required: with
+# writing on and no list, nobody can write. Read access to the sandbox site
+# (or membership of it) is deliberately not enough - colleagues are given the
+# site to SEE the pilot, and must not be able to change Nick's records by voice.
+WRITERS = {e.strip().lower() for e in _opt("SDI_VOICECRM_WRITERS").split(",") if e.strip()}
+
+
+def _may_write(user: dict) -> bool:
+    return bool(user) and str(user.get("email", "")).strip().lower() in WRITERS
+
+
+def _write_gate(user: dict | None = None) -> dict | None:
     """The reason writing is refused, or None if it is permitted."""
+    if WRITE_ENABLED and user is not None and not _may_write(user):
+        who = (user or {}).get("email") or "this account"
+        return {"state": "not_a_writer",
+                "detail": (f"Updates in this pilot are limited to named people, and {who} "
+                           f"is not one of them. You can still ask questions.")}
     if not WRITE_ENABLED:
         return {"state": "writes_disabled",
                 "detail": ("Writing is switched off. Set SDI_VOICECRM_WRITE=yes only after "
@@ -323,7 +341,7 @@ def _project_ref(fields: dict) -> str:
 @router.post("/api/voicecrm/propose")
 def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require_user)):
     """Validate a change and read it back. Nothing is written by this call."""
-    blocked = _write_gate()
+    blocked = _write_gate(user)
     if blocked:
         return blocked
 
@@ -369,7 +387,7 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
 @router.post("/api/voicecrm/confirm")
 def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require_user)):
     """Apply a proposal, once. A repeated confirm returns the first outcome."""
-    blocked = _write_gate()
+    blocked = _write_gate(user)
     if blocked:
         return blocked
 
@@ -460,6 +478,7 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
 def journal_view(request: Request, limit: int = 25, user: dict = Depends(auth.require_user)):
     """The audit trail: every proposal and what actually happened to it."""
     return {"writes_enabled": WRITE_ENABLED, "approved_by": APPROVED_BY,
+            "writers": sorted(WRITERS),
             "editable_fields": EDITABLE, "counts": _journal.counts(),
             "entries": _journal.recent(limit)}
 
