@@ -1036,8 +1036,10 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
                        for m in (getattr(config, "DESIGN_INTENT_MARKERS", None) or [])]
     except re.error:
         _di_markers = []
-    if _di_markers and not bom_header_detected and bom_row_count == 0 and any(
-            m.search(full_text) for m in _di_markers):
+    # The row count is not the test: the M&S border's glyph-spaced "304 - STAINLESS STEEL …
+    # 6063" matches the BOM-row pattern once on every sheet, which is what kept this branch
+    # off on 12675-01's 18:32 book. A parts list has a header (ITEM / DWG NO / QTY).
+    if _di_markers and not bom_header_detected and any(m.search(full_text) for m in _di_markers):
         signals.append("design_intent_detected")
         return {"primary_role": "design_intent", "signals": signals}
 
