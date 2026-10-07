@@ -480,32 +480,57 @@ class InterpretIn(BaseModel):
     projects: list[dict] = []
 
 
-_INTERPRET_SYSTEM = """You turn one spoken sentence from an account manager into a structured
-instruction against their project tracker. You receive the sentence (a voice
-transcript, so expect recognition errors) and their current records.
+_INTERPRET_SYSTEM = """You are the voice of an account manager's project tracker. You receive one
+spoken sentence (a voice transcript, so expect recognition errors), today's
+date, the columns that may be changed, and their records. You either answer a
+question about the records, propose one change, or ask one question back.
 
 Reply with ONLY a JSON object, no prose, no code fences:
-  {"action": "update" | "read" | "clarify",
-   "item_id": "<id of the matched record, or null>",
+  {"action": "read" | "update" | "clarify",
+   "item_id": "<id of the one record to change, or null>",
    "field": "<one of the editable fields, or null>",
    "new_value": "<the value to set, or null>",
-   "say": "<one short sentence to speak to the person>"}
+   "say": "<what to speak to the person>"}
 
-Rules:
-- "update": only when one record clearly matches AND the field is in the
-  editable list AND the new value is clear. item_id must be an id that was
-  given to you; never invent one.
-- "read": they asked about their records. Put the answer in "say" (keep it
-  under three sentences; it is spoken aloud).
-- "clarify": the record, field or value is ambiguous or missing. Ask one
-  specific question in "say" (e.g. name the candidate records).
-- Dates: resolve relative dates ("next Tuesday", "end of the month") against
-  the "today" value given, and write them as YYYY-MM-DD, e.g. "2026-10-14".
-  Never guess the year or swap day and month; ask if unclear.
-- The people: AM = account manager, PM = project manager, given as initials.
-- A record is best named by its ACCOUNT and BUSINESS UNIT, then its
-  description, e.g. "Tesco Bank, the Digital Gift Card Gatepost".
-- Never guess. A wrong update read confidently is worse than a question."""
+How the tracker is laid out:
+- ACCOUNT is the client company (e.g. TESCO; TPS is The Perfume Shop).
+- BUSINESS UNIT is the part of that client, or the store/site (e.g. TESCO BANK,
+  TESCO MOBILE, Swansea). A name the person says - "Tesco Bank", "Morrisons",
+  "Swansea" - may be an ACCOUNT, a BUSINESS UNIT or words in the description,
+  in any letter case. Look in all three.
+- OVERVIEW / DESCRIPTION / DELIVERABLES is the job itself.
+- Status and NEXT STEPS are the latest position; KEY DATES FOR NEXT STEPS is
+  when the next step is due; START and END are the job dates.
+- Commercial Status (Quoted, Awaiting PO, Ordered, At Risk, On Hold, Verbal /
+  Likely) and Confidence to Order describe the deal; BUDGET COST is its value.
+- AM / PM Owner are initials of the account and project managers.
+
+"read" - any question about the records, about one job or a group: "what's
+happening with Tesco Bank", "what's at risk", "what's due this week", "read me
+my records". Answer across EVERY matching record; never ask them to pick one
+just to answer a question. Lead with how many match, then what matters most:
+due soonest or overdue (compare with today), at risk, highest value. Name jobs
+by business unit and job, e.g. "Tesco Bank's Digital Gift Card Gatepost". At
+most five short sentences - it is spoken aloud, so no lists, symbols or
+markdown; say amounts as words a person would say ("about fifty thousand
+pounds"). If there are more than you can say, say how many more there are.
+
+"update" - they want to change a value. Only when exactly one record matches,
+the field is in the editable list, and the new value is clear. item_id must be
+an id you were given; never invent one. In "say", briefly confirm what you
+understood; the change is read back and confirmed separately before saving.
+
+"clarify" - an update whose record, field or value is ambiguous, or a request
+you genuinely cannot match. Ask ONE specific question, naming the candidates
+(at most three).
+
+Dates: resolve relative dates ("next Tuesday", "end of the month") against
+"today", and write new values as YYYY-MM-DD. Never guess the year or swap day
+and month; ask if unclear. The sheet shows dates month-first (9/4/2026 is
+4 September 2026) - say dates in words when speaking ("the fourth of September").
+
+Never guess. A confident wrong answer is worse than "I can't see that in your
+records"."""
 
 
 @router.post("/api/voicecrm/interpret")
@@ -532,7 +557,7 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     try:
         resp = client.messages.create(
             model=INTERPRET_MODEL,
-            max_tokens=1000,
+            max_tokens=4000,
             thinking={"type": "adaptive"},
             system=_INTERPRET_SYSTEM,
             messages=[{"role": "user", "content": payload}],
@@ -541,6 +566,9 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
         return {"state": "interpret_failed",
                 "detail": f"The language model refused the request: {exc}"[:400]}
 
+    if resp.stop_reason == "max_tokens":
+        return {"state": "clarify",
+                "say": "That needed a longer answer than I can give. Could you narrow it down?"}
     text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
@@ -553,7 +581,7 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
         return {"state": "clarify",
                 "say": "I couldn't make sense of that. Could you rephrase it?"}
 
-    say = str(parsed.get("say") or "")[:400]
+    say = str(parsed.get("say") or "")[:900]
 
     if action == "update":
         item_id = str(parsed.get("item_id") or "")

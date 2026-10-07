@@ -1,13 +1,15 @@
 /* SDI Intelligence app portal — service worker.
  *
  * Strategy:
- *   shell  (html/css/icons)  → cache-first, refreshed in the background
- *   /api/* (the catalogue)   → network-first, falling back to cache when offline
+ *   pages  (html)            → network-first, cached copy only when offline
+ *   icons, manifest          → cache-first, refreshed in the background
+ *   /api/services (catalogue)→ network-first, falling back to cache when offline
+ *   other /api/*, /auth/*    → never touched
  *
  * Deliberately NOT cached: anything under /api/files or /api/file. Those serve
  * real company documents from the shares and must never sit in a device cache.
  */
-const VERSION = 'sdi-app-v3';   // v3: never cache API/auth state (7 Oct 2026)
+const VERSION = 'sdi-app-v4';   // v4: pages network-first, so a deploy shows at once
 const SHELL = [
   './',
   './index.html',
@@ -55,7 +57,21 @@ self.addEventListener('fetch', e => {
   // honest network error, so the worker stays out of the way entirely.
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) return;
 
-  // Shell: cache-first, with a background refresh.
+  // Pages: network-first. Cache-first served the previous version of a page
+  // after every deploy; the cached copy is now only the offline fallback.
+  if (req.mode === 'navigate' || url.pathname.endsWith('.html') || url.pathname.endsWith('/')) {
+    e.respondWith(
+      fetch(req)
+        .then(res => {
+          if (res && res.ok) { const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); }
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
+  // Icons and the manifest: cache-first, with a background refresh.
   e.respondWith(
     caches.match(req).then(hit => {
       const net = fetch(req).then(res => {

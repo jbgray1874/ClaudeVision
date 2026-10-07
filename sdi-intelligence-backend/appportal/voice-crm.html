@@ -56,7 +56,7 @@
   .kv{display:grid;grid-template-columns:minmax(90px,34%) 1fr;gap:5px 12px;font-size:13.5px}
   .kv dt{color:var(--ink-faint);font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;
          text-transform:uppercase;padding-top:2px}
-  .kv dd{color:var(--ink)}
+  .kv dd{color:var(--ink);white-space:pre-line}
   code{font-family:var(--mono);font-size:12.5px;background:var(--surface-2);padding:1px 5px;
        border-radius:2px;color:var(--accent)}
   ul{margin:8px 0 0 18px} li{margin:5px 0;font-size:13.5px;color:var(--ink-dim)}
@@ -195,16 +195,28 @@ function explain(d){
   }
 }
 
+// Nick's tracker: the columns worth seeing at a glance. Everything else with a
+// value folds into "More"; the sheet's helper columns are never shown.
+const CARD_MAIN=['OVERVIEW / DESCRIPTION / DELIVERABLES','Status','NEXT STEPS',
+  'KEY DATES FOR NEXT STEPS','Commercial Status','Confidence to Order','BUDGET COST','PM Owner'];
+const HELPER=/_upper$|_num$|^end_month$|clean$|^contact key$|^stat$/i;
 function record(r){
   const f=r.fields||{};
   const pidKey=PID.find(k=>f[k]!=null&&String(f[k]).trim());
-  const keys=Object.keys(f).filter(k=>!HIDE.test(k)&&k!==pidKey);
+  const has=k=>f[k]!=null&&String(f[k]).trim()!=='';
+  const row=k=>'<dt>'+esc(k.replace(/_x0020_/g,' '))+'</dt><dd>'+esc(fmt(f[k]))+'</dd>';
+  const nick=CARD_MAIN.some(k=>k in f);
+  const main=nick?CARD_MAIN.filter(has):Object.keys(f).filter(k=>!HIDE.test(k)&&k!==pidKey);
+  const more=nick?Object.keys(f).filter(k=>has(k)&&!CARD_MAIN.includes(k)&&k!==pidKey
+                    &&k!=='BUSINESS UNIT'&&!HIDE.test(k)&&!HELPER.test(k)):[];
   return '<div class="rec"><div class="rh">'
     +'<span class="pid">'+esc(pidKey?(f[pidKey]+(f['BUSINESS UNIT']?' — '+f['BUSINESS UNIT']:'')):('Item '+r.id))+'</span>'
-    +'<span class="when">'+esc((r.modified||'').replace('T',' ').replace('Z','').slice(0,16))+'</span>'
-    +'</div><dl class="kv">'
-    + keys.map(k=>'<dt>'+esc(k.replace(/_x0020_/g,' '))+'</dt><dd>'+esc(fmt(f[k]))+'</dd>').join('')
-    +'</dl></div>';
+    +'<span class="when">row '+esc(String(r.id).replace(/^xl/,''))+'</span>'
+    +'</div><dl class="kv">'+main.map(row).join('')+'</dl>'
+    +(more.length?'<details style="margin-top:8px"><summary style="cursor:pointer;color:var(--ink-faint);'
+      +'font-size:12px;font-family:var(--mono)">More ('+more.length+')</summary><dl class="kv" style="margin-top:8px">'
+      +more.map(row).join('')+'</dl></details>':'')
+    +'</div>';
 }
 
 function fmt(v){
