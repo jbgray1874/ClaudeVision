@@ -46,6 +46,7 @@ import hashlib
 import json
 import os
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -90,6 +91,9 @@ class ExcelStore:
                         (("SDI_VOICECRM_SITE", self.site), ("SDI_VOICECRM_XLSX", self.xlsx))
                         if not val]
         self.configured = not self.missing
+        # (drive id, item id) once found, so a file located by search is not
+        # searched for again on every request.
+        self._located: Optional[tuple] = None
 
     # ── Graph plumbing ──────────────────────────────────────────────────────
 
@@ -116,17 +120,28 @@ class ExcelStore:
         site_id = site.json().get("id", "")
 
         path = self.xlsx.lstrip("/")
-        item = client.get(f"{GRAPH}/sites/{site_id}/drive/root:/{path}", headers=headers)
-        if item.status_code != 200:
-            err = self._err(item)
-            if item.status_code == 404:
-                err["detail"] = (f"Workbook not found at '{path}' in the site's document "
-                                 f"library. Check SDI_VOICECRM_XLSX — include the folder "
-                                 f"if the file is inside one. ({err['detail']})")
-            return None, err
-        meta = item.json()
+        meta = None
+        if self._located:
+            drive_id, item_id = self._located
+            item = client.get(f"{GRAPH}/drives/{drive_id}/items/{item_id}", headers=headers)
+            if item.status_code == 200:
+                meta = item.json()
+            else:
+                self._located = None        # moved or deleted since; look again
+        if meta is None:
+            item = client.get(f"{GRAPH}/sites/{site_id}/drive/root:/{path}", headers=headers)
+            if item.status_code == 200:
+                meta = item.json()
+            elif item.status_code == 404:
+                meta, err = self._find_by_name(client, headers, site_id, path)
+                if err:
+                    return None, err
+            else:
+                return None, self._err(item)
+        drive_id = (meta.get("parentReference") or {}).get("driveId", "")
+        self._located = (drive_id, meta.get("id"))
 
-        base = f"{GRAPH}/sites/{site_id}/drive/items/{meta.get('id')}/workbook"
+        base = f"{GRAPH}/drives/{drive_id}/items/{meta.get('id')}/workbook"
 
         sheet = self.sheet
         if not sheet:
@@ -141,6 +156,47 @@ class ExcelStore:
 
         return {"base": base, "sheet": sheet,
                 "modified": meta.get("lastModifiedDateTime", "")}, None
+
+    def _find_by_name(self, client: httpx.Client, headers: dict, site_id: str,
+                      path: str) -> tuple[Optional[dict], Optional[dict]]:
+        """Not at the configured path: search every library on the site for the
+        exact file name. A shared document link (Doc.aspx?sourcedoc=...) never
+        shows the folder, so the configured path is often just the name. One
+        exact match is used; none or several is reported, never guessed."""
+        name = path.rsplit("/", 1)[-1]
+        drives = client.get(f"{GRAPH}/sites/{site_id}/drives",
+                            params={"$select": "id,name"}, headers=headers)
+        if drives.status_code != 200:
+            return None, self._err(drives)
+        q = quote(name.replace("'", "''"))
+        matches = []
+        for drive in drives.json().get("value", []):
+            res = client.get(f"{GRAPH}/drives/{drive['id']}/root/search(q='{q}')",
+                             headers=headers)
+            if res.status_code != 200:
+                continue
+            for hit in res.json().get("value", []):
+                if "file" in hit and hit.get("name", "").lower() == name.lower():
+                    hit["_library"] = drive.get("name", "")
+                    matches.append(hit)
+        if len(matches) == 1:
+            return matches[0], None
+
+        def where(h: dict) -> str:
+            parent = (h.get("parentReference") or {}).get("path", "").split("root:")[-1]
+            return f"{h['_library']}{parent or ''}/{h.get('name')}"
+
+        if not matches:
+            return None, {"state": "graph_error", "status": 404,
+                          "detail": (f"Workbook '{name}' was not found anywhere on the site "
+                                     f"(searched {len(drives.json().get('value', []))} "
+                                     f"libraries). Check SDI_VOICECRM_XLSX and that the "
+                                     f"signed-in account can open the file.")}
+        return None, {"state": "graph_error", "status": 409,
+                      "detail": (f"Found {len(matches)} files named '{name}': "
+                                 + "; ".join(where(m) for m in matches[:5])
+                                 + ". Set SDI_VOICECRM_XLSX to the folder path of the "
+                                   "right one so the app never picks between them.")}
 
     def _used_range(self, client: httpx.Client, token: str,
                     wb: dict) -> tuple[Optional[dict], Optional[dict]]:
