@@ -171,6 +171,16 @@ function explain(d){
         +'For Nick\'s spreadsheet sandbox: <code>SDI_VOICECRM_STORE=excel</code>, '
         +'<code>SDI_VOICECRM_SITE</code> as <code>hostname:/sites/SiteName</code>, and '
         +'<code>SDI_VOICECRM_XLSX</code> as the workbook\'s path in the document library.</p>',true);
+    case 'no_access':
+      return panel('This pilot uses a tracker you don\'t have access to',
+        '<p>AM CRM is currently a pilot running on Nick Garrish\'s sandbox tracker'
+        +(d.workbook?' (<i>'+esc(d.workbook)+'</i>)':'')+'. It reads records as the signed-in '
+        +'person, and your account can\'t open that file, so there is nothing to show.</p>'
+        +'<p style="margin-top:10px">If you should have access, ask Nick to add you as a member '
+        +'of his sandbox site, then reload this page.</p>'
+        +'<details style="margin-top:10px"><summary style="cursor:pointer;color:var(--ink-faint);'
+        +'font-size:12px">Technical detail</summary><p style="margin-top:6px"><code>HTTP '
+        +esc(d.status)+'</code> '+esc(d.detail||'')+'</p></details>');
     case 'sign_in_elsewhere':
       return panel('Open AM CRM from its secure address',
         '<p>'+esc(d.detail||'')+'</p>'

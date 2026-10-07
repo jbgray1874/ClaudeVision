@@ -139,6 +139,13 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
 
     if EXCEL:
         data = EXCEL.rows(token)
+        if data.get("state") == "graph_error" and data.get("status") in (403, 404):
+            # Graph answers 403 - or 404, refusing even to confirm the file
+            # exists - to someone who cannot open the sandbox site. For anyone
+            # but the pilot's own users that is the correct outcome; say so
+            # rather than "not found", which reads as a fault.
+            return {"state": "no_access", "items": [], "status": data.get("status"),
+                    "workbook": EXCEL.xlsx, "detail": data.get("detail", "")}
         if data.get("state") != "ok":
             return data
         rows, skipped = [], 0
