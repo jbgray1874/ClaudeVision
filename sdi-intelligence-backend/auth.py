@@ -186,12 +186,20 @@ def login(request: Request, next: str = "/"):
             status_code=502,
             detail=("Could not reach Microsoft Entra for this tenant. Check SDI_TENANT_ID "
                     f"and that this server can reach login.microsoftonline.com. ({exc})"))
+    # Pending sign-ins are keyed by their own OAuth state, and all of one
+    # browser's attempts share one nonce cookie. A browser routinely starts two
+    # logins at once (address-bar prefetch, a page and its API call both
+    # bouncing to /auth/login); with a single cookie slot the second overwrote
+    # the first and Microsoft's answer to the first failed as a state mismatch.
+    # The nonce is reused, never replaced, so every concurrent attempt stays
+    # valid — and a callback still only succeeds in the browser that started it.
+    nonce = request.cookies.get(FLOW_COOKIE) or secrets.token_urlsafe(24)
     flow["_created"] = time.time()
     flow["_next"] = next if next.startswith("/") else "/"   # never redirect off-site
-    fid = secrets.token_urlsafe(24)
-    _FLOWS[fid] = flow
+    flow["_nonce"] = nonce
+    _FLOWS[flow["state"]] = flow
     resp = RedirectResponse(url=flow["auth_uri"], status_code=302)
-    resp.set_cookie(FLOW_COOKIE, fid, max_age=900, httponly=True,
+    resp.set_cookie(FLOW_COOKIE, nonce, max_age=900, httponly=True,
                     secure=COOKIE_SECURE, samesite="lax", path="/")
     return resp
 
@@ -200,11 +208,14 @@ def login(request: Request, next: str = "/"):
 def callback(request: Request):
     if not ENABLED:
         raise HTTPException(status_code=503, detail="SSO is not configured.")
-    fid = request.cookies.get(FLOW_COOKIE)
-    flow = _FLOWS.pop(fid, None) if fid else None
-    if not flow:
-        # Usually a stale browser tab or a restarted service — start again.
+    nonce = request.cookies.get(FLOW_COOKIE)
+    state = request.query_params.get("state", "")
+    flow = _FLOWS.get(state) if state else None
+    if not flow or not nonce or not secrets.compare_digest(flow.get("_nonce", ""), nonce):
+        # A stale tab, a restarted service, or a callback arriving in a browser
+        # that did not start this sign-in. Start again rather than fail loudly.
         return RedirectResponse(url="/auth/login", status_code=302)
+    _FLOWS.pop(state, None)
 
     cache = msal.SerializableTokenCache()
     try:
