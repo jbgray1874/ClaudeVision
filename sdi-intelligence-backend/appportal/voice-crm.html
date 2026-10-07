@@ -150,7 +150,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;',
 
 // SharePoint returns plenty of plumbing alongside the real columns.
 const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|FolderChildCount|AppAuthor|AppEditor|ComplianceAssetId|FileSystemObjectType|ServerRedirectedEmbedUrl)/i;
-const PID=['Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
+const PID=['ACCOUNT','Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
 
 let ST={}, PROJECTS=[], PENDING=null, LISTEN_MODE='command';
 
@@ -200,7 +200,7 @@ function record(r){
   const pidKey=PID.find(k=>f[k]!=null&&String(f[k]).trim());
   const keys=Object.keys(f).filter(k=>!HIDE.test(k)&&k!==pidKey);
   return '<div class="rec"><div class="rh">'
-    +'<span class="pid">'+esc(pidKey?f[pidKey]:('Item '+r.id))+'</span>'
+    +'<span class="pid">'+esc(pidKey?(f[pidKey]+(f['BUSINESS UNIT']?' — '+f['BUSINESS UNIT']:'')):('Item '+r.id))+'</span>'
     +'<span class="when">'+esc((r.modified||'').replace('T',' ').replace('Z','').slice(0,16))+'</span>'
     +'</div><dl class="kv">'
     + keys.map(k=>'<dt>'+esc(k.replace(/_x0020_/g,' '))+'</dt><dd>'+esc(fmt(f[k]))+'</dd>').join('')
@@ -268,12 +268,17 @@ function startListening(mode){
   try{ rec.start(); }catch(e){ setState('Could not start the mic: '+e.message); }
 }
 
+// Never sent to the language model: people's contact details, and the
+// sheet's own helper columns (formulas that restate other columns).
+const NOT_FOR_MODEL=/contact|e-?mail|phone|telephone|_upper$|_num$|clean|key$|^stat$/i;
 function projSummary(){
-  // Just enough for the model to match and act on — not the whole sheet.
-  const KEEP=['Client','Project','Description','Status','AM Owner','Action date','End date','Budget'];
+  // The working columns of each record, blanks dropped, long text trimmed.
   return PROJECTS.map(r=>{
-    const f={}; KEEP.forEach(k=>{ const v=(r.fields||{})[k];
-      if(v!=null&&String(v).trim()) f[k]=String(v).slice(0,120); });
+    const f={};
+    Object.entries(r.fields||{}).forEach(([k,v])=>{
+      if(NOT_FOR_MODEL.test(k)||HIDE.test(k)) return;
+      if(v!=null&&String(v).trim()) f[k]=String(v).replace(/\s+/g,' ').slice(0,140);
+    });
     return {id:r.id, fields:f};
   });
 }

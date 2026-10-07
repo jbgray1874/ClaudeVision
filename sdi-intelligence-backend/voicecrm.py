@@ -31,6 +31,7 @@ must be in SDI_GRAPH_SCOPES and consented, or every call returns no_token.
 import json
 import os
 from collections import Counter
+from datetime import date
 from typing import Any
 
 import httpx
@@ -222,7 +223,10 @@ APPROVED_BY = _opt("SDI_VOICECRM_APPROVED_BY")
 
 # Only these columns may ever be written. An open-ended write endpoint against a
 # List is how a pilot quietly becomes an incident.
-_EDITABLE_DEFAULT = ("Status,Action date,End date" if STORE == "excel"
+# Excel default = the working columns of Nick's tracker. Helper columns
+# (AM_Upper, Budget_Num, Contact Key...) are formulas and must not be written.
+_EDITABLE_DEFAULT = ("Status,NEXT STEPS,KEY DATES FOR NEXT STEPS,Commercial Status,"
+                     "Confidence to Order,Last Client Contact Date" if STORE == "excel"
                      else "Status,NextAction,NextActionDate")
 EDITABLE = [f.strip() for f in
             _opt("SDI_VOICECRM_EDITABLE", _EDITABLE_DEFAULT).split(",")
@@ -290,6 +294,10 @@ def _owner_ok(fields: dict) -> bool:
 def _project_ref(fields: dict) -> str:
     # Excel headers first (Nick's tracker — Project codes are currently blank,
     # so Client + Project is the spoken reference), then List internal names.
+    if fields.get("ACCOUNT"):
+        parts = [fields.get("ACCOUNT"), fields.get("BUSINESS UNIT"),
+                 str(fields.get("OVERVIEW / DESCRIPTION / DELIVERABLES") or "").split("\n")[0][:60]]
+        return " — ".join(str(p).strip() for p in parts if p and str(p).strip())
     if fields.get("Client") or fields.get("Project"):
         return " — ".join(str(fields[k]) for k in ("Client", "Project") if fields.get(k))
     for key in ("Project code", "ProjectID", "ProjectId", "Project_x0020_ID", "Title"):
@@ -491,7 +499,12 @@ Rules:
   under three sentences; it is spoken aloud).
 - "clarify": the record, field or value is ambiguous or missing. Ask one
   specific question in "say" (e.g. name the candidate records).
-- Dates: write them as the person would in the sheet, e.g. "14/10/2026".
+- Dates: resolve relative dates ("next Tuesday", "end of the month") against
+  the "today" value given, and write them as YYYY-MM-DD, e.g. "2026-10-14".
+  Never guess the year or swap day and month; ask if unclear.
+- The people: AM = account manager, PM = project manager, given as initials.
+- A record is best named by its ACCOUNT and BUSINESS UNIT, then its
+  description, e.g. "Tesco Bank, the Digital Gift Card Gatepost".
 - Never guess. A wrong update read confidently is worse than a question."""
 
 
@@ -511,6 +524,7 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     payload = json.dumps({
         "transcript": transcript,
         "editable_fields": EDITABLE,
+        "today": date.today().isoformat(),
         "records": body.projects[:150],
     }, ensure_ascii=False)
 
