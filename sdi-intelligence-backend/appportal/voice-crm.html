@@ -121,8 +121,8 @@
         </svg>
       </button>
       <div>
-        <div class="vc-state" id="vcstate">Tap the mic and say something like
-          “set the status on the Acme project to invoiced”.</div>
+        <div class="vc-state" id="vcstate">Tap the mic once and talk — it keeps listening and answering until you
+          tap it again or say “that's all”. Try “what's at risk?”</div>
       </div>
     </div>
     <div class="vc-log" id="vclog"></div>
@@ -283,15 +283,16 @@ let LAST_SAID='';
 function say(text, then){
   log('app', text);
   LAST_SAID=text;
+  if(!then&&CONVO) then=()=>{ if(CONVO) startListening(PENDING?'confirm':'command'); };
   try{
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang='en-GB';
-    if(then) u.onend = then;
-    speechSynthesis.speak(u);
-    if(then){ // belt and braces: some engines drop onend
-      u.onerror = then;
+    if(then){
+      let fired=false; const once=()=>{ if(!fired){ fired=true; then(); } };
+      u.onend=once; u.onerror=once;   // some engines drop onend
     }
+    speechSynthesis.speak(u);
   }catch(e){ if(then) then(); }
 }
 
@@ -313,26 +314,68 @@ function isEcho(t){
   if(heard.length<5||!said.size) return false;
   return heard.filter(x=>said.has(x)).length/heard.length>=0.6;
 }
+// Conversation mode. One tap starts it; the app then keeps listening after
+// each spoken reply, like a voice chat, until the mic is tapped again, the
+// person says "that's all", or two listens in a row hear nothing.
+// Listening is continuous with live text, and a sentence ends after a real
+// pause (~2 s) - the browser's default stopped at the first breath.
+let CONVO=false, SILENT_RUNS=0;
+const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
+function endConversation(msg){
+  CONVO=false; SILENT_RUNS=0;
+  if(rec&&rec._cancel) rec._cancel();
+  $('mic').classList.remove('live');
+  if(msg) setState(msg);
+}
 function startListening(mode){
   if(!SR) return;
   // The mic must never hear the app's own voice: stop speaking first.
   try{ if(speechSynthesis.speaking){ speechSynthesis.cancel(); setTimeout(()=>startListening(mode),350); return; } }catch(e){}
   LISTEN_MODE=mode||'command';
-  if(rec){ try{rec.abort();}catch(e){} }
-  rec=new SR();
-  rec.lang='en-GB'; rec.interimResults=false; rec.maxAlternatives=1;
-  rec.onstart=()=>{ $('mic').classList.add('live');
-    setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening…'); };
-  rec.onend=()=>{ $('mic').classList.remove('live'); };
-  rec.onerror=e=>{ $('mic').classList.remove('live');
-    if(e.error!=='aborted') setState('Mic error: '+e.error+'. Tap to try again, or type below.'); };
-  rec.onresult=e=>{
-    const t=e.results[0][0].transcript.trim();
-    if(isEcho(t)){ setState('That was me talking — tap the mic and try again.'); return; }
-    if(LISTEN_MODE==='confirm') handleConfirmSpeech(t);
-    else handleTranscript(t);
+  if(rec&&rec._cancel) rec._cancel();
+  const r=new SR(); rec=r;
+  r.lang='en-GB'; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
+  let finalText='', interim='', done=false, silenceT=null, firstT=null;
+  const clear=()=>{ clearTimeout(silenceT); clearTimeout(firstT); };
+  r._cancel=()=>{ done=true; clear(); try{ r.abort(); }catch(e){} };
+  const finish=()=>{
+    if(done) return; done=true; clear(); try{ r.stop(); }catch(e){}
+    $('mic').classList.remove('live');
+    const t=(finalText+' '+interim).replace(/\s+/g,' ').trim();
+    if(!t){
+      SILENT_RUNS++;
+      if(!CONVO){ setState('Didn\'t catch anything — tap the mic to try again.'); return; }
+      if(SILENT_RUNS>=2){ endConversation('Tap the mic when you need me.'); return; }
+      setState('Still here — go ahead, or tap the mic to stop.');
+      startListening(LISTEN_MODE); return;
+    }
+    SILENT_RUNS=0;
+    if(isEcho(t)){ setState('That was me talking — go ahead.'); if(CONVO) startListening(LISTEN_MODE); return; }
+    if(LISTEN_MODE==='command'&&STOP_WORDS.test(t)){
+      log('you', t); endConversation(); say('Okay — tap the mic when you need me.'); return;
+    }
+    if(LISTEN_MODE==='confirm') handleConfirmSpeech(t); else handleTranscript(t);
   };
-  try{ rec.start(); }catch(e){ setState('Could not start the mic: '+e.message); }
+  r.onstart=()=>{ $('mic').classList.add('live');
+    setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
+    firstT=setTimeout(finish, 8000); };
+  r.onresult=e=>{
+    clearTimeout(firstT); finalText=''; interim='';
+    for(let i=0;i<e.results.length;i++){
+      const x=e.results[i];
+      if(x.isFinal) finalText+=x[0].transcript+' '; else interim+=x[0].transcript;
+    }
+    setState('“'+(finalText+interim).trim()+'”');
+    clearTimeout(silenceT);
+    silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?1100:2000);
+  };
+  // Some phones end recognition on their own after a pause: use what was heard.
+  r.onend=()=>finish();
+  r.onerror=e=>{
+    if(e.error==='no-speech'||e.error==='aborted') return;   // onend follows
+    done=true; clear(); endConversation('Mic error: '+e.error+'. Tap to try again, or type below.');
+  };
+  try{ r.start(); }catch(e){ done=true; setState('Could not start the mic: '+e.message); }
 }
 
 // Never sent to the language model: people's contact details, and the
@@ -451,7 +494,15 @@ function sendTyped(){
 }
 document.addEventListener('DOMContentLoaded',()=>{
   $('vctext').addEventListener('keydown',e=>{ if(e.key==='Enter') sendTyped(); });
-  $('mic').addEventListener('click',()=>startListening(PENDING?'confirm':'command'));
+  $('mic').addEventListener('click',()=>{
+    if(CONVO||$('mic').classList.contains('live')){
+      try{ speechSynthesis.cancel(); }catch(e){}
+      endConversation('Stopped. Tap the mic to talk again.');
+      return;
+    }
+    CONVO=true; SILENT_RUNS=0;
+    startListening(PENDING?'confirm':'command');
+  });
 });
 
 // ── Records + status ────────────────────────────────────────────────────────
