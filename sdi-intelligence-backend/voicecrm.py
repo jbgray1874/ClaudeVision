@@ -307,8 +307,8 @@ def _write_gate(user: dict | None = None) -> dict | None:
                            f"is not one of them. You can still ask questions.")}
     if not WRITE_ENABLED:
         return {"state": "writes_disabled",
-                "detail": ("Writing is switched off. Set SDI_VOICECRM_WRITE=yes only after "
-                           "the sandbox List exists and the pilot has been approved.")}
+                "detail": ("updates aren't switched on for this pilot yet, so nothing was "
+                           "saved. You can still ask about your records.")}
     if not APPROVED_BY:
         return {"state": "not_approved",
                 "detail": ("SDI_VOICECRM_APPROVED_BY is empty. Record who approved the pilot "

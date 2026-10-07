@@ -276,8 +276,10 @@ async function post(url,data){
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 
+let LAST_SAID='';
 function say(text, then){
   log('app', text);
+  LAST_SAID=text;
   try{
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -300,8 +302,18 @@ function log(who, text){
 
 function setState(t){ $('vcstate').textContent=t; }
 
+// Mostly the same words as the app's last reply = the phone heard its own
+// speaker. Short replies ("yes") are never treated as echo.
+function isEcho(t){
+  const w=x=>String(x).toLowerCase().replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(Boolean);
+  const said=new Set(w(LAST_SAID)), heard=w(t);
+  if(heard.length<5||!said.size) return false;
+  return heard.filter(x=>said.has(x)).length/heard.length>=0.6;
+}
 function startListening(mode){
   if(!SR) return;
+  // The mic must never hear the app's own voice: stop speaking first.
+  try{ if(speechSynthesis.speaking){ speechSynthesis.cancel(); setTimeout(()=>startListening(mode),350); return; } }catch(e){}
   LISTEN_MODE=mode||'command';
   if(rec){ try{rec.abort();}catch(e){} }
   rec=new SR();
@@ -313,6 +325,7 @@ function startListening(mode){
     if(e.error!=='aborted') setState('Mic error: '+e.error+'. Tap to try again, or type below.'); };
   rec.onresult=e=>{
     const t=e.results[0][0].transcript.trim();
+    if(isEcho(t)){ setState('That was me talking — tap the mic and try again.'); return; }
     if(LISTEN_MODE==='confirm') handleConfirmSpeech(t);
     else handleTranscript(t);
   };
