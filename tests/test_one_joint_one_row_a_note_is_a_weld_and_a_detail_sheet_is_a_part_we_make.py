@@ -578,3 +578,66 @@ def test_the_fold_sentence_names_what_the_note_rung_counted():
     out = fc.press_brake_folds(part)
     assert out["count"] == 2
     assert "read 3 (UP 90°, DOWN 180°, FOLD on its own sheet)" in out["disagreement"]
+
+
+# ── D-406: M&S 12675-01, 7 Oct 17:52 book (design-intent pack on a drawings run) ─────────
+#
+# Three concept sheets titled DESIGN INTENT, every material field "SEE PART DRAWINGS", no parts
+# list, no part sheets. The engine minted a part per drawing number: "40 x 20mm … OVAL TUBE"
+# became a 40 x 20 blank of 20 mm stainless, "ESTIMATED BAG WEIGHT - 1.5kg" its weight, and the
+# report said the pack read cleanly beside three failed checks.
+
+_V2_SHEET = ("DESIGN INTENT ONLY 12 x CUSTOMER BAGS BRUSHED STAINLESS STEEL 5mm STAINLESSS STEEL BASE "
+             "ON 18mm BLACK MFMDF WITH FEET 5mm STAINLESS STEEL ARMS LASERED 40 x 20mm STAINLESS STEEL "
+             "FLAT SIDED OVAL TUBE CAPPED AND FINISHED ON TOP ESTIMATED BAG WEIGHT - 1.5kg "
+             "WEIGHT: 34.82kg 600 x 400 BASE 1500 930")
+
+
+def test_a_design_intent_sheet_is_not_a_detail_sheet_and_mints_no_part():
+    import file_scan as fs
+    role = fs._infer_page_role(_V2_SHEET, "", "12675-01-02 BLOCK MODEL V2 DRAWING No BAG STAND V2 - "
+                               "DESIGN INTENT MATERIAL: SEE PART DRAWINGS")
+    assert role["primary_role"] == "design_intent" and "design_intent_detected" in role["signals"]
+    # a real detail sheet and a GA with a parts list keep their roles
+    assert fs._infer_page_role("UP 90° R 1 DOWN 180° FLAT PATTERN", "",
+                               "9598-03-01M DRAWING No METAL FRAME MATERIAL: MILD STEEL")["primary_role"] == "detail"
+    assert fs._infer_page_role("ITEM DWG NO. DESCRIPTION QTY 1 9598-03-01M METAL FRAME 1 2 FIXING1270 BUMPER 4",
+                               "ITEM DWG NO QTY 1 9598-03-01M 1", "9598-03-GA DRAWING No")["primary_role"] == "assembly"
+    assert fs.design_intent_pages({"pages": [{"page_number": 1, "page_role": {"primary_role": "design_intent"}},
+                                             {"page_number": 2, "page_role": {"primary_role": "detail"}}]}) == [1]
+    # the part index reads the role before it mints: a design-intent page contributes nothing
+    src = (ROOT / "src" / "part_index.py").read_text(encoding="utf-8")
+    assert 'if page_role == "design_intent":' in src
+
+
+def test_a_section_callout_is_neither_a_gauge_nor_a_blank():
+    import extractor_patterns as ep
+    assert ep._extract_thickness_fallbacks(_V2_SHEET) == ["5", "18"]        # not the tube's 20
+    dims = ep.classify_dimensions(_V2_SHEET)
+    assert "600 x 400" in dims["overall_sizes_mm"] and "40 x 20" not in dims["overall_sizes_mm"]
+    assert ep.names_a_section("30 x 30 x 2mm SHS UPRIGHT", 0, 13)
+    assert not ep.names_a_section("471.61 x 212 BLANK 1.2mm MILD STEEL", 0, 12)
+    # a plain blank keeps its gauge reading
+    assert "2" in ep._extract_thickness_fallbacks("BLANK 300 x 200 2mm MILD STEEL")
+
+
+def test_a_weight_the_sheet_qualifies_as_something_elses_is_not_the_parts():
+    import extractor_patterns as ep
+    assert ep.extract_title_block_fields(_V2_SHEET)["weights"] == ["34.82kg"]
+    assert ep.strip_weights_not_the_parts("ESTIMATED BAG WEIGHT - 1.5kg WEIGHT: 0.40kg").strip().endswith("WEIGHT: 0.40kg")
+    assert ep.extract_title_block_fields("MAX LOADING: WEIGHT: 398.43g")["weights"] == ["398.43g"]
+
+
+def test_the_report_never_says_the_pack_read_cleanly_beside_a_failed_check():
+    import job_report_html as jr
+    dq = {"dxf_matched": 0, "dxf_unmatched": 0, "dxf_ambiguous": 0, "validation_issues": [],
+          "parts_without_dxf": [], "filename_space_issues": [], "low_confidence": []}
+    clean = jr._render_drawing_analysis(dict(dq), {"pages": [], "invariants": {"violations": []}})
+    assert "No significant drawing faults detected" in clean
+    failed = jr._render_drawing_analysis(dict(dq), {
+        "pages": [{"page_number": 1, "page_role": {"primary_role": "design_intent"}}],
+        "invariants": {"violations": [{"code": "native_extract_refused", "severity": "blocking"},
+                                      {"code": "blank_and_cut_path_disagree", "severity": "blocking"}]}})
+    assert "No significant drawing faults detected" not in failed
+    assert "Consistency checks failed" in failed and "SolidWorks extract refused" in failed
+    assert "Design-intent sheets" in failed

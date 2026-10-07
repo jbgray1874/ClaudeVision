@@ -1621,6 +1621,30 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
     if dq.get("validation_issues"):
         wk += (f'<tr><td><b>Validation issues</b></td><td>{len(dq["validation_issues"])} item(s)</td>'
                f'<td>The manufacturing write-up flagged structural issues (assembly-only parts, missing cues).</td></tr>')
+    # THE PACK DID NOT "READ CLEANLY" BESIDE A FAILED CHECK (D-406). 12675-01's report said so
+    # with three checks failed, the SolidWorks extract refused and two DXFs rejected as
+    # drawings: the callout below is printed only when this table is empty, so what the run
+    # itself found wrong with the pack is written into it.
+    _inv = (summary or {}).get("invariants") if isinstance(summary, dict) else None
+    _viol = [v for v in ((_inv or {}).get("violations") or []) if isinstance(v, dict)]
+    _failed = [v for v in _viol if str(v.get("severity") or "").lower() == "blocking"]
+    if _failed:
+        _codes = ", ".join(sorted({str(v.get("code") or "?") for v in _failed})[:6])
+        wk += (f'<tr><td><b>Consistency checks failed</b></td><td>{len(_failed)} check(s): {_esc(_codes)}</td>'
+               f'<td>Section 13 lists them. A failed check is a fault the run found in what it read; '
+               f'the pack has not read cleanly while any stands.</td></tr>')
+    if any(str(v.get("code") or "") == "native_extract_refused" for v in _viol):
+        wk += (f'<tr><td><b>SolidWorks extract refused</b></td><td>the model files beside the pack</td>'
+               f'<td>Nothing from the model was applied; blanks, gauges and bends rest on the drawings alone.</td></tr>')
+    try:
+        from file_scan import design_intent_pages as _di_pages
+        _di = _di_pages(summary or {})
+    except Exception:                                                # noqa: BLE001
+        _di = []
+    if _di:
+        wk += (f'<tr><td><b>Design-intent sheets</b></td><td>page(s) {_esc(", ".join(str(p) for p in _di))}</td>'
+               f'<td>Concept drawings with no parts list and no part sheets. They mint no part; the design '
+               f'is costed from a brief on the concept method, or detailed by Design into a drawings pack.</td></tr>')
 
     weaknesses = f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>
