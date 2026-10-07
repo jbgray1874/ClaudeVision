@@ -329,7 +329,9 @@ function isEcho(t){
 // each spoken reply, like a voice chat, until the mic is tapped again, the
 // person says "that's all", or two listens in a row hear nothing.
 // Listening is continuous with live text, and a sentence ends after a real
-// pause (~2 s) - the browser's default stopped at the first breath.
+// pause - the browser's default stopped at the first breath. 3 s, not 2:
+// people stop to think mid-sentence and were being answered too early.
+const PAUSE_MS=3000, CONFIRM_PAUSE_MS=1200, FIRST_WORD_MS=10000;
 let CONVO=false, SILENT_RUNS=0;
 const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
 function endConversation(msg){
@@ -369,7 +371,7 @@ function startListening(mode){
   };
   r.onstart=()=>{ $('mic').classList.add('live');
     setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
-    firstT=setTimeout(finish, 8000); };
+    firstT=setTimeout(finish, FIRST_WORD_MS); };
   r.onresult=e=>{
     clearTimeout(firstT); finalText=''; interim='';
     for(let i=0;i<e.results.length;i++){
@@ -378,7 +380,7 @@ function startListening(mode){
     }
     setState('“'+(finalText+interim).trim()+'”');
     clearTimeout(silenceT);
-    silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?1100:2000);
+    silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS);
   };
   // Some phones end recognition on their own after a pause: use what was heard.
   r.onend=()=>finish();
