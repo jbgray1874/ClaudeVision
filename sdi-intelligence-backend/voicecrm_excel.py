@@ -195,6 +195,12 @@ class ExcelStore:
                 if "file" in hit and hit.get("name", "").lower() == name.lower():
                     hit["_library"] = drive.get("name", "")
                     matches.append(hit)
+        if not matches:
+            # Search answers a signed-in person but not an app on its own (the
+            # scheduled morning review): its index is per user. Walk the
+            # folders instead - a sandbox library is small.
+            for drive in drives.json().get("value", []):
+                matches += self._walk_for(client, headers, drive, name)
         if len(matches) == 1:
             return matches[0], None
 
@@ -213,6 +219,29 @@ class ExcelStore:
                                  + "; ".join(where(m) for m in matches[:5])
                                  + ". Set SDI_VOICECRM_XLSX to the folder path of the "
                                    "right one so the app never picks between them.")}
+
+    def _walk_for(self, client: httpx.Client, headers: dict, drive: dict, name: str,
+                  max_folders: int = 300) -> list:
+        """Every file called `name` in one library, found by listing folders."""
+        found, queue, seen = [], [f"{GRAPH}/drives/{drive['id']}/root/children"], 0
+        while queue and seen < max_folders:
+            url = queue.pop(0)
+            seen += 1
+            while url:
+                res = client.get(url, params=None if "$skiptoken" in url else
+                                 {"$select": "id,name,file,folder,parentReference,lastModifiedDateTime",
+                                  "$top": "200"}, headers=headers)
+                if res.status_code != 200:
+                    break
+                body = res.json()
+                for item in body.get("value", []):
+                    if "folder" in item:
+                        queue.append(f"{GRAPH}/drives/{drive['id']}/items/{item['id']}/children")
+                    elif "file" in item and item.get("name", "").lower() == name.lower():
+                        item["_library"] = drive.get("name", "")
+                        found.append(item)
+                url = body.get("@odata.nextLink")
+        return found
 
     def _used_range(self, client: httpx.Client, token: str,
                     wb: dict) -> tuple[Optional[dict], Optional[dict]]:
