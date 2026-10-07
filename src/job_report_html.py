@@ -1644,7 +1644,8 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
     if _di:
         wk += (f'<tr><td><b>Design-intent sheets</b></td><td>page(s) {_esc(", ".join(str(p) for p in _di))}</td>'
                f'<td>Concept drawings with no parts list and no part sheets. They mint no part; the design '
-               f'is costed from a brief on the concept method, or detailed by Design into a drawings pack.</td></tr>')
+               f'is taken off from its own SolidWorks assembly or detailed by Design into a drawings pack '
+               f'(an LLM scan with a brief is a fallback budget only).</td></tr>')
 
     weaknesses = f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>

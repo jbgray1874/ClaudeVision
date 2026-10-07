@@ -664,3 +664,22 @@ def test_a_nested_line_charged_at_another_order_of_magnitude_from_its_engine_bas
     s["final_estimate"]["material_rows"][0]["total_value_gbp"] = 0.05
     s["estimate_summary"]["part_estimates"][0]["material_estimate"]["unit_material_cost_gbp"] = 0.4
     assert invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s) == []
+
+
+def test_a_dxf_that_is_a_drawing_of_a_part_never_mints_a_part(tmp_path):
+    import ezdxf
+    import drawing_job_merge as djm
+    sheet = tmp_path / "12675-01-02 Block Model V2.dxf"
+    d = ezdxf.new("R2000"); ms = d.modelspace()
+    ms.add_line((0, 0), (420, 0)); ms.add_line((420, 0), (420, 297))
+    ms.add_linear_dim(base=(0, -10), p1=(0, 0), p2=(420, 0))
+    ms.add_text("12675-01-02 BLOCK MODEL V2").set_placement((10, 10))
+    d.saveas(sheet)
+    report = {}
+    assert djm.dxf_may_mint_a_part(sheet, report, "12675-01-02") is False
+    assert report["unmatched_dxf"][0]["reason"].startswith("drawing_export_not_a_flat")
+    flat = tmp_path / "X-01M_1.2mm MS.dxf"
+    f = ezdxf.new("R2000"); fm = f.modelspace()
+    fm.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+    f.saveas(flat)
+    assert djm.dxf_may_mint_a_part(flat, {}, "X-01M") is True
