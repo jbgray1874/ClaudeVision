@@ -29,6 +29,7 @@ must be in SDI_GRAPH_SCOPES and consented, or every call returns no_token.
 """
 
 import json
+import re
 import os
 from collections import Counter
 from datetime import date
@@ -242,7 +243,8 @@ APPROVED_BY = _opt("SDI_VOICECRM_APPROVED_BY")
 # Excel default = the working columns of Nick's tracker. Helper columns
 # (AM_Upper, Budget_Num, Contact Key...) are formulas and must not be written.
 _EDITABLE_DEFAULT = ("Status,NEXT STEPS,KEY DATES FOR NEXT STEPS,Commercial Status,"
-                     "Confidence to Order,Last Client Contact Date" if STORE == "excel"
+                     "Confidence to Order,Last Client Contact Date,BUDGET COST"
+                     if STORE == "excel"
                      else "Status,NextAction,NextActionDate")
 EDITABLE = [f.strip() for f in
             _opt("SDI_VOICECRM_EDITABLE", _EDITABLE_DEFAULT).split(",")
@@ -273,6 +275,27 @@ WRITERS = {e.strip().lower() for e in _opt("SDI_VOICECRM_WRITERS").split(",") if
 
 def _may_write(user: dict) -> bool:
     return bool(user) and str(user.get("email", "")).strip().lower() in WRITERS
+
+
+def _is_money(field: str) -> bool:
+    return any(w in field.upper() for w in ("BUDGET", "COST", "VALUE", "PRICE"))
+
+
+def _money_value(raw: str) -> str | None:
+    """A spoken or typed amount as a plain number for the cell, or None.
+
+    The sheet holds budgets as numbers (its Budget_Num helper and any totals
+    calculate from them). Written as "£50,000.00" Excel may keep it as text and
+    silently break those, so currency signs, commas and spaces are removed and
+    anything that is not then a plain number is refused, not guessed at.
+    """
+    cleaned = re.sub(r"[£$€,\s]", "", str(raw or ""))
+    if cleaned.lower().endswith("k") and re.fullmatch(r"-?\d+(\.\d+)?k", cleaned.lower()):
+        cleaned = str(float(cleaned[:-1]) * 1000)
+    if not re.fullmatch(r"-?\d+(\.\d+)?", cleaned):
+        return None
+    value = float(cleaned)
+    return str(int(value)) if value == int(value) else f"{value:.2f}"
 
 
 def _write_gate(user: dict | None = None) -> dict | None:
@@ -348,6 +371,14 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
     if body.field not in EDITABLE:
         return {"state": "field_not_editable", "field": body.field, "editable": EDITABLE,
                 "detail": f"'{body.field}' is not in the editable set for this pilot."}
+
+    if _is_money(body.field):
+        amount = _money_value(body.new_value)
+        if amount is None:
+            return {"state": "invalid_value", "field": body.field,
+                    "detail": (f"'{body.new_value}' isn't a clear amount for {body.field}. "
+                               f"Say it as a number, e.g. fifteen thousand five hundred.")}
+        body.new_value = amount
 
     token = auth.graph_token(request)
     if not token:
@@ -556,6 +587,10 @@ understood; the change is read back and confirmed separately before saving.
 "clarify" - an update whose record, field or value is ambiguous, or a request
 you genuinely cannot match. Ask ONE specific question, naming the candidates
 (at most three).
+
+Money (BUDGET COST): new_value is a plain number - no currency sign, no
+commas: "fifty thousand" is "50000", "fifteen and a half k" is "15500". If you
+are not sure of the amount you heard, ask; never guess a figure.
 
 Dates: resolve relative dates ("next Tuesday", "end of the month") against
 "today", and write new values as YYYY-MM-DD. Never guess the year or swap day
