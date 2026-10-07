@@ -641,3 +641,26 @@ def test_the_report_never_says_the_pack_read_cleanly_beside_a_failed_check():
     assert "No significant drawing faults detected" not in failed
     assert "Consistency checks failed" in failed and "SolidWorks extract refused" in failed
     assert "Design-intent sheets" in failed
+
+
+# ── D-407: the sheet's charge and the engine's material basis (12675-01, 18:32 book) ─────
+
+def test_a_nested_line_charged_at_another_order_of_magnitude_from_its_engine_basis_fails():
+    s = {"final_estimate": {"material_rows": [
+            {"part_number": "12675-01-02", "block": "steel", "qty_per_unit": 1,
+             "total_value_gbp": 0.05, "charged_cell": "Estimate!M93"},
+            {"part_number": "FIXING1270", "block": "bought_in", "qty_per_unit": 4, "total_value_gbp": 0.37}]},
+         "estimate_summary": {"part_estimates": [
+            {"part_number": "12675-01-02", "material_estimate": {"unit_material_cost_gbp": 112.26,
+                                                                  "cost_method": "stated_weight"}},
+            {"part_number": "FIXING1270", "material_estimate": {"unit_material_cost_gbp": 9.0}}]}}
+    out = invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s)
+    assert out and out[0]["severity"] == invariants.BLOCKING
+    assert "12675-01-02 charged £0.05 a unit (Estimate!M93) against an engine basis of £112.26" in out[0]["message"]
+    assert "FIXING1270" not in out[0]["message"]                      # a bought-in is not a nested line
+    # the control: a nested line whose two readings agree, and a cheap line, pass
+    s["final_estimate"]["material_rows"][0]["total_value_gbp"] = 110.0
+    assert invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s) == []
+    s["final_estimate"]["material_rows"][0]["total_value_gbp"] = 0.05
+    s["estimate_summary"]["part_estimates"][0]["material_estimate"]["unit_material_cost_gbp"] = 0.4
+    assert invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s) == []

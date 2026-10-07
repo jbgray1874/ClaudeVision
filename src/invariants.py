@@ -3771,6 +3771,84 @@ def check_a_guessed_blank_its_own_weight_disproves(summary: Any) -> List[Dict[st
         count=len(hits), parts=hits[:20])]
 
 
+def check_the_sheets_charge_agrees_with_the_engines_material_basis(summary: Any) -> List[Dict[str, Any]]:
+    """A nested line whose sheet charge and engine material basis are a different order of
+    magnitude is costed on one of two wrong numbers, and the book must say which (D-407).
+
+    12675-01-02 on the 7 Oct 18:32 book: the engine carried a provisional material figure of
+    about £112 for the part (its stated 34.82 kg of stainless), and the Sheet Steel block
+    nested a 20 x 18 mm blank 2,542 to a sheet and charged £0.05. Both sat on the record; the
+    reconciliation checks passed, because rows summed to totals; and the gap between the two
+    readings of one line — a factor of two thousand — was written nowhere. James Gray: "make
+    a large disagreement between the engine's material basis and the final sheet visible."
+
+    Only lines the sheet nests (the Sheet Steel and Other Sheet blocks) are compared: on a
+    bought-in or a commercial line the engine's figure IS the sheet's. The factor is
+    config.MATERIAL_BASIS_DISAGREEMENT_FACTOR; both figures and the ratio are named.
+    """
+    fe = _node(summary, "final_estimate")
+    if not fe:
+        return []
+    # THE FACTOR AND THE FLOOR LIVE IN config, NOT HERE (the rate audit counts a literal in
+    # this module as a rate kept outside its one place). No config, no verdict.
+    try:
+        import config as _cfg
+        _factor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FACTOR"))
+        _floor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FLOOR_GBP"))
+    except Exception:                                                # noqa: BLE001
+        return _unevaluated("sheet_charge_disagrees_with_engine_material_basis",
+                            "config carries no MATERIAL_BASIS_DISAGREEMENT_FACTOR / "
+                            "_FLOOR_GBP, so the sheet's charge could not be compared with "
+                            "the engine's material basis.")
+    _by_pn: Dict[str, Dict[str, Any]] = {}
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if isinstance(_pe, dict) and _pe.get("part_number"):
+            _by_pn[str(_pe.get("part_number")).strip().upper()] = _pe
+    disputed = []
+    for row in (fe.get("material_rows") or []):
+        if not isinstance(row, dict):
+            continue
+        _blk = str(row.get("block") or "").lower()
+        if not any(k in _blk for k in ("steel", "sheet")):
+            continue
+        pn = str(row.get("part_number") or "").strip().upper()
+        pe = _by_pn.get(pn)
+        if not pe:
+            continue
+        me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+        basis = _num(me.get("unit_material_cost_gbp")) or _num(me.get("cost_per_part_gbp")) \
+            or _num(pe.get("unit_material_cost_gbp"))
+        total = _num(row.get("total_value_gbp"))
+        qty = _num(row.get("qty_per_unit")) or 1.0
+        if basis is None or total is None or qty <= 0:
+            continue
+        charged = total / qty
+        hi, lo = max(basis, charged), min(basis, charged)
+        if hi < _floor:
+            continue
+        ratio = (hi / lo) if lo > 0 else float("inf")
+        if ratio < _factor:
+            continue
+        disputed.append({"part_number": row.get("part_number"), "charged_gbp": round(charged, 2),
+                         "engine_basis_gbp": round(basis, 2),
+                         "ratio": (round(ratio, 1) if ratio != float("inf") else "inf"),
+                         "charged_cell": row.get("charged_cell"),
+                         "basis_method": me.get("cost_method") or me.get("basis") or ""})
+    if not disputed:
+        return []
+    return [_violation(
+        "sheet_charge_disagrees_with_engine_material_basis", BLOCKING,
+        f"{len(disputed)} nested line(s) are charged on the sheet at a different order of "
+        f"magnitude from the engine's own material basis for the same part: "
+        + "; ".join(f"{d['part_number']} charged £{d['charged_gbp']:.2f} a unit "
+                    f"({d['charged_cell'] or 'the nested row'}) against an engine basis of "
+                    f"£{d['engine_basis_gbp']:.2f}" + (f" ({d['basis_method']})" if d['basis_method'] else "")
+                    + f" — {d['ratio']}x" for d in disputed[:6])
+        + ". One of the two is the wrong blank, gauge, weight or stock form; the sheet's "
+          "figure is what the price carries, so the line is not a price until the two agree.",
+        parts=disputed)]
+
+
 def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
     """A part whose thickness two sources read differently, by enough to move the money.
 
@@ -4418,6 +4496,7 @@ CHECKS = (
     check_a_handed_pair_priced_on_the_cut_file,
     check_two_sources_disagree_about_the_material,
     check_two_sources_disagree_about_the_gauge,
+    check_the_sheets_charge_agrees_with_the_engines_material_basis,
     check_a_guessed_blank_its_own_weight_disproves,
     check_every_declared_material_layer_is_priced,
     check_the_record_declares_whether_it_carries_the_money,
