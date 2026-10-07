@@ -376,8 +376,19 @@ async function loadRecords(){
       '<p>The '+(ST.store==='excel'?'sheet':'List')+' was read successfully, but no record has '
       +'<code>'+esc(ST.owner_field)+'</code> set to <b>'+esc(d.owner_filter)+'</b>.'
       +(d.skipped_other_owner?' '+d.skipped_other_owner+' record(s) belong to other owners.':'')
-      +'</p><p style="margin-top:10px">If the records are there, the owner column\'s name '
-      +'probably differs — set <code>SDI_VOICECRM_OWNER_FIELD</code> to match.</p>');
+      +'</p>'
+      +(d.sheet?'<p style="margin-top:10px">Read worksheet <b>'+esc(d.sheet)+'</b>'
+        +(d.sheets&&d.sheets.length>1?' (of: '+d.sheets.map(esc).join(', ')+')':'')
+        +(d.header_row?', headings taken from row <b>'+esc(d.header_row)+'</b>':'')+'.</p>':'')
+      +(d.owner_field_found===false?'<p style="margin-top:10px">No column called <code>'
+        +esc(ST.owner_field)+'</code> was found. Columns seen:</p><p style="margin-top:6px">'
+        +(d.headers_seen||[]).map(h=>'<code>'+esc(h)+'</code>').join(' ')+'</p>'
+        +'<p style="margin-top:8px">Set <code>SDI_VOICECRM_OWNER_FIELD</code> to the owner '
+        +'column\'s heading exactly as shown.</p>':'')
+      +(d.owner_field_found&&d.owner_values?'<p style="margin-top:10px">Values in <code>'
+        +esc(ST.owner_field)+'</code>: '+d.owner_values.map(v=>'<b>'+esc(v[0])+'</b> ×'+v[1]).join(', ')
+        +'</p><p style="margin-top:8px">If Nick appears under a different value, set '
+        +'<code>SDI_VOICECRM_OWNER</code> to it.</p>':''));
   }else{
     PROJECTS=d.items;
     h='<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';

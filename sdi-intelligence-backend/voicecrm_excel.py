@@ -67,6 +67,11 @@ def _col_letter(index: int) -> str:
     return letters
 
 
+def _norm(name) -> str:
+    """Heading comparison: case- and spacing-insensitive."""
+    return " ".join(str(name or "").split()).lower()
+
+
 def _fingerprint(cells: list) -> str:
     """Version stamp for one row: hash of its rendered text, order preserved."""
     return hashlib.sha256(
@@ -94,6 +99,14 @@ class ExcelStore:
         # (drive id, item id) once found, so a file located by search is not
         # searched for again on every request.
         self._located: Optional[tuple] = None
+        # Column names the app depends on (the owner column and the editable
+        # ones), set by voicecrm.py. The header row — and, when no sheet is
+        # configured, the worksheet — is the one where these actually appear:
+        # real trackers put a title row above the headings and summary tabs
+        # in front of the data, and "first row with text on the first tab" read
+        # Nick's title row as headings and matched none of his 76 records.
+        self.key_columns: list[str] = []
+        self._chosen_sheet: Optional[str] = None
 
     # ── Graph plumbing ──────────────────────────────────────────────────────
 
@@ -143,8 +156,8 @@ class ExcelStore:
 
         base = f"{GRAPH}/drives/{drive_id}/items/{meta.get('id')}/workbook"
 
-        sheet = self.sheet
-        if not sheet:
+        names = [self.sheet] if self.sheet else []
+        if not names:
             ws = client.get(f"{base}/worksheets", params={"$select": "name"}, headers=headers)
             if ws.status_code != 200:
                 return None, self._err(ws)
@@ -152,9 +165,8 @@ class ExcelStore:
             if not names:
                 return None, {"state": "graph_error", "status": 200,
                               "detail": "The workbook has no worksheets."}
-            sheet = names[0]
 
-        return {"base": base, "sheet": sheet,
+        return {"base": base, "sheets": names,
                 "modified": meta.get("lastModifiedDateTime", "")}, None
 
     def _find_by_name(self, client: httpx.Client, headers: dict, site_id: str,
@@ -222,14 +234,57 @@ class ExcelStore:
                 "row0": int(data.get("rowIndex", 0)),      # 0-based sheet row of grid[0]
                 "col0": int(data.get("columnIndex", 0))}, None
 
-    @staticmethod
-    def _headers_row(grid: list) -> tuple[int, list[str]]:
-        """First row with any text is the header row. Returns (offset, names)."""
-        for i, row in enumerate(grid):
-            names = [str(c or "").strip() for c in row]
-            if any(names):
-                return i, names
-        return 0, []
+    def _headers_row(self, grid: list) -> tuple[int, list[str], bool]:
+        """The header row: among the first rows, the one naming the most key
+        columns. Falls back to the first row with any text. Returns
+        (offset, names, found) — names are whitespace-tidied, and a heading that
+        matches a key column ignoring case and spacing takes the key's spelling,
+        so "AM owner " in the sheet is the configured "AM Owner"."""
+        keys = {_norm(k): k for k in self.key_columns}
+        best, first = None, None
+        for i, row in enumerate(grid[:25]):
+            names = [" ".join(str(c or "").split()) for c in row]
+            if not any(names):
+                continue
+            names = [keys.get(_norm(n), n) for n in names]
+            if first is None:
+                first = (i, names)
+            hits = sum(1 for n in names if _norm(n) in keys)
+            if hits and (best is None or hits > best[0]):
+                best = (hits, i, names)
+        if best:
+            return best[1], best[2], True
+        if first:
+            return first[0], first[1], False
+        return 0, [], False
+
+    def _load(self, client: httpx.Client, token: str):
+        """Workbook + chosen sheet + its grid + header row, or an error payload."""
+        wb, err = self._workbook(client, token)
+        if err:
+            return None, err
+        order = list(wb["sheets"])
+        if self._chosen_sheet in order:
+            order.remove(self._chosen_sheet)
+            order.insert(0, self._chosen_sheet)
+        fallback, last_err = None, None
+        for name in order[:12]:
+            used, err = self._used_range(client, token, {**wb, "sheet": name})
+            if err:
+                last_err = err
+                continue
+            off, headers, found = self._headers_row(used["grid"])
+            if found or not self.key_columns:
+                self._chosen_sheet = name
+                return {**wb, "sheet": name, "used": used, "hdr": off,
+                        "headers": headers, "found": True}, None
+            if fallback is None:
+                fallback = {**wb, "sheet": name, "used": used, "hdr": off,
+                            "headers": headers, "found": False}
+        if fallback:
+            self._chosen_sheet = fallback["sheet"]
+            return fallback, None
+        return None, last_err or {"state": "empty_sheet", "detail": "No readable worksheet."}
 
     # ── The backend interface voicecrm.py consumes ──────────────────────────
 
@@ -237,17 +292,14 @@ class ExcelStore:
         """Every data row, shaped like List items. Caller applies the owner filter."""
         try:
             with httpx.Client(timeout=30) as client:
-                wb, err = self._workbook(client, token)
-                if err:
-                    return {**err, "items": []}
-                used, err = self._used_range(client, token, wb)
+                wb, err = self._load(client, token)
                 if err:
                     return {**err, "items": []}
         except httpx.HTTPError as exc:
             return {"state": "unreachable", "items": [],
                     "detail": f"Could not reach Microsoft Graph: {exc}"}
 
-        hdr_offset, headers = self._headers_row(used["grid"])
+        used, hdr_offset, headers = wb["used"], wb["hdr"], wb["headers"]
         if not headers:
             return {"state": "empty_sheet", "items": [],
                     "detail": f"No header row found on '{wb['sheet']}'."}
@@ -268,7 +320,9 @@ class ExcelStore:
                 "modified": wb["modified"],
                 "fields": fields,
             })
-        return {"state": "ok", "items": items, "sheet": wb["sheet"]}
+        return {"state": "ok", "items": items, "sheet": wb["sheet"],
+                "sheets": wb["sheets"], "header_row": used["row0"] + hdr_offset + 1,
+                "headers": [h for h in headers if h], "key_columns_found": wb["found"]}
 
     def fetch(self, token: str, item_id: str) -> tuple[Optional[dict], Optional[dict]]:
         """One row by its xl<row> id, with the addresses needed to write to it."""
@@ -283,17 +337,14 @@ class ExcelStore:
 
         try:
             with httpx.Client(timeout=30) as client:
-                wb, err = self._workbook(client, token)
-                if err:
-                    return None, err
-                used, err = self._used_range(client, token, wb)
+                wb, err = self._load(client, token)
                 if err:
                     return None, err
         except httpx.HTTPError as exc:
             return None, {"state": "unreachable",
                           "detail": f"Could not reach Microsoft Graph: {exc}"}
 
-        hdr_offset, headers = self._headers_row(used["grid"])
+        used, hdr_offset, headers = wb["used"], wb["hdr"], wb["headers"]
         grid_index = (sheet_row - 1) - used["row0"]
         if grid_index <= hdr_offset or grid_index >= len(used["grid"]):
             return None, {"state": "conflict",

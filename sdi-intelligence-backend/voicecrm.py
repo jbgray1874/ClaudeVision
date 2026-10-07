@@ -30,6 +30,7 @@ must be in SDI_GRAPH_SCOPES and consented, or every call returns no_token.
 
 import json
 import os
+from collections import Counter
 from typing import Any
 
 import httpx
@@ -139,10 +140,18 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
                 skipped += 1
                 continue
             rows.append(item)
-        return {"state": "ok", "items": rows, "owner_filter": OWNER,
-                "skipped_other_owner": skipped, "sheet": data.get("sheet", ""),
-                "owner_field_found": (any(OWNER_FIELD in r["fields"] for r in rows)
-                                      if rows else None)}
+        out = {"state": "ok", "items": rows, "owner_filter": OWNER,
+               "skipped_other_owner": skipped, "sheet": data.get("sheet", ""),
+               "owner_field_found": OWNER_FIELD in data.get("headers", [])}
+        if not rows:
+            # Say what WAS there, so the fix is one look rather than a guess.
+            counts = Counter(str(i["fields"].get(OWNER_FIELD, "")).strip() or "(blank)"
+                             for i in data["items"])
+            out.update({"sheets": data.get("sheets", []),
+                        "header_row": data.get("header_row"),
+                        "headers_seen": data.get("headers", [])[:40],
+                        "owner_values": counts.most_common(8)})
+        return out
 
     headers = {"Authorization": f"Bearer {token}"}
     try:
@@ -218,6 +227,8 @@ _EDITABLE_DEFAULT = ("Status,Action date,End date" if STORE == "excel"
 EDITABLE = [f.strip() for f in
             _opt("SDI_VOICECRM_EDITABLE", _EDITABLE_DEFAULT).split(",")
             if f.strip()]
+if EXCEL:
+    EXCEL.key_columns = [OWNER_FIELD, *EDITABLE]
 
 _journal = journal.UpdateJournal()
 
