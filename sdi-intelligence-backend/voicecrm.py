@@ -31,6 +31,7 @@ must be in SDI_GRAPH_SCOPES and consented, or every call returns no_token.
 import json
 import re
 import os
+import time
 from collections import Counter
 from datetime import date
 from typing import Any
@@ -564,6 +565,12 @@ def journal_view(request: Request, limit: int = 25, user: dict = Depends(auth.re
 # ═══════════════════════════════════════════════════════════════════════════
 
 INTERPRET_MODEL = _opt("SDI_VOICECRM_MODEL", "claude-opus-5-5")
+# How hard the model thinks per spoken request. Voice turns are short
+# (match a record, read or propose one change), so "low" keeps the reply
+# quick; raise to "medium" (the model's default) if answers to broad
+# questions ("what's at risk?") get thinner. Every write is still checked by
+# this code and confirmed by the person, whatever the setting.
+INTERPRET_EFFORT = _opt("SDI_VOICECRM_EFFORT", "low").lower()
 
 
 def _interpret_ready() -> bool:
@@ -704,11 +711,13 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     }, ensure_ascii=False)
 
     client = anthropic.Anthropic()
+    started = time.monotonic()
     try:
         resp = client.messages.create(
             model=INTERPRET_MODEL,
             max_tokens=4000,
             thinking={"type": "adaptive"},
+            output_config={"effort": INTERPRET_EFFORT},
             system=_INTERPRET_SYSTEM,
             messages=[{"role": "user", "content": payload}],
         )
@@ -742,7 +751,8 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
     print(f"[voicecrm.interpret] user={user.get('email','')} records={len(body.projects)} "
           f"heard={transcript[:120]!r} action={action} "
           f"changes={[(c.get('item_id'), c.get('field')) for c in raw_changes if isinstance(c, dict)]!r} "
-          f"say={say[:120]!r}", flush=True)
+          f"say={say[:120]!r} effort={INTERPRET_EFFORT} secs={time.monotonic() - started:.1f}",
+          flush=True)
 
     if action == "update":
         known_ids = {str(p.get("id")) for p in body.projects}
@@ -820,7 +830,6 @@ def briefing(request: Request, user: dict = Depends(auth.require_user)):
     """The spoken briefing: changes saved in the last 24 hours, movement in the
     sheet since the last review, the headline counts and the top three.
     Rule-based only (no model call), so it starts speaking in a second or two."""
-    import time
     import morning_review
     if not EXCEL:
         return {"state": "not_excel", "detail": "The briefing reads the Excel tracker."}
