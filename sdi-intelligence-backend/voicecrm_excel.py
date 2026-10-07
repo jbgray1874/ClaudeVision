@@ -106,6 +106,7 @@ class ExcelStore:
         # in front of the data, and "first row with text on the first tab" read
         # Nick's title row as headings and matched none of his 76 records.
         self.key_columns: list[str] = []
+        self._download_only = False
         self._chosen_sheet: Optional[str] = None
 
     # ── Graph plumbing ──────────────────────────────────────────────────────
@@ -153,6 +154,9 @@ class ExcelStore:
                 return None, self._err(item)
         drive_id = (meta.get("parentReference") or {}).get("driveId", "")
         self._located = (drive_id, meta.get("id"))
+        if self._download_only:
+            return {"drive_id": drive_id, "item_id": meta.get("id"),
+                    "modified": meta.get("lastModifiedDateTime", "")}, None
 
         base = f"{GRAPH}/drives/{drive_id}/items/{meta.get('id')}/workbook"
 
@@ -410,3 +414,27 @@ class ExcelStore:
             return {"state": "failed", "status": res.status_code,
                     "detail": self._graph_detail(res)}
         return None
+
+    def download(self, token: str) -> tuple[Optional[bytes], Optional[dict]]:
+        """The whole workbook file, for a reader with no signed-in user.
+
+        The scheduled morning review runs with an app-only token, which the
+        workbook (Excel) API does not accept; the file itself can always be
+        downloaded, and is then read locally. Read-only by construction.
+        """
+        try:
+            with httpx.Client(timeout=60, follow_redirects=True) as client:
+                self._download_only = True
+                try:
+                    loc, err = self._workbook(client, token)
+                finally:
+                    self._download_only = False
+                if err:
+                    return None, err
+                res = client.get(f"{GRAPH}/drives/{loc['drive_id']}/items/{loc['item_id']}/content",
+                                 headers=self._headers(token))
+        except httpx.HTTPError as exc:
+            return None, {"state": "unreachable", "detail": f"Could not reach Microsoft Graph: {exc}"}
+        if res.status_code != 200:
+            return None, self._err(res)
+        return res.content, None

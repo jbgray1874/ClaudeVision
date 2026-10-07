@@ -776,3 +776,56 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
                 "new_value": first["new_value"]}
 
     return {"state": action, "say": say or "Sorry, I have nothing useful to say about that."}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Morning review — the same review the scheduled 7:50 job emails, on demand.
+# Read-only. Preview for anyone signed in who can see the sandbox; sending is
+# limited to the pilot writers. See morning_review.py.
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _review_for(request: Request) -> tuple[dict | None, dict | None]:
+    import morning_review
+    if not EXCEL:
+        return None, {"state": "not_excel", "detail": "The review reads the Excel tracker."}
+    if not auth.sso_applies(request):
+        return None, {"state": "sign_in_elsewhere",
+                      "detail": "Open the app on its published address to run the review."}
+    token = auth.graph_token(request)
+    if not token:
+        return None, {"state": "no_token", "detail": "No Microsoft Graph token for this session."}
+    data = EXCEL.rows(token)
+    if data.get("state") != "ok":
+        return None, data
+    return morning_review.compose([i["fields"] for i in data["items"]], data.get("headers", []),
+                                  OWNER_FIELD, OWNER or "NG"), None
+
+
+@router.get("/api/voicecrm/review")
+def review_preview(request: Request, user: dict = Depends(auth.require_user)):
+    """Today's morning review, built now from the sheet. Nothing is sent or saved."""
+    import morning_review
+    composed, err = _review_for(request)
+    if err:
+        return err
+    r = composed["review"]
+    return {"state": "ok", "counts": r["counts"], "previous_date": r["previous_date"],
+            "subject": composed["email"]["subject"], "text": composed["email"]["text"],
+            "html": composed["email"]["html"], "recipients": morning_review.recipients(),
+            "can_send": _may_write(user)}
+
+
+@router.post("/api/voicecrm/review/send")
+def review_send(request: Request, user: dict = Depends(auth.require_user)):
+    """Build the review now and email it to SDI_REVIEW_TO. Pilot writers only."""
+    import morning_review
+    if not _may_write(user):
+        return {"state": "not_a_writer", "detail": "Only the pilot's named people can send the review."}
+    if not morning_review.recipients():
+        return {"state": "no_recipients", "detail": "SDI_REVIEW_TO is empty in the service .env."}
+    composed, err = _review_for(request)
+    if err:
+        return err
+    result = morning_review.send(composed)
+    return {"state": "sent" if result.get("sent") else "not_sent", **result,
+            "subject": composed["email"]["subject"]}

@@ -43,3 +43,4 @@ msal>=1.28,<2.0        # Entra ID sign-in (auth.py) — OIDC auth code + PKCE
 itsdangerous>=2.1,<3.0 # signs the session cookie (auth.py)
 httpx>=0.27,<1.0       # Microsoft Graph calls (voicecrm.py)
 cryptography>=42.0     # encrypts the session store at rest (session_store.py)
+openpyxl>=3.1,<4.0      # morning_review.py reads the downloaded tracker (scheduled run)

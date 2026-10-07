@@ -136,6 +136,17 @@
     </div>
   </div>
 
+  <div class="vc" id="mr" style="display:none">
+    <h4>Morning review</h4>
+    <div class="vc-state" id="mrstate">Today's review of your records, the same one that is emailed each
+      weekday morning: what is overdue or inconsistent, and the five to decide on.</div>
+    <div class="vc-confirm show" style="margin-top:10px">
+      <button class="btn" onclick="loadReview()">Show today's review</button>
+      <button class="btn" id="mrsend" style="display:none" onclick="sendReview()">Email it now</button>
+    </div>
+    <div id="mrbody" style="white-space:pre-wrap;font-size:14px;line-height:1.5;margin-top:12px"></div>
+  </div>
+
   <div id="body"><div class="msg">Checking…</div></div>
   <div class="foot" id="foot"></div>
 </div>
@@ -530,6 +541,28 @@ async function answerConfirm(yes){
   loadRecords();          // show the sheet as it now is
 }
 
+// ── Morning review (read-only) ────────────────────────────────────────────────
+async function loadReview(){
+  $('mrstate').textContent='Building today\'s review from the sheet…'; $('mrbody').textContent='';
+  let r;
+  try{ const res=await fetch('../api/voicecrm/review',{cache:'no-store',redirect:'manual'});
+       if(res.type==='opaqueredirect'||res.status===0){ renewSignIn(); return; }
+       r=await res.json(); }
+  catch(e){ $('mrstate').textContent='The service did not answer: '+e.message; return; }
+  if(r.state!=='ok'){ $('mrstate').textContent='Could not build the review: '+(typeof r.detail==='string'?r.detail:r.state); return; }
+  $('mrstate').textContent=r.subject+(r.recipients&&r.recipients.length?' · emails go to '+r.recipients.join(', '):'');
+  $('mrbody').textContent=r.text;
+  $('mrsend').style.display=r.can_send&&r.recipients&&r.recipients.length?'':'none';
+}
+async function sendReview(){
+  $('mrstate').textContent='Sending…';
+  let r;
+  try{ r=await post('../api/voicecrm/review/send',{}); }
+  catch(e){ $('mrstate').textContent='The service did not answer: '+e.message; return; }
+  $('mrstate').textContent=r.state==='sent'?'Sent to '+(r.recipients||[]).join(', ')+'.'
+    :'Not sent: '+(r.reason||r.detail||r.state);
+}
+
 function sendTyped(){
   const t=$('vctext').value.trim();
   if(!t) return;
@@ -637,6 +670,8 @@ async function main(){
             ST.writes_enabled?'c-ok':'c-off')
     + badge(ST.interpret_ready?'Voice brain ready':'Voice brain off',
             ST.interpret_ready?'c-ok':'c-warn');
+
+  if(ST.store==='excel'&&ST.sso_enabled) $('mr').style.display='block';
 
   // The console appears whenever the service can interpret; without a mic the
   // typed input still works, so only the mic button is disabled.
