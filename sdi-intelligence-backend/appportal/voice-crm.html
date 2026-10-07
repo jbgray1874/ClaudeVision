@@ -366,14 +366,26 @@ async function handleTranscript(t){
   }
 }
 
-function handleConfirmSpeech(t){
-  log('you', t);
-  if(/\b(yes|yeah|yep|correct|confirm|go ahead|do it|write it)\b/i.test(t)) answerConfirm(true);
-  else if(/\b(no|nope|cancel|stop|don'?t|wrong)\b/i.test(t)) answerConfirm(false);
-  else{
-    setState('I need a clear yes or no — or use the buttons.');
-    say('Sorry — yes or no?', ()=>startListening('confirm'));
+// A reply to a read-back is short. Anything longer is a new request: the
+// waiting change is dropped (recorded as declined) and the new one handled -
+// otherwise "...the One Stop Shop gateposts..." would count as "no", and any
+// sentence without yes/no left the page waiting for an answer forever.
+const YES=/\b(yes|yeah|yep|correct|confirm|go ahead|do it|write it|save it)\b/i;
+const NO=/\b(no|nope|cancel|stop|don'?t|wrong)\b/i;
+async function handleConfirmSpeech(t){
+  const short=t.trim().split(/\s+/).length<=4;
+  if(short&&YES.test(t)){ log('you', t); return answerConfirm(true); }
+  if(short&&NO.test(t)){ log('you', t); return answerConfirm(false); }
+  if(!short&&PENDING){
+    const pid=PENDING.proposal_id; PENDING=null;
+    $('vcconfirm').classList.remove('show');
+    try{ await post('../api/voicecrm/confirm',{proposal_id:pid,confirmed:false}); }catch(e){}
+    log('app','(Previous change cancelled — nothing was saved.)');
+    return handleTranscript(t);
   }
+  log('you', t);
+  setState('I need a clear yes or no — or use the buttons.');
+  say('Sorry — yes or no?', ()=>startListening('confirm'));
 }
 
 async function answerConfirm(yes){
