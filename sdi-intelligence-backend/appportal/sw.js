@@ -7,7 +7,7 @@
  * Deliberately NOT cached: anything under /api/files or /api/file. Those serve
  * real company documents from the shares and must never sit in a device cache.
  */
-const VERSION = 'sdi-app-v2';   // v2: two-column launcher (1 Oct 2026)
+const VERSION = 'sdi-app-v3';   // v3: never cache API/auth state (7 Oct 2026)
 const SHELL = [
   './',
   './index.html',
@@ -35,10 +35,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
 
-  // Never cache file-share traffic.
-  if (url.pathname.startsWith('/api/file')) return;
-
   // Catalogue: network-first so a published change shows up straight away.
+  // This is the ONLY API traffic the worker may touch.
   if (url.pathname.startsWith('/api/services') || url.pathname.endsWith('services.json')) {
     e.respondWith(
       fetch(req)
@@ -51,6 +49,11 @@ self.addEventListener('fetch', e => {
     );
     return;
   }
+
+  // Everything else under /api/ or /auth/ is live state — sign-in status,
+  // records, journal. Serving yesterday's copy of any of it is worse than an
+  // honest network error, so the worker stays out of the way entirely.
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/auth/')) return;
 
   // Shell: cache-first, with a background refresh.
   e.respondWith(
