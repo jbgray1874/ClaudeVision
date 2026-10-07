@@ -3789,11 +3789,17 @@ def check_the_sheets_charge_agrees_with_the_engines_material_basis(summary: Any)
     fe = _node(summary, "final_estimate")
     if not fe:
         return []
+    # THE FACTOR AND THE FLOOR LIVE IN config, NOT HERE (the rate audit counts a literal in
+    # this module as a rate kept outside its one place). No config, no verdict.
     try:
         import config as _cfg
-        _factor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FACTOR", 5.0) or 5.0)
+        _factor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FACTOR"))
+        _floor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FLOOR_GBP"))
     except Exception:                                                # noqa: BLE001
-        _factor = 5.0
+        return _unevaluated("sheet_charge_disagrees_with_engine_material_basis",
+                            "config carries no MATERIAL_BASIS_DISAGREEMENT_FACTOR / "
+                            "_FLOOR_GBP, so the sheet's charge could not be compared with "
+                            "the engine's material basis.")
     _by_pn: Dict[str, Dict[str, Any]] = {}
     for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
         if isinstance(_pe, dict) and _pe.get("part_number"):
@@ -3818,7 +3824,7 @@ def check_the_sheets_charge_agrees_with_the_engines_material_basis(summary: Any)
             continue
         charged = total / qty
         hi, lo = max(basis, charged), min(basis, charged)
-        if hi < 1.0:
+        if hi < _floor:
             continue
         ratio = (hi / lo) if lo > 0 else float("inf")
         if ratio < _factor:

@@ -1682,6 +1682,8 @@ SPECIFICATION_DEFAULT_SENTENCES = [
 # charged £0.05 for a 20 x 18 blank nested 2,542 to a sheet; the book reconciled and said nothing.
 # A nested line whose two readings differ by this factor (or more) fails a check, both named.
 MATERIAL_BASIS_DISAGREEMENT_FACTOR = 5.0
+# Below this on both sides the gap is pence and is not worth a failed check.
+MATERIAL_BASIS_DISAGREEMENT_FLOOR_GBP = 1.0
 # ── A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406) ──────────────────────────────────
 # M&S 12675-01: three concept sheets titled "… — DESIGN INTENT" / "DESIGN INTENT ONLY", every
 # MATERIAL / FINISH / COLOUR field "SEE PART DRAWINGS", no parts list and no part sheets. The
