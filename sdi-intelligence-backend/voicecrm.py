@@ -537,6 +537,31 @@ def _interpret_ready() -> bool:
         return False
 
 
+def _canonical_id(raw, known_ids: set) -> str:
+    """The model's record reference as one of the ids it was given, or "".
+
+    It is handed ids like "xl8" but sometimes returns "8", "XL8" or "row 8".
+    Each still names exactly one row; anything that does not resolve to an id
+    it was given is still discarded.
+    """
+    text = str(raw or "").strip().lower()
+    if text in known_ids:
+        return text
+    digits = re.sub(r"\D", "", text)
+    if digits and f"xl{digits}" in known_ids:
+        return f"xl{digits}"
+    return ""
+
+
+def _canonical_field(raw) -> str:
+    """The model's column name as the editable column it means, or as given."""
+    wanted = " ".join(str(raw or "").replace("_", " ").split()).lower()
+    for f in EDITABLE:
+        if " ".join(f.split()).lower() == wanted:
+            return f
+    return str(raw or "")
+
+
 class InterpretIn(BaseModel):
     transcript: str
     # The records the screen is currently showing, trimmed by the browser to
@@ -658,12 +683,17 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
                 "say": "I couldn't make sense of that. Could you rephrase it?"}
 
     say = str(parsed.get("say") or "")[:900]
+    # One line per request in the service log: what was heard, how many
+    # records the model was given, and what it decided. No record contents.
+    print(f"[voicecrm.interpret] user={user.get('email','')} records={len(body.projects)} "
+          f"heard={transcript[:120]!r} action={action} item_id={parsed.get('item_id')!r} "
+          f"field={parsed.get('field')!r} say={say[:120]!r}", flush=True)
 
     if action == "update":
-        item_id = str(parsed.get("item_id") or "")
-        field = str(parsed.get("field") or "")
-        new_value = str(parsed.get("new_value") or "")
         known_ids = {str(p.get("id")) for p in body.projects}
+        item_id = _canonical_id(parsed.get("item_id"), known_ids)
+        field = _canonical_field(parsed.get("field"))
+        new_value = str(parsed.get("new_value") or "")
         # The model proposes; this code decides. An id or field it was not
         # given is discarded, not trusted.
         if item_id not in known_ids:
