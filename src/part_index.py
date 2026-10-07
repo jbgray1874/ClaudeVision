@@ -238,7 +238,10 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         title_block_drawing_numbers = title_block.get("drawing_numbers", [])
         page_target_part_numbers: List[str] = []
 
-        if page_role == "detail":
+        if page_role == "design_intent":
+            # A DESIGN-INTENT SHEET MINTS NO PART (D-406): its drawing number names an idea.
+            pass
+        elif page_role == "detail":
             page_target_part_numbers.extend(
                 [value for value in title_block_drawing_numbers if is_valid_part_identifier(value)]
             )

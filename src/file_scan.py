@@ -987,6 +987,19 @@ def scan_folder_job(
     )
 
 
+def design_intent_pages(summary: Any) -> List[Any]:
+    """The page numbers whose role is design_intent (D-406), in order."""
+    out: List[Any] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict):
+            continue
+        _r = pg.get("page_role")
+        _r = _r.get("primary_role") if isinstance(_r, dict) else _r
+        if str(_r or "").strip().lower() == "design_intent":
+            out.append(pg.get("page_number"))
+    return out
+
+
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
     full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
@@ -1013,6 +1026,20 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
 
     signals: List[str] = []
     primary_role = "detail"
+
+    # A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406). "… — DESIGN INTENT" in the title
+    # block, "DESIGN INTENT ONLY" on the sheet, a concept's block model: a drawing of an idea,
+    # not of parts. It mints no part (part_index) and, with nothing else in the pack, the
+    # drawings run stops and names the method that answers it. Vocabulary in config.
+    try:
+        _di_markers = [re.compile(m, re.IGNORECASE)
+                       for m in (getattr(config, "DESIGN_INTENT_MARKERS", None) or [])]
+    except re.error:
+        _di_markers = []
+    if _di_markers and not bom_header_detected and bom_row_count == 0 and any(
+            m.search(full_text) for m in _di_markers):
+        signals.append("design_intent_detected")
+        return {"primary_role": "design_intent", "signals": signals}
 
     if bom_row_count > 0:
         signals.append("bom_rows_detected")
@@ -2629,9 +2656,12 @@ def _finalize_scan_summary(
                     for p in (summary.get("pages") or [])
                     if p.get("page_number") in (_part.get("pages") or [])
                 )
+                # A WEIGHT THE SHEET QUALIFIES AS SOMETHING ELSE'S IS NOT THE PART'S (D-406):
+                # "ESTIMATED BAG WEIGHT - 1.5kg" became 12675-01-02's weight.
+                from extractor_patterns import strip_weights_not_the_parts as _strip_w
                 _weight_matches = re.findall(
                     r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9]+(?:\.[0-9]+)?)\s*(KG|G)\b",
-                    _all_page_text.upper(),
+                    _strip_w(_all_page_text).upper(),
                 )
                 # THE SAME RULE THE SUPPRESSION PASS USES, ASKED HERE TOO.
                 #
@@ -4296,6 +4326,20 @@ def _finalize_scan_summary(
             "ordinary waterfall prices them.")
         print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
               "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
+    # A DESIGN-INTENT PACK ON AN ENGINE RUN IS THE SAME EMPTY BOOK (D-406). 12675-01: three
+    # concept sheets, no parts list, no part sheets; the readers minted a part per drawing
+    # number and costed a tube callout as a 20 mm blank. With nothing the readers can cost,
+    # the book is empty by mode and says so — and names the method that answers the pack.
+    _design_intent_pages = design_intent_pages(summary)
+    if _design_intent_pages and _no_parts and not _llm_only_run and not _is_render_pack:
+        summary.setdefault("review_flags", []).append(
+            f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
+            f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
+            f"readers have nothing to cost and this book is empty by mode, not by content. Run "
+            f"the design being priced as LLM SCAN ONLY with an enquiry brief, one design per "
+            f"run, or have Design detail it into a GA with a parts list and part sheets.")
+        print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
+              "Run it as LLM SCAN ONLY with an enquiry brief, one design per run.", flush=True)
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the

@@ -1677,6 +1677,30 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     # standing instruction, which a route may rest on only as an inference that says so.
     r"\b(?:ALWAYS\s+)?REMOVE\s+(?:ALL\s+)?BURRS?\s+AND\s+SHARP\s+(?:CORNERS|EDGES)\b",
 ]
+# ── A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406) ──────────────────────────────────
+# M&S 12675-01: three concept sheets titled "… — DESIGN INTENT" / "DESIGN INTENT ONLY", every
+# MATERIAL / FINISH / COLOUR field "SEE PART DRAWINGS", no parts list and no part sheets. The
+# drawings run minted a part from each sheet's drawing number and costed it: "40 x 20mm …
+# OVAL TUBE" became a 40 x 20 blank of 20 mm stainless, "ESTIMATED BAG WEIGHT - 1.5kg" became
+# its weight, and a 25/09 concept's 83.86 kg (bags included) became another part's. A sheet
+# that says it is design intent mints no part; a pack with nothing else stops and says which
+# method answers it (the concept read with a brief).
+DESIGN_INTENT_MARKERS = [
+    r"\bDESIGN\s+INTENT\b", r"\bCONCEPT\s+ONLY\b", r"\bNOT\s+FOR\s+MANUFACTURE\b",
+    r"\bFOR\s+(?:DISCUSSION|APPROVAL|COMMENT)\s+ONLY\b", r"\bBLOCK\s+MODEL\b",
+]
+# A size that names a SECTION is the stock's profile, never a blank and never a gauge:
+# "40 x 20mm … OVAL TUBE", "30 x 30 x 2mm SHS", "25 x 3 FLAT BAR".
+SECTION_CALLOUT_WORDS = [
+    r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
+    r"FLAT\s+BAR", r"BAR", r"ROD", r"UPRIGHT", r"POST",
+]
+# A weight the sheet qualifies as somebody else's — the customer's goods, a load, an estimate
+# of the product — is never the part's stated weight. Only the title block's own WEIGHT: is.
+WEIGHT_QUALIFIERS_NOT_THE_PARTS = [
+    r"ESTIMATED", r"EST\.?", r"APPROX(?:IMATE(?:LY)?)?", r"MAX(?:IMUM)?", r"LOAD(?:ING)?",
+    r"CAPACITY", r"BAGS?", r"PRODUCTS?", r"GOODS", r"CUSTOMER", r"GROSS", r"SHIPPING", r"TOTAL",
+]
 # ── A FLAT PATTERN IS NOT A TUBE (D-403) ─────────────────────────────────────────────────
 # 9598-03-01M: a 1.2 mm frame with a measured DXF flat and a sheet-metal cut list was given
 # Tube (£8.79) and Tubebend (£25.72) rows at one off, inferred by the vision read from "radii
