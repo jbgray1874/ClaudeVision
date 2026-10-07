@@ -76,6 +76,16 @@ GRAPH_SCOPES = [s for s in _opt("SDI_GRAPH_SCOPES", "User.Read").split() if s]
 COOKIE_SECURE = _flag("SDI_COOKIE_SECURE", True)
 ALLOW_API_KEY = _flag("SDI_ALLOW_API_KEY", True)
 
+# Where sign-in applies. Entra only returns a browser to an https address or to
+# http://localhost, so sign-in can only complete on the published (App Proxy)
+# hostname or on the server itself. A desk PC on http://10.0.0.5 was sent to its
+# OWN "localhost" after login and could never get in. Once public hosts are
+# set, requests arriving by any other name (the office network) are served as
+# they were before SSO; anything needing the person's identity says to use the
+# public address instead.
+PUBLIC_HOSTS = {h.strip().lower() for h in _opt("SDI_PUBLIC_HOSTS").split(",") if h.strip()}
+_LOCAL_HOSTS = {"localhost", "127.0.0.1"}
+
 AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}" if TENANT_ID else ""
 ENABLED = bool(TENANT_ID and CLIENT_ID and CLIENT_SECRET and SESSION_SECRET)
 
@@ -115,11 +125,35 @@ def _reap() -> None:
         _STORE.reap()
 
 
+def request_host(request: Request) -> str:
+    return request.headers.get("host", "").split(":")[0].strip().lower()
+
+
+def sso_applies(request: Request) -> bool:
+    """Whether this request can - and so must - sign in."""
+    if not ENABLED:
+        return False
+    if not PUBLIC_HOSTS:
+        return True                     # nothing published yet: behave as before
+    host = request_host(request)
+    return host in PUBLIC_HOSTS or host in _LOCAL_HOSTS
+
+
+def redirect_uri_for(request: Request) -> str:
+    host = request_host(request)
+    if host in PUBLIC_HOSTS:
+        return f"https://{host}/auth/callback"
+    return REDIRECT_URI
+
+
 def current_user(request: Request) -> Optional[dict]:
     """The signed-in user, or None. Never raises — callers decide the response."""
     if not ENABLED:
         # SSO not configured: the service behaves as before, unauthenticated.
         return {"name": "Unauthenticated (SSO not configured)", "email": "",
+                "oid": "", "kind": "anonymous"}
+    if not sso_applies(request):
+        return {"name": "Office network (not signed in)", "email": "",
                 "oid": "", "kind": "anonymous"}
 
     _reap()
@@ -177,8 +211,12 @@ def login(request: Request, next: str = "/"):
     if not ENABLED:
         raise HTTPException(status_code=503,
                             detail="SSO is not configured. See auth.py for the four required .env values.")
+    if not sso_applies(request):
+        # Cannot complete here (see PUBLIC_HOSTS); the page works without it.
+        return RedirectResponse(url=next if next.startswith("/") else "/", status_code=302)
     try:
-        flow = _msal_app().initiate_auth_code_flow(scopes=GRAPH_SCOPES, redirect_uri=REDIRECT_URI)
+        flow = _msal_app().initiate_auth_code_flow(scopes=GRAPH_SCOPES,
+                                                   redirect_uri=redirect_uri_for(request))
     except ValueError as exc:
         # Almost always a wrong SDI_TENANT_ID, or this host cannot reach
         # login.microsoftonline.com. Say which, rather than a stack trace.
@@ -256,7 +294,9 @@ def logout(request: Request):
         except BadSignature:
             pass
     # Sign out of Entra too, otherwise the next login silently reuses the session.
-    post = str(request.base_url).rstrip("/") + "/"
+    host = request_host(request)
+    post = (f"https://{host}/" if host in PUBLIC_HOSTS
+            else str(request.base_url).rstrip("/") + "/")
     url = (f"{AUTHORITY}/oauth2/v2.0/logout?" + urlencode({"post_logout_redirect_uri": post})
            if ENABLED else "/")
     resp = RedirectResponse(url=url, status_code=302)

@@ -171,6 +171,12 @@ function explain(d){
         +'For Nick\'s spreadsheet sandbox: <code>SDI_VOICECRM_STORE=excel</code>, '
         +'<code>SDI_VOICECRM_SITE</code> as <code>hostname:/sites/SiteName</code>, and '
         +'<code>SDI_VOICECRM_XLSX</code> as the workbook\'s path in the document library.</p>',true);
+    case 'sign_in_elsewhere':
+      return panel('Open AM CRM from its secure address',
+        '<p>'+esc(d.detail||'')+'</p>'
+        +(d.public_url?'<p style="margin-top:10px"><a href="'+esc(d.public_url)+'">'+esc(d.public_url)+'</a></p>':'')
+        +'<p style="margin-top:10px">That address works in the office and anywhere else, '
+        +'on a laptop or phone, after Microsoft sign-in.</p>',true);
     case 'sso_disabled':
       return panel('Sign-in not configured',
         '<p>These records are read as the signed-in person, so Entra SSO has to be '

@@ -105,7 +105,8 @@ def _status_payload() -> dict[str, Any]:
 def status(request: Request, user: dict = Depends(auth.require_user)):
     """What is wired up and what is not — used by the app screen to explain itself."""
     user = auth.current_user(request)
-    return {**_status_payload(), "signed_in": user is not None,
+    return {**_status_payload(), "sso_enabled": auth.sso_applies(request),
+            "signed_in": bool(user) and user.get("kind") == "user",
             "user": (user or {}).get("name", "")}
 
 
@@ -122,6 +123,12 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
     if not auth.ENABLED:
         return {"state": "sso_disabled", "items": [],
                 "detail": "Graph is called as the signed-in user. Configure Entra SSO first."}
+    if not auth.sso_applies(request):
+        public = sorted(auth.PUBLIC_HOSTS)
+        return {"state": "sign_in_elsewhere", "items": [],
+                "public_url": f"https://{public[0]}/app/voice-crm.html" if public else "",
+                "detail": ("These records are read as the signed-in person, and signing "
+                           "in only works on the published address.")}
 
     token = auth.graph_token(request)
     if not token:
