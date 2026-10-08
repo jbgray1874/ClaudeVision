@@ -37,12 +37,13 @@ from datetime import date
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel, Field
 
 import auth
 import journal
 import voicecrm_excel
+import voicecrm_speech
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -88,6 +89,7 @@ def _status_payload() -> dict[str, Any]:
         "store": STORE,
         "workbook": EXCEL.xlsx if EXCEL else "",
         "interpret_ready": _interpret_ready(),
+        **voicecrm_speech.status(),
         "missing_settings": missing,
         "sso_enabled": auth.ENABLED,
         "graph_scopes": auth.GRAPH_SCOPES,
@@ -545,10 +547,46 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
             "old_value": entry["old_value"], "new_value": entry["new_value"]}
 
 
+@router.post("/api/voicecrm/transcribe")
+async def transcribe(request: Request, user: dict = Depends(auth.require_user)):
+    """One recorded sentence (16 kHz mono WAV, the request body) to text, via
+    Azure AI Speech. Used on iPhones, where the browser's own recognition
+    stops when the page scrolls. Writes nothing; the words then go through
+    /interpret like any spoken or typed request."""
+    started = time.monotonic()
+    audio = await request.body()
+    if len(audio) > voicecrm_speech.MAX_AUDIO_BYTES:
+        return {"state": "too_long", "detail": "That was longer than a minute — please say it in shorter parts."}
+    out = voicecrm_speech.transcribe(audio)
+    print(f"[voicecrm.transcribe] user={(user or {}).get('email', '')} bytes={len(audio)} "
+          f"state={out.get('state')} chars={len(out.get('text', ''))} "
+          f"secs={time.monotonic() - started:.1f}", flush=True)
+    return out
+
+
+class SpeakIn(BaseModel):
+    text: str
+
+
+@router.post("/api/voicecrm/speak")
+def speak(body: SpeakIn, request: Request, user: dict = Depends(auth.require_user)):
+    """A reply as MP3 in the configured Azure neural voice. The page falls back
+    to the phone's own voice if this is off or fails."""
+    audio, err = voicecrm_speech.synthesize(body.text)
+    if err:
+        return err
+    return Response(content=audio, media_type="audio/mpeg",
+                    headers={"Cache-Control": "no-store"})
+
+
 class ClientLogIn(BaseModel):
-    reason: str = ""
-    ua: str = ""
-    events: list[str] = []
+    reason: str = Field("", max_length=40)
+    ua: str = Field("", max_length=400)
+    events: list[str] = Field(default_factory=list, max_length=80)
+
+
+# Control characters would let a caller forge extra log lines.
+_CTRL = re.compile(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 
 
 @router.post("/api/voicecrm/clientlog")
@@ -556,9 +594,10 @@ def client_log(body: ClientLogIn, request: Request, user: dict = Depends(auth.re
     """What a phone's mic and speech engine did, so voice problems on someone
     else's phone can be diagnosed from the server log. The page sends event
     names, error codes and lengths only - never what was said."""
-    events = " | ".join(str(e)[:90] for e in body.events[-60:])
-    print(f"[voicecrm.client] user={(user or {}).get('email', '')} reason={body.reason[:30]!r} "
-          f"ua={body.ua[:200]!r} events={events[:4000]}", flush=True)
+    clean = lambda v, n: _CTRL.sub(" ", str(v))[:n]          # noqa: E731
+    events = " | ".join(clean(e, 90) for e in body.events[-60:])
+    print(f"[voicecrm.client] user={(user or {}).get('email', '')} reason={clean(body.reason, 30)!r} "
+          f"ua={clean(body.ua, 200)!r} events={events[:4000]}", flush=True)
     return {"state": "ok"}
 
 
