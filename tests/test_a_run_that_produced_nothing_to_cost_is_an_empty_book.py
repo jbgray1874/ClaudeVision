@@ -376,3 +376,38 @@ def test_the_scan_hands_the_jobs_identity_to_the_guard():
     assert 'job_identity=[summary.get("drawing_number"), summary.get("job_name")' in src
     assert "the pack produced NO part records to match it" in src
     assert '"job_has_no_parts": _empty_job,' in src
+
+
+# ── D-413: an empty book says why BOTH doors gave nothing ───────────────────────────────
+
+def test_the_page_prints_why_the_model_and_the_concept_read_both_gave_nothing():
+    s = _stopped_summary()
+    run_stop.record(
+        s, "design_intent_pack_on_engine_run", STOP_REASON, next_step=NEXT, pages=["1", "2"],
+        model_takeoff=("2 designs in the model under the number this run was given (12675-01) and "
+                       "nothing says which to price: 12675-01-Block Model, 12675-01-02 Block Model V2"),
+        concept_read="the pack contains 12675-01-02 Block Model V2.dxf — measured CAD is never sighted over")
+    stop = run_stop.nothing_to_cost(s)
+    why = run_stop.doors(stop)
+    assert why.startswith("the model take-off did not run: 2 designs in the model")
+    assert "the concept read did not run: the pack contains 12675-01-02 Block Model V2.dxf" in why
+    html_out = jrh._render_run_stop(s)
+    assert "Why both doors gave nothing" in html_out
+    assert "12675-01-Block Model, 12675-01-02 Block Model V2" in html_out
+    assert "measured CAD is never sighted over" in html_out
+    rec = cf.costed_job(s)
+    assert rec["decisions_required"][0]["kind"] == "nothing_to_cost"
+    assert "the model take-off did not run" in rec["decisions_required"][0]["assumption"]
+
+
+def test_a_stop_with_no_door_reasons_prints_none_and_invents_none():
+    s = _stopped_summary()
+    assert run_stop.doors(run_stop.nothing_to_cost(s)) == ""
+    assert "Why both doors" not in jrh._render_run_stop(s)
+
+
+def test_the_scan_records_both_doors_on_the_deferred_stop():
+    src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "_di_pending = (_di_stop, _di_next, _di_why)" in src
+    assert 'model_takeoff=str(_di_pending[2] or "")' in src
+    assert 'or "the concept read produced no part"' in src

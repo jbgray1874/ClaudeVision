@@ -4406,7 +4406,7 @@ def _finalize_scan_summary(
             # THE STOP IS DEFERRED, NOT DROPPED (D-409, D-411): the concept read with the
             # brief is tried first as the fallback James named; if it prices nothing either,
             # the stop is recorded as the fact on the record, as before.
-            _di_pending = (_di_stop, _di_next)
+            _di_pending = (_di_stop, _di_next, _di_why)
             _design_intent_fallback = True
             print("   !! this pack is design-intent sheets on an ENGINE run and the model gave "
                   f"no take-off ({_di_why}) — the concept read with the brief is the fallback; "
@@ -4468,6 +4468,26 @@ def _finalize_scan_summary(
         summary.setdefault("review_flags", []).append(
             "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
+    # ONE DESIGN PER READ (D-413). A design-intent pack holding several designs is read one
+    # design at a time — the sheet(s) the same rule picks that picks a design from the model —
+    # never all three as one stand. A pack it cannot choose from asks, and the read does not run.
+    _fallback_sheets: List[str] = []
+    _fallback_pick: Optional[Dict[str, Any]] = None
+    _fallback_ask = ""
+    if _sight_run and (_no_parts or _is_render_pack) and not _concept_refused and _design_intent_pages:
+        try:
+            import model_takeoff as _mt_sheets
+            _cands = ([str(p) for p in (summary.get("scanned_documents") or [])]
+                      or ([str(pdf_path)] if pdf_path is not None else []))
+            _fallback_pick = _mt_sheets.choose_design_sheets(
+                _cands, declared=str(summary.get("declared_product") or ""),
+                drawing_number=str(summary.get("drawing_number") or ""))
+            if _fallback_pick.get("sheets"):
+                _fallback_sheets = list(_fallback_pick["sheets"])
+            else:
+                _fallback_ask = str(_fallback_pick.get("why_not") or "which design to read is not said")
+        except Exception as _fs_exc:                                    # noqa: BLE001
+            _fallback_ask = f"the design sheets could not be chosen ({type(_fs_exc).__name__}: {_fs_exc})"
     if _concept_refused:
         summary["concept_read"] = {"refused": _concept_refused}
         _cr_stop = (f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable "
@@ -4481,6 +4501,11 @@ def _finalize_scan_summary(
                                    "guessed from pictures while measurable geometry is present.",
                          refused=_concept_refused)
         print(f"   [concept] not sighted — {_concept_refused}", flush=True)
+    elif _fallback_ask:
+        summary["concept_read"] = {"refused": _fallback_ask}
+        summary.setdefault("review_flags", []).append(
+            f"CONCEPT READ NOT RUN: {_fallback_ask}. One design is read per book; say which.")
+        print(f"   [concept] not run — {_fallback_ask}", flush=True)
     elif _sight_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan
@@ -4489,6 +4514,15 @@ def _finalize_scan_summary(
                 _pack = [str(pdf_path)]
             if not _pack and job_folder is not None:
                 _pack = [str(p) for p in sorted(Path(job_folder).glob("*.pdf"))]
+            if _fallback_sheets:
+                # THE CHOSEN DESIGN'S SHEET(S), NOT THE PACK (D-413).
+                _pack = list(_fallback_sheets)
+                print(f"   [concept] reading one design: {_fallback_pick.get('design')} "
+                      f"({_fallback_pick.get('chosen_by')}) — "
+                      f"{', '.join(Path(p).name for p in _pack)}"
+                      + (f"; other designs in the pack, not read: "
+                         f"{', '.join(_fallback_pick.get('other_designs') or [])}"
+                         if _fallback_pick.get("other_designs") else ""), flush=True)
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
@@ -4572,6 +4606,26 @@ def _finalize_scan_summary(
             if _unit:
                 summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
+                # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
+                # report's callout, the sheet's banner and the quote's gate all read this.
+                summary["concept_takeoff"] = {
+                    "source": "vision_concept", "design": _fallback_pick.get("design"),
+                    "design_title": ", ".join(Path(p).name for p in _pack),
+                    "chosen_by": _fallback_pick.get("chosen_by"),
+                    "other_designs": list(_fallback_pick.get("other_designs") or []),
+                    "excluded": [], "parts": len(_sighted), "sheets": list(_pack),
+                    "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
+                }
+                summary.setdefault("review_flags", []).append(
+                    f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "
+                    f"gave no take-off, so the vision model sighted the parts of "
+                    f"{_fallback_pick.get('design')} ({', '.join(Path(p).name for p in _pack)}) "
+                    f"with the enquiry brief: {len(_sighted)} part(s), every size, material and "
+                    f"count an assumption."
+                    + (f" Other designs in the pack, not read: "
+                       f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
+                       f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
@@ -4622,10 +4676,14 @@ def _finalize_scan_summary(
     # as the fact on the record (D-409), with the reasons both doors gave (D-411).
     if _di_pending and not summary["manufacturing_writeup"]["parts"]:
         from run_stop import record as _record_stop
+        # BOTH DOORS' REASONS GO ON THE RECORD (D-413): the 10:40 page said "take the design
+        # off the model" and never why the run had not — the one thing a reader needed.
         _record_stop(summary, "design_intent_pack_on_engine_run", _di_pending[0],
                      next_step=_di_pending[1], pages=[str(p) for p in _design_intent_pages],
+                     model_takeoff=str(_di_pending[2] or ""),
                      concept_read=(str(_concept_refused) if _concept_refused else
-                                   str((summary.get("concept_read") or {}).get("error") or "")))
+                                   str(_fallback_ask or (summary.get("concept_read") or {}).get("error")
+                                       or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)

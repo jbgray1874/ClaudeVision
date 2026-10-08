@@ -122,35 +122,129 @@ def choose_design(roots: Iterable[str], *, declared: str = "", drawing_number: s
     if not roots:
         return None, "the model holds no assembly to take off from", []
     key = {r: _clean(r).upper() for r in roots}
-
     dec = _clean(declared).upper()
+    dn = _clean(drawing_number).upper()
+
+    # THE NUMBER THE RUN WAS GIVEN IS A JOB, NOT AN ASSEMBLY, UNLESS IT NAMES ONE (D-413). The
+    # portal passes the enquiry's Drawing Number as the declared product — "12675-01" — and
+    # on the 10:40 run of 8 Oct that prefix matched two roots and this stopped, "names 2
+    # assemblies", before the GA rule it was written to reach. A declared name that picks out
+    # one root is a choice; one that several roots share is the SCOPE the choice is made in;
+    # one that matches nothing is a question — unless it is just the drawing number, which
+    # scopes to every root.
+    cands = list(roots)
+    scope = ""
     if dec:
         hit = [r for r in roots if key[r] == dec] or [r for r in roots if key[r].startswith(dec)]
         if len(hit) == 1:
             return hit[0], "the product this run was asked for (SDI_PRODUCT)", [r for r in roots if r != hit[0]]
         if len(hit) > 1:
-            return None, (f"the product this run was asked for ({declared}) names "
-                          f"{len(hit)} assemblies in the model: {', '.join(hit)}"), roots
-        # ASKED FOR SOMETHING THE MODEL DOES NOT HOLD AS A DESIGN — a stack of the customer's
-        # bags, a name that is not in the tree. Said, not swapped for a design nobody asked for.
-        return None, (f"the product this run was asked for ({declared}) is not a design in the "
-                      f"model — the designs are: {', '.join(roots)}"), roots
+            cands, scope = hit, f" under the number this run was given ({declared})"
+        elif dec == dn or (dn and dn.startswith(dec)):
+            cands, scope = list(roots), f" under this drawing number ({drawing_number})"
+        else:
+            # ASKED FOR SOMETHING THE MODEL DOES NOT HOLD AS A DESIGN — a stack of the
+            # customer's bags, a name not in the tree. Said, not swapped for a design nobody
+            # asked for.
+            return None, (f"the product this run was asked for ({declared}) is not a design in "
+                          f"the model — the designs are: {', '.join(roots)}"), roots
+    elif dn:
+        hit = [r for r in roots if key[r].startswith(dn)]
+        if hit:
+            cands, scope = hit, f" under this drawing number ({drawing_number})"
 
-    dn = _clean(drawing_number).upper()
-    cands = [r for r in roots if dn and key[r].startswith(dn)] or roots
     if len(cands) == 1:
-        return cands[0], ("the only assembly in the model under this drawing number"
-                          if dn else "the only assembly in the model"), [r for r in roots if r != cands[0]]
+        return cands[0], f"the only assembly in the model{scope}", [r for r in roots if r != cands[0]]
     ga = [r for r in cands if _is_ga_named(r)]
     if len(ga) == 1:
-        return ga[0], "the assembly the GA naming convention marks as the product", [r for r in roots if r != ga[0]]
+        return ga[0], (f"the assembly the GA naming convention marks as the product"
+                       f"{scope}"), [r for r in roots if r != ga[0]]
     top = _clean(top_assembly).upper()
     if top and top in {key[r] for r in cands} and not ga:
         chosen = next(r for r in cands if key[r] == top)
         return chosen, ("the assembly the extract itself chose, nothing in the pack or the "
                         "run saying otherwise — confirm it is the design wanted"), [r for r in roots if r != chosen]
-    return None, (f"{len(cands)} designs in the model and nothing says which to price: "
+    return None, (f"{len(cands)} designs in the model{scope} and nothing says which to price: "
                   f"{', '.join(cands)} — run with SDI_PRODUCT=<assembly name> for the one wanted"), roots
+
+
+_STAGED_HASH_PREFIX = re.compile(r"^[0-9a-f]{12,}-", re.I)
+# A drawing-number token: digits, then one or more dashed segments — "12675-01", "12675-01-02",
+# "12675-01-GA", "12675-01-Block". An enquiry number on its own ("0359972") is not one. The
+# boundary is "not a letter or digit", not \b: M&S join the enquiry number to the drawing
+# number with an underscore, which \b treats as a word character and reads straight through.
+_DRAWING_NUMBER_TOKEN = re.compile(r"(?<![A-Za-z0-9])\d{3,}(?:-[A-Za-z0-9]+)+")
+
+
+def design_label(name: Any, drawing_number: str = "") -> str:
+    """The design a drawing file belongs to, read off its name: the drawing-number token the
+    drawing office put in it — preferring one under this job's number, because M&S file their
+    sheets enquiry-number first ("0359972_12675-01-02 Block Model V2_Design Intent") — with the
+    engine's own staging hash stripped off the front."""
+    base = str(name or "").replace("\\", "/").rsplit("/", 1)[-1]
+    stem = _STAGED_HASH_PREFIX.sub("", base.rsplit(".", 1)[0].strip() if "." in base else base.strip())
+    tokens = _DRAWING_NUMBER_TOKEN.findall(stem)
+    job = _clean(drawing_number).split("-", 1)[0].strip().upper() if drawing_number else ""
+    if job:
+        under = [t for t in tokens if t.upper().startswith(job)]
+        if under:
+            return under[0]
+    if tokens:
+        return tokens[0]
+    try:
+        from product_identity import drawing_of_file                   # noqa: PLC0415
+        num = str((drawing_of_file(base) or {}).get("number") or "").strip()
+    except Exception:                                                  # noqa: BLE001
+        num = ""
+    if not num:
+        num = re.split(r"[\s_]+", stem, maxsplit=1)[0]
+    return _STAGED_HASH_PREFIX.sub("", num).strip()
+
+
+def choose_design_sheets(paths: Iterable[Any], *, declared: str = "", drawing_number: str = ""
+                         ) -> Dict[str, Any]:
+    """ONE DESIGN PER READ (D-413). The concept read takes every page of a pack as one product
+    — right for a render pack, wrong for a design-intent pack holding three designs, which it
+    would read as one stand. The sheets are grouped by the design their names carry and the
+    same rule that picks a design from the model picks one here, so the model take-off and
+    its fallback cannot price two different designs of the same pack.
+
+    Returns {"sheets", "design", "chosen_by", "other_designs", "why_not"}; with one design in
+    the pack every sheet is that design's."""
+    groups: Dict[str, List[str]] = {}
+    for p in paths or ():
+        s = str(p or "").strip()
+        if not s:
+            continue
+        try:
+            from concept_scan import is_brief_page                      # noqa: PLC0415
+            if is_brief_page(s):
+                continue
+        except Exception:                                               # noqa: BLE001
+            pass
+        groups.setdefault(design_label(s, drawing_number) or "?", []).append(s)
+    out: Dict[str, Any] = {"sheets": [], "design": "", "chosen_by": "", "other_designs": [],
+                           "why_not": ""}
+    if not groups:
+        out["why_not"] = "no drawing sheet in the pack to read"
+        return out
+    if len(groups) == 1:
+        label, sheets = next(iter(groups.items()))
+        out.update({"sheets": list(sheets), "design": label,
+                    "chosen_by": "the only design in the pack"})
+        return out
+    chosen, how, others = choose_design(list(groups), declared=declared, drawing_number=drawing_number)
+    if not chosen:
+        out["why_not"] = how
+        out["other_designs"] = list(others)
+        return out
+    out.update({"sheets": list(groups[chosen]), "design": chosen,
+                "chosen_by": how.replace("assembly in the model", "design sheet in the pack")
+                                .replace("assembly the GA naming convention marks",
+                                         "sheet the GA naming convention marks")
+                                .replace("designs in the model", "designs in the pack"),
+                "other_designs": list(others)})
+    return out
 
 
 def members_of(job: Any, root: str) -> Dict[str, float]:
@@ -342,14 +436,27 @@ def takeoff(summary: Dict[str, Any], job: Any, *, declared: str = "", drawing_nu
     return out
 
 
+def is_vision(t: Any) -> bool:
+    """The fallback: the vision model sighted one design's sheet(s) with the brief."""
+    return isinstance(t, dict) and str(t.get("source") or "") == "vision_concept"
+
+
 def sentence(t: Any) -> str:
     """One sentence for the sheet, the quote and the report's callout."""
     if not isinstance(t, dict) or not t.get("design"):
         return ""
+    if is_vision(t):
+        return (f"Concept read of the design-intent sheet {t['design']} by the vision model with the "
+                f"enquiry brief — not a drawings estimate: every size, material and count was sighted, "
+                f"none measured; operations are assumptions to confirm.")
     return (f"Concept take-off from the SolidWorks model {t['design']} — not a drawings estimate: "
             f"parts, sizes, materials and counts are the model's; operations are assumptions to confirm.")
 
 
 def banner(t: Any) -> str:
     s = sentence(t)
-    return ("CONCEPT TAKE-OFF FROM THE MODEL — " + s[len("Concept take-off from the SolidWorks model "):]) if s else ""
+    if not s:
+        return ""
+    if is_vision(t):
+        return "CONCEPT READ OF A DESIGN-INTENT SHEET — " + s[len("Concept read of the design-intent sheet "):]
+    return "CONCEPT TAKE-OFF FROM THE MODEL — " + s[len("Concept take-off from the SolidWorks model "):]

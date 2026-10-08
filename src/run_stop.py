@@ -79,6 +79,22 @@ def sentence(stop: Mapping[str, Any]) -> str:
     return f"No price — nothing to cost: {short}." + (f" {nxt}" if nxt else "")
 
 
+def doors(stop: Mapping[str, Any]) -> str:
+    """Why each door that could have priced the pack gave nothing — the model take-off and the
+    concept read — where the record says. The 10:40 book of 8 Oct printed the stop and the
+    next step and never this, which is the one sentence a reader needed (D-413)."""
+    if not isinstance(stop, Mapping):
+        return ""
+    bits = []
+    m = str(stop.get("model_takeoff") or "").strip().rstrip(".")
+    c = str(stop.get("concept_read") or "").strip().rstrip(".")
+    if m:
+        bits.append(f"the model take-off did not run: {m}")
+    if c:
+        bits.append(f"the concept read did not run: {c}")
+    return "; ".join(bits)
+
+
 def banner(stop: Mapping[str, Any]) -> str:
     """The cell beside Unit Cost and Sell Price. Upper-case lead so it reads as the status it
     is, and never "PROVISIONAL —": that word promises a figure somebody can finish."""

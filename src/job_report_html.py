@@ -872,7 +872,7 @@ def _render_run_stop(summary: Dict[str, Any]) -> str:
     rendered. It is the one fact every other section is about, so it is the first thing read.
     """
     try:
-        from run_stop import nothing_to_cost, sentence, HEADLINE       # noqa: PLC0415
+        from run_stop import nothing_to_cost, sentence, doors, HEADLINE  # noqa: PLC0415
         stop = nothing_to_cost(summary)
     except Exception:                                                # noqa: BLE001
         return ""
@@ -880,10 +880,14 @@ def _render_run_stop(summary: Dict[str, Any]) -> str:
         return ""
     pages = stop.get("pages") or []
     where = (f" Page(s) {_esc(', '.join(str(p) for p in pages))} of the pack." if pages else "")
+    # WHY BOTH DOORS GAVE NOTHING (D-413). An empty book that does not say why the model and
+    # the concept read both produced nothing is a failed run wearing a safety result.
+    why = doors(stop)
+    why_html = (f'<br><b>Why both doors gave nothing:</b> {_esc(why)}.' if why else "")
     return (f'<div class="callout warn" style="border-left:6px solid #b3261e">'
             f'<b>{_esc(HEADLINE)}.</b> {_esc(sentence(stop))}{where} Nothing on this page or '
             f'on the sheet is a price for the product; the sections below describe an empty '
-            f'book and what was set aside, and this is not to be sent as an estimate.</div>')
+            f'book and what was set aside, and this is not to be sent as an estimate.{why_html}</div>')
 
 
 def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
@@ -898,6 +902,22 @@ def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
     others = [str(o) for o in (t.get("other_designs") or []) if str(o or "").strip()]
     set_aside = (f" Set aside as the customer's / reference models, not costed: "
                  f"{_esc(', '.join(excluded))}." if excluded else "")
+    if str(t.get("source") or "") == "vision_concept":
+        # THE FALLBACK (D-413): one design's sheet(s), sighted — said as such, with why the
+        # model gave nothing and which designs were left unread.
+        other_designs = (f" Other designs in the pack, not read in this book: "
+                         f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                         if others else "")
+        why = str(t.get("model_takeoff_why_not") or "").strip()
+        return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+                f'<b>CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate.</b> This pack '
+                f'has no parts list and no part drawings'
+                + (f', and the model gave no take-off ({_esc(why)})' if why else '')
+                + f'; the vision model sighted the parts of <code>{_esc(str(t["design"]))}</code> '
+                f'({_esc(str(t.get("design_title") or ""))}) with the enquiry brief — '
+                f'{t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}. '
+                f'Every size, material and count is an assumption to confirm; nothing here was '
+                f'measured.{other_designs}</div>')
     other_designs = (f" Other designs in the model, not priced in this book: "
                      f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
                      if others else "")

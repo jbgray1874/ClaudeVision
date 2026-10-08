@@ -283,10 +283,107 @@ def test_the_scan_keeps_the_jobs_own_unmatched_extract_for_the_take_off():
 def test_the_concept_read_is_the_fallback_and_the_stop_comes_last():
     src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     assert "_sight_run = _llm_only_run or _design_intent_fallback" in src
-    # the guard, the brief-unused flag and the concept read all ask the one name
-    assert src.count("_sight_run and (_no_parts") == 3
+    # the guard, the sheet choice, the brief-unused flag and the concept read all ask the one name
+    assert src.count("_sight_run and (_no_parts") == 4
     assert "_llm_only_run and (_no_parts" not in src, "no site still asks the old question"
     # the design-intent stop is recorded only after both doors, right before costing
     i_stop = src.index('if _di_pending and not summary["manufacturing_writeup"]["parts"]:')
     i_cost = src.index('summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"]')
     assert i_stop < i_cost
+
+
+# ── D-413: the two gates the 10:40 run of 8 Oct escaped through ─────────────────────────
+#
+# The portal passes the enquiry's Drawing Number as the declared product — "12675-01" — and
+# choose_design read it as an explicit assembly prefix: it matched two roots and stopped
+# before the GA rule. And the concept read, the fallback, was refused for a DXF the content
+# reader had already set aside as a drawing export — measured CAD that measured nothing.
+# Even allowed, it would have read all three design sheets as one stand.
+
+REAL_PDFS = [
+    r"C:\stage\0359972_12675-01-02 Block Model V2_Design Intent.PDF",
+    r"C:\stage\12675-01-Block Model_Customer Bag Stand_Design Intent.PDF",
+    r"C:\stage\12675-01-GA Stacking Block Model_Customer Bag Stand_Design Intent.PDF",
+    r"C:\stage\4bd27951910381ec-12675-01-Block Model.pdf",
+]
+REAL_DXFS = [r"C:\stage\12675-01-02 Block Model V2.dxf", r"C:\stage\12675-01-Block Model.dxf"]
+
+
+def test_the_drawing_number_the_run_was_given_is_a_scope_not_an_assembly_name():
+    chosen, how, others = mt.choose_design([GA, V2], declared="12675-01", drawing_number="12675-01",
+                                           top_assembly=V2)
+    assert chosen == GA and "GA naming convention" in how and "12675-01" in how
+    assert others == [V2]
+    chosen, how, _ = mt.choose_design([GA, BLOCK, V2], declared="12675-01", drawing_number="12675-01")
+    assert chosen == GA
+    # two roots, no GA, the extract's own choice: accepted and said
+    chosen, how, _ = mt.choose_design([BLOCK, V2], declared="12675-01", drawing_number="12675-01",
+                                      top_assembly=V2)
+    assert chosen == V2 and "confirm" in how
+    # two roots, no GA, nothing else: asked, with the names
+    chosen, how, _ = mt.choose_design([BLOCK, V2], declared="12675-01", drawing_number="12675-01")
+    assert chosen is None and BLOCK in how and V2 in how and "SDI_PRODUCT" in how
+
+
+def test_an_explicit_prefix_that_picks_one_root_is_a_choice_and_one_that_picks_several_is_a_scope():
+    chosen, how, _ = mt.choose_design([GA, BLOCK, V2], declared="12675-01-02", drawing_number="12675-01")
+    assert chosen == V2 and "SDI_PRODUCT" in how
+    chosen, how, _ = mt.choose_design([GA, "12675-01-02 Block Model V3", V2], declared="12675-01-02",
+                                      drawing_number="12675-01")
+    assert chosen is None and "12675-01-02" in how and "V3" in how
+
+
+def test_the_take_off_prices_the_ga_when_the_run_was_given_the_job_number():
+    s = _summary()
+    s["declared_product"] = "12675-01"
+    r = mt.takeoff(s, _job(), declared="12675-01", drawing_number="12675-01")
+    assert r["design"] == GA and r["parts"]
+    assert s["declared_product"] == "12675-01", "the run's own declaration is not rewritten"
+
+
+def test_the_design_sheets_are_grouped_by_the_drawing_number_in_their_names():
+    labels = [mt.design_label(p) for p in REAL_PDFS]
+    assert labels == ["12675-01-02", "12675-01-Block", "12675-01-GA", "12675-01-Block"], labels
+    pick = mt.choose_design_sheets(REAL_PDFS, declared="12675-01", drawing_number="12675-01")
+    assert pick["design"] == "12675-01-GA" and "GA naming convention" in pick["chosen_by"]
+    assert pick["sheets"] == [REAL_PDFS[2]], "one design's sheet, not the pack"
+    assert set(pick["other_designs"]) == {"12675-01-02", "12675-01-Block"}
+    one = mt.choose_design_sheets(REAL_PDFS[2:3], declared="12675-01", drawing_number="12675-01")
+    assert one["sheets"] == [REAL_PDFS[2]] and "only design" in one["chosen_by"]
+    asked = mt.choose_design_sheets(REAL_PDFS[:2], declared="12675-01", drawing_number="12675-01")
+    assert asked["sheets"] == [] and "SDI_PRODUCT" in asked["why_not"]
+
+
+def test_a_dxf_the_merge_refused_as_a_drawing_export_is_not_measured_cad():
+    import concept_scan as cs
+    s = {"dxf_augmentation": {"unmatched_dxf": [
+        {"path": REAL_DXFS[0], "reason": ("drawing_export_not_a_flat: 17 dimension entities — "
+                                          "this is a drawing of the part, not its flat pattern")},
+        {"path": REAL_DXFS[1], "reason": ("drawing_export_not_a_flat: 22 dimension entities — "
+                                          "this is a drawing of the part, not its flat pattern")}]},
+         "manufacturing_writeup": {"parts": []}}
+    assert cs.why_not_sightable(s, REAL_PDFS + REAL_DXFS) is None
+    assert "12675-01-03_flat.dxf" in (cs.why_not_sightable(s, REAL_DXFS + [r"C:\stage\12675-01-03_flat.dxf"]) or "")
+    assert "SLDPRT" in (cs.why_not_sightable(s, REAL_DXFS + [r"C:\stage\12675-01-Block Model.SLDPRT"]) or "")
+    assert cs.why_not_sightable({"manufacturing_writeup": {"parts": []}}, REAL_DXFS), \
+        "without the merge's record the DXF is still measured CAD"
+
+
+def test_the_fallback_reads_one_design_and_labels_the_book():
+    src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "_mt_sheets.choose_design_sheets(" in src
+    assert "_pack = list(_fallback_sheets)" in src
+    assert '"source": "vision_concept", "design": _fallback_pick.get("design")' in src
+    assert "elif _fallback_ask:" in src
+
+
+def test_the_fallbacks_label_is_the_vision_read_not_the_model():
+    t = {"source": "vision_concept", "design": "12675-01-GA", "design_title": "x.PDF",
+         "chosen_by": "the sheet the GA naming convention marks as the product", "other_designs": ["12675-01-02"],
+         "excluded": [], "parts": 6, "model_takeoff_why_not": "no SolidWorks extract of this job's own was available"}
+    assert mt.sentence(t).startswith("Concept read of the design-intent sheet 12675-01-GA by the vision model")
+    assert mt.banner(t).startswith("CONCEPT READ OF A DESIGN-INTENT SHEET — 12675-01-GA")
+    s = dict(_summary(), concept_takeoff=t)
+    html = jrh._render_concept_takeoff(s)
+    assert "CONCEPT READ OF A DESIGN-INTENT SHEET" in html and "12675-01-02" in html
+    assert "no SolidWorks extract" in html
