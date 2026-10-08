@@ -659,6 +659,7 @@ function endConversation(msg, logIt){
   if(rec&&rec._cancel) rec._cancel();
   $('mic').classList.remove('live');
   keepAwake(false);
+  releaseMic();
   if(msg) setState(msg);
   if(msg&&logIt) log('app', msg);
   diag('conversation ended');
@@ -759,24 +760,41 @@ function encodeWav(chunks, inRate, outRate){
   }
   return new Blob([buf],{type:'audio/wav'});
 }
+// The mic is normally released before every reply, so replies play loud and
+// through the speaker. If re-opening it makes the phone ask for permission
+// again (Chrome on iPhone can), it is kept open between turns instead.
+let KEEP_MIC=false, KEPT_STREAM=null, MIC_OPENS=0;
+function liveStream(s){ return s&&s.getAudioTracks().some(t=>t.readyState==='live'&&!t.muted); }
+function releaseMic(){ if(KEPT_STREAM){ KEPT_STREAM.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); KEPT_STREAM=null; } }
 async function startRecording(mode){
   LISTEN_MODE=mode||'command';
   if(isSpeaking()) stopSpeaking();
   if(rec&&rec._cancel) rec._cancel();
   const me={heard:false,cancelled:false}; rec=me;
-  let stream=null, src=null, proc=null, timer=null, chunks=[], lastVoice=0, noise=0;
+  let stream=null, src=null, proc=null, timer=null, chunks=[], lastVoice=0, noise=0, mutedSince=0;
   const t0=performance.now();
   const cleanup=()=>{
     clearInterval(timer);
     try{ if(proc){ proc.onaudioprocess=null; proc.disconnect(); } }catch(e){}
     try{ if(src) src.disconnect(); }catch(e){}
-    if(stream) stream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
+    if(stream&&!(KEEP_MIC&&stream===KEPT_STREAM)) stream.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} });
   };
   me._cancel=()=>{ me.cancelled=true; cleanup(); };
   try{
+    // Ask for the mic first, in the same moment as the tap: iPhones are strict.
+    let gum=null, asked=0;
+    if(KEEP_MIC&&liveStream(KEPT_STREAM)) stream=KEPT_STREAM;
+    else{ asked=performance.now(); gum=navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}}); }
     if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
     if(ACTX.state!=='running') await ACTX.resume();
-    stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true,channelCount:1}});
+    if(gum){
+      stream=await gum;
+      // A slow answer means the phone showed a permission prompt: keep the mic from now on.
+      // The first opening may show the permission prompt; a slow repeat means it asked again.
+      if(!KEEP_MIC&&MIC_OPENS>0&&performance.now()-asked>1500){ KEEP_MIC=true; diag('mic permission asked again — keeping the mic open'); }
+      MIC_OPENS++;
+      if(KEEP_MIC){ releaseMic(); KEPT_STREAM=stream; }
+    }
   }catch(e){
     if(me.cancelled) return;
     diag('mic error '+(e&&e.name||e));
@@ -824,12 +842,14 @@ async function startRecording(mode){
   me._send=send;
   stream.getAudioTracks().forEach(t=>{
     t.onended=()=>{ diag('mic track ended'); send(); };
-    t.onmute=()=>diag('mic muted by the phone');
+    t.onmute=()=>{ diag('mic muted by the phone'); mutedSince=performance.now(); };
+    t.onunmute=()=>{ mutedSince=0; };
   });
   timer=setInterval(()=>{
     if(me.cancelled){ clearInterval(timer); return; }
     const now=performance.now();
     if(ACTX.state!=='running'){ diag('audio interrupted'); send(); return; }
+    if(mutedSince&&now-mutedSince>1000){ send(); return; }
     if(me.heard&&now-lastVoice>pause) send();
     else if(!me.heard&&now-t0>FIRST_WORD_MS) send();
     else if(now-t0>45000) send();                               // under Azure's 60 s limit
