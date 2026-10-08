@@ -18,8 +18,9 @@ one we hold.
 
 | # | Item | Owner | State |
 |---|---|---|---|
-| 1.1 | **Partner secret** | **InVentry** | The only unverified value left. We send the one pre-filled in their Postman collection; their overview says it is common across on-premises installations. Asked 28 Sep and 6 Oct. |
-| 1.2 | Does a new API key need the InVentry service restarted? | **InVentry** | Would explain the 401 on its own. Asked with 1.1. |
+| 1.1 | **Partner secret** | **InVentry Support** | **Answered 8 Oct: it is per site, not shared, and lives in our own database.** The value in their Postman collection is not ours — that is the 401. Their support team will log on, read it out of the database and give it to us. Escalated by Charlotte the same day. |
+| 1.2 | ~~Does a new API key need the service restarted?~~ | — | **No** (Charlotte, 8 Oct). Ruled out. |
+| 1.3 | ~~Does `ActionLocation` accept free text?~~ | — | **Yes** (Charlotte, 8 Oct). Unblocks automatic sign-out — but confirm the value *round-trips* as `LastEventLocation` with one `probe_inventry.py --sign-in` before enabling it. Accepting a value is not the same as storing and returning it, and the safety argument rests on the round trip. |
 
 ### Verified on SDI's side — 6 Oct 2026
 

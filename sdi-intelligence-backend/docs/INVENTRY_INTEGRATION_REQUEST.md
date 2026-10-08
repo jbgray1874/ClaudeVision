@@ -674,3 +674,30 @@ question cannot come back as "are you sure it isn't your end?".
 > Thanks,
 > James Gray
 > AI & Systems Controller, SDI Displays Ltd
+
+## Round 7 reply — Charlotte Fastenbauer, 8 Oct 2026
+
+Three answers, all useful:
+
+1. **The partner secret is per site, and lives in our own database.** Support
+   will log on to our system, read it, and give it to us. So the value in the
+   Postman collection is *not* ours — which is exactly the 401, and closes the
+   question the last three emails have been asking. Their overview describing
+   it as "the same across on-premises installations" is, at best, misleading.
+2. **No service restart is needed** for a new API key. That hypothesis is dead.
+3. **`ActionLocation` accepts free text** — "within the Value section, you're
+   able to freetype whatever you like".
+
+Answer 3 unblocks automatic sign-out, which has been off since it was built.
+
+One caution before acting on it. "Within the Value section" reads like she is
+describing the key/value table in the Postman request, not making a statement
+about server-side validation. Accepting a value on the way in is also not the
+same as storing it and returning it as `LastEventLocation`, and the whole
+safety argument depends on the round trip, not on the POST succeeding. Treat it
+as good evidence, not proof: one `probe_inventry.py --sign-in` settles it, and
+that is a single record.
+
+This is the third time an inference about InVentry's behaviour has looked
+settled and not been - CN fallback, the Locations list, the shared secret. Run
+the probe.
