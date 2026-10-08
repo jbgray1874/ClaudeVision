@@ -1920,6 +1920,16 @@ CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "
                                 "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
 CONCEPT_LABEL_MAX_WORDS = 4
 
+# A short "<gauge>mm <material>" note on a design sheet ("2mm STEEL CONSTRUCTION", D-419), and
+# the stock material it names. Plain STEEL on a design sheet is mild steel unless it says
+# otherwise; stainless and galvanised are named.
+CONCEPT_SHEET_MATERIAL_WORDS = {
+    "MILD STEEL": "MILD STEEL", "STAINLESS STEEL": "STAINLESS STEEL",
+    "STAINLESS": "STAINLESS STEEL", "GALVANISED STEEL": "GALVANISED STEEL",
+    "ZINTEC": "ZINTEC", "STEEL": "MILD STEEL", "ALUMINIUM": "ALUMINIUM",
+    "ACRYLIC": "ACRYLIC", "MDF": "MDF", "MFMDF": "MFMDF", "PLYWOOD": "PLYWOOD",
+}
+
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
     (r"POWDER", "powder_coating"),
