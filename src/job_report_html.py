@@ -886,6 +886,30 @@ def _render_run_stop(summary: Dict[str, Any]) -> str:
             f'book and what was set aside, and this is not to be sent as an estimate.</div>')
 
 
+def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
+    """A BOOK PRICED FROM THE MODEL SAYS SO BEFORE ANY FIGURE (D-411). Every part, size,
+    material and count came off a SolidWorks assembly nobody has detailed; the reader must know
+    that before the number, in the same words the sheet and the quote use."""
+    t = summary.get("concept_takeoff")
+    if not isinstance(t, dict) or not t.get("design"):
+        return ""
+    excluded = [str(e.get("part_number") or "") for e in (t.get("excluded") or [])
+                if isinstance(e, dict) and e.get("part_number")]
+    others = [str(o) for o in (t.get("other_designs") or []) if str(o or "").strip()]
+    set_aside = (f" Set aside as the customer's / reference models, not costed: "
+                 f"{_esc(', '.join(excluded))}." if excluded else "")
+    other_designs = (f" Other designs in the model, not priced in this book: "
+                     f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                     if others else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+            f'<b>CONCEPT TAKE-OFF FROM THE MODEL — not a drawings estimate.</b> This pack has no '
+            f'parts list and no part drawings; every part, size, material and count on this page is '
+            f'read from the SolidWorks assembly <code>{_esc(str(t["design"]))}</code> '
+            f'({t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}). '
+            f'Operations come from the model\'s features and are assumptions to confirm; nothing '
+            f'here has been detailed, toleranced or released.{set_aside}{other_designs}</div>')
+
+
 def _render_product_scope(summary: Dict[str, Any]) -> str:
     """WHAT WAS PRICED, AND WHAT WAS LEFT OUT — before any figure.
 
@@ -3122,6 +3146,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     body = "\n".join([
         _render_header(h, has_parity, summary),
         _render_run_stop(summary),
+        _render_concept_takeoff(summary),
         _render_product_scope(summary),
         _render_summary(summary, record, h, hl),
         _render_decisions(record),
