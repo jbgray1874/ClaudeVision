@@ -284,7 +284,9 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #   s1  first cut (D-415)
 #   s2  the model's envelope as the body; the goods' numbers never spent on the steel; the body
 #       made from its panels; a legend is not a note (D-416)
-SHEET_PROMPT_VERSION = "s2"
+#   s3  the goods' unit weight and the labelled parts reported, so the check can verify them
+#       from what the sheet prints (D-417)
+SHEET_PROMPT_VERSION = "s3"
 SHEET_TEXT_MAX_CHARS = 6000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
@@ -326,9 +328,12 @@ rules and the ones after them differ, THESE RULES WIN.
    the top of the goods>", "material": "", "thickness_mm": 0, "finish": "",
    "stated_weight_kg": 0, "weight_includes_goods": "yes|no|not stated",
    "goods": "<what the product holds, with count and unit weight where stated>",
-   "goods_count": 0, "goods_weight_kg": 0,
+   "goods_count": 0, "goods_unit_weight_kg": 0, "goods_weight_kg": 0,
    "goods_dimensions_mm": [<every dimension the sheet gives of the goods themselves>],
-   "dimensions_to_goods_mm": [<every product dimension measured to or over the goods>]}}
+   "dimensions_to_goods_mm": [<every product dimension measured to or over the goods>],
+   "labelled_parts": [<every label on the sheet that names a part of the product, exactly as
+   printed; never the goods>]}}
+   Every labelled part must be a line of the make list.
 
 """
 
@@ -358,7 +363,7 @@ pad or trim lines to hit a figure: every line must be drawn on the sheet and siz
 
 # The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
-_SHEET_PROMPT_FINGERPRINT = "4306a47112ca"
+_SHEET_PROMPT_FINGERPRINT = "1287e1f7b6b9"
 
 
 def is_brief_page(path: Any) -> bool:
@@ -837,6 +842,72 @@ def _density(material: Any) -> float:
     return 0.0
 
 
+def _vocab(name: str, default: Any) -> Any:
+    try:
+        import config                                               # noqa: WPS433
+        return getattr(config, name, default)
+    except Exception:                                               # noqa: BLE001
+        return default
+
+
+def _singular(word: str) -> str:
+    """A word in the one form the label check compares in (config's irregulars, then -S)."""
+    w = str(word or "").upper()
+    forms = dict(_vocab("CONCEPT_COMPONENT_WORD_FORMS", {}) or {})
+    if w in forms:
+        return str(forms[w]).upper()
+    if len(w) > 3 and w.endswith("S") and not w.endswith("SS"):
+        return w[:-1]
+    return w
+
+
+def _words_of(text: Any) -> set:
+    return {_singular(w) for w in re.findall(r"[A-Za-z]+", str(text or ""))}
+
+
+def _finish_operations() -> List[tuple]:
+    return [tuple(x) for x in (_vocab("CONCEPT_FINISH_OPERATIONS", ()) or ())]
+
+
+def sheet_labels(words: str, facts: Optional[Mapping[str, Any]] = None) -> List[Dict[str, str]]:
+    """The components the sheet labels, each with the head word a bill line must carry (D-417).
+
+    Two sources, both printed on the sheet: a short callout (a few words on a line of their
+    own) naming a component from config.CONCEPT_COMPONENT_WORDS, found without the model; and
+    a label the read lists in sheet_facts["labelled_parts"], kept only where the sheet prints
+    it. A label naming the goods the product holds is never a component."""
+    components = {_singular(w) for w in (_vocab("CONCEPT_COMPONENT_WORDS", ()) or ())}
+    max_words = int(_vocab("CONCEPT_LABEL_MAX_WORDS", 4) or 4)
+    facts = facts or {}
+    goods_words = _words_of(facts.get("goods"))
+    out: List[Dict[str, str]] = []
+    seen = set()
+
+    def _add(label: str, head: str) -> None:
+        if head and head not in goods_words and head not in seen:
+            seen.add(head)
+            out.append({"label": label, "head": head})
+
+    for line in str(words or "").splitlines():
+        line = " ".join(line.split())
+        tokens = re.findall(r"[A-Za-z]+", line)
+        if not tokens or len(line.split()) > max_words or re.search(r"\d+\s*[xX×]\s", line):
+            continue
+        heads = [_singular(t) for t in tokens if _singular(t) in components]
+        if heads:
+            _add(line, heads[-1])
+    flat = " ".join(str(words or "").split()).lower()
+    for raw in (facts.get("labelled_parts") or []):
+        label = " ".join(str(raw or "").split())
+        if not label or (flat and label.lower() not in flat):
+            continue
+        tokens = [_singular(t) for t in re.findall(r"[A-Za-z]+", label)]
+        heads = [t for t in tokens if t in components] or tokens[-1:]
+        if heads:
+            _add(label, heads[-1])
+    return out
+
+
 def sheet_check(answer: Mapping[str, Any], words: str = "",
                 envelope: Any = None) -> Dict[str, Any]:
     """The sighted bill against the sheet's stated body, goods and weight.
@@ -931,15 +1002,28 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
                 failures.append(f"{name} is sized off {label} ({hit:g} mm) — "
                                 f"the goods' size is not the steel's")
 
+    # ── THE WEIGHT, UNDER EVERY READING THE SHEET ALLOWS (D-417) ─────────────────────────
+    # The goods' weight is count × unit weight where the sheet prints both; a total the read
+    # worked out for itself counts only where the sheet prints it too. Where the sheet does not
+    # say whether its weight includes the goods, the bill is weighed against both readings:
+    # too light under both, or too heavy under both, fails; fitting only one is UNVERIFIED —
+    # the case a single reading let pass as "agrees".
     stated = _stated("stated weight", facts.get("stated_weight_kg"))
-    goods = _num(facts.get("goods_weight_kg"))
+    unit_w = _stated("goods unit weight", facts.get("goods_unit_weight_kg"))
+    goods = (goods_count * unit_w if (goods_count and unit_w)
+             else _stated("goods weight", facts.get("goods_weight_kg")))
     includes = str(facts.get("weight_includes_goods") or "").strip().lower()
-    net = 0.0
-    # Whole words: "not stated" is neither, and must not read as "no".
-    if stated and re.match(r"(yes|true|includes?)\b", includes):
-        net = stated - goods if 0 < goods < stated else 0.0
-    elif stated and re.match(r"(no|false|excludes?)\b", includes):
-        net = stated
+    _yes = bool(re.match(r"(yes|true|includes?)\b", includes))
+    _no = bool(re.match(r"(no|false|excludes?)\b", includes))
+    _less_goods = stated - goods if (stated and 0 < goods < stated) else 0.0
+    if _yes:
+        readings = [_less_goods] if _less_goods else []
+    elif _no:
+        readings = [stated] if stated else []
+    else:
+        readings = ([stated] if stated else []) + ([_less_goods] if _less_goods else [])
+    # The light side can be tested only where every reading the sheet allows is known.
+    light_testable = bool(readings) and (_no or bool(_less_goods))
 
     sighted, unweighed = 0.0, []
     for p in made:
@@ -952,35 +1036,120 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         qty = _num(p.get("quantity")) or 1.0
         sighted += l * w * t * 1e-9 * rho * qty
     weight_checked = bool(stated) and sighted > 0
-    ratio = (sighted / net) if (weight_checked and net) else None
+    unverified: List[str] = []
+    net = readings[0] if len(readings) == 1 else 0.0
+    ratio = (sighted / min(readings)) if (weight_checked and readings) else None
     if weight_checked:
         _goods = str(facts.get("goods") or "").strip()
-        if net:
-            _of = (f"{stated:g} kg stated, less {goods:g} kg of {_goods or 'goods'}"
-                   if net != stated else f"{stated:g} kg stated")
-            if ratio < lo and not unweighed:
-                failures.append(
-                    f"the made parts weigh about {sighted:.1f} kg as sized, against "
-                    f"{net:.1f} kg of product on the sheet ({_of}) — {ratio:.0%} of it, so "
-                    f"parts are missing or undersized")
-            elif ratio > hi:
-                failures.append(
-                    f"the made parts weigh about {sighted:.1f} kg as sized, against "
-                    f"{net:.1f} kg of product on the sheet ({_of}) — {ratio:.0%} of it, so "
-                    f"parts are oversized or counted twice")
-        elif sighted > hi * stated:
-            failures.append(
-                f"the made parts weigh about {sighted:.1f} kg as sized, more than "
-                f"{hi:g} × the {stated:g} kg the sheet states for the whole product")
 
-    checked = body_checked or weight_checked or goods_checked
-    return {"checked": checked, "agrees": checked and not failures, "failures": failures,
+        def _of(reading: float) -> str:
+            return (f"{stated:g} kg stated, less {goods:g} kg of {_goods or 'goods'}"
+                    if reading != stated else f"{stated:g} kg stated")
+
+        too_light = light_testable and not unweighed and all(sighted < lo * r for r in readings)
+        too_heavy = all(sighted > hi * r for r in (readings or [stated]))
+        if too_light:
+            r = max(readings)
+            failures.append(
+                f"the made parts weigh about {sighted:.1f} kg as sized, against "
+                f"{r:.1f} kg of product on the sheet ({_of(r)}) — {sighted / r:.0%} of it, so "
+                f"parts are missing or undersized")
+        elif too_heavy:
+            r = min(readings or [stated])
+            failures.append(
+                f"the made parts weigh about {sighted:.1f} kg as sized, against "
+                f"{r:.1f} kg of product on the sheet ({_of(r)}) — {sighted / r:.0%} of it, so "
+                f"parts are oversized or counted twice")
+        elif len(readings) == 2 and not unweighed:
+            fits = [r for r in readings if lo * r <= sighted <= hi * r]
+            if len(fits) == 1:
+                unverified.append(
+                    f"the bill weighs about {sighted:.1f} kg and fits the sheet's "
+                    f"{stated:g} kg only if that weight {'excludes' if fits[0] == stated else 'includes'} "
+                    f"the goods, and the sheet does not say which")
+        if not light_testable:
+            unverified.append(
+                "the sheet does not settle how much of its stated weight is the goods, so a bill "
+                "too light could not be caught")
+    elif not stated:
+        unverified.append("the sheet states no weight to weigh the bill against")
+    if unweighed:
+        unverified.append(f"{len(unweighed)} made part(s) could not be weighed "
+                          f"({', '.join(unweighed[:4])}) — no size, gauge or material")
+
+    # ── WHAT THE SHEET LABELS IS ON THE BILL (D-417) ──────────────────────────────────────
+    # A short callout naming a component (config.CONCEPT_COMPONENT_WORDS) is a part the
+    # product has; so is a label the read lists that the sheet prints. Each must be a line.
+    required = sheet_labels(words, facts)
+    _held = {}
+    for p in parts:
+        _held_words = _words_of(f"{p.get('name') or ''} {p.get('drawn') or ''}")
+        for w in _held_words:
+            _held.setdefault(w, str(p.get("name") or "").strip())
+    labels_missing = [lab for lab in required if lab["head"] not in _held]
+    for lab in labels_missing:
+        failures.append(f"the sheet labels '{lab['label']}' and the bill has no part for it")
+
+    # ── THE STATED GAUGE AND FINISH ARE ON THE BILL (D-417) ───────────────────────────────
+    _mat = str(facts.get("material") or "").strip()
+    _mat_printed = bool(_mat) and any(w.lower() in str(words or "").lower()
+                                      for w in re.findall(r"[A-Za-z]{4,}", _mat)) if words else bool(_mat)
+    gauge = _stated("thickness", facts.get("thickness_mm"))
+    _family = _density(_mat) if _mat_printed else 0.0
+    gauge_checked = bool(gauge and _family and made)
+    if gauge_checked:
+        for p in made:
+            blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+            t = _num(blank.get("thickness"))
+            if t and _density(p.get("material_guess") or _mat) == _family and abs(t - gauge) > 0.05:
+                failures.append(f"{str(p.get('name') or 'a part').strip()} is {t:g} mm, and the "
+                                f"sheet states {gauge:g} mm {_mat.lower()}")
+    _finish = str(facts.get("finish") or "").strip()
+    _finish_printed = bool(_finish) and (not words or any(
+        w.lower() in str(words).lower() for w in re.findall(r"[A-Za-z]{4,}", _finish)))
+    finish_checked = False
+    if _finish_printed and made:
+        _ops_held = {str(o or "").strip().lower().replace(" ", "_")
+                     for p in parts for o in (p.get("operations") or [])}
+        _ops_held |= {str(o or "").strip().lower().replace(" ", "_")
+                      for o in (answer.get("unit_operations") or [])}
+        for pattern, op in _finish_operations():
+            if re.search(pattern, _finish, re.IGNORECASE):
+                finish_checked = True
+                if op not in _ops_held:
+                    failures.append(f"the sheet states '{_finish}' and nothing in the bill "
+                                    f"carries {op.replace('_', ' ')}")
+
+    # ── THE BODY IS VERIFIED ONLY WHERE SOMETHING INDEPENDENT GAVE IT (D-417) ─────────────
+    if body_checked and body_source != "the SolidWorks model's envelope":
+        _raw_to_goods = {round(_num(v), 1) for v in (facts.get("dimensions_to_goods_mm") or [])
+                         if not isinstance(v, (dict, list)) and _num(v)}
+        _both = [d for d in dims if round(d, 1) in _raw_to_goods]
+        for d in _both:
+            failures.append(f"the read gives {d:g} mm as the product body and as a dimension to "
+                            f"the top of the goods")
+        unverified.append("the body size is the read's own figures — printed on the sheet, but "
+                          "nothing independent says they are the body and not a dimension over "
+                          "the goods")
+    elif not body_checked and made:
+        unverified.append("no body size to hold the parts to")
+
+    checked = body_checked or weight_checked or goods_checked or bool(required) \
+        or gauge_checked or finish_checked
+    verdict = ("disagrees" if failures else "unchecked" if not checked
+               else "unverified" if unverified else "agrees")
+    return {"checked": checked, "agrees": verdict == "agrees", "verdict": verdict,
+            "failures": failures, "unverified": unverified if not failures else unverified,
             "body_mm": body, "body_used_mm": dims if body_checked else [],
             "body_source": body_source if body_checked else "",
             "goods_spent": goods_spent,
             "goods_checked_clean": goods_checked and not goods_spent,
+            "labels_required": [lab["label"] for lab in required],
+            "labels_missing": [lab["label"] for lab in labels_missing],
+            "gauge_checked": gauge_checked, "finish_checked": finish_checked,
             "stated_weight_kg": stated or None,
             "goods_weight_kg": goods or None, "net_weight_kg": net or None,
+            "weight_readings_kg": [round(r, 2) for r in readings],
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
             "ratio": round(ratio, 3) if ratio is not None else None,
             "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet}
@@ -1000,7 +1169,14 @@ def sheet_check_sentence(check: Mapping[str, Any]) -> str:
     if check.get("failures"):
         return ("CONCEPT BILL DOES NOT AGREE WITH THE SHEET" + again + ": "
                 + "; ".join(check["failures"])
-                + ". Costed as sighted — a concept budget to walk against the GA, not a price.")
+                + ". Costed as sighted — an unchecked concept figure to walk against the GA, "
+                  "not a checked budget and not a price.")
+    if check.get("verdict") == "unverified" or check.get("unverified"):
+        # NOTHING CONTRADICTS IT IS NOT THE SAME AS IT AGREES (D-417).
+        return ("CONCEPT BILL UNVERIFIED AGAINST THE SHEET" + again + ": nothing in it "
+                "contradicts the sheet, but " + "; ".join(check.get("unverified") or [])
+                + ". An unchecked concept figure — walk the bill against the GA before "
+                  "anyone relies on it.")
     said = []
     if check.get("sighted_weight_kg") and check.get("net_weight_kg"):
         said.append(f"the made parts weigh about {check['sighted_weight_kg']:g} kg as sized "
@@ -1013,6 +1189,13 @@ def sheet_check_sentence(check: Mapping[str, Any]) -> str:
         said.append("every flat part fits the body the sheet dimensions")
     if check.get("goods_checked_clean"):
         said.append("no part takes the goods' count or size")
+    if check.get("labels_required"):
+        said.append("every component the sheet labels is on the bill ("
+                    + ", ".join(check["labels_required"]) + ")")
+    if check.get("gauge_checked"):
+        said.append("every part of the stated material is at the stated gauge")
+    if check.get("finish_checked"):
+        said.append("the stated finish is on the route")
     return ("CONCEPT BILL CHECKED AGAINST THE SHEET" + again + ": " + "; ".join(said)
             + ". Still a concept budget: nothing was measured.")
 
@@ -1023,10 +1206,11 @@ def recheck_text(check: Mapping[str, Any]) -> str:
 
 
 def _check_rank(check: Mapping[str, Any]) -> tuple:
-    """Lower is better: agreeing, then fewer failures, then a weight nearer the sheet's."""
+    """Lower is better: fewer failures, agreeing, fewer things unverified, then a weight nearer
+    the sheet's."""
     ratio = check.get("ratio")
-    return (0 if check.get("agrees") else 1, len(check.get("failures") or []),
-            abs(1.0 - float(ratio)) if ratio else 9.0)
+    return (len(check.get("failures") or []), 0 if check.get("agrees") else 1,
+            len(check.get("unverified") or []), abs(1.0 - float(ratio)) if ratio else 9.0)
 
 
 def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
@@ -1105,6 +1289,17 @@ def raise_sheet_questions(parts: List[Dict[str, Any]], check: Mapping[str, Any],
             "costed as sighted — a concept budget, not an estimate",
             "Walk the bill against the GA sheet and correct the sizes and counts in the answers "
             "file, or have the design detailed with a parts list",
+            "concept_sheet_check")
+    elif check.get("unverified"):
+        # UNVERIFIED IS ASKED TOO (D-417): nothing contradicts the sheet, but nothing confirmed
+        # it either, and an estimator must decide that, not the banner.
+        n += raise_manufacturing_question(
+            host,
+            "The sighted bill could not be verified against the sheet: "
+            + "; ".join(check["unverified"]),
+            "costed as read — an unchecked concept figure, not a checked budget",
+            "Walk the bill against the GA sheet and confirm or correct the sizes, counts and "
+            "gauge in the answers file",
             "concept_sheet_check")
     for item in (set_aside or []):
         qty = item.get("quantity")

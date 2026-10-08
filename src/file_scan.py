@@ -4669,8 +4669,9 @@ def _finalize_scan_summary(
                     "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
                     "brief_used": bool(_brief),
                     "sheet_check": {k: _sheet_check.get(k) for k in (
-                        "checked", "agrees", "failures", "stated_weight_kg", "net_weight_kg",
-                        "sighted_weight_kg", "second_read_taken")} if _sheet_check else {},
+                        "checked", "agrees", "verdict", "failures", "unverified",
+                        "stated_weight_kg", "net_weight_kg", "sighted_weight_kg",
+                        "second_read_taken")} if _sheet_check else {},
                 }
                 summary.setdefault("review_flags", []).append(
                     f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "

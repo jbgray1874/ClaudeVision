@@ -1901,6 +1901,26 @@ CONCEPT_SHEET_WEIGHT_BAND = (0.6, 2.0)
 # the sheet's envelope.
 CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
 
+# What a design sheet LABELS must be on the bill (D-417). A callout of at most
+# CONCEPT_LABEL_MAX_WORDS words on its own line that names one of these components is a part the
+# product has ("ADJUSTABLE FEET", "CENTRAL SOLID DIVIDER" on 12675-01's GA); a bill with no line
+# carrying that word disagrees with the sheet. Words, not phrases: the bill's line may say
+# "ADJUSTABLE FOOT". The forms map irregular plurals to the one form compared.
+CONCEPT_COMPONENT_WORDS = (
+    "FOOT", "LEVELLER", "GLIDE", "CASTOR", "WHEEL", "DIVIDER", "PARTITION", "SHELF", "TRAY",
+    "DRAWER", "LID", "DOOR", "HINGE", "HOOK", "ARM", "LEG", "POST", "UPRIGHT", "PANEL", "HEADER",
+    "FASCIA", "PLINTH", "PLATE", "CAP", "BRACKET", "RAIL", "BACKBOARD", "RISER",
+)
+CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "CASTOR",
+                                "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
+CONCEPT_LABEL_MAX_WORDS = 4
+
+# A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
+CONCEPT_FINISH_OPERATIONS = (
+    (r"POWDER", "powder_coating"),
+    (r"\bSPRAY|\bPAINT|LACQUER", "wet_spray"),
+)
+
 # The route operations that cut a part out of stock. A costed line whose route carries one of
 # these is a part SDI cuts, whatever block its money sits in (D-415: the 12675-01 concept book
 # lasered its flat bars and the report said none of its lines was a part SDI cuts).

@@ -578,6 +578,17 @@ def is_vision(t: Any) -> bool:
     return isinstance(t, dict) and str(t.get("source") or "") == "vision_concept"
 
 
+def unchecked_figure(t: Any) -> Optional[bool]:
+    """True where a vision read's bill did not pass the sheet check, False where it agreed, and
+    None where no check was recorded (a book from before D-415, or a model take-off)."""
+    if not is_vision(t):
+        return None
+    _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else None
+    if not _sc:
+        return None
+    return not bool(_sc.get("agrees"))
+
+
 def sentence(t: Any) -> str:
     """One sentence for the sheet, the quote and the report's callout."""
     if not isinstance(t, dict) or not t.get("design"):
@@ -589,9 +600,15 @@ def sentence(t: Any) -> str:
         _held = ""
         if _sc.get("failures"):
             _held = (" The bill does not agree with the sheet: "
-                     + "; ".join(str(f) for f in _sc["failures"]) + ".")
+                     + "; ".join(str(f) for f in _sc["failures"])
+                     + ". This is an unchecked concept figure, not a checked budget.")
+        elif _sc.get("unverified"):
+            _held = (" Nothing in the bill contradicts the sheet, but it is unverified: "
+                     + "; ".join(str(f) for f in _sc["unverified"])
+                     + ". This is an unchecked concept figure, not a checked budget.")
         elif _sc.get("agrees"):
-            _held = " The bill was checked against the sheet's stated body and weight and agrees."
+            _held = (" The bill was checked against the sheet's body, goods, labelled parts, "
+                     "gauge, finish and weight, and agrees.")
         return (f"Concept read of the design-intent sheet {t['design']} by the vision model{_with} "
                 f"— not a drawings estimate: every size, material and count was read off the sheet "
                 f"or sighted, none measured; operations are assumptions to confirm.{_held}")
@@ -604,5 +621,9 @@ def banner(t: Any) -> str:
     if not s:
         return ""
     if is_vision(t):
-        return "CONCEPT READ OF A DESIGN-INTENT SHEET — " + s[len("Concept read of the design-intent sheet "):]
+        # AN UNCHECKED FIGURE SAYS SO FIRST (D-417): beside the Unit Cost an estimator must not
+        # be able to read a bill the check could not pass as a checked budget.
+        _lead = "" if unchecked_figure(t) is False else "UNCHECKED CONCEPT FIGURE — "
+        return (_lead + "CONCEPT READ OF A DESIGN-INTENT SHEET — "
+                + s[len("Concept read of the design-intent sheet "):])
     return "CONCEPT TAKE-OFF FROM THE MODEL — " + s[len("Concept take-off from the SolidWorks model "):]

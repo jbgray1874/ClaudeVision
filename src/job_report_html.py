@@ -913,9 +913,15 @@ def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
         _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else {}
         held = ""
         if _sc.get("failures"):
-            held = (' <b>The bill does not agree with the sheet:</b> '
+            held = (' <b>UNCHECKED CONCEPT FIGURE — the bill does not agree with the sheet:</b> '
                     + _esc("; ".join(str(f) for f in _sc["failures"]))
-                    + '. Costed as sighted — walk it against the GA before anyone relies on it.')
+                    + '. Costed as sighted — not a checked budget; walk it against the GA before '
+                      'anyone relies on it.')
+        elif _sc.get("unverified"):
+            held = (' <b>UNCHECKED CONCEPT FIGURE — nothing in the bill contradicts the sheet, '
+                    'but it is unverified:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["unverified"]))
+                    + '. Not a checked budget; walk it against the GA before anyone relies on it.')
         elif _sc.get("agrees"):
             held = (' The bill was checked against the body and weight the sheet states'
                     + (f' (about {_sc["sighted_weight_kg"]:g} kg as sized against '
