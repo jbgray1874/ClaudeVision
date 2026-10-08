@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 try:
     import openpyxl
@@ -833,6 +833,29 @@ def _what_they_are(lines: List[Dict[str, Any]]) -> str:
     return ", ".join(kinds[:-1]) + " and " + kinds[-1]
 
 
+def _sdi_cuts(code: str, steel: Dict[str, Any], material: Dict[str, Dict[str, Any]],
+              line: Optional[Mapping[str, Any]]) -> bool:
+    """Is this a line SDI cuts? A sheet blank, a section cut to length, or a route that cuts it.
+
+    THE ROUTE IS EVIDENCE TOO (D-415). The 12675-01 concept book lasered its flat bars from
+    strip, priced them off length, and this table read neither a Sheet Steel row nor a Blank L
+    column for them — so it told the reader none of its lines was a part SDI cuts, and that
+    each was "a bought item, a fastener off a BOM table, or a commercial line"."""
+    if bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")):
+        return True
+    line = line or {}
+    if line.get("length"):
+        return True
+    try:
+        import config                                                    # noqa: PLC0415
+        cutting = {str(o).lower() for o in getattr(config, "CUTTING_OPERATIONS", ())}
+    except Exception:                                                    # noqa: BLE001
+        cutting = set()
+    ops = {str(o or "").strip().lower()
+           for o in list(line.get("route_operations") or []) + list(line.get("operations") or [])}
+    return bool(ops & cutting)
+
+
 def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
                       steel: Dict[str, Any],
                       material: Dict[str, Dict[str, Any]],
@@ -862,7 +885,7 @@ def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]]
         _charged = _money(_line.get("charged_ext_gbp"))
         out.append({
             "code": row.get("code"), "desc": _description(row),
-            "cut": bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")),
+            "cut": _sdi_cuts(code, steel, material, _line),
             "section": bool(_line.get("length")),
             "gbp": (round(unit * qty, 2) if unit and qty else _charged or None),
             "priced": row.get("price") not in (None, "") or bool(_charged),
@@ -2267,7 +2290,7 @@ def build(workbook: Path, scan_json: Optional[Path],
             rec = scan.get(code) or {}
             if rec.get("pages"):
                 continue
-            cut_here = bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L"))
+            cut_here = _sdi_cuts(code, steel, material, (record_lines or {}).get(code))
             # A SECTION IS NOT CUT FROM SHEET. The leg's 15.88 × 15.88 profile sat in the
             # Blank L column and this table told the reader its "blank and gauge" came from
             # nowhere. The record knows it is priced by length.

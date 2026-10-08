@@ -574,9 +574,18 @@ def sentence(t: Any) -> str:
     if not isinstance(t, dict) or not t.get("design"):
         return ""
     if is_vision(t):
-        return (f"Concept read of the design-intent sheet {t['design']} by the vision model with the "
-                f"enquiry brief — not a drawings estimate: every size, material and count was sighted, "
-                f"none measured; operations are assumptions to confirm.")
+        # WITH THE BRIEF ONLY WHERE THERE WAS ONE, AND WHAT THE SHEET CHECK FOUND (D-415).
+        _with = " with the enquiry brief" if t.get("brief_used", True) else ""
+        _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else {}
+        _held = ""
+        if _sc.get("failures"):
+            _held = (" The bill does not agree with the sheet: "
+                     + "; ".join(str(f) for f in _sc["failures"]) + ".")
+        elif _sc.get("agrees"):
+            _held = " The bill was checked against the sheet's stated body and weight and agrees."
+        return (f"Concept read of the design-intent sheet {t['design']} by the vision model{_with} "
+                f"— not a drawings estimate: every size, material and count was read off the sheet "
+                f"or sighted, none measured; operations are assumptions to confirm.{_held}")
     return (f"Concept take-off from the SolidWorks model {t['design']} — not a drawings estimate: "
             f"parts, sizes, materials and counts are the model's; operations are assumptions to confirm.")
 

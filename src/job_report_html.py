@@ -909,15 +909,31 @@ def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
                          f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
                          if others else "")
         why = str(t.get("model_takeoff_why_not") or "").strip()
+        # WHAT THE SHEET CHECK FOUND, IN THE CALLOUT (D-415): agreeing or not, before any figure.
+        _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else {}
+        held = ""
+        if _sc.get("failures"):
+            held = (' <b>The bill does not agree with the sheet:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["failures"]))
+                    + '. Costed as sighted — walk it against the GA before anyone relies on it.')
+        elif _sc.get("agrees"):
+            held = (' The bill was checked against the body and weight the sheet states'
+                    + (f' (about {_sc["sighted_weight_kg"]:g} kg as sized against '
+                       f'{_sc["net_weight_kg"]:g} kg on the sheet)'
+                       if _sc.get("sighted_weight_kg") and _sc.get("net_weight_kg") else '')
+                    + ' and agrees.')
+        elif _sc and not _sc.get("checked"):
+            held = ' The sheet states no body size or weight to check the bill against.'
         return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
                 f'<b>CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate.</b> This pack '
                 f'has no parts list and no part drawings'
                 + (f', and the model gave no take-off ({_esc(why)})' if why else '')
-                + f'; the vision model sighted the parts of <code>{_esc(str(t["design"]))}</code> '
-                f'({_esc(str(t.get("design_title") or ""))}) with the enquiry brief — '
-                f'{t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}. '
+                + f'; the vision model read the parts of <code>{_esc(str(t["design"]))}</code> '
+                f'({_esc(str(t.get("design_title") or ""))}) off the sheet'
+                + (' with the enquiry brief' if t.get("brief_used", True) else '')
+                + f' — {t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}. '
                 f'Every size, material and count is an assumption to confirm; nothing here was '
-                f'measured.{other_designs}</div>')
+                f'measured.{held}{other_designs}</div>')
     other_designs = (f" Other designs in the model, not priced in this book: "
                      f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
                      if others else "")
@@ -2399,10 +2415,47 @@ def _concept_assumptions_section(summary: Dict[str, Any]) -> str:
     where = (f'<p>Confirm or correct them in <code>{_esc(path)}</code>. State your reasoning '
              f'against each one — an entry with none is refused, and the render\'s own '
              f'assumption stands.</p>' if path else "")
+    # A SHEET READ SAYS WHAT THE SHEET STATED AND WHETHER THE BILL AGREED (D-415).
+    sheet_html = ""
+    if concept.get("sheet_read"):
+        try:
+            from concept_scan import sheet_check_sentence as _scs
+            _said = _scs(concept.get("sheet_check") or {})
+        except Exception:                                                # noqa: BLE001
+            _said = ""
+        facts = concept.get("sheet_facts") if isinstance(concept.get("sheet_facts"), dict) else {}
+        _body = facts.get("body_mm") if isinstance(facts.get("body_mm"), dict) else {}
+        _stated = [s for s in (
+            ("Body", " × ".join(f"{_body.get(k):g}" for k in ("height", "width", "depth")
+                                if isinstance(_body.get(k), (int, float)) and _body.get(k))
+             + (" mm" if any(_body.get(k) for k in ("height", "width", "depth")) else "")),
+            ("Material", " ".join(str(x) for x in (
+                f"{facts.get('thickness_mm'):g} mm" if isinstance(facts.get("thickness_mm"), (int, float))
+                and facts.get("thickness_mm") else "", facts.get("material") or "") if x)),
+            ("Finish", str(facts.get("finish") or "")),
+            ("Stated weight", (f"{facts.get('stated_weight_kg'):g} kg"
+                               if isinstance(facts.get("stated_weight_kg"), (int, float))
+                               and facts.get("stated_weight_kg") else "")),
+            ("Goods it holds", str(facts.get("goods") or "")),
+        ) if s[1]]
+        aside = [a for a in (concept.get("set_aside_undrawn") or []) if isinstance(a, dict)]
+        sheet_html = (
+            '<p><b>What the sheet states, and whether the bill agrees.</b></p>'
+            + (('<table><tbody>' + "".join(f'<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>'
+                                           for k, v in _stated) + '</tbody></table>')
+               if _stated else '')
+            + (f'<p>{_esc(_said)}</p>' if _said else '')
+            + (('<p>Listed by the read but not drawn on the sheet, so not costed and asked: '
+                + _esc(", ".join(f"{a.get('name')}" + (f" x{a.get('quantity')}" if a.get('quantity') else "")
+                                 for a in aside)) + '.</p>') if aside else ''))
+    _lead = ('This pack is design-intent sheets with no parts list, so <b>every size, material '
+             'and count below was read off the sheet by the vision model</b> and none of it was '
+             'measured. ' if concept.get("sheet_read") else
+             'This pack is a visual, so <b>every size, material and count below was sighted '
+             'from the image</b> and none of it was measured. ')
     return (f'{_h2("concept")}'
-            f'<p class="lead">This pack is a visual, so <b>every size, material and count '
-            f'below was sighted from the image</b> and none of it was measured. '
-            f'{len(rows)} assumption(s) went into the price.</p>{where}'
+            f'<p class="lead">{_lead}'
+            f'{len(rows)} assumption(s) went into the price.</p>{sheet_html}{where}'
             f'<table><thead><tr><th>Part</th><th>Description</th><th>Assumed</th>'
             f'<th>Value</th><th>Sighted because</th></tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table>')
