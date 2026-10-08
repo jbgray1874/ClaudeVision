@@ -2739,6 +2739,9 @@ def _finalize_scan_summary(
     # unanswerable.
     # _sw_why records which of the several ways to have no extract actually happened.
     _sw_job = None
+    # THIS JOB'S OWN EXTRACT THAT MATCHED NO PART, kept for the model take-off (D-411): on a
+    # design-intent pack the drawings mint nothing, so the model is the parts list.
+    _sw_job_own_unmatched = None
     _sw_why = "not attempted"
     if _sw_flag in {"0", "false", "no", "off"}:
         _sw_why = "SDI_APPLY_SOLIDWORKS is off"
@@ -2969,6 +2972,8 @@ def _finalize_scan_summary(
                         "job_codes": _sw_id.get("job_codes"),
                         "reason": _why,
                     }
+                    if _ours and _empty_job:
+                        _sw_job_own_unmatched = _sw_job
                     _sw_job = None
                     _sw_why = f"extract refused as belonging to another job: {_why}"
             if _sw_job and _sw_job.found:
@@ -4357,25 +4362,58 @@ def _finalize_scan_summary(
     # number and costed a tube callout as a 20 mm blank. With nothing the readers can cost,
     # the book is empty by mode and says so — and names the method that answers the pack.
     _design_intent_pages = design_intent_pages(summary)
+    _di_pending = None          # (stop text, next step): recorded only if nothing below prices the pack
+    _design_intent_fallback = False
     if _design_intent_pages and _no_parts and not _llm_only_run and not _is_render_pack:
-        _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
-                    "(the model is the parts list where the pack has none) or detailed by "
-                    "Design into a GA with a parts list and part sheets; an LLM scan with an "
-                    "enquiry brief is a fallback budget only, one design per run.")
-        _di_stop = (
-            f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
-            f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
-            f"readers have nothing to cost and this book is empty by mode, not by content. "
-            f"{_di_next}")
-        summary.setdefault("review_flags", []).append(_di_stop)
-        # THE STOP IS A FACT ON THE RECORD, NOT ONLY A FLAG (D-409). On the 8 Oct run the flag
-        # was written and nothing read it: packaging and delivery were minted for a product
-        # that did not exist, the quote carried their price, and the stop reached no page.
-        from run_stop import record as _record_stop
-        _record_stop(summary, "design_intent_pack_on_engine_run", _di_stop, next_step=_di_next,
-                     pages=[str(p) for p in _design_intent_pages])
-        print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
-              "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+        # THE MODEL IS THE PARTS LIST WHERE THE PACK HAS NONE (D-411). James Gray, 8 Oct 2026:
+        # "we should be able to BOM and route a lot from this." The job's own extract was kept
+        # when it matched no drawn part; the chosen design's bodies become the parts, stamped
+        # by the connector that stamps a drawn part, and the book says it is a concept take-off.
+        _took = None
+        try:
+            import model_takeoff as _mt
+            _took = _mt.takeoff(summary, _sw_job_own_unmatched,
+                                declared=str(summary.get("declared_product") or ""),
+                                drawing_number=str(summary.get("drawing_number") or ""),
+                                job_folder_name=Path(str(summary.get("job_folder") or "")).name)
+        except Exception as _mt_exc:                                   # noqa: BLE001
+            print(f"   [takeoff] the model take-off could not run "
+                  f"({type(_mt_exc).__name__}: {_mt_exc})", flush=True)
+            _took = None
+        if _took and _took.get("parts"):
+            summary["manufacturing_writeup"]["parts"].extend(_took["parts"])
+            _no_parts = False
+            print(f"   [takeoff] CONCEPT TAKE-OFF FROM THE MODEL: {len(_took['parts']) - 1} "
+                  f"part(s) under {_took['design']} ({_took['chosen_by']})"
+                  + (f"; set aside: {', '.join(e['part_number'] for e in _took['excluded'])}"
+                     if _took.get("excluded") else "")
+                  + (f"; other designs not priced in this book: "
+                     f"{', '.join(_took['other_designs'])}" if _took.get("other_designs") else ""),
+                  flush=True)
+        else:
+            _di_why = ((_took or {}).get("why_not")
+                       or "no SolidWorks extract of this job's own was available")
+            _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
+                        "(the model is the parts list where the pack has none) or detailed by "
+                        "Design into a GA with a parts list and part sheets; an LLM scan with an "
+                        "enquiry brief is a fallback budget only, one design per run.")
+            _di_stop = (
+                f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
+                f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
+                f"readers have nothing to cost and this book is empty by mode, not by content. "
+                f"The model take-off did not run: {_di_why}. {_di_next}")
+            summary.setdefault("review_flags", []).append(_di_stop)
+            # THE STOP IS DEFERRED, NOT DROPPED (D-409, D-411): the concept read with the
+            # brief is tried first as the fallback James named; if it prices nothing either,
+            # the stop is recorded as the fact on the record, as before.
+            _di_pending = (_di_stop, _di_next)
+            _design_intent_fallback = True
+            print("   !! this pack is design-intent sheets on an ENGINE run and the model gave "
+                  f"no take-off ({_di_why}) — the concept read with the brief is the fallback; "
+                  "failing that, nothing to cost.", flush=True)
+    # The concept read runs for an LLM-only run, and as the FALLBACK for a design-intent pack
+    # the model could not answer (D-411) — "even if it's LLM pricing" (James Gray, 8 Oct 2026).
+    _sight_run = _llm_only_run or _design_intent_fallback
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
@@ -4388,7 +4426,7 @@ def _finalize_scan_summary(
     # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
     # a deliberate refusal is never reported as a concept read that crashed.
     _concept_refused = None
-    if _llm_only_run and (_no_parts or _is_render_pack):
+    if _sight_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan as _cs_probe
             # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
@@ -4425,8 +4463,8 @@ def _finalize_scan_summary(
             + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])])[0]
     except Exception:                                                # noqa: BLE001
         _brief_unused = ""
-    if _brief_unused and (_concept_refused or not (_llm_only_run and (_no_parts
-                                                                     or _is_render_pack))):
+    if _brief_unused and (_concept_refused or not (_sight_run and (_no_parts
+                                                                  or _is_render_pack))):
         summary.setdefault("review_flags", []).append(
             "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
@@ -4443,7 +4481,7 @@ def _finalize_scan_summary(
                                    "guessed from pictures while measurable geometry is present.",
                          refused=_concept_refused)
         print(f"   [concept] not sighted — {_concept_refused}", flush=True)
-    elif _llm_only_run and (_no_parts or _is_render_pack):
+    elif _sight_run and (_no_parts or _is_render_pack):
         try:
             import concept_scan
             _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4580,6 +4618,16 @@ def _finalize_scan_summary(
                 f"because the read failed, not because the pack has no parts")
             print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
 
+    # A DESIGN-INTENT PACK THAT NEITHER THE MODEL NOR THE CONCEPT READ COULD PRICE STOPS HERE,
+    # as the fact on the record (D-409), with the reasons both doors gave (D-411).
+    if _di_pending and not summary["manufacturing_writeup"]["parts"]:
+        from run_stop import record as _record_stop
+        _record_stop(summary, "design_intent_pack_on_engine_run", _di_pending[0],
+                     next_step=_di_pending[1], pages=[str(p) for p in _design_intent_pages],
+                     concept_read=(str(_concept_refused) if _concept_refused else
+                                   str((summary.get("concept_read") or {}).get("error") or "")))
+        print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
+              "Take the chosen design off from its own model, or have Design detail it.", flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 

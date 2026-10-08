@@ -4544,6 +4544,26 @@ def _write_run_stop_banner(ws, summary: Dict[str, Any], flags: List[str]) -> boo
         return False
 
 
+def _write_concept_takeoff_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A SHEET PRICED FROM THE MODEL SAYS SO BESIDE ITS PRICE CELLS (D-411), in the words the
+    report's callout and the quote's gate use. Returns True when written."""
+    try:
+        from model_takeoff import banner as _takeoff_banner           # noqa: PLC0415
+        text = _takeoff_banner(summary.get("concept_takeoff"))
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not text:
+        return False
+    try:
+        _write_beside_price_labels(ws, text)
+        _flag(text, flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the concept take-off banner could not be written ({_exc}) — the report and "
+              f"the quote carry the label", flags)
+        return False
+
+
 def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str],
                             banner: bool = True) -> None:
     """Put the outstanding inputs where the estimator is already looking.
@@ -8277,6 +8297,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
     # inputs banner stands aside: "PROVISIONAL — 2 to settle" over an empty book promised a
     # figure somebody could finish.
     _stopped = _write_run_stop_banner(ws, summary, flags)
+    if not _stopped:
+        # A book priced from the model carries that label first (D-411); the inputs banner
+        # follows it in the next free cell, since both are true.
+        _write_concept_takeoff_banner(ws, summary, flags)
     _write_estimator_inputs(ws, _inputs, flags, banner=not _stopped)
     _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)

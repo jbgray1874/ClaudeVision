@@ -359,6 +359,20 @@ def quote_state(summary: Any) -> Dict[str, Any]:
             "short": "the unit price is not yet traceable to the workbook cell it came from",
         })
 
+    # A CONCEPT TAKE-OFF FROM THE MODEL IS NOT A CUSTOMER PRICE (D-411): nothing on it has been
+    # detailed or released, and the quote says so in the words the report and the sheet use.
+    _takeoff = source.get("concept_takeoff")
+    if isinstance(_takeoff, Mapping) and _takeoff.get("design"):
+        try:
+            from model_takeoff import sentence as _takeoff_sentence
+            _what = _takeoff_sentence(dict(_takeoff))
+        except Exception:                                                 # noqa: BLE001
+            _what = f"priced as a concept take-off from the SolidWorks model {_takeoff.get('design')}"
+        blocking.append({
+            "gate": "concept_takeoff", "what": _what,
+            "short": "a concept take-off from the model, not from drawings — not a customer price",
+        })
+
     outstanding = _outstanding_on_the_record(source)
     if outstanding:
         blocking.append({

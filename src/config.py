@@ -1708,6 +1708,18 @@ WEIGHT_QUALIFIERS_NOT_THE_PARTS = [
     r"ESTIMATED", r"EST\.?", r"APPROX(?:IMATE(?:LY)?)?", r"MAX(?:IMUM)?", r"LOAD(?:ING)?",
     r"CAPACITY", r"BAGS?", r"PRODUCTS?", r"GOODS", r"CUSTOMER", r"GROSS", r"SHIPPING", r"TOTAL",
 ]
+# ── WHERE THE PACK HAS NO PART DRAWINGS, THE MODEL IS THE PARTS LIST (D-411) ─────────────
+# A model in the assembly tree whose NAME says it is the customer's or a reference — the goods
+# the stand holds, modelled so the stand fits them — is set aside from a model take-off and
+# listed, never costed. 12675-01: "12675-M&S Customer Bag" and "… Customer Bag_Estimated
+# Stakable" sit in every stand's tree. Matched on whole words, case-insensitive.
+REFERENCE_MODEL_NAME_WORDS = [
+    r"\bCUSTOMER\b", r"\bSUPPLIED\b", r"\bREFERENCE\b", r"\bPLACEHOLDER\b", r"\bDUMMY\b",
+    r"\bENVELOPE\b", r"\bFREE\s+ISSUE\b",
+]
+# The drawing office marks the product among its models with a GA token in the name
+# ("12675-01-GA Stacking Block Model"); the same convention ignore_dxf_name_tokens reads.
+GA_NAME_TOKEN_PATTERN = r"(?:^|[\s_-])GA(?:[\s_-]|$)"
 # ── A FLAT PATTERN IS NOT A TUBE (D-403) ─────────────────────────────────────────────────
 # 9598-03-01M: a 1.2 mm frame with a measured DXF flat and a sheet-metal cut list was given
 # Tube (£8.79) and Tubebend (£25.72) rows at one off, inferred by the vision read from "radii
