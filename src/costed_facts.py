@@ -3557,15 +3557,18 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # row of the one tally, so the banner, the Decisions table, the verdict and the quote's
     # blocking list all say it, in the same words, first.
     try:
-        from run_stop import nothing_to_cost as _nothing_to_cost, sentence as _stop_sentence
+        from run_stop import (nothing_to_cost as _nothing_to_cost, sentence as _stop_sentence,
+                              doors as _stop_doors)
         _stop = _nothing_to_cost(source)
     except Exception:                                                # noqa: BLE001
         _stop = None
     if _stop:
+        _why_doors = _stop_doors(_stop)
         decisions.insert(0, {
             "part": "—", "kind": "nothing_to_cost",
             "issue": f"Nothing to cost: {_stop.get('short') or _stop.get('kind')}",
-            "assumption": "no part was costed, so no figure on the sheet is a price",
+            "assumption": (f"no part was costed — {_why_doors}" if _why_doors else
+                           "no part was costed, so no figure on the sheet is a price"),
             "action": (_stop.get("next_step")
                        or "answer the pack with the method the stop names, then re-run"),
             "owner": "estimator / Design", "gbp_at_stake": None})

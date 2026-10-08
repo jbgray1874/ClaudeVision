@@ -872,7 +872,7 @@ def _render_run_stop(summary: Dict[str, Any]) -> str:
     rendered. It is the one fact every other section is about, so it is the first thing read.
     """
     try:
-        from run_stop import nothing_to_cost, sentence, HEADLINE       # noqa: PLC0415
+        from run_stop import nothing_to_cost, sentence, doors, HEADLINE  # noqa: PLC0415
         stop = nothing_to_cost(summary)
     except Exception:                                                # noqa: BLE001
         return ""
@@ -880,10 +880,14 @@ def _render_run_stop(summary: Dict[str, Any]) -> str:
         return ""
     pages = stop.get("pages") or []
     where = (f" Page(s) {_esc(', '.join(str(p) for p in pages))} of the pack." if pages else "")
+    # WHY BOTH DOORS GAVE NOTHING (D-413). An empty book that does not say why the model and
+    # the concept read both produced nothing is a failed run wearing a safety result.
+    why = doors(stop)
+    why_html = (f'<br><b>Why both doors gave nothing:</b> {_esc(why)}.' if why else "")
     return (f'<div class="callout warn" style="border-left:6px solid #b3261e">'
             f'<b>{_esc(HEADLINE)}.</b> {_esc(sentence(stop))}{where} Nothing on this page or '
             f'on the sheet is a price for the product; the sections below describe an empty '
-            f'book and what was set aside, and this is not to be sent as an estimate.</div>')
+            f'book and what was set aside, and this is not to be sent as an estimate.{why_html}</div>')
 
 
 def _render_concept_takeoff(summary: Dict[str, Any]) -> str:

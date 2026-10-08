@@ -4406,7 +4406,7 @@ def _finalize_scan_summary(
             # THE STOP IS DEFERRED, NOT DROPPED (D-409, D-411): the concept read with the
             # brief is tried first as the fallback James named; if it prices nothing either,
             # the stop is recorded as the fact on the record, as before.
-            _di_pending = (_di_stop, _di_next)
+            _di_pending = (_di_stop, _di_next, _di_why)
             _design_intent_fallback = True
             print("   !! this pack is design-intent sheets on an ENGINE run and the model gave "
                   f"no take-off ({_di_why}) — the concept read with the brief is the fallback; "
@@ -4615,9 +4615,7 @@ def _finalize_scan_summary(
                     "chosen_by": _fallback_pick.get("chosen_by"),
                     "other_designs": list(_fallback_pick.get("other_designs") or []),
                     "excluded": [], "parts": len(_sighted), "sheets": list(_pack),
-                    "model_takeoff_why_not": (_di_pending[0].split("The model take-off did not run: ", 1)[-1]
-                                              .split(". The design being priced", 1)[0]
-                                              if _di_pending else ""),
+                    "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
                 }
                 summary.setdefault("review_flags", []).append(
                     f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "
@@ -4678,11 +4676,14 @@ def _finalize_scan_summary(
     # as the fact on the record (D-409), with the reasons both doors gave (D-411).
     if _di_pending and not summary["manufacturing_writeup"]["parts"]:
         from run_stop import record as _record_stop
+        # BOTH DOORS' REASONS GO ON THE RECORD (D-413): the 10:40 page said "take the design
+        # off the model" and never why the run had not — the one thing a reader needed.
         _record_stop(summary, "design_intent_pack_on_engine_run", _di_pending[0],
                      next_step=_di_pending[1], pages=[str(p) for p in _design_intent_pages],
+                     model_takeoff=str(_di_pending[2] or ""),
                      concept_read=(str(_concept_refused) if _concept_refused else
                                    str(_fallback_ask or (summary.get("concept_read") or {}).get("error")
-                                       or "")))
+                                       or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
