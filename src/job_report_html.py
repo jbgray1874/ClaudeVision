@@ -539,6 +539,78 @@ def part_review_notes(parts: List[Dict[str, Any]],
     return [{"note": t, "parts": who} for t, who in seen.items()]
 
 
+def _dxf_record_names(it: Any) -> List[str]:
+    """The filename(s) a dxf_augmentation record is about, whichever key the merge wrote.
+
+    drawing_job_merge writes `dxf` on a matched record, `path` on an unmatched, skipped or
+    ambiguous one, and `candidates` where several flats were weighed — full Windows paths as
+    written on the box. This report read `dxf_name`, `name` and `file`, keys no live run has
+    ever written, so 4.1 listed every PDF and every model and not one DXF: on 12675-01's 19:10
+    report the only DXF in the pack minted the priced part and was named nowhere, and 4.2
+    could only count the unmatched files. The test fixture used `dxf_name`, so the test
+    passed against a shape the engine never produces (D-408).
+
+    Basenames only: the staged path is the box's business, the filename is the reader's.
+    """
+    def _base(v: Any) -> str:
+        return re.split(r"[\\/]", str(v or "").strip())[-1]
+    if not isinstance(it, dict):
+        b = _base(it)
+        return [b] if b else []
+    for k in ("dxf_name", "name", "file", "dxf", "path"):
+        if it.get(k):
+            b = _base(it.get(k))
+            return [b] if b else []
+    out = [_base(c) for c in (it.get("candidates") or [])]
+    return [b for b in out if b]
+
+
+# What a DXF record's reason code means to a reader. The code is the merge's own vocabulary
+# (it is what drawing_job_merge writes); the sentence is for the person. An unknown code is
+# printed de-underscored rather than dropped, so a reason the merge learns to give next month
+# reaches the page without this table knowing it.
+_DXF_REASON_SENTENCES: Dict[str, str] = {
+    "drawing_export_not_a_flat": ("a drawing of a part, not a flat pattern — it minted no part "
+                                  "and measured nothing"),
+    "code_belongs_to_another_assembly_in_this_job_number": (
+        "its code belongs to another assembly under this job number — not attached to this one"),
+    "no_part_number_in_filename": "no part number in its name — matched to no part",
+    "ga_dxf_ignored": "a general-arrangement export — not a flat pattern, not measured",
+    "missing_file": "listed for the run but not found on disk — NOT READ",
+    "not_dxf": "not a DXF — not read as geometry",
+    "suffixed_flat_beside_the_parts_own_flat": (
+        "could be a piece or a variant of a part that has a flat of its own — not attached; "
+        "say which"),
+    "numbered_piece_or_separate_item_unresolved": (
+        "could be a numbered piece or a separate item — not attached; say which"),
+}
+
+
+def _dxf_record_code_and_evidence(it: Any) -> Tuple[str, str]:
+    """(reason code, evidence) off a record. The merge writes the code either on its own with
+    the evidence under `detail`, or as "code: evidence" in one string; the evidence from the
+    content reader ends with its own verdict ("— this is a drawing of the part…"), which the
+    sentence already says, so only the measurement before the dash is kept."""
+    if not isinstance(it, dict):
+        return "", ""
+    raw = str(it.get("reason") or "").strip()
+    code, _, tail = raw.partition(":")
+    code = code.strip()
+    evidence = str(it.get("detail") or tail or "").strip()
+    if code in _DXF_REASON_SENTENCES and " — " in evidence:
+        evidence = evidence.split(" — ", 1)[0].strip()
+    return code, evidence
+
+
+def _dxf_record_reason(it: Any) -> str:
+    """The recorded reason as a sentence, with the evidence in brackets when there is any."""
+    code, evidence = _dxf_record_code_and_evidence(it)
+    if not code:
+        return ""
+    sentence = _DXF_REASON_SENTENCES.get(code, code.replace("_", " "))
+    return f"{sentence} ({evidence})" if evidence else sentence
+
+
 def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     """The drawing-quality audit: DXF coverage, geometry reliability, contaminated fields,
     filename issues, part-number variety, validation issues, junk records."""
@@ -554,10 +626,21 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     dxf_names = []
     for k in ("matched", "unmatched_dxf", "ambiguous_dxf", "skipped"):
         for it in (dxf.get(k) or []):
-            nm = it.get("dxf_name") or it.get("name") or it.get("file") if isinstance(it, dict) else str(it)
-            if nm:
-                dxf_names.append(str(nm))
+            dxf_names.extend(_dxf_record_names(it))
     all_names = [str(p.get("name") or p) if isinstance(p, dict) else str(p) for p in pdfs] + dxf_names
+    # THE FILES SET ASIDE, BY NAME AND WITH THE REASON THE MERGE RECORDED (D-408). A refused
+    # drawing export is a different fact from a naming mismatch and gets its own row: the
+    # advice for one ("align the filename to the part number") is wrong for the other.
+    _refused_drawings: List[Tuple[str, str]] = []
+    _unmatched_items: List[Tuple[str, str]] = []
+    for k in ("unmatched_dxf", "skipped"):
+        for it in (dxf.get(k) or []):
+            code, evidence = _dxf_record_code_and_evidence(it)
+            for nm in _dxf_record_names(it):
+                if code == "drawing_export_not_a_flat":
+                    _refused_drawings.append((nm, evidence))
+                elif k == "unmatched_dxf":
+                    _unmatched_items.append((nm, _dxf_record_reason(it) or "matched to no part"))
     stray_space = [n for n in all_names if re.search(r"\s\.(dxf|pdf)$", n, re.I) or "  " in n]
 
     # part-number format variety
@@ -644,6 +727,8 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "dxf_matched": len(dxf.get("matched") or []),
         "dxf_unmatched": len(dxf.get("unmatched_dxf") or []),
+        "dxf_unmatched_items": _unmatched_items,
+        "dxf_refused_drawings": _refused_drawings,
         "dxf_ambiguous": len(dxf.get("ambiguous_dxf") or []),
         "dxf_skipped": len(dxf.get("skipped") or []),
         "native_flat_parts": len(_native_flat_pns),
@@ -1566,7 +1651,29 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
                      else ", though reliability stayed high"))
         wk += (f'<tr><td><b>Parts without a DXF</b></td><td>{_esc(", ".join(names_bits))}{"…" if n>6 else ""}</td>'
                f'<td>{n} part(s): {effect}.</td></tr>')
-    if dq.get("dxf_unmatched"):
+    # NAMED, WITH THE REASON, NOT COUNTED (D-408). "1 file(s) — check naming" told a reader
+    # nothing about a file the content reader refused for carrying 22 dimension entities: the
+    # name was fine, the file was a drawing. Each file set aside is listed with what the merge
+    # recorded about it, and a refused drawing export is kept apart from a naming mismatch
+    # because the remedy differs.
+    def _listed(items: List[Tuple[str, str]], cap: int = 6) -> str:
+        shown = "; ".join(f"{n} — {why}" if why else n for n, why in items[:cap])
+        return shown + (f" …and {len(items) - cap} more" if len(items) > cap else "")
+    _refused = dq.get("dxf_refused_drawings") or []
+    if _refused:
+        wk += (f'<tr><td><b>DXFs that are drawings, not flat patterns</b></td>'
+               f'<td>{_esc(_listed(_refused))}</td>'
+               f'<td>{len(_refused)} DXF(s) carry dimensions or a title block, so each is an export '
+               f'of the drawing rather than of the flat pattern. None minted a part and none was '
+               f'measured. A flat-pattern export of the part is what gives measured geometry.</td></tr>')
+    _unm = dq.get("dxf_unmatched_items") or []
+    if _unm:
+        wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{_esc(_listed(_unm))}</td>'
+               f'<td>{len(_unm)} DXF(s) present and tied to no part, each with the reason recorded '
+               f'beside its name. A naming mismatch is fixed by aligning the filename to the part '
+               f'number; a code from another assembly is not this job\'s flat.</td></tr>')
+    elif dq.get("dxf_unmatched") and not _refused:
+        # An older record whose entries carry no name or reason: the count is all there is.
         wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{dq["dxf_unmatched"]} file(s)</td>'
                f'<td>DXFs present but not tied to a part — check naming/part-number alignment.</td></tr>')
     if dq.get("dxf_ambiguous"):
@@ -1686,12 +1793,11 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     dxf = summary.get("dxf_augmentation") or {}
 
     def _names(items) -> List[str]:
-        out = []
+        # By the key the merge writes (`dxf`, `path`, `candidates`), not the keys a fixture
+        # once used — see _dxf_record_names for the report that named no DXF at all.
+        out: List[str] = []
         for it in items or []:
-            nm = (it.get("dxf_name") or it.get("name") or it.get("file")
-                  if isinstance(it, dict) else str(it))
-            if nm:
-                out.append(str(nm))
+            out.extend(_dxf_record_names(it))
         return out
 
     # WHAT ACTUALLY READ EACH FILE, not what kind of file it is.
@@ -1720,8 +1826,14 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
         rows.append((n, "PDF", _pdf_what))
     for n in _names(dxf.get("matched")):
         rows.append((n, "DXF", "matched to a part — measured flat pattern (ezdxf)"))
-    for n in _names(dxf.get("unmatched_dxf")):
-        rows.append((n, "DXF", "present, matched to no part"))
+    # A DXF THE MERGE SET ASIDE IS NAMED WITH THE REASON IT RECORDED (D-408). Matched rows go
+    # first, so a file that was weighed among candidates and then applied keeps its matched
+    # row and the record of the weighing does not list it a second time.
+    for key in ("unmatched_dxf", "skipped", "ambiguous_dxf"):
+        for it in (dxf.get(key) or []):
+            why = _dxf_record_reason(it) or "matched to no part"
+            for n in _dxf_record_names(it):
+                rows.append((n, "DXF", f"present, not used: {why}"))
     for n in (cad.get("solidworks") or []):
         rows.append((str(n), "MODEL",
                      "cut list and assembly structure read from the model (SolidWorks COM)"
@@ -1748,7 +1860,11 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
         if key in seen:
             continue
         seen.add(key)
-        cls = ' style="color:#b3261e;font-weight:600"' if "NOT READ" in what else ""
+        # Red for a file that contributed nothing, however it came to contribute nothing.
+        _nothing = ("NOT READ", "minted no part", "matched to no part", "not attached",
+                    "not measured")
+        cls = (' style="color:#b3261e;font-weight:600"'
+               if any(m in what for m in _nothing) else "")
         body += (f'<tr><td><code>{_esc(name)}</code></td><td>{_esc(kind)}</td>'
                  f'<td{cls}>{_esc(what)}</td></tr>')
 

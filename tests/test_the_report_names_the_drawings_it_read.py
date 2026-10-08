@@ -117,6 +117,141 @@ def test_the_section_appears_in_the_rendered_report(jrh_section=None):
     assert "10575-02-GA [Rev D].PDF" in html
 
 
+# ── the record the ENGINE writes, not the one the first fixture imagined (D-408) ─────────
+#
+# drawing_job_merge writes `dxf` on a matched record and `path` on an unmatched, skipped or
+# ambiguous one — full Windows paths as written on the box — and `candidates` where several
+# flats were weighed. The fixture above used `dxf_name`, a key no run has ever written, so the
+# section passed its tests while live reports named every PDF and every model and not one DXF.
+# 12675-01's 19:10 report: the only DXF in the pack minted the priced part and appeared nowhere
+# in 4.1, and 4.2 could say only "1 file(s) — check naming" about a file refused for carrying
+# 22 dimension entities.
+
+LIVE = {
+    "job_source_pdfs": [{"name": "12675-01-GA Stacking Block Model_Design Intent.PDF"}],
+    "dxf_augmentation": {
+        "matched": [{"part_number": "12675-01-03",
+                     "dxf": r"C:\SDI\staging\12675-01\12675-01-03_2mm_SS.DXF",
+                     "geometry_reliability": 0.95}],
+        "unmatched_dxf": [
+            {"path": r"C:\SDI\staging\12675-01\12675-01-02 Block Model V2.dxf",
+             "part_number": "12675-01-02",
+             "reason": ("drawing_export_not_a_flat: 22 dimension entities — this is a drawing "
+                        "of the part, not its flat pattern")},
+            {"path": r"C:\SDI\staging\12675-01\12675-03-BOOTS BAR BLACK_RevB.DXF",
+             "part_number": "12675-03",
+             "reason": "code_belongs_to_another_assembly_in_this_job_number"},
+        ],
+        "skipped": [
+            {"path": r"C:\SDI\staging\12675-01\0355255 - Table Top Holder - 12675_REV B.DXF",
+             "reason": "drawing_export_not_a_flat",
+             "detail": "9 dimension entities — this is a drawing of the part, not its flat pattern"},
+            {"path": r"C:\SDI\staging\12675-01\12675-01-GA.DXF", "reason": "ga_dxf_ignored"},
+        ],
+        "ambiguous_dxf": [
+            {"part_number": "12675-01-05",
+             "candidates": [r"C:\SDI\staging\12675-01\12675-01-05-1.DXF",
+                            r"C:\SDI\staging\12675-01\12675-01-05-2.DXF"],
+             "reason": "numbered_piece_or_separate_item_unresolved", "evidence": []},
+        ],
+    },
+    "cad_inputs": {},
+}
+
+
+def _section_41() -> str:
+    return _text(jrh._files_read_section(LIVE))
+
+
+def _section_42() -> str:
+    return _text(jrh._render_drawing_analysis(jrh._extract_drawing_quality(LIVE), LIVE))
+
+
+def test_a_dxf_is_named_by_the_key_the_merge_actually_writes():
+    out = _section_41()
+    for name in ("12675-01-03_2mm_SS.DXF", "12675-01-02 Block Model V2.dxf",
+                 "12675-03-BOOTS BAR BLACK_RevB.DXF", "0355255 - Table Top Holder - 12675_REV B.DXF",
+                 "12675-01-GA.DXF", "12675-01-05-1.DXF", "12675-01-05-2.DXF"):
+        assert name in out, f"{name} is in the engine's record and is not named"
+
+
+def test_the_staged_path_is_shown_as_its_filename():
+    out = _section_41()
+    assert r"C:\SDI" not in out and "staging" not in out
+
+
+def test_a_matched_flat_still_reads_as_measured():
+    out = _section_41()
+    assert re.search(r"12675-01-03_2mm_SS\.DXF\s+DXF\s+matched to a part — measured flat pattern", out)
+
+
+def test_a_refused_drawing_export_says_why_beside_its_name():
+    """The reason the merge recorded, in the row for the file — not a count two sections away."""
+    out = _section_41()
+    assert re.search(r"Block Model V2\.dxf\s+DXF\s+present, not used: a drawing of a part, not a "
+                     r"flat pattern — it minted no part and measured nothing \(22 dimension entities\)", out)
+    # the same reason written the other way the merge writes it (code + detail)
+    assert re.search(r"12675_REV B\.DXF\s+DXF\s+present, not used: a drawing of a part.*\(9 dimension entities\)", out)
+    # the verdict the content reader appends to its evidence is not printed twice
+    assert "this is a drawing of the part, not its flat pattern" not in out
+
+
+def test_every_recorded_reason_reaches_the_row():
+    out = _section_41()
+    assert "its code belongs to another assembly under this job number" in out
+    assert "a general-arrangement export — not a flat pattern, not measured" in out
+    assert "could be a numbered piece or a separate item — not attached; say which" in out
+
+
+def test_an_unknown_reason_code_is_printed_not_dropped():
+    s = {"job_source_pdfs": [{"name": "ga.pdf"}], "cad_inputs": {},
+         "dxf_augmentation": {"unmatched_dxf": [
+             {"path": r"C:\x\odd.DXF", "reason": "some_new_reason_the_merge_learned"}]}}
+    out = _text(jrh._files_read_section(s))
+    assert "odd.DXF" in out
+    assert "some new reason the merge learned" in out
+
+
+def test_a_file_that_contributed_nothing_is_marked_like_an_unread_one():
+    html_out = jrh._files_read_section(LIVE)
+    row = re.search(r"<tr><td><code>12675-01-02 Block Model V2\.dxf</code></td>.*?</tr>", html_out).group(0)
+    assert "color:#b3261e" in row, "a refused DXF contributed nothing and is not shown in red"
+    row = re.search(r"<tr><td><code>12675-01-03_2mm_SS\.DXF</code></td>.*?</tr>", html_out).group(0)
+    assert "color:#b3261e" not in row, "a measured flat is not a warning"
+
+
+def test_the_weaknesses_table_lists_refused_drawings_by_name_with_the_evidence():
+    out = _section_42()
+    assert "DXFs that are drawings, not flat patterns" in out
+    assert "12675-01-02 Block Model V2.dxf — 22 dimension entities" in out
+    assert "0355255 - Table Top Holder - 12675_REV B.DXF — 9 dimension entities" in out
+    assert "2 DXF(s) carry dimensions or a title block" in out
+    assert "None minted a part" in out
+
+
+def test_the_weaknesses_table_lists_unmatched_files_with_their_reason_not_a_count():
+    out = _section_42()
+    assert "12675-03-BOOTS BAR BLACK_RevB.DXF — its code belongs to another assembly" in out
+    # the refused drawing is NOT also counted as a naming problem
+    assert "1 DXF(s) present and tied to no part" in out
+    assert "check naming/part-number alignment" not in out
+
+
+def test_an_old_record_with_bare_entries_still_gets_the_count():
+    """A summary saved before reasons were recorded carries unmatched entries with no name or
+    reason. The count is all there is, and it is still said."""
+    s = {"dxf_augmentation": {"unmatched_dxf": [{}, {}]}}
+    out = _text(jrh._render_drawing_analysis(jrh._extract_drawing_quality(s), s))
+    assert "Unmatched DXFs" in out and "2 file(s)" in out
+
+
+def test_the_first_fixtures_key_still_works():
+    """`dxf_name` is still read — the fix widened the reader, it did not move it."""
+    out = _text(jrh._files_read_section(PACK))
+    assert "10575-02-009_DIBOND_3.0mm.DXF" in out
+    assert re.search(r"spare\.DXF\s+DXF\s+present, not used: matched to no part", out)
+
+
 def test_the_sub_numbering_does_not_collide(jrh_section=None):
     """4.1 is the new list, so Strengths and Weaknesses shift down. Two 4.2s in one section is
     the kind of thing nobody notices until a report is being read aloud in a meeting."""
