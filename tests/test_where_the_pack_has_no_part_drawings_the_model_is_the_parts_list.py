@@ -438,6 +438,16 @@ def test_a_block_with_no_stock_basis_is_not_a_take_off_and_says_why():
     assert "concept_takeoff" not in s, "nothing is labelled a take-off when there is none"
 
 
+def test_a_design_that_is_one_block_gives_its_envelope_as_the_body():
+    """D-416: refused as a part, the one block is still the holder's measured size."""
+    r = mt.takeoff(_summary(), _real_job(), declared="12675-01", drawing_number="12675-01")
+    assert r["parts"] == [] and r["model_envelope_mm"] == [1250, 600, 1200]
+    assert r["model_envelope_of"] == STACKING_BLOCK
+    src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert '"model_envelope_mm": list((_took or {}).get("model_envelope_mm") or [])' in src
+    assert 'envelope=list(_door_rec.get("model_envelope_mm") or [])' in src
+
+
 def test_a_stack_holding_only_the_customers_bags_is_set_aside_with_them():
     r = mt.takeoff(_summary(), _real_job(), declared="12675-01", drawing_number="12675-01")
     gone = {e["part_number"] for e in r["excluded"]}
