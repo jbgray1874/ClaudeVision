@@ -210,6 +210,24 @@ class InVentryAPI:
                 "is issued by InVentry Ltd."
             )
 
+        # A placeholder pasted verbatim from instructions is otherwise
+        # indistinguishable from a wrong credential: both come back as a 401,
+        # and the real cause is a line in a file nobody is looking at. Note
+        # .env takes the LAST of any duplicated key, so a pasted placeholder
+        # silently wins over the correct value above it.
+        placeholders = [name for name, value in (
+            ("INVENTRY_API_BASE_URL", self.base_url),
+            ("INVENTRY_API_KEY", self.api_key),
+            ("INVENTRY_PARTNER_SECRET", self.partner_secret),
+        ) if value.strip().startswith("<") and value.strip().endswith(">")]
+        if placeholders:
+            raise InVentryAPIError(
+                f"{', '.join(placeholders)} still holds a placeholder, not a real value - "
+                f"something like <paste it here> was copied into {cfg.ENV_FILE} literally. "
+                f"Remove that line. If the setting appears twice, the LAST one is the one "
+                f"being used."
+            )
+
     def _headers(self):
         # Documented header names, sent lowercase exactly as written there.
         return {"apikey": self.api_key, "partnersecret": self.partner_secret}

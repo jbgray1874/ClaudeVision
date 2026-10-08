@@ -673,3 +673,23 @@ def test_skipping_the_hostname_check_with_a_pin_does_not_warn_about_it():
     assert not any("nothing about the server" in w for w in client.warnings)
     # The adapter is what actually turns the name check off.
     assert isinstance(client.session.get_adapter("https://x"), api.PinnedCertAdapter)
+
+
+def test_a_placeholder_pasted_into_env_is_named_not_left_as_a_401():
+    """A placeholder copied verbatim and a wrong credential both 401. Only one
+    of them is fixable by reading the error."""
+    client = api.InVentryAPI(base_url="https://x", api_key="k",
+                             partner_secret="<what they give you>",
+                             limiter=NoWaitLimiter(), verify=False)
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_PARTNER_SECRET" in str(exc.value)
+    assert "placeholder" in str(exc.value)
+    assert "LAST one" in str(exc.value)
+
+
+def test_a_real_secret_that_merely_contains_brackets_is_not_rejected():
+    client, session = make_client([StubResponse({"response": "OK"})],
+                                  partner_secret="ab<cd>ef")
+    client.check_auth()
+    assert session.calls[0]["headers"]["partnersecret"] == "ab<cd>ef"
