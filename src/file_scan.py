@@ -4393,6 +4393,16 @@ def _finalize_scan_summary(
         else:
             _di_why = ((_took or {}).get("why_not")
                        or "no SolidWorks extract of this job's own was available")
+            # THE MODEL DOOR RAN AND ANSWERED (D-414): recorded, so the concept read's guard
+            # knows the model files beside the pack were offered first and gave nothing to
+            # cost — they are not measured CAD the sighting would be guessing over.
+            summary["model_takeoff_door"] = {
+                "ran": True, "design": str((_took or {}).get("design") or ""),
+                "why_not": _di_why,
+                "undetailed": list((_took or {}).get("undetailed") or []),
+                "excluded": [e.get("part_number") for e in ((_took or {}).get("excluded") or [])
+                             if isinstance(e, dict)],
+            }
             _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
                         "(the model is the parts list where the pack has none) or detailed by "
                         "Design into a GA with a parts list and part sheets; an LLM scan with an "

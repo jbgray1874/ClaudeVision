@@ -1629,11 +1629,22 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
         # The caveat only holds when NOTHING measured the blanks. Native SolidWorks flats
         # are measured geometry, so a native job must not be told its blanks are provisional.
         _no_measured = not (dq.get("dxf_matched") or dq.get("native_flat_parts"))
-        _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
-                   "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
-                   "matched on this job, so blank sizes, bend counts and cut lengths "
-                   "remain provisional.</em>"
-                   if _no_measured else "")
+        _ct = (summary or {}).get("concept_takeoff") if isinstance((summary or {}).get("concept_takeoff"), dict) else {}
+        if _no_measured and _ct.get("source") == "solidworks_model":
+            # NOT "NO MODEL MATCHED" ON A BOOK TAKEN OFF THE MODEL (D-414): the parts came from
+            # the SolidWorks assembly, not from flats or drawings, and the line says so.
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. The parts on this book were taken off "
+                       f"the SolidWorks assembly {_esc(str(_ct.get('design') or ''))}, not read "
+                       "from drawings or flats, so every size is the model's and every operation "
+                       "an assumption.</em>")
+        elif _no_measured:
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
+                       "matched on this job, so blank sizes, bend counts and cut lengths "
+                       "remain provisional.</em>")
+        else:
+            _caveat = ""
         strengths.append(f"<li><b>PDF vector extraction confidence: {band} ({rel_pct}%).</b> "
                          f"Overall extraction confidence "
                          f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%."

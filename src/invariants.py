@@ -1505,7 +1505,19 @@ def check_both_bom_readers_ran(summary: Any) -> List[Dict[str, Any]]:
                 f"corroboration and no line only one reader could see has been flagged as "
                 f"such. A parent BOM missing from this estimate would look exactly like a job "
                 f"that has none.")
-        if summary.get("source_format") == "image_render":
+        _ct = summary.get("concept_takeoff") if isinstance(summary.get("concept_takeoff"), dict) else {}
+        if _ct.get("design") or summary.get("model_takeoff_door"):
+            # SAID AS WHAT IT IS ON A DESIGN-INTENT PACK (D-414): the sheets carry no parts
+            # list, so both readers correctly found none; the parts here come from the model
+            # take-off or the concept read, and are assumptions until a parts list confirms them.
+            _src = ("taken off the SolidWorks model" if _ct.get("source") == "solidworks_model"
+                    else "sighted on the design-intent sheet by the vision model" if _ct.get("design")
+                    else "not yet established")
+            _msg = (f"This pack is design-intent sheets with no parts list for either BOM reader to "
+                    f"read; the parts here were {_src}, so none is a read line and none is "
+                    f"corroborated. The estimate stays blocked from release until a parts list or a "
+                    f"detailed drawing confirms them.")
+        elif summary.get("source_format") == "image_render":
             # SAID AS WHAT IT IS ON A RENDER (D-358): no parts list exists to be read twice.
             _msg = ("This pack is a customer render: there is no parts list for either BOM "
                     "reader to read, so every part here was sighted on the picture and none is "
