@@ -94,6 +94,24 @@
   .vc-type input{flex:1;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r);
                  color:var(--ink);font-family:var(--body);font-size:14px;padding:9px 11px;outline:none}
   .vc-type input:focus{border-color:var(--accent)}
+  .vc-hint{font-size:13px;color:var(--ink-faint);margin-bottom:4px}
+  .turn.thinking{opacity:.65;font-style:italic}
+  /* The mic, what it is doing, and Yes/No stay on screen while the page
+     scrolls - on a phone the conversation is read further down the page. */
+  .dock{position:fixed;left:0;right:0;bottom:0;z-index:30;display:none;
+        background:rgba(13,13,15,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);
+        padding:10px 16px calc(10px + var(--safe-b))}
+  .dock.show{display:block}
+  .dock-in{max-width:840px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+  .dock-row{display:flex;gap:10px;align-items:center}
+  .dock .mic{width:52px;height:52px}
+  .dock .vc-state{flex:1;min-width:0;font-size:13px;line-height:1.35;max-height:3.6em;overflow:hidden}
+  .dock .vc-confirm{margin-top:0}
+  .btn.sm{padding:8px 11px;font-size:13px;flex:0 0 auto}
+  body.has-dock .wrap{padding-bottom:calc(170px + var(--safe-b))}
+  .diag{margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+  .diag summary{cursor:pointer}
+  .diag pre{white-space:pre-wrap;margin-top:6px;max-height:180px;overflow:auto;font-family:var(--mono)}
 </style>
 </head>
 <body>
@@ -114,26 +132,15 @@
 
   <div class="vc" id="vc" style="display:none">
     <h4>Talk to the tracker</h4>
-    <div class="vc-row">
-      <button class="mic" id="mic" title="Hold a conversation">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>
-        </svg>
-      </button>
-      <div>
-        <div class="vc-state" id="vcstate">Tap the mic once and talk — it keeps listening and answering until you
-          tap it again or say “that's all”. Try “what's at risk?”</div>
-      </div>
-    </div>
+    <p class="vc-hint">Tap the mic at the bottom of the screen and talk, or type here. Your keyboard's
+      own mic button works in the box too.</p>
     <div class="vc-log" id="vclog"></div>
-    <div class="vc-confirm" id="vcconfirm">
-      <button class="btn yes" onclick="answerConfirm(true)">Yes — write it</button>
-      <button class="btn no" onclick="answerConfirm(false)">No — cancel</button>
-    </div>
-    <div class="vc-type">
-      <input id="vctext" placeholder="…or type the instruction" autocomplete="off">
-      <button class="btn" onclick="sendTyped()">Send</button>
-    </div>
+    <form class="vc-type" id="vcform" autocomplete="off">
+      <input id="vctext" placeholder="Type or dictate an instruction" autocomplete="off"
+             autocapitalize="sentences" enterkeyhint="send">
+      <button class="btn" type="submit">Send</button>
+    </form>
+    <details class="diag"><summary>Voice diagnostics</summary><pre id="diag">No events yet.</pre></details>
   </div>
 
   <div class="vc" id="mr" style="display:none">
@@ -152,6 +159,25 @@
   <div class="foot" id="foot"></div>
 </div>
 
+<div class="dock" id="dock" role="region" aria-label="Voice controls">
+  <div class="dock-in">
+    <div class="dock-row">
+      <button class="mic" id="mic" type="button" title="Start or stop talking" aria-label="Start or stop talking">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>
+        </svg>
+      </button>
+      <div class="vc-state" id="vcstate" aria-live="polite">Tap the mic once and talk — it keeps listening and
+        answering until you tap it again or say “that's all”.</div>
+      <button class="btn sm" id="replay" type="button" title="Hear the last reply again" aria-label="Hear the last reply again">&#128266;</button>
+    </div>
+    <div class="vc-confirm" id="vcconfirm">
+      <button class="btn yes" type="button" onclick="answerConfirm(true)">Yes — write it</button>
+      <button class="btn no" type="button" onclick="answerConfirm(false)">No — cancel</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // Nothing on this screen is invented. If a record cannot be read, the screen
 // says why instead of showing a plausible-looking row. A confidently wrong
@@ -165,6 +191,13 @@ const HIDE=/^(@|odata|_|ContentType|Attachments|Edit$|LinkTitle|ItemChildCount|F
 const PID=['ACCOUNT','Client','ProjectID','ProjectId','Project_x0020_ID','Title'];
 
 let ST={}, PROJECTS=[], COLUMNS=[], PENDING=null, LISTEN_MODE='command';
+// Where the current turn came from. A typed turn never switches the mic on by
+// itself: the person is using the keyboard (often its own dictation), and the
+// page listening at the same time fights it for the microphone.
+let TURN='voice';
+// The question waiting on the server, kept so it can be re-sent if the page
+// has to reload to renew the sign-in.
+let CUR_TEXT=null;
 // The records' load in flight. A question asked before it lands must wait for
 // it: sent early, the model gets no records and truthfully finds nothing.
 let RECORDS_LOADING=null;
@@ -265,9 +298,36 @@ function renewSignIn(){
   let tried=false;
   try{ tried=sessionStorage.getItem('sdiRenew')==='1'; sessionStorage.setItem('sdiRenew','1'); }catch(e){}
   if(tried) return false;
+  diag('sign-in renew: reload');
+  saveReplay();
   setState('Refreshing your sign-in…');
   setTimeout(()=>location.reload(),600);
   return true;
+}
+// Before any reload or sign-in redirect: the conversation so far and the
+// question that had not been answered yet. Restored after the page loads, so
+// a renewed sign-in no longer silently swallows what was said or typed.
+function saveReplay(){
+  try{
+    const turns=[...document.querySelectorAll('#vclog .turn:not(.thinking)')].slice(-20)
+      .map(d=>({who:d.classList.contains('t-you')?'you':'app',text:d.dataset.text||d.textContent}));
+    sessionStorage.setItem('sdiReplay',JSON.stringify({text:CUR_TEXT,typed:TURN==='typed',turns}));
+  }catch(e){}
+}
+function restoreReplay(){
+  let r=null;
+  try{ r=JSON.parse(sessionStorage.getItem('sdiReplay')||'null'); sessionStorage.removeItem('sdiReplay'); }catch(e){}
+  if(!r) return;
+  const turns=r.turns||[];
+  // The unanswered question is re-sent below, which logs it again.
+  if(r.text&&turns.length&&turns[turns.length-1].who==='you'&&turns[turns.length-1].text===r.text) turns.pop();
+  turns.forEach(t=>log(t.who,t.text));
+  if(r.text){
+    diag('replay after sign-in');
+    log('app','(Signed in again — sending your last message.)');
+    TURN=r.typed?'typed':'voice';
+    handleTranscript(r.text).catch(reportFailure);
+  }
 }
 async function post(url,data){
   let r;
@@ -275,14 +335,31 @@ async function post(url,data){
     r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
                        body:JSON.stringify(data),redirect:'manual'});
   }catch(e){
-    if(renewSignIn()) throw new Error('refreshing sign-in');
-    throw new Error('the connection to the server dropped. Check your signal and try again');
+    // A bare network failure is usually the phone's signal, not the sign-in.
+    // Ask the server: a redirect back means the sign-in really has lapsed.
+    diag('post failed: '+url.split('/').pop());
+    let probe=null;
+    try{ probe=await fetch('../api/voicecrm/status',{cache:'no-store',redirect:'manual'}); }catch(e2){}
+    if(probe&&(probe.type==='opaqueredirect'||probe.status===0)){
+      if(renewSignIn()) throw new Error('refreshing sign-in');
+      throw new Error('your sign-in needs renewing — reload the page');
+    }
+    throw new Error('the connection to the server dropped — check your signal and try again');
   }
   if(r.type==='opaqueredirect'||r.status===0){
     if(renewSignIn()) throw new Error('refreshing sign-in');
-    throw new Error('your sign-in needs renewing. Reload the page');
+    throw new Error('your sign-in needs renewing — reload the page');
   }
-  if(r.status===401){ location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'+location.search); throw new Error('signed out'); }
+  if(r.status===401){
+    saveReplay();
+    location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'+location.search);
+    throw new Error('signing you in again');
+  }
+  const ct=(r.headers&&r.headers.get&&r.headers.get('content-type'))||'';
+  if(!r.ok||!ct.includes('json')){
+    diag('post http '+r.status+' '+url.split('/').pop());
+    throw new Error(r.status===502||r.status===504?'the server took too long to answer':'the server returned an error ('+r.status+')');
+  }
   try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}
   return r.json();
 }
@@ -291,29 +368,113 @@ async function post(url,data){
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 
+// ── Diagnostics ──────────────────────────────────────────────────────────────
+// What the mic and the speech engine did, in order, shown under "Voice
+// diagnostics" and sent to the server log so a phone's problem can be seen
+// remotely. Event names, codes and lengths only - never what was said.
+const UA=navigator.userAgent||'';
+const IOS=/iPad|iPhone|iPod/.test(UA)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+const BROWSER=/CriOS/.test(UA)?'Chrome (iPhone)':/FxiOS/.test(UA)?'Firefox (iPhone)':/EdgiOS/.test(UA)?'Edge (iPhone)'
+  :IOS?'Safari (iPhone)':/Edg\//.test(UA)?'Edge':/Chrome\//.test(UA)?(/Android/.test(UA)?'Chrome (Android)':'Chrome'):'Other';
+const DIAG=[], DIAG_Q=[];
+function diag(ev){
+  const line=new Date().toTimeString().slice(0,8)+' '+ev;
+  DIAG.push(line); if(DIAG.length>80) DIAG.shift();
+  DIAG_Q.push(line); if(DIAG_Q.length>60) DIAG_Q.shift();
+  const el=$('diag'); if(el) el.textContent=BROWSER+'\n'+DIAG.join('\n');
+  if(DIAG_Q.length>=40) flushDiag('batch');
+}
+function flushDiag(reason){
+  if(!DIAG_Q.length) return;
+  const events=DIAG_Q.splice(0);
+  try{
+    fetch('../api/voicecrm/clientlog',{method:'POST',keepalive:true,redirect:'manual',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reason:reason||'',ua:BROWSER+' | '+UA.slice(0,140),events})}).catch(()=>{});
+  }catch(e){}
+}
+
+// ── Speech out ───────────────────────────────────────────────────────────────
+// iPhones (Safari and Chrome alike) only let a page speak after a tap: a
+// reply that arrives a few seconds after the tap is dropped silently, with no
+// start, end or error event. One utterance spoken inside any tap unlocks the
+// page until it reloads, so every tap and key press does that first.
+let TTS_OK=false;
+function unlockTTS(){
+  if(TTS_OK||!window.speechSynthesis) return;
+  try{ const u=new SpeechSynthesisUtterance(' '); u.volume=0; speechSynthesis.speak(u); TTS_OK=true; diag('speech unlocked'); }catch(e){}
+}
+['touchend','click','keydown'].forEach(ev=>document.addEventListener(ev,unlockTTS,{capture:true,passive:true}));
+
 let LAST_SAID='';
+// then === undefined: in a voice conversation, listen again afterwards.
+// then === null: say it and do nothing more (typed turns).
 function say(text, then){
+  clearThinking();
   log('app', text);
   LAST_SAID=text;
-  if(!then&&CONVO) then=()=>{ if(CONVO) startListening(PENDING?'confirm':'command'); };
-  try{
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang='en-GB';
-    if(then){
-      let fired=false; const once=()=>{ if(!fired){ fired=true; then(); } };
-      u.onend=once; u.onerror=once;   // some engines drop onend
-    }
-    speechSynthesis.speak(u);
-  }catch(e){ if(then) then(); }
+  // Never listen while speaking: the mic would hear the reply.
+  if(rec&&rec._cancel) rec._cancel();
+  $('mic').classList.remove('live');
+  if(then===undefined) then=CONVO?()=>{ if(CONVO) startListening(PENDING?'confirm':'command'); }:null;
+  let fired=false, started=false, poll=null;
+  const t0=Date.now();
+  const once=()=>{ if(fired) return; fired=true; clearInterval(poll); if(then) then(); };
+  if(!window.speechSynthesis){ once(); return; }
+  const go=()=>{
+    try{
+      const u=new SpeechSynthesisUtterance(text);
+      u.lang='en-GB';
+      u.onstart=()=>{ started=true; diag('speaking'); };
+      u.onend=()=>{ diag('spoken'); once(); };
+      u.onerror=e=>{ diag('speech error '+(e&&e.error||'')); once(); };
+      speechSynthesis.speak(u);
+    }catch(e){ diag('speech threw'); once(); return; }
+    // Some phones drop the speech, or its end event, without telling us.
+    // Don't wait for it forever: when nothing is speaking or queued, carry on.
+    poll=setInterval(()=>{
+      if(fired){ clearInterval(poll); return; }
+      let busy=false; try{ busy=speechSynthesis.speaking||speechSynthesis.pending; }catch(e){}
+      if(busy) return;
+      if(!started&&Date.now()-t0<1500) return;
+      if(!started){ diag('speech blocked by the phone'); setState('Reply shown above — tap 🔊 to hear it.'); }
+      once();
+    },400);
+  };
+  let cancelled=false;
+  try{ if(speechSynthesis.speaking||speechSynthesis.pending){ speechSynthesis.cancel(); cancelled=true; } }catch(e){}
+  // Speaking straight after cancel() can be swallowed by WebKit.
+  if(cancelled) setTimeout(go,80); else go();
+}
+function replayLast(){
+  unlockTTS();
+  if(!LAST_SAID||!window.speechSynthesis) return;
+  if(rec&&rec._cancel) rec._cancel();
+  try{ speechSynthesis.cancel(); const u=new SpeechSynthesisUtterance(LAST_SAID); u.lang='en-GB'; speechSynthesis.speak(u); diag('replay'); }catch(e){}
 }
 
 function log(who, text){
   const div=document.createElement('div');
   div.className='turn '+(who==='you'?'t-you':'t-app');
+  div.dataset.text=text;
   div.innerHTML=(who==='you'?'':'<b>CRM</b> · ')+esc(text);
   $('vclog').appendChild(div);
   $('vclog').scrollTop=$('vclog').scrollHeight;
+  return div;
+}
+// A placeholder while the server works, so a slow answer doesn't look like no answer.
+function thinking(){ clearThinking(); const d=log('app','thinking…'); d.classList.add('thinking'); }
+function clearThinking(){ document.querySelectorAll('#vclog .thinking').forEach(x=>x.remove()); }
+// Anything that goes wrong is said and shown in the conversation, not only in
+// the status line, and a typed message comes back to the box to resend.
+function reportFailure(err){
+  const m=(err&&err.message)||String(err||'something went wrong');
+  if(/refreshing sign-in|signing you in again/.test(m)){ clearThinking(); return; }
+  diag('failure: '+m.slice(0,60));
+  if(TURN==='typed'&&CUR_TEXT&&!$('vctext').value) $('vctext').value=CUR_TEXT;
+  CUR_TEXT=null;
+  say('That didn\'t go through: '+m+'.'+(TURN==='typed'?' Your message is back in the box — tap Send to try again.':''), null);
+  setState('Not sent: '+m);
 }
 
 function setState(t){ $('vcstate').textContent=t; }
@@ -332,7 +493,7 @@ function isEcho(t){
 // Listening is continuous with live text, and a sentence ends after a real
 // pause - the browser's default stopped at the first breath. 3 s, not 2:
 // people stop to think mid-sentence and were being answered too early.
-const PAUSE_MS=3000, CONFIRM_PAUSE_MS=1200, FIRST_WORD_MS=10000;
+const PAUSE_MS=3000, CONFIRM_PAUSE_MS=1200, FIRST_WORD_MS=10000, SILENT_LIMIT=3;
 let CONVO=false, SILENT_RUNS=0;
 const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?|thank you|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
 // Some Android phones report one sentence as a run of growing pieces
@@ -356,6 +517,18 @@ function endConversation(msg){
   if(rec&&rec._cancel) rec._cancel();
   $('mic').classList.remove('live');
   if(msg) setState(msg);
+  diag('conversation ended');
+  flushDiag('ended');
+}
+// What each speech-recognition error means for the person holding the phone.
+function micErrorText(code){
+  switch(code){
+    case 'not-allowed': return 'Microphone access is blocked for this page. Allow the microphone in your browser\'s settings for this site, or type below.';
+    case 'service-not-allowed': return 'This browser won\'t let web pages use speech recognition'+(IOS?' (Chrome on iPhone is one)':'')+'. Use your keyboard\'s mic button to dictate into the box'+(IOS?', or open this page in Safari':'')+'.';
+    case 'audio-capture': return 'The microphone was interrupted (a call, Siri, or the phone switching audio). Tap the mic to carry on.';
+    case 'network': return 'Speech recognition lost its connection. Tap the mic to try again.';
+    default: return 'Mic error: '+code+'. Tap the mic to try again, or type below.';
+  }
 }
 function startListening(mode){
   if(!SR) return;
@@ -375,7 +548,7 @@ function startListening(mode){
     if(!t){
       SILENT_RUNS++;
       if(!CONVO){ setState('Didn\'t catch anything — tap the mic to try again.'); return; }
-      if(SILENT_RUNS>=2){ endConversation('Tap the mic when you need me.'); return; }
+      if(SILENT_RUNS>=SILENT_LIMIT){ endConversation('Stopped — I didn\'t hear anything for a while. Tap the mic to talk again.'); return; }
       setState('Still here — go ahead, or tap the mic to stop.');
       startListening(LISTEN_MODE); return;
     }
@@ -384,13 +557,15 @@ function startListening(mode){
     if(LISTEN_MODE==='command'&&STOP_WORDS.test(t)){
       log('you', t); endConversation(); say('Okay — tap the mic when you need me.'); return;
     }
-    if(LISTEN_MODE==='confirm') handleConfirmSpeech(t); else handleTranscript(t);
+    TURN='voice';
+    (LISTEN_MODE==='confirm'?handleConfirmSpeech(t):handleTranscript(t)).catch(reportFailure);
   };
-  r.onstart=()=>{ $('mic').classList.add('live');
+  r.onstart=()=>{ $('mic').classList.add('live'); diag('mic on ('+LISTEN_MODE+')');
     setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
     firstT=setTimeout(finish, FIRST_WORD_MS); };
   r.onresult=e=>{
     clearTimeout(firstT);
+    if(!r._heard){ r._heard=true; diag('hearing speech'); }
     const fin=[], tmp=[];
     for(let i=0;i<e.results.length;i++){
       const x=e.results[i];
@@ -402,12 +577,13 @@ function startListening(mode){
     silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS);
   };
   // Some phones end recognition on their own after a pause: use what was heard.
-  r.onend=()=>finish();
+  r.onend=()=>{ diag('mic off'+(done?'':' (by the phone)')); finish(); };
   r.onerror=e=>{
+    diag('mic error '+e.error);
     if(e.error==='no-speech'||e.error==='aborted') return;   // onend follows
-    done=true; clear(); endConversation('Mic error: '+e.error+'. Tap to try again, or type below.');
+    done=true; clear(); endConversation(micErrorText(e.error));
   };
-  try{ r.start(); }catch(e){ done=true; setState('Could not start the mic: '+e.message); }
+  try{ r.start(); }catch(e){ done=true; diag('mic start threw'); setState('Could not start the mic: '+e.message); }
 }
 
 // Never sent to the language model: people's contact details, and the
@@ -425,47 +601,68 @@ function projSummary(){
   });
 }
 
+// The last few turns, oldest first, so the model can take "Tesco Mobile's"
+// as the answer to the question it just asked.
+function recentTurns(n){
+  return [...document.querySelectorAll('#vclog .turn:not(.thinking)')].slice(-(n||8))
+    .map(d=>({who:d.classList.contains('t-you')?'you':'app',text:d.dataset.text||d.textContent}));
+}
+// Refusals that apply to every change, not one column: say them once.
+const GATE_STATES=['not_a_writer','writes_disabled','not_approved','not_configured','no_token'];
+
 async function handleTranscript(t){
+  const history=recentTurns(8);
   log('you', t);
+  CUR_TEXT=t;
+  thinking();
   if(RECORDS_LOADING){
     setState('Loading your records…');
     try{ await RECORDS_LOADING; }catch(e){}
   }
   if(!PROJECTS.length){
+    CUR_TEXT=null;
     say('Your records haven\'t loaded, so I can\'t answer yet. Check the message below the box, or reload the page.');
     setState('No records loaded.');
     return;
   }
   setState('Working out what you meant…');
-  let r;
-  try{ r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS}); }
-  catch(e){ setState('The service did not answer: '+e.message); return; }
+  const r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS,history});
+  CUR_TEXT=null;
 
   if(r.state==='update'){
     // One sentence can carry several changes ("spoke to them today, confidence
     // 80, next step revised quote"). Each is proposed and checked separately,
     // then all are read back together and saved on one yes.
     const changes=r.changes&&r.changes.length?r.changes:[{item_id:r.item_id,field:r.field,new_value:r.new_value}];
-    const ok=[], same=[];
+    const ok=[], same=[], refused=[];
     for(const c of changes){
       let p;
       try{ p=await post('../api/voicecrm/propose',c); }
-      catch(e){ setState('The service did not answer: '+e.message); await declineAll(ok); return; }
+      catch(e){ await declineAll(ok); throw e; }
+      const why=p.detail&&typeof p.detail==='string'?p.detail:p.state;
       if(p.state==='proposed') ok.push(p);
       else if(p.state==='no_change') same.push(p.detail);
-      else{
+      else if(GATE_STATES.includes(p.state)){
+        // Not about this column: no change can be made at all.
         await declineAll(ok);
-        say('I can\'t make that change: '+(p.detail&&typeof p.detail==='string'?p.detail:p.state)
-            +(ok.length?' So nothing was changed.':''));
-        setState('state: '+p.state);
+        say('I can\'t make changes: '+why);
+        setState('Not saved: '+p.state);
         return;
       }
+      // One column that can't be changed doesn't stop the others.
+      else refused.push(c.field+' can\'t be changed — '+why);
     }
-    if(!ok.length){ say(same.join(' ')||'Nothing to change.'); setState('Nothing to do.'); return; }
+    if(!ok.length){
+      say((refused.length?'I can\'t make '+(refused.length>1?'those changes':'that change')+'. '+refused.join(' ')+' ':'')
+          +(same.join(' ')||(refused.length?'':'Nothing to change.')));
+      setState(refused.length?'Nothing saved.':'Nothing to do.');
+      return;
+    }
+    same.push(...refused);
     PENDING={list:ok};
     $('vcconfirm').classList.add('show');
     setState('Say “yes” to write '+(ok.length>1?'them':'it')+' or “no” to cancel — or use the buttons.');
-    say(readbackFor(ok, same), ()=>startListening('confirm'));
+    say(readbackFor(ok, same), TURN==='voice'&&CONVO?()=>startListening('confirm'):null);
   }else if(r.say){
     say(r.say);
     setState(r.state==='clarify'?'Tap the mic to answer.':'Done. Tap the mic for the next one.');
@@ -497,6 +694,20 @@ async function declineAll(list){
   }
 }
 
+// Typed replies to a read-back must be a plain yes or no. Anything else is a
+// new instruction, and the waiting change is cancelled where it can be seen.
+const TYPED_YES=/^(yes|y|yeah|yep|correct|confirm|go ahead|do it|save it|write it)[.! ]*$/i;
+const TYPED_NO=/^(no|n|nope|cancel|stop|don'?t)[.! ]*$/i;
+async function handleTypedConfirm(t){
+  if(TYPED_YES.test(t.trim())){ log('you', t); return answerConfirm(true); }
+  if(TYPED_NO.test(t.trim())){ log('you', t); return answerConfirm(false); }
+  const list=PENDING.list; PENDING=null;
+  $('vcconfirm').classList.remove('show');
+  await declineAll(list);
+  log('app','(Previous change cancelled — nothing was saved.)');
+  return handleTranscript(t);
+}
+
 async function handleConfirmSpeech(t){
   const short=t.trim().split(/\s+/).length<=4;
   if(short&&YES.test(t)){ log('you', t); return answerConfirm(true); }
@@ -514,6 +725,7 @@ async function handleConfirmSpeech(t){
 }
 
 async function answerConfirm(yes){
+  unlockTTS();
   if(!PENDING) return;
   $('vcconfirm').classList.remove('show');
   const list=PENDING.list; PENDING=null;
@@ -603,37 +815,70 @@ async function sendReview(){
     :'Not sent: '+(r.reason||r.detail||r.state);
 }
 
+// Send from the box. Blurring first ends the phone keyboard's own dictation
+// so all of its text is in the box; reading it a moment later picks that up.
 function sendTyped(){
-  const t=$('vctext').value.trim();
-  if(!t) return;
-  $('vctext').value='';
-  if(PENDING){
-    // A typed yes/no answers an open read-back just like a spoken one.
-    handleConfirmSpeech(t);
-  }else{
-    handleTranscript(t);
-  }
+  unlockTTS();
+  const box=$('vctext');
+  box.blur();
+  setTimeout(()=>{
+    const t=box.value.trim();
+    if(!t){ setState('Nothing to send yet — let the dictation finish, then tap Send.'); return; }
+    box.value='';
+    TURN='typed';
+    diag('typed send ('+t.length+' chars)');
+    (PENDING?handleTypedConfirm(t):handleTranscript(t)).catch(reportFailure);
+  },250);
 }
 document.addEventListener('DOMContentLoaded',()=>{
-  $('vctext').addEventListener('keydown',e=>{ if(e.key==='Enter') sendTyped(); });
+  $('vcform').addEventListener('submit',e=>{ e.preventDefault(); sendTyped(); });
+  // Typing (or keyboard dictation) and the page's own mic fight over the
+  // microphone: starting to type switches the page's mic off.
+  $('vctext').addEventListener('focus',()=>{
+    if(CONVO||$('mic').classList.contains('live')) endConversation('Mic off while you type. Tap the mic to talk again.');
+  });
+  $('replay').addEventListener('click',replayLast);
   $('mic').addEventListener('click',()=>{
+    unlockTTS();
     if(CONVO||$('mic').classList.contains('live')){
       try{ speechSynthesis.cancel(); }catch(e){}
       endConversation('Stopped. Tap the mic to talk again.');
       return;
     }
+    TURN='voice';
     CONVO=true; SILENT_RUNS=0;
     startListening(PENDING?'confirm':'command');
   });
 });
+// A page that is hidden can't keep the mic, and phones stop it anyway.
+document.addEventListener('visibilitychange',()=>{
+  diag('page '+document.visibilityState);
+  if(document.visibilityState==='hidden'){
+    if(CONVO) endConversation('Paused when the page went into the background. Tap the mic to carry on.');
+    flushDiag('hidden');
+  }
+});
+let _rsz=null;
+window.addEventListener('resize',()=>{ clearTimeout(_rsz); _rsz=setTimeout(()=>diag('screen resized '+innerWidth+'x'+innerHeight),300); });
+window.addEventListener('orientationchange',()=>diag('phone rotated'));
+window.addEventListener('pagehide',()=>flushDiag('pagehide'));
 
 // ── Records + status ────────────────────────────────────────────────────────
 function loadRecords(){
-  RECORDS_LOADING=_loadRecords().finally(()=>{ RECORDS_LOADING=null; });
+  RECORDS_LOADING=_loadRecords().catch(e=>{
+    diag('records failed');
+    if(!PROJECTS.length) $('body').innerHTML=panel('Couldn\'t load your records',
+      '<p>'+esc(e&&e.message||e)+'</p><p style="margin-top:10px">Check your signal and reload the page.</p>',true);
+  }).finally(()=>{ RECORDS_LOADING=null; });
   return RECORDS_LOADING;
 }
 async function _loadRecords(){
-  const r2=await fetch('../api/voicecrm/projects',{cache:'no-store'});
+  const r2=await fetch('../api/voicecrm/projects',{cache:'no-store',redirect:'manual'});
+  if(r2.type==='opaqueredirect'||r2.status===0){
+    if(renewSignIn()) return;
+    throw new Error('Your sign-in needs renewing — reload the page.');
+  }
+  if(!r2.ok) throw new Error('The server returned an error ('+r2.status+').');
   const d=await r2.json();
 
   let h='';
@@ -725,13 +970,19 @@ async function main(){
   // typed input still works, so only the mic button is disabled.
   if(ST.interpret_ready){
     $('vc').style.display='block';
+    $('dock').classList.add('show');
+    document.body.classList.add('has-dock');
     if(!SR){
       $('mic').disabled=true;
-      setState('This browser has no speech recognition (Safari and Chrome do) — type below instead.');
+      setState('This browser has no speech recognition — type, or use your keyboard\'s mic button in the box.');
+    }else if(IOS){
+      setState('Tap the mic once and talk. If it stops, your keyboard\'s mic button in the box works too.');
     }
   }
+  diag('page loaded · '+BROWSER);
 
   await loadRecords();
+  restoreReplay();
 }
 main();
 </script>

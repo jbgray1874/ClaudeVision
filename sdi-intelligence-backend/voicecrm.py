@@ -545,6 +545,23 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
             "old_value": entry["old_value"], "new_value": entry["new_value"]}
 
 
+class ClientLogIn(BaseModel):
+    reason: str = ""
+    ua: str = ""
+    events: list[str] = []
+
+
+@router.post("/api/voicecrm/clientlog")
+def client_log(body: ClientLogIn, request: Request, user: dict = Depends(auth.require_user)):
+    """What a phone's mic and speech engine did, so voice problems on someone
+    else's phone can be diagnosed from the server log. The page sends event
+    names, error codes and lengths only - never what was said."""
+    events = " | ".join(str(e)[:90] for e in body.events[-60:])
+    print(f"[voicecrm.client] user={(user or {}).get('email', '')} reason={body.reason[:30]!r} "
+          f"ua={body.ua[:200]!r} events={events[:4000]}", flush=True)
+    return {"state": "ok"}
+
+
 @router.get("/api/voicecrm/journal")
 def journal_view(request: Request, limit: int = 25, user: dict = Depends(auth.require_user)):
     """The audit trail: every proposal and what actually happened to it."""
@@ -615,6 +632,10 @@ class InterpretIn(BaseModel):
     projects: list[dict] = []
     # Every column of the sheet, including ones blank on every record shown.
     columns: list[str] = []
+    # The last few turns of this conversation, oldest first: [{"who": "you"|"app",
+    # "text": ...}]. Lets "Tesco Mobile's" answer the question the model just
+    # asked, and "it" mean the job being discussed.
+    history: list[dict] = []
 
 
 _INTERPRET_SYSTEM = """You are the voice of an account manager's project tracker. You receive one
@@ -675,6 +696,14 @@ understood; the changes are read back and confirmed before saving.
 you genuinely cannot match. Ask ONE specific question, naming the candidates
 (at most three).
 
+"conversation_so_far" holds the last few turns, oldest first. Use it: when the
+person answers a question you asked ("Tesco Mobile's", "the first one", "yes,
+that one"), combine the answer with their earlier request and act on it -
+never ask them to repeat what they already said. "It" and "that job" mean the
+job being discussed. A change that was read back and not confirmed was NOT
+saved; if they ask again, propose it again. Do not claim anything was saved:
+only the app's own "Updated" lines confirm a save.
+
 Money (BUDGET COST): new_value is a plain number - no currency sign, no
 commas: "fifty thousand" is "50000", "fifteen and a half k" is "15500". If you
 are not sure of the amount you heard, ask; never guess a figure.
@@ -711,7 +740,11 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
         "editable_fields": columns or _editable_label(),
         "records": body.projects[:150],
     }, ensure_ascii=False, sort_keys=True)
+    history = [{"who": "person" if str(h.get("who")) == "you" else "assistant",
+                "text": str(h.get("text") or "")[:400]}
+               for h in body.history[-8:] if isinstance(h, dict) and h.get("text")]
     question_block = json.dumps({
+        "conversation_so_far": history,
         "transcript": transcript,
         "today": date.today().isoformat(),
     }, ensure_ascii=False)
