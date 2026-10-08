@@ -4615,6 +4615,18 @@ def _finalize_scan_summary(
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
+            if _sheet_read and _unit:
+                # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
+                # is a stated weld on the product the sheet draws, not an inference.
+                try:
+                    from weld_symbols import sheet_weld_facts as _swf
+                    if concept_scan.apply_sheet_notes_to_unit(_unit, _swf(_pack)):
+                        print(f"   [concept] welded per the design sheet's own note: "
+                              f"'{_unit.get('weld_stated_by_note')}' — stated on "
+                              f"{_unit.get('part_number')}, not inferred", flush=True)
+                except Exception as _sw_exc:                       # noqa: BLE001
+                    print(f"   [concept] the sheet's weld note could not be read "
+                          f"({type(_sw_exc).__name__}: {_sw_exc})", flush=True)
             if _sheet_read:
                 # WHAT THE SHEET CHECK COULD NOT SETTLE IS ASKED (D-415), on the unit, in the
                 # channel the book's "to settle" count already reads.
