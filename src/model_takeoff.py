@@ -487,6 +487,15 @@ def takeoff(summary: Dict[str, Any], job: Any, *, declared: str = "", drawing_nu
         out.update({"design": chosen, "chosen_by": how, "other_designs": list(others),
                     "excluded": excluded, "undetailed": [p.get("part_number") for p in undetailed],
                     "applied": applied})
+        # ONE BLOCK IS THE DESIGN'S BODY (D-416). Refused as a part, its envelope is still a
+        # measured fact about the product: where the whole design is one undetailed body, that
+        # body's size is the holder's, and the concept read of the sheet is held to it.
+        _fab_undetailed = [p for p in undetailed if stock_basis(p) != "bought-in"]
+        if len(_fab_undetailed) == 1:
+            _bb = [b for b in (_num(v) for v in (_fab_undetailed[0].get("bbox_mm") or [])) if b]
+            if len(_bb) >= 2:
+                out["model_envelope_mm"] = _bb
+                out["model_envelope_of"] = str(_fab_undetailed[0].get("part_number") or "")
         return out
     if undetailed:
         _drop = {id(p) for p in undetailed}

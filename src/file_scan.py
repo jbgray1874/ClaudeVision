@@ -4400,6 +4400,10 @@ def _finalize_scan_summary(
                 "ran": True, "design": str((_took or {}).get("design") or ""),
                 "why_not": _di_why,
                 "undetailed": list((_took or {}).get("undetailed") or []),
+                # The one block's envelope, where the design is one (D-416): the body the
+                # concept read is told and held to.
+                "model_envelope_mm": list((_took or {}).get("model_envelope_mm") or []),
+                "model_envelope_of": str((_took or {}).get("model_envelope_of") or ""),
                 "excluded": [e.get("part_number") for e in ((_took or {}).get("excluded") or [])
                              if isinstance(e, dict)],
             }
@@ -4565,7 +4569,12 @@ def _finalize_scan_summary(
             _sheet_check: Dict[str, Any] = {}
             _set_aside: List[Dict[str, Any]] = []
             if _sheet_read:
-                _sr = concept_scan.read_sheet_concept(_pack, refresh=_fresh, brief=_brief)
+                _door_rec = (summary.get("model_takeoff_door")
+                             if isinstance(summary.get("model_takeoff_door"), dict) else {})
+                _sr = concept_scan.read_sheet_concept(
+                    _pack, refresh=_fresh, brief=_brief,
+                    envelope=list(_door_rec.get("model_envelope_mm") or []),
+                    envelope_of=str(_door_rec.get("model_envelope_of") or ""))
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
             else:

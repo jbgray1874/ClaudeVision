@@ -282,7 +282,9 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 # "sheet_facts" in the answer, which `sheet_check` holds the bill against. The render
 # prompt is unchanged and its cache key is unchanged: only a sheet read hashes this.
 #   s1  first cut (D-415)
-SHEET_PROMPT_VERSION = "s1"
+#   s2  the model's envelope as the body; the goods' numbers never spent on the steel; the body
+#       made from its panels; a legend is not a note (D-416)
+SHEET_PROMPT_VERSION = "s2"
 SHEET_TEXT_MAX_CHARS = 6000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
@@ -296,26 +298,47 @@ rules and the ones after them differ, THESE RULES WIN.
    say which in why_size. Only where nothing bounds it, estimate and write "not dimensioned".
 2. A MATERIAL, GAUGE OR FINISH NOTE IS A FACT. A note such as "2mm STEEL CONSTRUCTION" fixes the
    material and thickness of every made part it covers; a finish note fixes the coat. A note
-   that only points elsewhere ("SEE PART DRAWINGS") states nothing.
+   that only points elsewhere ("SEE PART DRAWINGS") states nothing, and a general legend or
+   specification block (finish, material or weld specifications, tolerances) says how a thing
+   is done if it is done, not that this product has it.
 3. WHAT THE PRODUCT HOLDS IS NOT A PART. Goods drawn in or on it (stock, bags, products, the
    customer's items), with their counts, sizes and weights, are the LOAD, not the make list:
    never a line, and their count is never a count of parts. A dimension to the top of the goods
    is not the height of the product, and lines seen through an opening may be the goods behind it.
+   NEVER SPEND THE GOODS' NUMBERS ON THE STEEL: no part takes the goods' count as its quantity
+   (unless the sheet draws one part per item — then write "one per <item>" in quantity_basis), and
+   no part takes a goods dimension, or a dimension to the top of the goods, as its size.
 4. A FITTING IS A LINE ONLY WHERE THE SHEET DRAWS OR LABELS IT (a label naming feet, castors or a
    hinge). Do not add fittings or fixings the sheet does not show; put what a real unit may need
    in "not_visible".
 5. NO MADE PART IS LONGER OR WIDER THAN THE PRODUCT BODY, unless it is folded and its blank is
    the unfolded shape.
-6. Add to every part "drawn": the view and label where the sheet draws or names it, or "" if the
+6. MAKE THE BODY FROM ITS PANELS. Where the sheet shows a box, carcass or frame of one material and
+   gauge, list the panels or members that make it (faces, base, top, internal dividers), each
+   sized from the body's dimensions, with the windows and cut-outs it shows as part of the panel,
+   never as separate bars. Give each its route from the list below: cut it, fold it where corners
+   are formed, weld it where the sheet says welded, finish it as the note says.
+7. Add to every part "drawn": the view and label where the sheet draws or names it, or "" if the
    sheet does not show it.
-7. Add to the top level "sheet_facts", exactly what the sheet states (0 or "" where it is silent):
+8. Add to the top level "sheet_facts", exactly what the sheet states (0, "" or [] where it is
+   silent):
    {{"body_mm": {{"height": 0, "width": 0, "depth": 0}}, "body_basis": "<the dimensions read; never to
    the top of the goods>", "material": "", "thickness_mm": 0, "finish": "",
    "stated_weight_kg": 0, "weight_includes_goods": "yes|no|not stated",
    "goods": "<what the product holds, with count and unit weight where stated>",
-   "goods_weight_kg": 0}}
+   "goods_count": 0, "goods_weight_kg": 0,
+   "goods_dimensions_mm": [<every dimension the sheet gives of the goods themselves>],
+   "dimensions_to_goods_mm": [<every product dimension measured to or over the goods>]}}
 
 """
+
+# THE DESIGN'S OWN BODY, WHERE THE MODEL GAVE ONE (D-416). The take-off refuses a block with no
+# stock basis as a part; its envelope is still the holder's measured size.
+_ENVELOPE_SECTION = """
+
+THE DESIGN'S MODEL: {of} is one undetailed body {dims} mm, measured off the SolidWorks model. That
+is the PRODUCT BODY — size the panels from it; no made part is larger than it, and the product is
+this size, not a dimension to the top of any goods."""
 
 _SHEET_TEXT_SECTION = """
 
@@ -333,9 +356,9 @@ YOUR FIRST MAKE LIST FOR THESE SHEETS DID NOT AGREE WITH WHAT THE SHEET STATES:
 Read the sheet again and return the whole make list, corrected, in the same JSON shape. Do not
 pad or trim lines to hit a figure: every line must be drawn on the sheet and sized from it."""
 
-# The sheet prompt's own hash (preamble + text section + recheck section), pinned beside
+# The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
-_SHEET_PROMPT_FINGERPRINT = "d00d3a4ab687"
+_SHEET_PROMPT_FINGERPRINT = "4306a47112ca"
 
 
 def is_brief_page(path: Any) -> bool:
@@ -368,8 +391,14 @@ def sheet_text(pdf_paths: List[Any]) -> str:
     return text[:SHEET_TEXT_MAX_CHARS]
 
 
+def _envelope_words(envelope: Any) -> str:
+    dims = [d for d in (_num(v) for v in (envelope or [])) if d]
+    return " × ".join(f"{d:g}" for d in dims) if len(dims) >= 2 else ""
+
+
 def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool = False,
-                        sheet_words: str = "", recheck: str = "") -> str:
+                        sheet_words: str = "", recheck: str = "", envelope: Any = None,
+                        envelope_of: str = "") -> str:
     """The words put to the model: the make-list prompt, the text-only preamble where there
     is no image, the sheet preamble and the sheet's own text where the pages are drawing
     sheets, the brief section where there is a brief, and what broke where it is re-asked."""
@@ -383,6 +412,8 @@ def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool 
         _text += _BRIEF_SECTION.format(brief=brief)
     if sheet and sheet_words:
         _text += _SHEET_TEXT_SECTION.format(text=sheet_words)
+    if sheet and _envelope_words(envelope):
+        _text += _ENVELOPE_SECTION.format(of=envelope_of or "the design", dims=_envelope_words(envelope))
     if recheck:
         _text += _RECHECK_SECTION.format(failures=recheck)
     return _text
@@ -437,7 +468,8 @@ def _cache_dir() -> Path:
 
 
 def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bool = False,
-               sheet_words: str = "", recheck: str = "") -> str:
+               sheet_words: str = "", recheck: str = "", envelope: Any = None,
+               envelope_of: str = "") -> str:
     h = hashlib.sha256()
     for png in png_pages:
         h.update(png)
@@ -457,6 +489,9 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
         h.update(SHEET_PROMPT_VERSION.encode("utf-8"))
         h.update(b"\x00")
         h.update(sheet_words.encode("utf-8"))
+        if _envelope_words(envelope):
+            h.update(b"\x00envelope\x00")
+            h.update(f"{envelope_of}|{_envelope_words(envelope)}".encode("utf-8"))
     if recheck:
         h.update(b"\x00recheck\x00")
         h.update(recheck.encode("utf-8"))
@@ -465,7 +500,8 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
 
 def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
                  refresh: bool = False, brief: str = "", sheet: bool = False,
-                 recheck: str = "") -> Dict[str, Any]:
+                 recheck: str = "", envelope: Any = None,
+                 envelope_of: str = "") -> Dict[str, Any]:
     """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}, and
     'sheet_text' for a sheet read.
 
@@ -496,7 +532,9 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     recheck = str(recheck or "").strip()
     _words = sheet_text(pdf_paths) if sheet else ""
     _sheet_kw: Dict[str, Any] = (
-        {"sheet": True, "sheet_words": _words, "recheck": recheck} if sheet
+        dict({"sheet": True, "sheet_words": _words, "recheck": recheck},
+             **({"envelope": list(envelope), "envelope_of": envelope_of}
+                if _envelope_words(envelope) else {})) if sheet
         else ({"recheck": recheck} if recheck else {}))
     key = _cache_key(pngs, model, brief, **_sheet_kw)
     path = _cache_dir() / (key + ".json")
@@ -799,13 +837,21 @@ def _density(material: Any) -> float:
     return 0.0
 
 
-def sheet_check(answer: Mapping[str, Any], words: str = "") -> Dict[str, Any]:
-    """The sighted bill against the sheet's stated body and weight.
+def sheet_check(answer: Mapping[str, Any], words: str = "",
+                envelope: Any = None) -> Dict[str, Any]:
+    """The sighted bill against the sheet's stated body, goods and weight.
 
-    Returns {'checked', 'agrees', 'failures', 'body_mm', 'stated_weight_kg', 'goods_weight_kg',
-    'net_weight_kg', 'sighted_weight_kg', 'ratio', 'breaches', 'unweighed', 'not_on_sheet'}.
-    'checked' is False where the sheet gave nothing to check against; then nothing failed and
-    nothing agreed, and the book says so rather than calling an unchecked bill sound."""
+    Returns {'checked', 'agrees', 'failures', 'body_mm', 'body_used_mm', 'body_source',
+    'stated_weight_kg', 'goods_weight_kg', 'net_weight_kg', 'sighted_weight_kg', 'ratio',
+    'breaches', 'goods_spent', 'unweighed', 'not_on_sheet'}. 'checked' is False where the sheet
+    gave nothing to check against; then nothing failed and nothing agreed, and the book says so
+    rather than calling an unchecked bill sound.
+
+    THE BODY IS THE MODEL'S WHERE THE MODEL GAVE ONE (D-416): one undetailed block's envelope is
+    measured; the read's own body figures are used only where there is none, and only where
+    the sheet prints them. THE GOODS' NUMBERS ARE NOT THE STEEL'S: a made part that takes the
+    goods' count as its quantity, or a goods dimension or a dimension to the top of the goods
+    as its size, is the 12:05 misreading and fails, whatever else it agrees with."""
     try:
         import config                                               # noqa: WPS433
         lo, hi = tuple(getattr(config, "CONCEPT_SHEET_WEIGHT_BAND", (0.6, 2.0)))
@@ -827,6 +873,10 @@ def sheet_check(answer: Mapping[str, Any], words: str = "") -> Dict[str, Any]:
                        if isinstance(facts.get("body_mm"), Mapping) else 0)
             for k in ("height", "width", "depth")}
     dims = sorted((v for v in body.values() if v), reverse=True)
+    body_source = "the sheet"
+    _env = sorted((d for d in (_num(v) for v in (envelope or [])) if d), reverse=True)
+    if len(_env) >= 2:
+        dims, body_source = _env, "the SolidWorks model's envelope"
     parts = [p for p in (answer.get("parts") or []) if isinstance(p, Mapping)]
     made = [p for p in parts if _concept_kind(p.get("kind")) == "fabricated"]
 
@@ -848,7 +898,38 @@ def sheet_check(answer: Mapping[str, Any], words: str = "") -> Dict[str, Any]:
                 breaches.append({"part": name, "size_mm": [size[0], size[1]], "body_mm": dims})
                 failures.append(
                     f"{name} is sized {size[0]:g} × {size[1]:g} mm, larger than the product body "
-                    f"the sheet dimensions ({_body_words} mm), and it is not folded")
+                    f"({_body_words} mm, from {body_source}), and it is not folded")
+
+    # THE GOODS' NUMBERS SPENT ON THE STEEL (D-416). Only figures the sheet prints, and never a
+    # figure that is also the body's own: a panel the body's size is the body's panel.
+    _body_set = {round(d, 1) for d in dims}
+    goods_count = _stated("goods count", facts.get("goods_count"))
+    goods_dims = [g for g in (_stated("goods dimension", v)
+                              for v in (facts.get("goods_dimensions_mm") or [])
+                              if not isinstance(v, (dict, list))) if g and round(g, 1) not in _body_set]
+    to_goods = [g for g in (_stated("dimension to the goods", v)
+                            for v in (facts.get("dimensions_to_goods_mm") or [])
+                            if not isinstance(v, (dict, list))) if g and round(g, 1) not in _body_set]
+    goods_spent: List[Dict[str, Any]] = []
+    _goods_words = str(facts.get("goods") or "the goods").strip()
+    goods_checked = bool(made) and bool(goods_count > 1 or goods_dims or to_goods)
+    for p in made:
+        name = str(p.get("name") or "a part").strip()
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        size = [x for x in (_num(blank.get("length")), _num(blank.get("width"))) if x]
+        qty = _num(p.get("quantity"))
+        if (goods_count > 1 and qty == goods_count
+                and "one per" not in str(p.get("quantity_basis") or "").lower()):
+            goods_spent.append({"part": name, "took": "count", "value": qty})
+            failures.append(f"{name} x{qty:g} takes the goods' count as its quantity "
+                            f"({_goods_words}) — goods are not parts")
+        for label, pool in (("a dimension of the goods", goods_dims),
+                            ("a dimension to the top of the goods", to_goods)):
+            hit = next((g for g in pool for x in size if abs(x - g) <= 1.0), None)
+            if hit is not None:
+                goods_spent.append({"part": name, "took": label, "value": hit})
+                failures.append(f"{name} is sized off {label} ({hit:g} mm) — "
+                                f"the goods' size is not the steel's")
 
     stated = _stated("stated weight", facts.get("stated_weight_kg"))
     goods = _num(facts.get("goods_weight_kg"))
@@ -892,9 +973,13 @@ def sheet_check(answer: Mapping[str, Any], words: str = "") -> Dict[str, Any]:
                 f"the made parts weigh about {sighted:.1f} kg as sized, more than "
                 f"{hi:g} × the {stated:g} kg the sheet states for the whole product")
 
-    checked = body_checked or weight_checked
+    checked = body_checked or weight_checked or goods_checked
     return {"checked": checked, "agrees": checked and not failures, "failures": failures,
-            "body_mm": body, "stated_weight_kg": stated or None,
+            "body_mm": body, "body_used_mm": dims if body_checked else [],
+            "body_source": body_source if body_checked else "",
+            "goods_spent": goods_spent,
+            "goods_checked_clean": goods_checked and not goods_spent,
+            "stated_weight_kg": stated or None,
             "goods_weight_kg": goods or None, "net_weight_kg": net or None,
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
             "ratio": round(ratio, 3) if ratio is not None else None,
@@ -920,8 +1005,14 @@ def sheet_check_sentence(check: Mapping[str, Any]) -> str:
     if check.get("sighted_weight_kg") and check.get("net_weight_kg"):
         said.append(f"the made parts weigh about {check['sighted_weight_kg']:g} kg as sized "
                     f"against {check['net_weight_kg']:g} kg of product on the sheet")
-    if [v for v in (check.get("body_mm") or {}).values() if v]:
+    if check.get("body_used_mm"):
+        said.append(f"every flat part fits the body "
+                    f"({' × '.join(f'{d:g}' for d in check['body_used_mm'])} mm, from "
+                    f"{check.get('body_source') or 'the sheet'})")
+    elif [v for v in (check.get("body_mm") or {}).values() if v]:
         said.append("every flat part fits the body the sheet dimensions")
+    if check.get("goods_checked_clean"):
+        said.append("no part takes the goods' count or size")
     return ("CONCEPT BILL CHECKED AGAINST THE SHEET" + again + ": " + "; ".join(said)
             + ". Still a concept budget: nothing was measured.")
 
@@ -964,25 +1055,27 @@ def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
 
 
 def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
-                       brief: str = "", model: Optional[str] = None) -> Dict[str, Any]:
+                       brief: str = "", model: Optional[str] = None, envelope: Any = None,
+                       envelope_of: str = "") -> Dict[str, Any]:
     """A concept read of drawing sheets: read, held against the sheet, put back once with what
     broke, and the undrawn fittings set aside. Returns {'read', 'answer', 'check', 'set_aside'}.
 
     THE BETTER OF TWO, NEVER A THIRD. The second read is taken only where it agrees with the
     sheet more closely than the first; a bill that still does not agree is costed as sighted
     and the book says so — a concept budget to walk against the sheet, not a price."""
-    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True)
+    _env = {"envelope": list(envelope or []), "envelope_of": envelope_of}
+    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True, **_env)
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
-    check = sheet_check(answer, words)
+    check = sheet_check(answer, words, envelope=envelope)
     if check.get("failures"):
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
-                             recheck=recheck_text(check))
+                             recheck=recheck_text(check), **_env)
         answer2 = again.get("parsed") or {}
         taken = False
         if answer2.get("parts"):
-            check2 = sheet_check(answer2, words)
+            check2 = sheet_check(answer2, words, envelope=envelope)
             if _check_rank(check2) < _check_rank(check):
                 read, answer, check, taken = again, answer2, check2, True
         check["rechecked"] = True

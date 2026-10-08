@@ -93,8 +93,8 @@ def test_a_render_keeps_its_prompt_and_its_cache_key():
 
 
 def test_the_sheet_prompt_cannot_change_without_its_version():
-    got = hashlib.sha256((cs._SHEET_PREAMBLE + cs._SHEET_TEXT_SECTION
-                          + cs._RECHECK_SECTION).encode()).hexdigest()[:12]
+    got = hashlib.sha256((cs._SHEET_PREAMBLE + cs._SHEET_TEXT_SECTION + cs._RECHECK_SECTION
+                          + cs._ENVELOPE_SECTION).encode()).hexdigest()[:12]
     assert got == cs._SHEET_PROMPT_FINGERPRINT, (
         f"the sheet prompt changed. Bump SHEET_PROMPT_VERSION (now {cs.SHEET_PROMPT_VERSION!r}) "
         f"and set _SHEET_PROMPT_FINGERPRINT = {got!r}")
@@ -140,6 +140,7 @@ def test_the_1205_bill_does_not_agree_with_the_sheet():
     assert 13 < check["sighted_weight_kg"] < 17
     words = " ".join(check["failures"])
     assert "OUTER VERTICAL POST is sized 1580 × 40 mm, larger than the product body" in words
+    assert "(1250 × 600 × 400 mm, from the sheet)" in words
     assert "parts are missing or undersized" in words and "less 30 kg of 20 customer bags" in words
     assert [b["part"] for b in check["breaches"]] == ["OUTER VERTICAL POST"]
 
@@ -310,7 +311,7 @@ def test_the_report_concept_section_says_what_the_sheet_stated():
 def test_the_scan_reads_a_design_intent_sheet_as_a_sheet():
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     assert "_sheet_read = bool(_design_intent_pages)" in src
-    assert "concept_scan.read_sheet_concept(_pack, refresh=_fresh, brief=_brief)" in src
+    assert "concept_scan.read_sheet_concept(\n                    _pack, refresh=_fresh, brief=_brief," in src
     assert "concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)" in src
     assert "concept_scan.raise_sheet_questions(" in src
 
@@ -330,3 +331,92 @@ def test_a_line_whose_route_cuts_it_is_a_part_sdi_cuts():
         record={"JOB-CPT01": {"route_operations": ["laser_cutting"]},
                 "FOOT": {"route_operations": []}})
     assert [r["cut"] for r in rows] == [True, False]
+
+
+# ── D-416: the model's envelope is the body; the goods' numbers are never the steel's ────
+#
+# James Gray's review of the same run: give the read the extracted GA facts and the model
+# envelope as constraints, have it propose the box's panels and route, and refuse an answer
+# that spends the bag count, the bag size or the stack height on the steel.
+
+FULL_FACTS = dict(FACTS, goods_count=20, goods_dimensions_mm=[556.5, 530, 662, 186.5, 380],
+                  dimensions_to_goods_mm=[1580])
+ENVELOPE = [600, 1250, 400]
+
+
+def _with(bill, facts=FULL_FACTS):
+    return dict(bill, sheet_facts=dict(facts))
+
+
+def test_the_1205_bill_spends_the_bags_on_the_steel_and_fails_for_it():
+    check = cs.sheet_check(_with(_the_1205_bill()), GA_WORDS, envelope=ENVELOPE)
+    words = " ".join(check["failures"])
+    assert "HORIZONTAL BAG SUPPORT x20 takes the goods' count as its quantity" in words
+    assert "HORIZONTAL BAG SUPPORT is sized off a dimension of the goods (530 mm)" in words
+    assert "OUTER VERTICAL POST is sized off a dimension to the top of the goods (1580 mm)" in words
+    assert "(1250 × 600 × 400 mm, from the SolidWorks model's envelope)" in words
+    assert check["body_source"] == "the SolidWorks model's envelope"
+    took = {(g["part"], g["took"]) for g in check["goods_spent"]}
+    assert ("HORIZONTAL BAG SUPPORT", "count") in took
+
+
+def test_the_stand_the_sheet_draws_passes_every_check_against_the_model_envelope():
+    check = cs.sheet_check(_with(_the_sheets_bill()), GA_WORDS, envelope=ENVELOPE)
+    assert check["agrees"], check["failures"]
+    said = cs.sheet_check_sentence(check)
+    assert "from the SolidWorks model's envelope" in said
+    assert "no part takes the goods' count or size" in said
+
+
+def test_a_goods_figure_that_is_also_the_bodys_is_the_bodys():
+    """A panel the body's width is not sized off the goods because a bag is that wide too."""
+    facts = dict(FULL_FACTS, goods_dimensions_mm=[600, 530])
+    check = cs.sheet_check(_with(_the_sheets_bill(), facts), GA_WORDS, envelope=ENVELOPE)
+    assert check["agrees"], check["failures"]
+
+
+def test_one_hook_per_item_held_may_take_the_goods_count_when_it_says_so():
+    bill = _with({"parts": [dict(_made("BAG HOOK", 150, 20, 20), quantity_basis="seen")]})
+    assert not cs.sheet_check(bill, GA_WORDS)["agrees"]
+    bill["parts"][0]["quantity_basis"] = "one per bag, drawn on the front view"
+    assert not any("count" in f for f in cs.sheet_check(bill, GA_WORDS)["failures"])
+
+
+def test_goods_figures_the_sheet_does_not_print_are_not_used():
+    facts = dict(FULL_FACTS, goods_count=24, goods_dimensions_mm=[531], dimensions_to_goods_mm=[])
+    bill = _with({"parts": [_made("BAR", 531, 25, 24)]}, facts)
+    check = cs.sheet_check(bill, GA_WORDS)
+    assert not check["goods_spent"]
+    assert "goods count 24" in check["not_on_sheet"] and "goods dimension 531" in check["not_on_sheet"]
+
+
+def test_the_envelope_goes_to_the_model_and_into_the_key():
+    text = cs.concept_prompt_text([b"png"], sheet=True, sheet_words=GA_WORDS,
+                                  envelope=ENVELOPE, envelope_of="12675-01-Stacking Holder Block")
+    assert "12675-01-Stacking Holder Block is one undetailed body 600 × 1250 × 400 mm" in text
+    assert "NEVER SPEND THE GOODS' NUMBERS ON THE STEEL" in text
+    assert "MAKE THE BODY FROM ITS PANELS" in text
+    assert "a general legend or\n   specification block" in text
+    assert '"goods_count": 0' in text and '"dimensions_to_goods_mm"' in text
+    plain = cs.concept_prompt_text([b"png"], sheet=True, sheet_words=GA_WORDS)
+    assert "THE DESIGN'S MODEL" not in plain
+    k = cs._cache_key([b"png"], "m", sheet=True, sheet_words=GA_WORDS)
+    assert cs._cache_key([b"png"], "m", sheet=True, sheet_words=GA_WORDS, envelope=[]) == k
+    assert cs._cache_key([b"png"], "m", sheet=True, sheet_words=GA_WORDS, envelope=ENVELOPE) != k
+
+
+def test_the_re_ask_carries_the_envelope_both_times(tmp_path, monkeypatch):
+    pdf = _sheet_pdf(tmp_path)
+    monkeypatch.setattr(cs, "_cache_dir", lambda: tmp_path / "cache")
+    asked = []
+
+    def fake(pngs, model, brief="", **kw):
+        asked.append(kw)
+        bill = _the_1205_bill() if not kw.get("recheck") else _the_sheets_bill()
+        return json.dumps(_with(bill))
+
+    monkeypatch.setattr(cs, "_call_vision_llm", fake)
+    out = cs.read_sheet_concept([str(pdf)], envelope=ENVELOPE, envelope_of="BLOCK")
+    assert [a.get("envelope") for a in asked] == [ENVELOPE, ENVELOPE]
+    assert "takes the goods' count" in asked[1]["recheck"]
+    assert out["check"]["agrees"] and out["check"]["body_source"] == "the SolidWorks model's envelope"
