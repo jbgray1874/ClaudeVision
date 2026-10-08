@@ -38,6 +38,7 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import auth
@@ -682,12 +683,13 @@ spoken sentence (a voice transcript, so expect recognition errors), today's
 date, the columns that may be changed, and their records. You either answer a
 question about the records, propose changes, or ask one question back.
 
-Reply with ONLY a JSON object, no prose, no code fences:
+Reply with ONLY a JSON object, no prose, no code fences, with the keys in
+this order (the start of "say" is spoken while the rest is still arriving):
   {"action": "read" | "update" | "clarify",
+   "say": "<what to speak to the person>",
    "changes": [{"item_id": "<id of the record>",
                 "field": "<an editable column, spelled exactly as given>",
-                "new_value": "<the value to set>"}],
-   "say": "<what to speak to the person>"}
+                "new_value": "<the value to set>"}]}
 "changes" is [] unless action is "update".
 
 How the tracker is laid out:
@@ -757,18 +759,15 @@ as the job it plainly sounds like is not guessing; making up a value, date or
 status is."""
 
 
-@router.post("/api/voicecrm/interpret")
-def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.require_user)):
-    """Parse a transcript into update/read/clarify. Writes nothing."""
+def _interpret_prepare(body: InterpretIn):
+    """The request to the model for one transcript, or a reply needing no model."""
     if not _interpret_ready():
-        return {"state": "interpret_unavailable",
-                "detail": ("Voice interpretation needs ANTHROPIC_API_KEY in the service "
-                           "environment and the 'anthropic' package installed.")}
+        return None, {"state": "interpret_unavailable",
+                      "detail": ("Voice interpretation needs ANTHROPIC_API_KEY in the service "
+                                 "environment and the 'anthropic' package installed.")}
     transcript = body.transcript.strip()
     if not transcript:
-        return {"state": "clarify", "say": "I didn't catch that. Say it again?"}
-
-    import anthropic
+        return None, {"state": "clarify", "say": "I didn't catch that. Say it again?"}
 
     columns = [c for c in body.columns if c and _editable(c)] if ALL_COLUMNS else EDITABLE
     # The records go first, marked for caching: within a conversation they are
@@ -787,29 +786,27 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
         "transcript": transcript,
         "today": date.today().isoformat(),
     }, ensure_ascii=False)
+    return dict(
+        model=INTERPRET_MODEL,
+        max_tokens=4000,
+        thinking={"type": "adaptive"},
+        output_config={"effort": INTERPRET_EFFORT},
+        system=_INTERPRET_SYSTEM,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": records_block, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": question_block},
+        ]}],
+    ), None
 
-    client = anthropic.Anthropic()
-    started = time.monotonic()
-    try:
-        resp = client.messages.create(
-            model=INTERPRET_MODEL,
-            max_tokens=4000,
-            thinking={"type": "adaptive"},
-            output_config={"effort": INTERPRET_EFFORT},
-            system=_INTERPRET_SYSTEM,
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": records_block, "cache_control": {"type": "ephemeral"}},
-                {"type": "text", "text": question_block},
-            ]}],
-        )
-    except anthropic.APIError as exc:
-        return {"state": "interpret_failed",
-                "detail": f"The language model refused the request: {exc}"[:400]}
 
-    if resp.stop_reason == "max_tokens":
+def _interpret_result(text: str, stop_reason, cached, body: InterpretIn, user: dict,
+                      started: float, streamed: bool = False, first_say=None) -> dict:
+    """The model's reply checked and turned into update / read / clarify."""
+    transcript = body.transcript.strip()
+    if stop_reason == "max_tokens":
         return {"state": "clarify",
                 "say": "That needed a longer answer than I can give. Could you narrow it down?"}
-    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text").strip()
+    text = text.strip()
     if text.startswith("```"):
         text = text.strip("`").removeprefix("json").strip()
     try:
@@ -817,7 +814,7 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
         action = parsed.get("action")
         if action not in ("update", "read", "clarify"):
             raise ValueError(f"unknown action {action!r}")
-    except (ValueError, json.JSONDecodeError):
+    except (ValueError, json.JSONDecodeError, AttributeError):
         return {"state": "clarify",
                 "say": "I couldn't make sense of that. Could you rephrase it?"}
 
@@ -833,7 +830,8 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
           f"heard={transcript[:120]!r} action={action} "
           f"changes={[(c.get('item_id'), c.get('field')) for c in raw_changes if isinstance(c, dict)]!r} "
           f"say={say[:120]!r} effort={INTERPRET_EFFORT} secs={time.monotonic() - started:.1f} "
-          f"cached={getattr(getattr(resp, 'usage', None), 'cache_read_input_tokens', 0) or 0}",
+          f"cached={cached or 0}{' streamed' if streamed else ''}"
+          f"{f' first_say={first_say:.1f}' if first_say is not None else ''}",
           flush=True)
 
     if action == "update":
@@ -868,6 +866,141 @@ def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.req
                 "new_value": first["new_value"]}
 
     return {"state": action, "say": say or "Sorry, I have nothing useful to say about that."}
+
+
+@router.post("/api/voicecrm/interpret")
+def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.require_user)):
+    """Parse a transcript into update/read/clarify. Writes nothing."""
+    params, early = _interpret_prepare(body)
+    if early:
+        return early
+    import anthropic
+    started = time.monotonic()
+    try:
+        resp = anthropic.Anthropic().messages.create(**params)
+    except anthropic.APIError as exc:
+        return {"state": "interpret_failed",
+                "detail": f"The language model refused the request: {exc}"[:400]}
+    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
+    cached = getattr(getattr(resp, "usage", None), "cache_read_input_tokens", 0)
+    return _interpret_result(text, resp.stop_reason, cached, body, user, started)
+
+
+class _SayScanner:
+    """Reads the model's JSON reply as it streams in and hands back each
+    finished sentence of "say", once "action" shows it is an answer to speak
+    (read / clarify). An update's words are not spoken early: the change is
+    read back from the sheet instead. Anything it can't follow (a different
+    key order, an odd escape) just means nothing is spoken early - the full
+    reply still arrives at the end as usual."""
+
+    _ACTION = re.compile(r'"action"\s*:\s*"(\w+)"')
+    _SAY = re.compile(r'"say"\s*:\s*"')
+    _END = re.compile(r'[.!?](?=\s)')
+
+    def __init__(self):
+        self.buf = ""
+        self.action = None
+        self.say_at = -1          # where the say string's text starts in buf
+        self.spoken = 0           # characters of the say text already handed out
+        self.closed = False
+
+    def _say_text(self) -> str:
+        out, i, s = [], self.say_at, self.buf
+        while i < len(s):
+            ch = s[i]
+            if ch == '"':
+                self.closed = True
+                break
+            if ch == "\\":
+                if i + 1 >= len(s):
+                    break                       # escape split across chunks: wait
+                nxt = s[i + 1]
+                if nxt == "u":
+                    if i + 6 > len(s):
+                        break
+                    try:
+                        out.append(chr(int(s[i + 2:i + 6], 16)))
+                    except ValueError:
+                        pass
+                    i += 6
+                    continue
+                out.append({"n": " ", "t": " ", "r": " "}.get(nxt, nxt))
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    def feed(self, chunk: str) -> list[str]:
+        self.buf += chunk
+        if self.action is None:
+            m = self._ACTION.search(self.buf)
+            if m:
+                self.action = m.group(1)
+        if self.say_at < 0:
+            m = self._SAY.search(self.buf)
+            if not m:
+                return []
+            self.say_at = m.end()
+        if self.action not in ("read", "clarify"):
+            return []
+        text = self._say_text()
+        rest = text[self.spoken:]
+        cuts = [m.end() for m in self._END.finditer(rest)]
+        if self.closed and (not cuts or cuts[-1] < len(rest)):
+            cuts.append(len(rest))
+        out, prev = [], 0
+        for cut in cuts:                         # one sentence at a time
+            piece = rest[prev:cut].strip()
+            if piece:
+                out.append(piece)
+            prev = cut
+        self.spoken += prev
+        return out
+
+
+@router.post("/api/voicecrm/interpret/stream")
+def interpret_stream(body: InterpretIn, request: Request, user: dict = Depends(auth.require_user)):
+    """The same as /interpret, as lines of JSON: {"type": "say", "text": ...}
+    for each sentence of an answer as soon as it is written, then
+    {"type": "result", ...the /interpret reply...}. Lets the phone start
+    speaking the first sentence while the rest is still being written."""
+    params, early = _interpret_prepare(body)
+
+    def lines():
+        if early:
+            yield json.dumps({"type": "result", **early}) + "\n"
+            return
+        import anthropic
+        started = time.monotonic()
+        scanner = _SayScanner()
+        parts, said, first_say = [], [], None
+        try:
+            with anthropic.Anthropic().messages.stream(**params) as stream:
+                for text in stream.text_stream:
+                    parts.append(text)
+                    for sentence in scanner.feed(text):
+                        if not said:
+                            first_say = time.monotonic() - started
+                        said.append(sentence)
+                        yield json.dumps({"type": "say", "text": sentence}) + "\n"
+                final = stream.get_final_message()
+        except anthropic.APIError as exc:
+            yield json.dumps({"type": "result", "state": "interpret_failed",
+                              "detail": f"The language model refused the request: {exc}"[:400]}) + "\n"
+            return
+        cached = getattr(getattr(final, "usage", None), "cache_read_input_tokens", 0)
+        result = _interpret_result("".join(parts), final.stop_reason, cached, body, user,
+                                   started, streamed=True, first_say=first_say)
+        # Whether what was already spoken is the whole answer; if not (a
+        # reply that failed its checks, say), the page speaks the result too.
+        norm = lambda t: " ".join(str(t or "").split())
+        result["say_streamed"] = bool(said) and norm(" ".join(said)) == norm(result.get("say"))
+        yield json.dumps({"type": "result", **result}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ═══════════════════════════════════════════════════════════════════════════
