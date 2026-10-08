@@ -2914,16 +2914,31 @@ def _finalize_scan_summary(
             _sw_id = None
             if _sw_job and _sw_job.found:
                 from source_connectors.solidworks import extract_is_for_this_job
-                _sw_id = extract_is_for_this_job(_pre_estimate_parts, _sw_job)
+                # THE JOB'S OWN IDENTITY GOES WITH THE PARTS (D-410): a pack that minted no
+                # part still has a drawing number and a folder, and its extract is still its own.
+                _sw_id = extract_is_for_this_job(
+                    _pre_estimate_parts, _sw_job,
+                    job_identity=[summary.get("drawing_number"), summary.get("job_name"),
+                                  Path(str(summary.get("job_folder") or "")).name])
                 if not _sw_id.get("belongs"):
                     # WHICH FAILURE IS THIS? Both look like zero matches, and for a whole
                     # session job 11350 reported "different job" while suffering "our matcher
                     # does not know this convention". Say which, and print the codes on both
                     # sides, so the next convention gap is one look rather than a week.
                     _ours = _sw_id.get("shares_job_number")
-                    _why = ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
-                            "codes share a job number. That is a naming convention this "
-                            "connector does not know, NOT a foreign pack."
+                    _empty_job = bool(_sw_id.get("job_has_no_parts"))
+                    # THREE FAILURES, NOT TWO (D-410). A pack that produced no part records
+                    # cannot match anything, and that is neither a foreign extract nor an
+                    # unknown naming convention: it is this job's model with nothing drawn to
+                    # hold it against — the parts list where the pack has none.
+                    _why = ((("THIS IS THIS JOB'S OWN EXTRACT (the codes share this job's "
+                              "number) and the pack produced NO part records to match it "
+                              "against — the model is the parts list where the pack has none, "
+                              "and nothing was taken off from it on this run.")
+                             if _empty_job else
+                             ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
+                              "codes share a job number. That is a naming convention this "
+                              "connector does not know, NOT a foreign pack."))
                             if _ours else
                             "The codes share no job number with this one, so it describes a "
                             "different job. Point SDI_SW_EXTRACT_JSON at this job's extract, "
@@ -2945,6 +2960,7 @@ def _finalize_scan_summary(
                         "found": False,
                         "refused_wrong_job": True,
                         "refused_own_job": bool(_ours),
+                        "job_has_no_parts": _empty_job,
                         "extract_path": _sw_job.meta.get("extract_path"),
                         "extract_top_assembly": _sw_id.get("top_assembly"),
                         "extract_part_count": _sw_id.get("candidates"),
@@ -4321,11 +4337,19 @@ def _finalize_scan_summary(
         # readers read drawings; a render has no text layer, no dimensions and no flats, so
         # they correctly find nothing — and "£0.00, no parts" filed without a reason reads
         # as a free job, not as the wrong mode. Say which mode answers this pack.
-        summary.setdefault("review_flags", []).append(
+        _render_stop = (
             "THIS PACK IS IMAGE RENDERS AND THIS WAS AN ENGINE RUN — the drawing readers "
             "have nothing to measure, so this book is empty by mode, not by content. Run "
             "the same pack as LLM SCAN ONLY: the vision model sights the parts and the "
             "ordinary waterfall prices them.")
+        summary.setdefault("review_flags", []).append(_render_stop)
+        if _no_parts:
+            # THE STOP IS A FACT ON THE RECORD, NOT ONLY A FLAG (D-409): the commercial
+            # lines, the quote, the sheet banner and the report all ask run_stop.
+            from run_stop import record as _record_stop
+            _record_stop(summary, "image_render_pack_on_engine_run", _render_stop,
+                         next_step="Run the same pack as LLM SCAN ONLY: the vision model "
+                                   "sights the parts and the ordinary waterfall prices them.")
         print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
               "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
     # A DESIGN-INTENT PACK ON AN ENGINE RUN IS THE SAME EMPTY BOOK (D-406). 12675-01: three
@@ -4334,14 +4358,22 @@ def _finalize_scan_summary(
     # the book is empty by mode and says so — and names the method that answers the pack.
     _design_intent_pages = design_intent_pages(summary)
     if _design_intent_pages and _no_parts and not _llm_only_run and not _is_render_pack:
-        summary.setdefault("review_flags", []).append(
+        _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
+                    "(the model is the parts list where the pack has none) or detailed by "
+                    "Design into a GA with a parts list and part sheets; an LLM scan with an "
+                    "enquiry brief is a fallback budget only, one design per run.")
+        _di_stop = (
             f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
             f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
-            f"readers have nothing to cost and this book is empty by mode, not by content. The "
-            f"design being priced is taken off from its own SolidWorks assembly (the model is the "
-            f"parts list where the pack has none) or detailed by Design into a GA with a parts "
-            f"list and part sheets; an LLM scan with an enquiry brief is a fallback budget only, "
-            f"one design per run.")
+            f"readers have nothing to cost and this book is empty by mode, not by content. "
+            f"{_di_next}")
+        summary.setdefault("review_flags", []).append(_di_stop)
+        # THE STOP IS A FACT ON THE RECORD, NOT ONLY A FLAG (D-409). On the 8 Oct run the flag
+        # was written and nothing read it: packaging and delivery were minted for a product
+        # that did not exist, the quote carried their price, and the stop reached no page.
+        from run_stop import record as _record_stop
+        _record_stop(summary, "design_intent_pack_on_engine_run", _di_stop, next_step=_di_next,
+                     pages=[str(p) for p in _design_intent_pages])
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
@@ -4400,9 +4432,16 @@ def _finalize_scan_summary(
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
     if _concept_refused:
         summary["concept_read"] = {"refused": _concept_refused}
-        summary.setdefault("review_flags", []).append(
-            f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable geometry, "
-            f"so an empty parts list is a reading problem to fix, not a picture to guess at.")
+        _cr_stop = (f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable "
+                    f"geometry, so an empty parts list is a reading problem to fix, not a "
+                    f"picture to guess at.")
+        summary.setdefault("review_flags", []).append(_cr_stop)
+        if _no_parts:
+            from run_stop import record as _record_stop
+            _record_stop(summary, "concept_read_refused", _cr_stop,
+                         next_step="Fix the reading of the pack's drawings; nothing is "
+                                   "guessed from pictures while measurable geometry is present.",
+                         refused=_concept_refused)
         print(f"   [concept] not sighted — {_concept_refused}", flush=True)
     elif _llm_only_run and (_no_parts or _is_render_pack):
         try:

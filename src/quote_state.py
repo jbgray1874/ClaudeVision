@@ -108,6 +108,19 @@ def _price_fact(summary: Mapping[str, Any]) -> Dict[str, Any]:
     question. The fail-closed handler lives here too, so every caller inherits it rather than
     each one remembering to write a try/except of its own.
     """
+    # A RUN THAT COSTED NOTHING HAS NO PRICE, INDICATIVE OR OTHERWISE (D-409). 12675-01's
+    # workbook held £25.46 — packaging and delivery for a product that was never costed — and
+    # an internal page would have printed it as "the figure the workbook holds". It is not a
+    # figure of anything; the stop is the fact, and it is said in the price's own words so the
+    # quote, the report and the e-mail cannot disagree about why there is no number.
+    try:
+        from run_stop import nothing_to_cost as _ntc, sentence as _stop_sentence
+        _stop = _ntc(summary)
+    except Exception:                                                 # noqa: BLE001
+        _stop = None
+    if _stop:
+        return {"amount": None, "cell": None, "basis": "none", "workbook_amount": None,
+                "nothing_to_cost": True, "why": _stop_sentence(_stop)}
     es = _mapping(summary.get("estimate_summary"))
     totals = _mapping(_mapping(summary.get("final_estimate")).get("totals"))
     unit = _mapping(es.get("workbook_equivalent_pricing")).get("m105_total_unit_cost_gbp")
@@ -330,7 +343,14 @@ def quote_state(summary: Any) -> Dict[str, Any]:
     # They are two fields of ONE entry rather than two derivations, because a fact with two
     # producers is how this session lost five afternoons.
     blocking: List[Dict[str, str]] = []
-    if price.get("amount") is None:
+    if price.get("amount") is None and price.get("nothing_to_cost"):
+        # Not "untraceable" — there is no price to trace. The gate names the fact (D-409).
+        blocking.append({
+            "gate": "nothing_to_cost",
+            "what": _clean(price.get("why")) or "the run produced nothing to cost",
+            "short": "the run produced nothing to cost — there is no price to release",
+        })
+    elif price.get("amount") is None:
         blocking.append({
             "gate": "traceable_price",
             "what": (_clean(price.get("why"))

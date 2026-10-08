@@ -87,6 +87,72 @@ def undrawn_bom_lines(summary: Any) -> List[Dict[str, Any]]:
                             "description": str(m.get("description") or "").strip()})
     return out
 
+# ── WHAT A DXF RECORD'S REASON CODE MEANS, IN ONE PLACE (D-408, D-409) ──────────────────
+#
+# drawing_job_merge writes `dxf` on a matched record, `path` on an unmatched, skipped or
+# ambiguous one and `candidates` where several flats were weighed — full Windows paths as
+# written on the box — and a reason code either on its own with the evidence under `detail`
+# or as "code: evidence" in one string. The report and the covering note each read these
+# records; one vocabulary here so they cannot call the same file two different things. An
+# unknown code is printed de-underscored rather than dropped, so a reason the merge learns to
+# give next month reaches every page unaided.
+DXF_REASON_SENTENCES: Dict[str, str] = {
+    "drawing_export_not_a_flat": ("a drawing of a part, not a flat pattern — it minted no part "
+                                  "and measured nothing"),
+    "code_belongs_to_another_assembly_in_this_job_number": (
+        "its code belongs to another assembly under this job number — not attached to this one"),
+    "no_part_number_in_filename": "no part number in its name — matched to no part",
+    "ga_dxf_ignored": "a general-arrangement export — not a flat pattern, not measured",
+    "missing_file": "listed for the run but not found on disk — NOT READ",
+    "not_dxf": "not a DXF — not read as geometry",
+    "suffixed_flat_beside_the_parts_own_flat": (
+        "could be a piece or a variant of a part that has a flat of its own — not attached; "
+        "say which"),
+    "numbered_piece_or_separate_item_unresolved": (
+        "could be a numbered piece or a separate item — not attached; say which"),
+}
+
+
+def dxf_record_names(it: Any) -> List[str]:
+    """The filename(s) a dxf_augmentation record is about, whichever key the merge wrote —
+    basenames only, so a staged Windows path reads as the file the drawing office knows."""
+    def _base(v: Any) -> str:
+        return re.split(r"[\\/]", str(v or "").strip())[-1]
+    if not isinstance(it, dict):
+        b = _base(it)
+        return [b] if b else []
+    for k in ("dxf_name", "name", "file", "dxf", "path"):
+        if it.get(k):
+            b = _base(it.get(k))
+            return [b] if b else []
+    out = [_base(c) for c in (it.get("candidates") or [])]
+    return [b for b in out if b]
+
+
+def dxf_record_code_and_evidence(it: Any) -> Tuple[str, str]:
+    """(reason code, evidence) off a record. The content reader's evidence ends with its own
+    verdict ("— this is a drawing of the part…"), which the sentence already says, so for a
+    known code only the measurement before the dash is kept."""
+    if not isinstance(it, dict):
+        return "", ""
+    raw = str(it.get("reason") or "").strip()
+    code, _, tail = raw.partition(":")
+    code = code.strip()
+    evidence = str(it.get("detail") or tail or "").strip()
+    if code in DXF_REASON_SENTENCES and " — " in evidence:
+        evidence = evidence.split(" — ", 1)[0].strip()
+    return code, evidence
+
+
+def dxf_record_reason(it: Any) -> str:
+    """The recorded reason as a sentence, with the evidence in brackets when there is any."""
+    code, evidence = dxf_record_code_and_evidence(it)
+    if not code:
+        return ""
+    sentence = DXF_REASON_SENTENCES.get(code, code.replace("_", " "))
+    return f"{sentence} ({evidence})" if evidence else sentence
+
+
 def pack_shortfalls(source: Any) -> List[str]:
     """What the DRAWING PACK failed to supply or staged wrongly, in plain sentences.
 
@@ -132,15 +198,28 @@ def pack_shortfalls(source: Any) -> List[str]:
     except Exception:                                            # noqa: BLE001
         pass
     dxf = source.get("dxf_augmentation") or {}
-    for s in (dxf.get("skipped") or []):
-        if isinstance(s, dict) and str(s.get("reason") or "") == "drawing_export_not_a_flat":
-            _add(f"'{_fname(s.get('path'))}' is a drawing export, not a manufacturing "
-                 f"flat — it was staged alongside the real flats and had to be "
-                 f"recognised by its content and set aside, never measured as cut path.")
-    for u in (dxf.get("unmatched_dxf") or []):
-        if isinstance(u, dict) and u.get("path"):
-            _add(f"'{_fname(u.get('path'))}' matched no part in this job — a stray or "
-                 f"mis-named file in the pack.")
+    # BY THE REASON THE MERGE RECORDED, NOT BY THE LIST IT LANDED IN (D-409). A drawing export
+    # the merge refuses BEFORE minting a part (D-406) lands in unmatched_dxf with its reason,
+    # and this called it "a stray or mis-named file in the pack" — the name was fine, the file
+    # was a drawing — on the same page that had just said what it was.
+    for key in ("skipped", "unmatched_dxf"):
+        for u in (dxf.get(key) or []):
+            if not isinstance(u, dict) or not u.get("path"):
+                continue
+            code, evidence = dxf_record_code_and_evidence(u)
+            if code == "drawing_export_not_a_flat":
+                _add(f"'{_fname(u.get('path'))}' is a drawing export, not a manufacturing "
+                     f"flat ({evidence or 'dimensions or a title block in the file'}) — it was "
+                     f"staged alongside the real flats and had to be recognised by its content "
+                     f"and set aside, never measured as cut path and never a part.")
+            elif key == "unmatched_dxf":
+                if code == "no_part_number_in_filename":
+                    _add(f"'{_fname(u.get('path'))}' carries no part number in its name, so it "
+                         f"matched no part in this job — a stray or mis-named file in the pack.")
+                else:
+                    why = dxf_record_reason(u)
+                    _add(f"'{_fname(u.get('path'))}' matched no part in this job — "
+                         + (why or "a stray or mis-named file in the pack") + ".")
     return out
 
 
@@ -1461,6 +1540,8 @@ NIL = "nil"                             # correctly nothing — an assembly, a c
 # table, the AI Explanation tab, the banner's named items) reads the same order and words.
 # kind -> (tag class, label, rank). Rank 0 is money not in the unit at all.
 DECISION_KINDS: Dict[str, Tuple[str, str, int]] = {
+    # A run that costed nothing is the first row and the whole headline (D-409).
+    "nothing_to_cost": ("t-bad", "Nothing to cost", 0),
     "missing_price": ("t-bad", "Missing price", 0),
     "stated_not_carried": ("t-bad", "Stated, not carried", 0),
     "labour_not_on_sheet": ("t-bad", "Labour not on sheet", 0),
@@ -1477,9 +1558,9 @@ _UNKNOWN_KIND = ("t-info", "Decision", 9)
 # The kinds that keep a quote a draft: something a person owes before it goes out. A
 # quantity check and an indicative house rate are asked, not owed; labour the block had no
 # room for keeps the estimate provisional (D-340) and is listed, as it was.
-_DRAFT_KINDS = frozenset({"missing_price", "stated_not_carried", "market_figure",
-                          "manufacturing_decision", "consistency_check", "provisional_price",
-                          "ruling", "size_assumed"})
+_DRAFT_KINDS = frozenset({"nothing_to_cost", "missing_price", "stated_not_carried",
+                          "market_figure", "manufacturing_decision", "consistency_check",
+                          "provisional_price", "ruling", "size_assumed"})
 
 
 def decision_kind(kind: Any) -> Tuple[str, str, int]:
@@ -3469,6 +3550,25 @@ def costed_job(source: Any) -> Dict[str, Any]:
     decisions.sort(key=lambda d: (decision_kind(d.get("kind"))[2],
                                   -_num(d.get("gbp_at_stake"))))
 
+    # ── A RUN THAT PRODUCED NOTHING TO COST IS THE FIRST ROW AND THE WHOLE HEADLINE (D-409) ──
+    # 12675-01, 8 Oct 2026: the scan stopped the run (design-intent sheets, no part) and this
+    # record went on to list two market figures to replace and a failing BOM check — true rows
+    # about an empty book, with the one fact that explained them written nowhere. The stop is a
+    # row of the one tally, so the banner, the Decisions table, the verdict and the quote's
+    # blocking list all say it, in the same words, first.
+    try:
+        from run_stop import nothing_to_cost as _nothing_to_cost, sentence as _stop_sentence
+        _stop = _nothing_to_cost(source)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
+    if _stop:
+        decisions.insert(0, {
+            "part": "—", "kind": "nothing_to_cost",
+            "issue": f"Nothing to cost: {_stop.get('short') or _stop.get('kind')}",
+            "assumption": "no part was costed, so no figure on the sheet is a price",
+            "action": (_stop.get("next_step")
+                       or "answer the pack with the method the stop names, then re-run"),
+            "owner": "estimator / Design", "gbp_at_stake": None})
     # ── release status ──────────────────────────────────────────────────────────
     _checks = [d for d in decisions if d["kind"] == "consistency_check"]
     _rulings = [d for d in decisions if d["kind"] == "ruling"]
@@ -3492,6 +3592,8 @@ def costed_job(source: Any) -> Dict[str, Any]:
                                      for v in _blocking_v + _ruling_v + _not_run_v}),
     }
     reasons: List[str] = []
+    if _stop:
+        reasons.append(_stop_sentence(_stop))
     if unpriced:
         reasons.append(f"{len(unpriced)} line(s) carry no price: {', '.join(gaps['unpriced'])}")
     _no_line = [d for d in decisions if d["kind"] == "missing_price"
@@ -3546,9 +3648,14 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # the quote's scope; the LLM-only path already marks those runs in its own words.
     _draft_rows = [d for d in decisions if d["kind"] in _DRAFT_KINDS]
     draft = bool(_draft_rows)
+    if _stop:
+        status = "provisional"
 
     return {
         "schema": COSTED_JOB_SCHEMA,
+        # The stop travels on the record, so a reader given the record alone (the HTML
+        # regeneration path, the quote's blocking list) still knows the book is empty by mode.
+        "run_stop": _stop or None,
         "run": {
             "order_qty": order_qty,
             "unit_gbp": totals.get("unit_gbp"),
@@ -3830,6 +3937,7 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     stated = _n("stated_not_carried")
     off_sheet = _n("labour_not_on_sheet")
     rulings = _n("ruling")
+    stopped = _n("nothing_to_cost")
     # FAILING CHECKS AND ASSUMED SIZES ARE ROWS (v2, 12173-02). A record saved before that
     # kept them as two counts in its release block; those are still printed AND added to
     # the headline, so even an old record's "N to settle" is the sum of its phrase.
@@ -3849,12 +3957,15 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     # row lands in a named bucket, and an unclassified kind is counted as blocking, not
     # quietly dropped: an open item nobody classified is not thereby advisory.
     other = len(ds) + legacy - (prices + market + mfg + house + qty + prov + stated
-                                + off_sheet + rulings + _checks + _assumed)
+                                + off_sheet + rulings + _checks + _assumed + stopped)
 
     def _gbp(kind: str) -> str:
         v = sum(_num(d.get("gbp_at_stake")) for d in ds if d.get("kind") == kind)
         return f" (£{v:,.2f})" if v else ""
     bits: List[str] = []
+    if stopped:
+        # FIRST, because it is the fact the other bits are about (D-409).
+        bits.append("nothing to cost — the run stopped before pricing")
     if prices:
         bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
     if stated:
@@ -3909,8 +4020,9 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         "provisional": prov, "stated_not_carried": stated,
         "labour_not_on_sheet": off_sheet,
         "consistency_checks": _checks, "sizes_assumed": _assumed, "rulings": rulings,
+        "nothing_to_cost": stopped,
         "blocking": (prices + market + mfg + prov + stated + off_sheet + rulings + _checks
-                     + _assumed + other),
+                     + _assumed + stopped + other),
         "advisory": house,
         # THE HEADLINE IS THE SUM OF THE PHRASE: every row, plus the counts an old record
         # kept beside its rows. `in_table` is how many of them the Decisions table lists.

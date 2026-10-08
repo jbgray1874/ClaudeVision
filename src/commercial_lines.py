@@ -704,6 +704,33 @@ def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         "DELIVERY")
 
 
+def nothing_to_ship(summary: Any, parts: Any) -> Optional[str]:
+    """Why no packaging or delivery line belongs on this book — or None when something ships.
+
+    A commercial line is a per-unit share of packing and carrying the PARTS. On a run that
+    produced none there is nothing to pack, and a line for it is a price for nothing: 12675-01
+    on 8 Oct 2026 carried £14.50 packaging and £8.50 delivery on a book with no part, and the
+    customer's terms ran over them to £25.46 a unit of nothing (D-409). Two questions, the
+    stop first: a run the scan stopped has nothing to cost whatever the part list holds, and
+    a part list holding only the engine's own placeholders has nothing in it that ships.
+    """
+    try:
+        from run_stop import nothing_to_cost                           # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                  # noqa: BLE001
+        stop = None
+    if stop:
+        return (f"the run produced nothing to cost "
+                f"({stop.get('short') or stop.get('kind') or 'the run stopped'})")
+    shippable = [p for p in (parts or ()) if isinstance(p, dict)
+                 and not p.get("_commercial_placeholder")
+                 and not p.get("_plating_placeholder")
+                 and str(p.get("source") or "") != "commercial_placeholder"]
+    if not shippable:
+        return "no part on this book to pack or deliver"
+    return None
+
+
 def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Every commercial line on the job, harvested from wherever the parts live.
 

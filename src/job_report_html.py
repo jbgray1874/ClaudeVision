@@ -202,8 +202,17 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
     _pt = _pub({"run": {"unit_cost_gbp": unit,
                         "unit_cell": _fe_tot.get("unit_cell"),
                         "unit_cell_value": _fe_tot.get("unit_cell_value")}})
+    # A RUN THAT COSTED NOTHING HAS NO FIGURE TO PUBLISH (D-409) — decided here, where every
+    # renderer reads its answer, so the header, the summary, the glance, the verdict and the
+    # footer say "no price" together instead of one of them finding £25.46 of packaging.
+    try:
+        from run_stop import nothing_to_cost as _ntc                 # noqa: PLC0415
+        _stop = _ntc(summary)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
     return {
         "unit": unit, "material": material, "labour": labour,
+        "nothing_to_cost": _stop,
         "unit_publishable": _pt.get("amount"),
         "unit_cell": _pt.get("cell"),
         "unit_withheld_why": _pt.get("why") or "",
@@ -539,76 +548,18 @@ def part_review_notes(parts: List[Dict[str, Any]],
     return [{"note": t, "parts": who} for t, who in seen.items()]
 
 
-def _dxf_record_names(it: Any) -> List[str]:
-    """The filename(s) a dxf_augmentation record is about, whichever key the merge wrote.
-
-    drawing_job_merge writes `dxf` on a matched record, `path` on an unmatched, skipped or
-    ambiguous one, and `candidates` where several flats were weighed — full Windows paths as
-    written on the box. This report read `dxf_name`, `name` and `file`, keys no live run has
-    ever written, so 4.1 listed every PDF and every model and not one DXF: on 12675-01's 19:10
-    report the only DXF in the pack minted the priced part and was named nowhere, and 4.2
-    could only count the unmatched files. The test fixture used `dxf_name`, so the test
-    passed against a shape the engine never produces (D-408).
-
-    Basenames only: the staged path is the box's business, the filename is the reader's.
-    """
-    def _base(v: Any) -> str:
-        return re.split(r"[\\/]", str(v or "").strip())[-1]
-    if not isinstance(it, dict):
-        b = _base(it)
-        return [b] if b else []
-    for k in ("dxf_name", "name", "file", "dxf", "path"):
-        if it.get(k):
-            b = _base(it.get(k))
-            return [b] if b else []
-    out = [_base(c) for c in (it.get("candidates") or [])]
-    return [b for b in out if b]
-
-
-# What a DXF record's reason code means to a reader. The code is the merge's own vocabulary
-# (it is what drawing_job_merge writes); the sentence is for the person. An unknown code is
-# printed de-underscored rather than dropped, so a reason the merge learns to give next month
-# reaches the page without this table knowing it.
-_DXF_REASON_SENTENCES: Dict[str, str] = {
-    "drawing_export_not_a_flat": ("a drawing of a part, not a flat pattern — it minted no part "
-                                  "and measured nothing"),
-    "code_belongs_to_another_assembly_in_this_job_number": (
-        "its code belongs to another assembly under this job number — not attached to this one"),
-    "no_part_number_in_filename": "no part number in its name — matched to no part",
-    "ga_dxf_ignored": "a general-arrangement export — not a flat pattern, not measured",
-    "missing_file": "listed for the run but not found on disk — NOT READ",
-    "not_dxf": "not a DXF — not read as geometry",
-    "suffixed_flat_beside_the_parts_own_flat": (
-        "could be a piece or a variant of a part that has a flat of its own — not attached; "
-        "say which"),
-    "numbered_piece_or_separate_item_unresolved": (
-        "could be a numbered piece or a separate item — not attached; say which"),
-}
-
-
-def _dxf_record_code_and_evidence(it: Any) -> Tuple[str, str]:
-    """(reason code, evidence) off a record. The merge writes the code either on its own with
-    the evidence under `detail`, or as "code: evidence" in one string; the evidence from the
-    content reader ends with its own verdict ("— this is a drawing of the part…"), which the
-    sentence already says, so only the measurement before the dash is kept."""
-    if not isinstance(it, dict):
-        return "", ""
-    raw = str(it.get("reason") or "").strip()
-    code, _, tail = raw.partition(":")
-    code = code.strip()
-    evidence = str(it.get("detail") or tail or "").strip()
-    if code in _DXF_REASON_SENTENCES and " — " in evidence:
-        evidence = evidence.split(" — ", 1)[0].strip()
-    return code, evidence
-
-
-def _dxf_record_reason(it: Any) -> str:
-    """The recorded reason as a sentence, with the evidence in brackets when there is any."""
-    code, evidence = _dxf_record_code_and_evidence(it)
-    if not code:
-        return ""
-    sentence = _DXF_REASON_SENTENCES.get(code, code.replace("_", " "))
-    return f"{sentence} ({evidence})" if evidence else sentence
+# WHAT A DXF RECORD IS CALLED, ONCE (D-408, D-409). drawing_job_merge writes `dxf` on a matched
+# record, `path` on an unmatched, skipped or ambiguous one and `candidates` where several flats
+# were weighed — full Windows paths as written on the box. This report read `dxf_name`, `name`
+# and `file`, keys no live run has ever written, so 4.1 listed every PDF and every model and not
+# one DXF: on 12675-01's 19:10 report the only DXF in the pack minted the priced part and was
+# named nowhere, and 4.2 could only count the unmatched files; the test fixture used `dxf_name`,
+# so the test passed against a shape the engine never produces. The vocabulary lives in
+# costed_facts beside the covering note's, so the two cannot call one file two things.
+from costed_facts import (DXF_REASON_SENTENCES as _DXF_REASON_SENTENCES,  # noqa: E402
+                          dxf_record_names as _dxf_record_names,
+                          dxf_record_code_and_evidence as _dxf_record_code_and_evidence,
+                          dxf_record_reason as _dxf_record_reason)
 
 
 def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -911,6 +862,30 @@ _CSS = """
 # Section renderers — each returns an HTML string, driven by the view-model
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _render_run_stop(summary: Dict[str, Any]) -> str:
+    """THE FIRST THING ON AN EMPTY BOOK IS WHY IT IS EMPTY (D-409).
+
+    The 12675-01 report of 8 Oct 09:15 opened on "What this estimate prices", a Summary with a
+    PENDING unit cost, £23.00 of material and "Not for release — 3 to settle", and a Decisions
+    table about packaging and delivery. The run had stopped — design-intent sheets, nothing to
+    cost — and that sentence was on no page: the scan wrote it as a review flag that nothing
+    rendered. It is the one fact every other section is about, so it is the first thing read.
+    """
+    try:
+        from run_stop import nothing_to_cost, sentence, HEADLINE       # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                # noqa: BLE001
+        return ""
+    if not stop:
+        return ""
+    pages = stop.get("pages") or []
+    where = (f" Page(s) {_esc(', '.join(str(p) for p in pages))} of the pack." if pages else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #b3261e">'
+            f'<b>{_esc(HEADLINE)}.</b> {_esc(sentence(stop))}{where} Nothing on this page or '
+            f'on the sheet is a price for the product; the sections below describe an empty '
+            f'book and what was set aside, and this is not to be sent as an estimate.</div>')
+
+
 def _render_product_scope(summary: Dict[str, Any]) -> str:
     """WHAT WAS PRICED, AND WHAT WAS LEFT OUT — before any figure.
 
@@ -981,6 +956,12 @@ def _unit_text(hl: Dict[str, Any]) -> str:
     the verdict and the footer cannot disagree about whether the total is publishable. They
     could before: the email refused a total the report printed four ways.
     """
+    if hl.get("nothing_to_cost"):
+        # A RUN THAT COSTED NOTHING HAS NO PRICE TO BE PENDING (D-409). "PENDING — NOT
+        # TRACEABLE TO A WORKBOOK CELL" promises a figure somebody can finish; on 12675-01's
+        # empty book it sat over £25.46 of packaging and delivery and said nothing about why.
+        from run_stop import HEADLINE as _NO_PRICE                   # noqa: PLC0415
+        return _NO_PRICE
     if hl.get("unit_publishable") is not None:
         return _money(hl["unit_publishable"])
     return "PENDING — NOT TRACEABLE TO A WORKBOOK CELL"
@@ -1020,6 +1001,15 @@ def _extract_parts_count_note(streams: List[Dict[str, Any]]) -> str:
 
 def _render_glance(streams: List[Dict[str, Any]], hl: Dict[str, Any]) -> str:
     # Authoritative workbook-computed figures (the Excel's own SUM) — the single source of truth.
+    if hl.get("nothing_to_cost"):
+        # NOT "LABOUR £29.13" OVER AN EMPTY BOOK (D-409). The 12675-01 report printed the
+        # engine's own labour aggregate here, under a heading calling it the workbook's SUM,
+        # beside a summary tile reading "—" and a sheet reading £0.00. On a run that costed
+        # nothing there is no figure to show, and the glance says why instead.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        return (f"{_h2('glance')}\n<div class=\"callout warn\"><b>{_esc(_unit_text(hl))}.</b> "
+                f"{_esc(_stop_sentence(hl['nothing_to_cost']))} No material or labour figure "
+                f"on this run is a price, so none is shown here.</div>")
     fig_rows = ""
     if hl.get("material") is not None:
         fig_rows += f'<tr><td>Material</td><td class="n">{_money(hl["material"])}</td></tr>'
@@ -2138,7 +2128,15 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
            "found": f"some lines may be counted twice ({_sec('right')})",
            "not_established": f"double-counting is not ruled out ({_sec('right')})"
            }[double_count_status(summary, record=_rec)["state"]]
-    if _inv is not None and not _inv.get("may_quote_firm"):
+    _stop = _rec.get("run_stop") if isinstance(_rec.get("run_stop"), dict) else None
+    if _stop:
+        # THE VERDICT ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409), not "PROVISIONAL … the
+        # workbook Unit Cost is PENDING" as though a figure were waiting to be finished.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _lead = (f"<b>No price was produced on this run.</b> {_esc(_stop_sentence(_stop))} "
+                 f"The checks and figures in this document describe an empty book, not a "
+                 f"price; nothing here is to be sent as an estimate.{_open_note}")
+    elif _inv is not None and not _inv.get("may_quote_firm"):
         _sentence = _checks_sentence(summary)
         _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
                  + (f"{_esc(_sentence)} — listed in {_sec('checks')}. " if _sentence else
@@ -3123,6 +3121,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     ])
     body = "\n".join([
         _render_header(h, has_parity, summary),
+        _render_run_stop(summary),
         _render_product_scope(summary),
         _render_summary(summary, record, h, hl),
         _render_decisions(record),
@@ -3366,6 +3365,21 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
     rel = record.get("release") or {}
     inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
     reasons = [str(r) for r in (rel.get("reasons") or []) if r]
+    # NO PRICE IS NOT "N TO SETTLE" (D-409). The 12675-01 book's status read "Not for release —
+    # 3 to settle: 2 market figures to replace (£23.00) + 1 consistency finding failed" over a
+    # run that costed nothing; the stop is the status, and the tally is what it is about.
+    _stop = record.get("run_stop") if isinstance(record.get("run_stop"), dict) else None
+    if _stop is None:
+        try:
+            from run_stop import nothing_to_cost as _ntc             # noqa: PLC0415
+            _stop = _ntc(summary)
+        except Exception:                                            # noqa: BLE001
+            _stop = None
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _first = _stop_sentence(_stop)
+        return ("t-bad", "No price — this run produced nothing to cost",
+                [_first] + [r for r in reasons if r != _first])
     if rel.get("draft"):
         # THE ONE TALLY. The banner said "3 inputs" over a table of 5 items because it read
         # release.outstanding (blocking only) while the table listed every decision. Both
@@ -3412,6 +3426,11 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     unit = run.get("unit_gbp") if calculated else hl.get("unit")
     material = run.get("material_gbp") if calculated else hl.get("material")
     labour = run.get("labour_gbp") if calculated else hl.get("labour")
+    _stop = hl.get("nothing_to_cost")
+    if _stop:
+        # NO FIGURE IS A PRICE ON A RUN THAT COSTED NOTHING (D-409): the tiles say so rather
+        # than show packaging and delivery as the material of a product that was never costed.
+        material = labour = None
     qty = run.get("order_qty") or h.get("quantity")
     cls, head, reasons = _release_words(record, summary)
     gaps = record.get("gaps") or {}
@@ -3421,6 +3440,9 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     finishes = str(record.get("finishes_charged") or "")
 
     facts: List[str] = []
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        facts.append(f"<b>Nothing was costed on this run.</b> {_esc(_stop_sentence(_stop))}")
     if lines:
         facts.append(f"<b>{len(lines)}</b> lines on the bill of materials, <b>{len(charged)}</b> "
                      f"carrying money on the sheet.")
@@ -3445,7 +3467,9 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
         facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
                      + (f"; excluded because their own detail states another finish: "
                         f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
-    basis = ("the Estimate sheet's own calculated cells" if calculated else
+    basis = ("not a price — this run costed nothing, so no figure on the sheet is one"
+             if _stop else
+             "the Estimate sheet's own calculated cells" if calculated else
              "the engine's figures — the sheet has not been read back, so nothing here is "
              "the charged money yet")
     # NEVER DROP A REASON (12173-02: the seventh, "1 parts-list row(s) stated and not

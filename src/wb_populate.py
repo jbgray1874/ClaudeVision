@@ -4471,7 +4471,81 @@ def _apply_customer_terms(ws, customer_name: Any, flags: List[str]) -> None:
               f"defaults stand.", flags)
 
 
-def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
+def _write_beside_price_labels(ws, text: Optional[str]) -> int:
+    """Write `text` in the first free cell past the value beside each figure that reads as a
+    price — Unit Cost, Sell Price, Total Unit Cost — and return the lowest label row found.
+
+    With `text` None nothing is written and only the row is returned, so the checklist still
+    anchors below the totals. ONE WALK, because the run-stop banner (D-409) and the estimator-
+    inputs banner must land in the same cells by the same rule; a second copy of this walk
+    would be a second opinion about where the price is.
+
+    ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same row was
+    found twice and the second pass walked past the first banner and wrote another beside it.
+
+    PAST THE VALUE, NOT AT A FIXED OFFSET. The value sits somewhere to the right of its label
+    and the gap differs per row, so a fixed +3 landed exactly on the Total Unit Cost figure.
+    The write was refused — the formula is safe either way — but a refused banner is no
+    banner, and the sheet went out looking finished again. Walk right past every populated
+    cell, then take the first free one.
+    """
+    _last_row = 0
+    _done_rows = set()
+    for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
+        _hit = _find_label_cell(ws, *_needles)
+        if not _hit:
+            continue
+        _r, _c = _hit
+        _last_row = max(_last_row, _r)
+        if _r in _done_rows or text is None:
+            continue
+        _done_rows.add(_r)
+        _col = _c + 1
+        _seen_value = False
+        for _step in range(1, 12):
+            if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
+                _seen_value = True
+                _col = _c + _step + 1
+            elif _seen_value:
+                _col = _c + _step
+                break
+        _target = _writable_cell(ws, _r, _col)
+        if _target is not None and _target.value in (None, ""):
+            _target.value = text
+            _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
+            _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+    return _last_row
+
+
+def _write_run_stop_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409).
+
+    The 12675-01 book of 8 Oct 09:15 carried "PROVISIONAL — 2 to settle: 2 market figures to
+    replace (£23.00)" beside a Unit Cost of £25.46 — packaging and delivery for a product the
+    run never costed — and nothing on the sheet said the run had stopped. The stop the scan
+    recorded is written where a reader looks for the price, in the same words the report and
+    the quote use. Returns True when it was written, so the estimator-inputs banner stands
+    aside: "PROVISIONAL" promises a figure somebody can finish.
+    """
+    try:
+        from run_stop import nothing_to_cost, banner                   # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not stop:
+        return False
+    try:
+        _write_beside_price_labels(ws, banner(stop))
+        _flag(f"NO PRICE: {banner(stop)}", flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the run-stop banner could not be written ({_exc}) — the report and the quote "
+              f"carry the stop", flags)
+        return False
+
+
+def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str],
+                            banner: bool = True) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
     Three places, because one is not enough. Beside Unit Cost and beside Sell Price, so the
@@ -4499,41 +4573,9 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
         _banner = banner_text(inputs)
 
         # ── beside the two figures that look like a price ──────────────────────
-        _last_row = 0
-        # ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same
-        # row was found twice and the second pass walked past the first banner and wrote
-        # another beside it.
-        _done_rows = set()
-        for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
-            _hit = _find_label_cell(ws, *_needles)
-            if not _hit:
-                continue
-            _r, _c = _hit
-            _last_row = max(_last_row, _r)
-            if _r in _done_rows:
-                continue
-            _done_rows.add(_r)
-            # PAST THE VALUE, NOT AT A FIXED OFFSET.
-            #
-            # The value sits somewhere to the right of its label and the gap differs per
-            # row, so a fixed +3 landed exactly on the Total Unit Cost figure. The write
-            # was refused — the formula is safe either way — but a refused banner is no
-            # banner, and the sheet went out looking finished again. Walk right past every
-            # populated cell, then take the first free one.
-            _col = _c + 1
-            _seen_value = False
-            for _step in range(1, 12):
-                if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
-                    _seen_value = True
-                    _col = _c + _step + 1
-                elif _seen_value:
-                    _col = _c + _step
-                    break
-            _target = _writable_cell(ws, _r, _col)
-            if _target is not None and _target.value in (None, ""):
-                _target.value = _banner
-                _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
-                _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+        # One walk for every banner (D-409); with `banner` False the stop's banner already
+        # stands there and only the anchor row is wanted.
+        _last_row = _write_beside_price_labels(ws, _banner if banner else None)
 
         # ── the checklist ──────────────────────────────────────────────────────
         # ANCHORED BELOW THE TOTALS, AND NOWHERE ELSE.
@@ -8231,7 +8273,11 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 "where": "engine question", "what": _txt[:400],
             })
 
-    _write_estimator_inputs(ws, _inputs, flags)
+    # A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409), and the estimator-
+    # inputs banner stands aside: "PROVISIONAL — 2 to settle" over an empty book promised a
+    # figure somebody could finish.
+    _stopped = _write_run_stop_banner(ws, summary, flags)
+    _write_estimator_inputs(ws, _inputs, flags, banner=not _stopped)
     _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)
 
