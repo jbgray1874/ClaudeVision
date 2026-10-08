@@ -115,6 +115,31 @@
   .diag{margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
   .diag summary{cursor:pointer}
   .diag pre{white-space:pre-wrap;margin-top:6px;max-height:180px;overflow:auto;font-family:var(--mono)}
+
+  /* ── Drive mode ── one screen, big type, readable at a glance from a
+     dashboard holder. Everything is done by voice; the buttons are for
+     when the car is parked. */
+  .drive{position:fixed;inset:0;z-index:60;display:none;flex-direction:column;gap:16px;
+         background:var(--bg);padding:calc(16px + var(--safe-t)) 20px calc(20px + var(--safe-b))}
+  .drive.show{display:flex}
+  body.driving{overflow:hidden}
+  .dv-top{display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .dv-top .kicker{font-size:12px}
+  .dv-exit{font-size:16px;padding:12px 20px}
+  .dv-state{font-family:var(--disp);font-weight:800;font-size:30px;line-height:1.15;color:var(--ink)}
+  .dv-heard{font-size:18px;color:var(--ink-faint);min-height:1.4em;overflow:hidden;max-height:2.8em}
+  .dv-reply{flex:1;min-height:0;overflow-y:auto;font-size:24px;line-height:1.35;color:var(--ink-dim)}
+  .dv-confirm{display:none;gap:14px}
+  .dv-confirm.show{display:flex}
+  .dv-confirm .btn{flex:1;font-size:22px;padding:22px 10px}
+  .dv-confirm:not(.armed) .btn{pointer-events:none;opacity:.55}
+  .dv-mic{align-self:center;width:150px;height:150px;border-radius:50%;border:2px solid var(--line);
+          background:var(--surface-2);color:var(--ink);font-family:var(--body);font-size:17px;font-weight:600;
+          cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+          text-align:center;padding:12px;flex:0 0 auto}
+  .dv-mic svg{width:40px;height:40px}
+  .dv-mic.live{background:rgba(255,93,93,.18);border-color:var(--fail);color:var(--fail);animation:pulse 1.2s infinite}
+  .dv-mic.paused{border-color:var(--accent);color:var(--accent)}
 </style>
 </head>
 <body>
@@ -177,8 +202,29 @@
       <div class="vc-state" id="vcstate" aria-live="polite">Tap the mic once and talk — it keeps listening and
         answering until you tap it again or say “that's all”.</div>
       <button class="btn sm" id="replay" type="button" title="Hear the last reply again" aria-label="Hear the last reply again">&#128266;</button>
+      <button class="btn sm" id="drivebtn" type="button" style="display:none" title="Hands-free, for the car" aria-label="Drive mode">&#128663; Drive</button>
     </div>
   </div>
+</div>
+
+<div class="drive" id="drive" role="dialog" aria-label="Drive mode">
+  <div class="dv-top">
+    <div class="kicker">Drive mode · AM CRM</div>
+    <button class="btn dv-exit" id="dvexit" type="button">Exit</button>
+  </div>
+  <div class="dv-state" id="dvstate" aria-live="polite">Starting…</div>
+  <div class="dv-heard" id="dvheard"></div>
+  <div class="dv-reply" id="dvreply"></div>
+  <div class="dv-confirm" id="dvconfirm">
+    <button class="btn yes" type="button" onclick="answerConfirm(true)">Yes — write it</button>
+    <button class="btn no" type="button" onclick="answerConfirm(false)">No — cancel</button>
+  </div>
+  <button class="dv-mic" id="dvmic" type="button">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M8 22h8"/>
+    </svg>
+    <span id="dvmiclabel">Tap to talk</span>
+  </button>
 </div>
 
 <script>
@@ -428,8 +474,10 @@ const AUDIO=new Audio(); AUDIO.preload='auto'; AUDIO.setAttribute('playsinline',
 const USE_SERVER_VOICE=()=>!!(ST&&ST.speech_tts);
 // Who records for the server: iPhones (their browser recognition stops on
 // scroll/rotate), browsers with no recognition at all, or everyone if set.
+// Drive mode records on every phone: the browser's own recognition restarts
+// (and on many Android phones beeps) every few seconds of silence.
 const USE_SERVER_EARS=()=>!!(ST&&ST.speech_ready&&
-  (ST.speech_stt==='all'||(ST.speech_stt==='ios'&&(IOS||!SR))));
+  (ST.speech_stt==='all'||(ST.speech_stt==='ios'&&(IOS||!SR||DRIVE))));
 let SILENT_URL=null;
 function silentWavUrl(){
   if(SILENT_URL) return SILENT_URL;
@@ -484,10 +532,18 @@ function stopListening(){
   $('mic').classList.remove('live');
 }
 // Keep the screen on during a hands-free conversation (where the phone allows).
-let WAKE=null;
+let WAKE=null, WAKE_ASKING=false, WANT_WAKE=false;
 async function keepAwake(on){
+  WANT_WAKE=on;
   try{
-    if(on&&!WAKE&&navigator.wakeLock){ WAKE=await navigator.wakeLock.request('screen'); WAKE.addEventListener('release',()=>{ WAKE=null; }); }
+    if(on&&!WAKE&&!WAKE_ASKING&&navigator.wakeLock){
+      WAKE_ASKING=true;
+      try{
+        const w=await navigator.wakeLock.request('screen');
+        if(!WANT_WAKE){ w.release(); return; }          // switched off while it was being granted
+        WAKE=w; w.addEventListener('release',()=>{ if(WAKE===w) WAKE=null; });
+      }finally{ WAKE_ASKING=false; }
+    }
     else if(!on&&WAKE){ const w=WAKE; WAKE=null; await w.release(); }
   }catch(e){}
 }
@@ -598,6 +654,8 @@ function log(who, text, priv){
   div.innerHTML=(who==='you'?'':'<b>CRM</b> · ')+esc(text);
   $('vclog').appendChild(div);
   $('vclog').scrollTop=$('vclog').scrollHeight;
+  if(who==='you'){ $('dvheard').textContent='You: “'+text+'”'; $('dvreply').textContent=''; }
+  else{ $('dvreply').textContent=text; $('dvreply').scrollTop=0; }
   return div;
 }
 // A placeholder while the server works, so a slow answer doesn't look like no answer.
@@ -609,6 +667,14 @@ function reportFailure(err){
   const m=(err&&err.message)||String(err||'something went wrong');
   if(/refreshing sign-in|signing you in again/.test(m)){ clearThinking(); return; }
   diag('failure: '+m.slice(0,60));
+  // In the car a dropped signal is common and the driver can't tap to retry:
+  // say what happened and keep listening, a few times in a row at most.
+  if(DRIVE&&CONVO&&TURN==='voice'&&DRIVE_FAILS<3){
+    DRIVE_FAILS++; CUR_TEXT=null;
+    say('That didn\'t go through: '+m+'. I\'m still listening — say it again when you\'re ready.');
+    setState('Not sent: '+m);
+    return;
+  }
   if(CONVO) endConversation();      // nothing listens after a failure: the next mic tap starts again
   let refilled=false;
   if(TURN==='typed'&&CUR_TEXT&&!$('vctext').value){ $('vctext').value=CUR_TEXT; refilled=true; }
@@ -618,7 +684,7 @@ function reportFailure(err){
   setState('Not sent: '+m);
 }
 
-function setState(t){ $('vcstate').textContent=t; }
+function setState(t){ $('vcstate').textContent=t; $('dvstate').textContent=driveWords(t); }
 
 // Mostly the same words as the app's last reply = the phone heard its own
 // speaker. Short replies ("yes") are never treated as echo.
@@ -636,6 +702,10 @@ function isEcho(t){
 // people stop to think mid-sentence and were being answered too early.
 const PAUSE_MS=3000, CONFIRM_PAUSE_MS=1200, FIRST_WORD_MS=10000, SILENT_LIMIT=3;
 let CONVO=false, SILENT_RUNS=0;
+// Drive mode: the same conversation, but it never gives up on silence, rides
+// out a dropped signal, keeps the screen on, and shows one big glanceable
+// screen. It only stops on "that's all", the big button, or Exit.
+let DRIVE=false, DRIVE_FAILS=0, DRIVE_SYNC=null;
 const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?|thank you|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
 // Some Android phones report one sentence as a run of growing pieces
 // ("what's", "what's most", "what's most at risk"), and joining them all gave
@@ -658,7 +728,7 @@ function endConversation(msg, logIt){
   CONVO=false; SILENT_RUNS=0;
   if(rec&&rec._cancel) rec._cancel();
   $('mic').classList.remove('live');
-  keepAwake(false);
+  if(!DRIVE) keepAwake(false);      // drive mode keeps the screen on until Exit
   releaseMic();
   if(msg) setState(msg);
   if(msg&&logIt) log('app', msg);
@@ -683,14 +753,16 @@ function handleHeard(t){
   if(!t){
     SILENT_RUNS++;
     if(!CONVO){ setState('Didn\'t catch anything — tap the mic to try again.'); return; }
-    if(SILENT_RUNS>=SILENT_LIMIT){ endConversation('Stopped — I didn\'t hear anything for a while. Tap the mic to talk again.'); return; }
-    setState('Still here — go ahead, or tap the mic to stop.');
+    if(SILENT_RUNS>=SILENT_LIMIT&&!DRIVE){ endConversation('Stopped — I didn\'t hear anything for a while. Tap the mic to talk again.'); return; }
+    setState(DRIVE?(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening…'):'Still here — go ahead, or tap the mic to stop.');
     startListening(LISTEN_MODE); return;
   }
   SILENT_RUNS=0;
   if(isEcho(t)){ setState('That was me talking — go ahead.'); if(CONVO) startListening(LISTEN_MODE); return; }
   if(LISTEN_MODE==='command'&&STOP_WORDS.test(t)){
-    log('you', t); endConversation(); say('Okay — tap the mic when you need me.'); return;
+    log('you', t); endConversation();
+    say(DRIVE?'Okay — I\'ve stopped listening. Tap the big button when you need me.':'Okay — tap the mic when you need me.');
+    return;
   }
   TURN='voice';
   (LISTEN_MODE==='confirm'?handleConfirmSpeech(t):handleTranscript(t)).catch(reportFailure);
@@ -713,7 +785,7 @@ function startListening(mode){
   };
   r.onstart=()=>{ $('mic').classList.add('live'); diag('mic on ('+LISTEN_MODE+')');
     setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
-    firstT=setTimeout(finish, FIRST_WORD_MS); };
+    if(!DRIVE) firstT=setTimeout(finish, FIRST_WORD_MS); };
   r.onresult=e=>{
     clearTimeout(firstT);
     if(!r._heard){ r._heard=true; diag('hearing speech'); }
@@ -771,7 +843,7 @@ async function startRecording(mode){
   if(isSpeaking()) stopSpeaking();
   if(rec&&rec._cancel) rec._cancel();
   const me={heard:false,cancelled:false}; rec=me;
-  let stream=null, src=null, proc=null, timer=null, chunks=[], lastVoice=0, noise=0, mutedSince=0;
+  let stream=null, src=null, proc=null, timer=null, chunks=[], lastVoice=0, noise=0, mutedSince=0, spokeAt=0;
   const t0=performance.now();
   const cleanup=()=>{
     clearInterval(timer);
@@ -814,8 +886,12 @@ async function startRecording(mode){
     let sq=0; for(let i=0;i<d.length;i++) sq+=d[i]*d[i];
     const rms=Math.sqrt(sq/d.length), now=performance.now();
     if(now-t0<400){ noise=Math.max(noise,rms); return; }        // the room's own noise
-    if(rms>Math.max(0.012,noise*2.5)){
-      if(!me.heard){ me.heard=true; diag('hearing speech');
+    const loud=rms>Math.max(0.012,noise*2.5);
+    // Drive mode waits a long time for the first word while the road noise
+    // rises and falls with speed: keep following it (slowly down, at once up).
+    if(DRIVE&&!me.heard&&!loud) noise=Math.max(noise*0.998,rms);
+    if(loud){
+      if(!me.heard){ me.heard=true; spokeAt=now; diag('hearing speech');
         setState(LISTEN_MODE==='confirm'?'Listening… say yes or no.':'Listening… pause for 3 seconds when you\'re done, or tap the mic to send.'); }
       lastVoice=now;
     }
@@ -851,8 +927,8 @@ async function startRecording(mode){
     if(ACTX.state!=='running'){ diag('audio interrupted'); send(); return; }
     if(mutedSince&&now-mutedSince>1000){ send(); return; }
     if(me.heard&&now-lastVoice>pause) send();
-    else if(!me.heard&&now-t0>FIRST_WORD_MS) send();
-    else if(now-t0>45000) send();                               // under Azure's 60 s limit
+    else if(!me.heard&&now-t0>FIRST_WORD_MS&&!DRIVE) send();   // drive mode just keeps waiting
+    else if(me.heard&&now-spokeAt>45000) send();               // under Azure's 60 s limit
   },200);
 }
 
@@ -898,7 +974,7 @@ async function handleTranscript(t){
   }
   setState('Working out what you meant…');
   const r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS,history});
-  CUR_TEXT=null;
+  CUR_TEXT=null; DRIVE_FAILS=0;
 
   if(r.state==='update'){ IN_FLIGHT=true; try{
     // One sentence can carry several changes ("spoke to them today, confidence
@@ -971,10 +1047,11 @@ async function declineAll(list){
 }
 
 function showConfirm(){
-  const c=$('vcconfirm'); c.classList.remove('armed'); c.classList.add('show');
-  setTimeout(()=>{ if(PENDING) c.classList.add('armed'); },700);
+  const cs=[$('vcconfirm'),$('dvconfirm')];
+  cs.forEach(c=>{ c.classList.remove('armed'); c.classList.add('show'); });
+  setTimeout(()=>{ if(PENDING) cs.forEach(c=>c.classList.add('armed')); },700);
 }
-function hideConfirm(){ $('vcconfirm').classList.remove('show','armed'); }
+function hideConfirm(){ ['vcconfirm','dvconfirm'].forEach(id=>$(id).classList.remove('show','armed')); }
 // Typed replies to a read-back must be a plain yes or no. Anything else is a
 // new instruction, and the waiting change is cancelled where it can be seen.
 const TYPED_YES=/^(yes|y|yeah|yep|correct|confirm|go ahead|do it|save it|write it)(,?\s*please)?[.! ]*$/i;
@@ -1138,26 +1215,83 @@ document.addEventListener('DOMContentLoaded',()=>{
     else SAY_SEQ++;                 // a reply still playing won't reopen the mic
   });
   $('replay').addEventListener('click',replayLast);
-  $('mic').addEventListener('click',()=>{
-    unlockAudio();
-    // Recording and already heard something: a tap sends it now.
-    if(rec&&rec._send&&rec.heard&&!rec.cancelled&&$('mic').classList.contains('live')){ diag('tap to send'); rec._send(); return; }
-    if(CONVO||$('mic').classList.contains('live')){
-      stopSpeaking();
-      endConversation('Stopped. Tap the mic to talk again.');
-      return;
-    }
-    TURN='voice';
-    CONVO=true; SILENT_RUNS=0;
-    keepAwake(true);
-    startListening(PENDING?'confirm':'command');
-  });
+  $('mic').addEventListener('click',micTap);
+  $('dvmic').addEventListener('click',micTap);
+  $('drivebtn').addEventListener('click',()=>startDrive(true));
+  $('dvexit').addEventListener('click',exitDrive);
 });
+function micTap(){
+  unlockAudio();
+  // Recording and already heard something: a tap sends it now.
+  if(rec&&rec._send&&rec.heard&&!rec.cancelled&&$('mic').classList.contains('live')){ diag('tap to send'); rec._send(); return; }
+  if(CONVO||$('mic').classList.contains('live')){
+    stopSpeaking();
+    endConversation(DRIVE?'Paused. Tap the big button to carry on.':'Stopped. Tap the mic to talk again.');
+    return;
+  }
+  TURN='voice';
+  CONVO=true; SILENT_RUNS=0; DRIVE_FAILS=0;
+  keepAwake(true);
+  startListening(PENDING?'confirm':'command');
+}
+
+// ── Drive mode ───────────────────────────────────────────────────────────────
+// Short status words for the big screen; the full sentence stays in the dock.
+function driveWords(t){
+  t=String(t||'');
+  if(/^Listening for yes|say yes or no/i.test(t)) return 'Say yes or no';
+  if(/^Listening/i.test(t)) return 'Listening…';
+  if(/working out|^Got it|^Loading/i.test(t)) return 'Thinking…';
+  if(/^Writing \d/i.test(t)) return 'Saving…';
+  if(/tap 🔊/.test(t)) return 'The reply is on screen';
+  return t;
+}
+function driveSync(){
+  const m=$('dvmic'), live=$('mic').classList.contains('live');
+  m.classList.toggle('live', live);
+  m.classList.toggle('paused', !CONVO);
+  $('dvmiclabel').textContent=live?'Listening — tap to pause':CONVO?(isSpeaking()?'Speaking':'Working…'):'Tap to talk';
+  // Phones drop the screen lock when the page is hidden; take it back.
+  if(DRIVE&&!WAKE&&document.visibilityState==='visible') keepAwake(true);
+}
+// listen: start listening straight away (a tap); false after a reload, where
+// the phone needs a tap before the mic or the voice can start again.
+function startDrive(listen){
+  if(DRIVE&&!listen) return;
+  DRIVE=true; DRIVE_FAILS=0;
+  unlockAudio();
+  try{ sessionStorage.setItem('sdiDrive','1'); }catch(e){}
+  $('drive').classList.add('show'); document.body.classList.add('driving');
+  if(PENDING) showConfirm();
+  clearInterval(DRIVE_SYNC); DRIVE_SYNC=setInterval(driveSync,300);
+  keepAwake(true);
+  diag('drive mode on');
+  if(listen&&!CONVO&&!$('mic').classList.contains('live')){
+    TURN='voice'; CONVO=true; SILENT_RUNS=0;
+    stopSpeaking();
+    startListening(PENDING?'confirm':'command');
+  }else if(!listen){
+    setState('Tap the big button to carry on.');
+  }
+  driveSync();
+}
+function exitDrive(){
+  stopSpeaking();
+  if(CONVO||$('mic').classList.contains('live')) endConversation();
+  DRIVE=false;
+  try{ sessionStorage.removeItem('sdiDrive'); }catch(e){}
+  clearInterval(DRIVE_SYNC); DRIVE_SYNC=null;
+  $('drive').classList.remove('show'); document.body.classList.remove('driving');
+  keepAwake(false);
+  setState('Drive mode off. Tap the mic to talk.');
+  diag('drive mode off');
+}
 // A page that is hidden can't keep the mic, and phones stop it anyway.
 document.addEventListener('visibilitychange',()=>{
   diag('page '+document.visibilityState);
   if(document.visibilityState==='hidden'){
-    if(CONVO) endConversation('Paused when the page went into the background. Tap the mic to carry on.');
+    if(CONVO) endConversation(DRIVE?'Paused while another app was open. Tap the big button to carry on.'
+                                   :'Paused when the page went into the background. Tap the mic to carry on.');
     flushDiag('hidden');
   }
 });
@@ -1286,8 +1420,13 @@ async function main(){
   }
   diag('page loaded · '+BROWSER+(USE_SERVER_EARS()?' · server listening':'')+(USE_SERVER_VOICE()?' · natural voice':''));
 
+  // Drive mode needs a way to listen: the browser's own, or the server's.
+  if(ST.interpret_ready&&(SR||ST.speech_ready)) $('drivebtn').style.display='';
   await loadRecords();
   restoreReplay();
+  // Back after a sign-in renewal mid-drive: the big screen again, waiting for a tap.
+  let drove=false; try{ drove=sessionStorage.getItem('sdiDrive')==='1'; }catch(e){}
+  if(drove&&ST.interpret_ready) startDrive(false);
 }
 main();
 </script>
