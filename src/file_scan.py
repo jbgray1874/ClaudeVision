@@ -4556,15 +4556,28 @@ def _finalize_scan_summary(
                     + ("…" if len(_brief) > 300 else ""))
                 print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
                       f"facts outrank what the render suggests", flush=True)
-            _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
-            _answer = _read.get("parsed") or {}
+            # A DRAWING SHEET IS READ AS A DRAWING (D-415). Design-intent pages go to the model
+            # with their own printed text, under a preamble that makes the sheet's dimensions
+            # and notes facts; the bill that comes back is held against the body and weight the
+            # sheet states, put back once with what broke, and a fitting it does not draw is
+            # asked, not costed. A render is read exactly as before.
+            _sheet_read = bool(_design_intent_pages)
+            _sheet_check: Dict[str, Any] = {}
+            _set_aside: List[Dict[str, Any]] = []
+            if _sheet_read:
+                _sr = concept_scan.read_sheet_concept(_pack, refresh=_fresh, brief=_brief)
+                _read, _answer = _sr["read"], _sr["answer"]
+                _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
+            else:
+                _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
+                _answer = _read.get("parsed") or {}
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
             # in the output tree, so the anchor's stem is a hash — and every sighted part
             # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type
             # into a confirmations file and nobody can match to a job by eye.
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
-            _sighted = concept_scan.parts_from_concept(_answer, _job_name)
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)
             _unit_ops = concept_scan.unit_operations(_answer)
             # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
             #
@@ -4593,6 +4606,11 @@ def _finalize_scan_summary(
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
+            if _sheet_read:
+                # WHAT THE SHEET CHECK COULD NOT SETTLE IS ASKED (D-415), on the unit, in the
+                # channel the book's "to settle" count already reads.
+                concept_scan.raise_sheet_questions(([_unit] if _unit else []) + _sighted,
+                                                   _sheet_check, _set_aside)
             _assumed = concept_scan.assumption_register(_sighted)
             _answers_path = concept_scan.write_assumptions_file(
                 _sighted, folder=job_folder, job=_job_name)
@@ -4604,6 +4622,20 @@ def _finalize_scan_summary(
                                            assumptions_file=(str(_answers_path)
                                                              if _answers_path else ""),
                                            cache_hit=bool(_read.get("cache_hit")))
+            if _sheet_read:
+                summary["concept_read"].update(
+                    sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
+                    sheet_facts=(_answer.get("sheet_facts")
+                                 if isinstance(_answer.get("sheet_facts"), dict) else {}))
+                _sc_flag = concept_scan.sheet_check_sentence(_sheet_check)
+                if _sc_flag:
+                    summary.setdefault("review_flags", []).append(_sc_flag)
+                    print(f"   [concept] {_sc_flag}", flush=True)
+                for _sa in _set_aside:
+                    summary.setdefault("review_flags", []).append(
+                        f"NOT COSTED — LISTED BUT NOT DRAWN: {_sa.get('name')}"
+                        f"{' x' + str(_sa.get('quantity')) if _sa.get('quantity') else ''} — the read "
+                        f"listed it and the sheet does not draw or label it; asked, not priced")
             # ── THE UNIT ITSELF, SO SOMEBODY ASSEMBLES IT ───────────────────────────
             #
             # This wrote the unit's work to `summary["assembly_events"]`, and NOTHING IN
@@ -4626,13 +4658,17 @@ def _finalize_scan_summary(
                     "other_designs": list(_fallback_pick.get("other_designs") or []),
                     "excluded": [], "parts": len(_sighted), "sheets": list(_pack),
                     "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
+                    "brief_used": bool(_brief),
+                    "sheet_check": {k: _sheet_check.get(k) for k in (
+                        "checked", "agrees", "failures", "stated_weight_kg", "net_weight_kg",
+                        "sighted_weight_kg", "second_read_taken")} if _sheet_check else {},
                 }
                 summary.setdefault("review_flags", []).append(
                     f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "
-                    f"gave no take-off, so the vision model sighted the parts of "
+                    f"gave no take-off, so the vision model read the parts of "
                     f"{_fallback_pick.get('design')} ({', '.join(Path(p).name for p in _pack)}) "
-                    f"with the enquiry brief: {len(_sighted)} part(s), every size, material and "
-                    f"count an assumption."
+                    f"off the sheet{' with the enquiry brief' if _brief else ''}: "
+                    f"{len(_sighted)} part(s), every size, material and count an assumption."
                     + (f" Other designs in the pack, not read: "
                        f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
                        f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))

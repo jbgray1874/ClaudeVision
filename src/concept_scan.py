@@ -265,24 +265,131 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 """
 
 
+# ── A DRAWING SHEET IS READ AS A DRAWING (D-415) ──────────────────────────────────────────
+#
+# 12675-01, 8 Oct 2026: the design-intent GA of a bag stand went to this read as the fallback
+# the model take-off could not answer, under a prompt written for a photograph — "estimate in
+# mm from visible human-scale cues". The sheet says 600 × 400, 1250 body, 2mm STEEL
+# CONSTRUCTION, ADJUSTABLE FEET, 20 x CUSTOMER BAGS at 1.5 kg; the read took 1580 (the top
+# of the bags) for four posts, the twenty bags for twenty bars, 530 (the bag's width) for
+# their length, and came to about 15 kg of steel on a sheet whose own weight, less its bags,
+# is 37 kg. Nothing in the prompt told it the numbers on the page were facts, or that what a
+# product holds is not what it is made of.
+#
+# So a sheet read gets three things a render read does not: the text printed on the sheet,
+# verbatim, from the file's own text layer; a preamble that says dimensions and notes are
+# facts, the goods held are not parts and a fitting is a line only where it is drawn; and
+# "sheet_facts" in the answer, which `sheet_check` holds the bill against. The render
+# prompt is unchanged and its cache key is unchanged: only a sheet read hashes this.
+#   s1  first cut (D-415)
+SHEET_PROMPT_VERSION = "s1"
+SHEET_TEXT_MAX_CHARS = 6000
+
+_SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
+design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
+is given at the end of this request. READ THE SHEET BEFORE YOU LOOK AT THE PICTURE. Where these
+rules and the ones after them differ, THESE RULES WIN.
+
+1. A DIMENSION ON THE SHEET IS A FACT. Size every part from the dimensions drawn and the notes,
+   never by eye and never from human-scale cues. A part the sheet does not dimension takes its
+   size from the dimensions that bound it (a panel between two dimensioned edges is that size);
+   say which in why_size. Only where nothing bounds it, estimate and write "not dimensioned".
+2. A MATERIAL, GAUGE OR FINISH NOTE IS A FACT. A note such as "2mm STEEL CONSTRUCTION" fixes the
+   material and thickness of every made part it covers; a finish note fixes the coat. A note
+   that only points elsewhere ("SEE PART DRAWINGS") states nothing.
+3. WHAT THE PRODUCT HOLDS IS NOT A PART. Goods drawn in or on it (stock, bags, products, the
+   customer's items), with their counts, sizes and weights, are the LOAD, not the make list:
+   never a line, and their count is never a count of parts. A dimension to the top of the goods
+   is not the height of the product, and lines seen through an opening may be the goods behind it.
+4. A FITTING IS A LINE ONLY WHERE THE SHEET DRAWS OR LABELS IT (a label naming feet, castors or a
+   hinge). Do not add fittings or fixings the sheet does not show; put what a real unit may need
+   in "not_visible".
+5. NO MADE PART IS LONGER OR WIDER THAN THE PRODUCT BODY, unless it is folded and its blank is
+   the unfolded shape.
+6. Add to every part "drawn": the view and label where the sheet draws or names it, or "" if the
+   sheet does not show it.
+7. Add to the top level "sheet_facts", exactly what the sheet states (0 or "" where it is silent):
+   {{"body_mm": {{"height": 0, "width": 0, "depth": 0}}, "body_basis": "<the dimensions read; never to
+   the top of the goods>", "material": "", "thickness_mm": 0, "finish": "",
+   "stated_weight_kg": 0, "weight_includes_goods": "yes|no|not stated",
+   "goods": "<what the product holds, with count and unit weight where stated>",
+   "goods_weight_kg": 0}}
+
+"""
+
+_SHEET_TEXT_SECTION = """
+
+TEXT PRINTED ON THE SHEET(S), extracted verbatim from the drawing file. The dimensions, notes and
+title block are in it; its order is not the drawing's layout.
+<<<
+{text}
+>>>"""
+
+# THE BILL PUT BACK ONCE, WITH WHAT BROKE (D-415). Read after `sheet_check`, never before.
+_RECHECK_SECTION = """
+
+YOUR FIRST MAKE LIST FOR THESE SHEETS DID NOT AGREE WITH WHAT THE SHEET STATES:
+{failures}
+Read the sheet again and return the whole make list, corrected, in the same JSON shape. Do not
+pad or trim lines to hit a figure: every line must be drawn on the sheet and sized from it."""
+
+# The sheet prompt's own hash (preamble + text section + recheck section), pinned beside
+# SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
+_SHEET_PROMPT_FINGERPRINT = "d00d3a4ab687"
+
+
 def is_brief_page(path: Any) -> bool:
     """Is this document the staged brief's own page, and not a drawing or a render?"""
     return BRIEF_PAGE_STEM in Path(str(path or "")).stem.upper()
 
 
-def concept_prompt_text(png_pages: List[bytes], brief: str = "") -> str:
+def sheet_text(pdf_paths: List[Any]) -> str:
+    """The text printed on these sheets, from each file's own text layer, capped — or "".
+
+    Verbatim and unparsed: the model is told it is the sheet's words, and `sheet_check` looks
+    a figure up in it. A scan with no text layer gives "" and the read proceeds on the image."""
+    chunks: List[str] = []
+    for pdf in (pdf_paths or []):
+        if is_brief_page(pdf):
+            continue
+        try:
+            import pdfplumber                                           # noqa: WPS433
+            with pdfplumber.open(str(pdf)) as doc:
+                for page in doc.pages:
+                    chunks.append(page.extract_text() or "")
+        except Exception:                                               # noqa: BLE001
+            try:
+                import pymupdf                                          # noqa: WPS433
+                with pymupdf.open(str(pdf)) as doc:
+                    chunks.extend(page.get_text() or "" for page in doc)
+            except Exception:                                           # noqa: BLE001
+                continue
+    text = "\n".join(c.strip() for c in chunks if c and c.strip())
+    return text[:SHEET_TEXT_MAX_CHARS]
+
+
+def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool = False,
+                        sheet_words: str = "", recheck: str = "") -> str:
     """The words put to the model: the make-list prompt, the text-only preamble where there
-    is no image, and the brief section where there is a brief."""
+    is no image, the sheet preamble and the sheet's own text where the pages are drawing
+    sheets, the brief section where there is a brief, and what broke where it is re-asked."""
     _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
     _text = _PROMPT.format(n=len(png_pages), ops=_ops)
     if not png_pages:
         _text = _TEXT_ONLY_PREAMBLE + _text
+    if sheet:
+        _text = _SHEET_PREAMBLE.format() + _text
     if brief:
         _text += _BRIEF_SECTION.format(brief=brief)
+    if sheet and sheet_words:
+        _text += _SHEET_TEXT_SECTION.format(text=sheet_words)
+    if recheck:
+        _text += _RECHECK_SECTION.format(failures=recheck)
     return _text
 
 
-def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "") -> str:
+def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
+                     **sheet_kw: Any) -> str:
     if os.getenv("SDI_OFFLINE", "").strip().lower() in {"1", "true", "yes"}:
         raise ConceptUnavailable(
             "SDI_OFFLINE=1 — the concept read needs the vision model and this run may not "
@@ -295,7 +402,7 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "") -> str
     from openai import OpenAI                                       # noqa: WPS433
 
     client = OpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-    _text = concept_prompt_text(png_pages, brief)
+    _text = concept_prompt_text(png_pages, brief, **sheet_kw)
     content: List[Dict[str, Any]] = [{"type": "text", "text": _text}]
     for png in png_pages:
         b64 = base64.b64encode(png).decode("ascii")
@@ -329,7 +436,8 @@ def _cache_dir() -> Path:
     return Path(config.BASE_DIR) / "cache" / "vision_concept"
 
 
-def _cache_key(png_pages: List[bytes], model: str, brief: str = "") -> str:
+def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bool = False,
+               sheet_words: str = "", recheck: str = "") -> str:
     h = hashlib.sha256()
     for png in png_pages:
         h.update(png)
@@ -342,15 +450,29 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "") -> str:
         # brief-less read keeps the key it already has in the cache.
         h.update(b"\x00brief\x00")
         h.update(brief.encode("utf-8"))
+    if sheet:
+        # A SHEET READ IS A DIFFERENT QUESTION (D-415), and only a sheet read hashes it: every
+        # render keeps the key, and the answer, it already has.
+        h.update(b"\x00sheet\x00")
+        h.update(SHEET_PROMPT_VERSION.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(sheet_words.encode("utf-8"))
+    if recheck:
+        h.update(b"\x00recheck\x00")
+        h.update(recheck.encode("utf-8"))
     return h.hexdigest()
 
 
 def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
-                 refresh: bool = False, brief: str = "") -> Dict[str, Any]:
-    """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}.
+                 refresh: bool = False, brief: str = "", sheet: bool = False,
+                 recheck: str = "") -> Dict[str, Any]:
+    """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}, and
+    'sheet_text' for a sheet read.
 
     Pages are rendered exactly as the BOM vision reader renders them, and ALL of them go in
-    one call — see A PAGE IS NOT A PRODUCT above.
+    one call — see A PAGE IS NOT A PRODUCT above. `sheet` says the pages are drawing sheets
+    (design-intent GAs): their own text goes in with them under the sheet preamble (D-415).
+    `recheck` is what `sheet_check` found wrong with a first answer, put back once.
     """
     import _bom_vision_reader as pathB                              # noqa: WPS433
 
@@ -371,28 +493,37 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             pngs.append(pathB.render_page_to_png(str(pdf), index))
     if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
-    key = _cache_key(pngs, model, brief)
+    recheck = str(recheck or "").strip()
+    _words = sheet_text(pdf_paths) if sheet else ""
+    _sheet_kw: Dict[str, Any] = (
+        {"sheet": True, "sheet_words": _words, "recheck": recheck} if sheet
+        else ({"recheck": recheck} if recheck else {}))
+    key = _cache_key(pngs, model, brief, **_sheet_kw)
     path = _cache_dir() / (key + ".json")
+    _extra = {"sheet_text": _words} if sheet else {}
     if not refresh and path.is_file():
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
             raw = entry.get("raw_response", "")
             parsed = parse_concept_response(raw)
             if parsed is not None:
-                return {"parsed": parsed, "raw_response": raw, "cache_hit": True}
+                return dict({"parsed": parsed, "raw_response": raw, "cache_hit": True}, **_extra)
         except (OSError, ValueError):
             pass                                     # corrupt entry → re-fetch
 
-    raw = _call_vision_llm(pngs, model, brief)
+    # A render read calls exactly as it always has; only a sheet read or a re-ask says more.
+    raw = (_call_vision_llm(pngs, model, brief, **_sheet_kw) if _sheet_kw
+           else _call_vision_llm(pngs, model, brief))
     parsed = parse_concept_response(raw)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps({"raw_response": raw, "model": model,
                                     "prompt_version": CONCEPT_PROMPT_VERSION,
+                                    "sheet_prompt_version": (SHEET_PROMPT_VERSION if sheet else ""),
                                     "pages": len(pngs)}, indent=1), encoding="utf-8")
     except OSError:
         pass                                         # a cache that cannot write is not an error
-    return {"parsed": parsed, "raw_response": raw, "cache_hit": False}
+    return dict({"parsed": parsed, "raw_response": raw, "cache_hit": False}, **_extra)
 
 
 # ── sighted answer → engine parts ───────────────────────────────────────────────────
@@ -624,19 +755,299 @@ def _with_implied_fittings(answer: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]]:
+# ── THE SIGHTED BILL, HELD AGAINST WHAT THE SHEET STATES (D-415) ──────────────────────────
+#
+# Nothing after the 12675-01 answer checked it. A 1580 mm post on a 1250 mm body and about
+# 15 kg of steel on a sheet whose stand weighs 37 kg were both costed, because the only thing
+# the read was compared with was itself. The sheet states its body, its gauge and its weight;
+# a bill made from it can be weighed and measured against those, deterministically, before a
+# penny rests on it. The model's own "sheet_facts" give the figures, and a figure is used only
+# where it is printed on the sheet's text layer — a number the model says the sheet states
+# and the sheet does not print is not a fact to check against.
+
+def _figures_in(words: str) -> set:
+    """Every number printed in the sheet's text, as floats."""
+    out = set()
+    for tok in re.findall(r"(?<![\d.])\d+(?:\.\d+)?(?![\d.])", str(words or "")):
+        try:
+            out.add(round(float(tok), 3))
+        except ValueError:
+            continue
+    return out
+
+
+def _num(value: Any) -> float:
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return f if f > 0 else 0.0
+
+
+def _density(material: Any) -> float:
+    """kg/m³ for a sighted material from config's density table, or 0 where it names none."""
+    try:
+        import config                                               # noqa: WPS433
+        table = dict(getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        table = {}
+    said = str(material or "").upper()
+    for form in (said, said.replace("_", " ")):
+        for name in sorted(table, key=len, reverse=True):
+            if name and name.upper() in form:
+                return float(table[name])
+    return 0.0
+
+
+def sheet_check(answer: Mapping[str, Any], words: str = "") -> Dict[str, Any]:
+    """The sighted bill against the sheet's stated body and weight.
+
+    Returns {'checked', 'agrees', 'failures', 'body_mm', 'stated_weight_kg', 'goods_weight_kg',
+    'net_weight_kg', 'sighted_weight_kg', 'ratio', 'breaches', 'unweighed', 'not_on_sheet'}.
+    'checked' is False where the sheet gave nothing to check against; then nothing failed and
+    nothing agreed, and the book says so rather than calling an unchecked bill sound."""
+    try:
+        import config                                               # noqa: WPS433
+        lo, hi = tuple(getattr(config, "CONCEPT_SHEET_WEIGHT_BAND", (0.6, 2.0)))
+        tol = float(getattr(config, "CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM", 5.0))
+    except Exception:                                               # noqa: BLE001
+        lo, hi, tol = 0.6, 2.0, 5.0
+    facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    printed = _figures_in(words)
+    not_on_sheet: List[str] = []
+
+    def _stated(label: str, value: Any) -> float:
+        v = _num(value)
+        if v and printed and round(v, 3) not in printed:
+            not_on_sheet.append(f"{label} {v:g}")
+            return 0.0
+        return v
+
+    body = {k: _stated(f"body {k}", (facts.get("body_mm") or {}).get(k)
+                       if isinstance(facts.get("body_mm"), Mapping) else 0)
+            for k in ("height", "width", "depth")}
+    dims = sorted((v for v in body.values() if v), reverse=True)
+    parts = [p for p in (answer.get("parts") or []) if isinstance(p, Mapping)]
+    made = [p for p in parts if _concept_kind(p.get("kind")) == "fabricated"]
+
+    failures: List[str] = []
+    breaches: List[Dict[str, Any]] = []
+    body_checked = len(dims) >= 2 and bool(made)
+    if body_checked:
+        _body_words = " × ".join(f"{d:g}" for d in dims)
+        for p in made:
+            blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+            size = sorted((_num(blank.get("length")), _num(blank.get("width"))), reverse=True)
+            if not size[0]:
+                continue
+            ops = {str(o or "").strip().lower().replace(" ", "_") for o in (p.get("operations") or [])}
+            if "folding" in ops:
+                continue                     # a folded part's blank is its unfolded shape
+            if size[0] > dims[0] + tol or (size[1] and size[1] > dims[1] + tol):
+                name = str(p.get("name") or "a part").strip()
+                breaches.append({"part": name, "size_mm": [size[0], size[1]], "body_mm": dims})
+                failures.append(
+                    f"{name} is sized {size[0]:g} × {size[1]:g} mm, larger than the product body "
+                    f"the sheet dimensions ({_body_words} mm), and it is not folded")
+
+    stated = _stated("stated weight", facts.get("stated_weight_kg"))
+    goods = _num(facts.get("goods_weight_kg"))
+    includes = str(facts.get("weight_includes_goods") or "").strip().lower()
+    net = 0.0
+    # Whole words: "not stated" is neither, and must not read as "no".
+    if stated and re.match(r"(yes|true|includes?)\b", includes):
+        net = stated - goods if 0 < goods < stated else 0.0
+    elif stated and re.match(r"(no|false|excludes?)\b", includes):
+        net = stated
+
+    sighted, unweighed = 0.0, []
+    for p in made:
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        l, w, t = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
+        rho = _density(p.get("material_guess")) or _density(facts.get("material"))
+        if not (l and w and t and rho):
+            unweighed.append(str(p.get("name") or "a part").strip())
+            continue
+        qty = _num(p.get("quantity")) or 1.0
+        sighted += l * w * t * 1e-9 * rho * qty
+    weight_checked = bool(stated) and sighted > 0
+    ratio = (sighted / net) if (weight_checked and net) else None
+    if weight_checked:
+        _goods = str(facts.get("goods") or "").strip()
+        if net:
+            _of = (f"{stated:g} kg stated, less {goods:g} kg of {_goods or 'goods'}"
+                   if net != stated else f"{stated:g} kg stated")
+            if ratio < lo and not unweighed:
+                failures.append(
+                    f"the made parts weigh about {sighted:.1f} kg as sized, against "
+                    f"{net:.1f} kg of product on the sheet ({_of}) — {ratio:.0%} of it, so "
+                    f"parts are missing or undersized")
+            elif ratio > hi:
+                failures.append(
+                    f"the made parts weigh about {sighted:.1f} kg as sized, against "
+                    f"{net:.1f} kg of product on the sheet ({_of}) — {ratio:.0%} of it, so "
+                    f"parts are oversized or counted twice")
+        elif sighted > hi * stated:
+            failures.append(
+                f"the made parts weigh about {sighted:.1f} kg as sized, more than "
+                f"{hi:g} × the {stated:g} kg the sheet states for the whole product")
+
+    checked = body_checked or weight_checked
+    return {"checked": checked, "agrees": checked and not failures, "failures": failures,
+            "body_mm": body, "stated_weight_kg": stated or None,
+            "goods_weight_kg": goods or None, "net_weight_kg": net or None,
+            "sighted_weight_kg": round(sighted, 2) if sighted else None,
+            "ratio": round(ratio, 3) if ratio is not None else None,
+            "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet}
+
+
+def sheet_check_sentence(check: Mapping[str, Any]) -> str:
+    """One line for the run, the flags and the report: did the bill agree with the sheet?"""
+    if not isinstance(check, Mapping) or not check:
+        return ""
+    again = (" (after a second read put back with what broke)"
+             if check.get("second_read_taken") else
+             " (a second read, put back with what broke, did no better)"
+             if check.get("rechecked") else "")
+    if not check.get("checked"):
+        return ("CONCEPT BILL NOT CHECKED AGAINST THE SHEET: the sheet states no body size or "
+                "weight the bill could be held against — every size is the read's own.")
+    if check.get("failures"):
+        return ("CONCEPT BILL DOES NOT AGREE WITH THE SHEET" + again + ": "
+                + "; ".join(check["failures"])
+                + ". Costed as sighted — a concept budget to walk against the GA, not a price.")
+    said = []
+    if check.get("sighted_weight_kg") and check.get("net_weight_kg"):
+        said.append(f"the made parts weigh about {check['sighted_weight_kg']:g} kg as sized "
+                    f"against {check['net_weight_kg']:g} kg of product on the sheet")
+    if [v for v in (check.get("body_mm") or {}).values() if v]:
+        said.append("every flat part fits the body the sheet dimensions")
+    return ("CONCEPT BILL CHECKED AGAINST THE SHEET" + again + ": " + "; ".join(said)
+            + ". Still a concept budget: nothing was measured.")
+
+
+def recheck_text(check: Mapping[str, Any]) -> str:
+    """What broke, as the list the second read is given."""
+    return "\n".join(f"- {f}" for f in (check.get("failures") or []))
+
+
+def _check_rank(check: Mapping[str, Any]) -> tuple:
+    """Lower is better: agreeing, then fewer failures, then a weight nearer the sheet's."""
+    ratio = check.get("ratio")
+    return (0 if check.get("agrees") else 1, len(check.get("failures") or []),
+            abs(1.0 - float(ratio)) if ratio else 9.0)
+
+
+def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
+    """(answer, set aside): a bought-in line the sheet does not draw is not costed (D-415).
+
+    Only where the read answered the sheet's schema — a part with no "drawn" key at all says
+    nothing either way, and nothing is dropped on silence. What is set aside goes to the
+    estimator as a question, with its count; it is never priced as if drawn."""
+    parts = [p for p in (answer.get("parts") or []) if isinstance(p, dict)]
+    if not any("drawn" in p for p in parts):
+        return answer, []
+    kept, aside = [], []
+    for p in parts:
+        if (_concept_kind(p.get("kind")) == "bought_in" and "drawn" in p
+                and not str(p.get("drawn") or "").strip()):
+            aside.append({"name": str(p.get("name") or "a fitting").strip(),
+                          "quantity": p.get("quantity"),
+                          "sighted_material": str(p.get("sighted_material") or "")})
+            continue
+        kept.append(p)
+    if not aside:
+        return answer, []
+    out = dict(answer)
+    out["parts"] = kept
+    return out, aside
+
+
+def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
+                       brief: str = "", model: Optional[str] = None) -> Dict[str, Any]:
+    """A concept read of drawing sheets: read, held against the sheet, put back once with what
+    broke, and the undrawn fittings set aside. Returns {'read', 'answer', 'check', 'set_aside'}.
+
+    THE BETTER OF TWO, NEVER A THIRD. The second read is taken only where it agrees with the
+    sheet more closely than the first; a bill that still does not agree is costed as sighted
+    and the book says so — a concept budget to walk against the sheet, not a price."""
+    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True)
+    answer = read.get("parsed") or {}
+    words = str(read.get("sheet_text") or "")
+    check = sheet_check(answer, words)
+    if check.get("failures"):
+        first = list(check["failures"])
+        again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
+                             recheck=recheck_text(check))
+        answer2 = again.get("parsed") or {}
+        taken = False
+        if answer2.get("parts"):
+            check2 = sheet_check(answer2, words)
+            if _check_rank(check2) < _check_rank(check):
+                read, answer, check, taken = again, answer2, check2, True
+        check["rechecked"] = True
+        check["second_read_taken"] = taken
+        check["first_read_failures"] = first
+    answer, aside = set_aside_undrawn(answer)
+    check["sheet_text_chars"] = len(words)
+    return {"read": read, "answer": answer, "check": check, "set_aside": aside}
+
+
+def raise_sheet_questions(parts: List[Dict[str, Any]], check: Mapping[str, Any],
+                          set_aside: List[Mapping[str, Any]]) -> int:
+    """What the sheet check could not settle, as manufacturing questions on the unit (D-415).
+
+    On the unit assembly where there is one, else the first part: the channel costed_facts
+    already counts, so the book is provisional while they are open and no money moves on
+    their account."""
+    if not parts:
+        return 0
+    from source_precedence import raise_manufacturing_question     # noqa: WPS433
+    host = next((p for p in parts if p.get("concept_kind") == "assembly"), parts[0])
+    n = 0
+    if check.get("failures"):
+        n += raise_manufacturing_question(
+            host,
+            "The sighted bill does not agree with the sheet: " + "; ".join(check["failures"]),
+            "costed as sighted — a concept budget, not an estimate",
+            "Walk the bill against the GA sheet and correct the sizes and counts in the answers "
+            "file, or have the design detailed with a parts list",
+            "concept_sheet_check")
+    for item in (set_aside or []):
+        qty = item.get("quantity")
+        n += raise_manufacturing_question(
+            host,
+            f"{item.get('name')}{f' x{qty}' if qty else ''} was listed by the read but the sheet "
+            f"does not draw or label it",
+            "not costed",
+            "Confirm whether the unit has it; if it does, add it as a bought-in line",
+            "concept_sheet_check")
+    return n
+
+
+def parts_from_concept(answer: Dict[str, Any], stem: str, *,
+                       sheet: bool = False) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
     hand-rolled imitation of them — and so length, width and thickness share one recorded
     source, which is what lets flat_blank_mm treat the pair as ONE reading (D-152).
+
+    `sheet`: the pages are drawing sheets (D-415). A fitting the sheet does not draw is not
+    minted by the implied-fittings net; it is asked on the part that implies it.
     """
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
 
     parts: List[Dict[str, Any]] = []
     answer = _with_print_lines(answer)
-    answer = _with_implied_fittings(answer)
+    _implied: List[Dict[str, Any]] = []
+    if sheet:
+        _before = len(answer.get("parts") or [])
+        _netted = _with_implied_fittings(answer)
+        _implied = [p for p in (_netted.get("parts") or [])[_before:] if isinstance(p, dict)]
+    else:
+        answer = _with_implied_fittings(answer)
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -898,9 +1309,12 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 f"{blank.get('thickness', '?')}mm before release")
         elif wrote_size or thickness > 0:
             record["review_flags"].append(
-                f"CONCEPT: size assumed from the render ({why}) — confirm "
+                f"CONCEPT: size {'read off the design-intent sheet by the vision model' if sheet else 'assumed from the render'} "
+                f"({why}) — confirm "
                 f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
                 f"{blank.get('thickness', '?')}mm before release")
+        if sheet:
+            record["concept_drawn"] = str(sighted.get("drawn") or "")
         elif not unclassified:
             # An unclassified line already carries its one action; "enter the dimensions"
             # on top of it asks for a size before anybody has said what the thing is.
@@ -924,6 +1338,24 @@ def parts_from_concept(answer: Dict[str, Any], stem: str) -> List[Dict[str, Any]
                 f"and the price before release")
         record["concept_assumptions"] = assumed
         parts.append(record)
+    if _implied:
+        # A SHEET THAT DRAWS A LID AND NO HINGE IS ASKED, NOT ANSWERED (D-415). On a render the
+        # net mints the fitting a moving part cannot work without (D-368); a drawing sheet
+        # states what it holds, so the same rule becomes a question on the part, with no money.
+        from source_precedence import raise_manufacturing_question  # noqa: WPS433
+        for fit in _implied:
+            movers = {s.strip().upper() for s in str(fit.get("_minted_fitting_for") or "").split(",")}
+            for rec in parts:
+                if str(rec.get("description") or "").strip().upper() in movers:
+                    raise_manufacturing_question(
+                        rec,
+                        f"The sheet draws {rec.get('description')} and no "
+                        f"{str(fit.get('name') or 'fitting').lower()}",
+                        "not costed",
+                        f"Confirm the {str(fit.get('name') or 'fitting').lower()} and its count "
+                        f"({fit.get('_fitting_per_part'):g} per part is the house assumption) and "
+                        f"add it as a bought-in line",
+                        "concept_sheet_check")
     return parts
 
 

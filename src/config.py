@@ -1889,6 +1889,24 @@ CONCEPT_IMPLIED_FITTINGS = (
      "per_part": 2},
 )
 
+# ── A CONCEPT READ OF A DRAWING SHEET, HELD AGAINST THE SHEET (D-415) ──────────────────────
+# The sighted bill's made parts, weighed as sized (gross blanks, before any cut-out), against
+# the product weight the sheet states less any goods it says that weight includes. Gross blanks
+# weigh more than the finished part, so the band is wide on the heavy side: a bill below the
+# lower bound is missing or undersizing parts; above the upper, oversizing or double-counting.
+# 12675-01 V1: about 15 kg sighted against 37 kg of stand (0.39) was the read that prompted it;
+# the sheet's own panels, gross, weigh about 55 kg (1.46).
+CONCEPT_SHEET_WEIGHT_BAND = (0.6, 2.0)
+# A made part longer or wider than the product body by more than this, and not folded, breaks
+# the sheet's envelope.
+CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
+
+# The route operations that cut a part out of stock. A costed line whose route carries one of
+# these is a part SDI cuts, whatever block its money sits in (D-415: the 12675-01 concept book
+# lasered its flat bars and the report said none of its lines was a part SDI cuts).
+CUTTING_OPERATIONS = ("laser_cutting", "laser", "tube_laser", "cnc_routing", "waterjet_cutting",
+                      "plasma_cutting", "punching", "guillotine", "saw", "sawing")
+
 MATERIAL_DENSITY_KG_PER_M3 = {
     "MILD STEEL": 7850,
     "MILD_STEEL": 7850,
