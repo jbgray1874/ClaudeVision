@@ -425,11 +425,32 @@ def why_not_sightable(summary: Mapping[str, Any],
     if str(summary.get("source_format") or "").lower() == "dxf":
         return "this pack was read as DXF geometry — it is measured, not sighted"
 
+    # A DXF THAT MEASURED NOTHING IS NOT MEASURED CAD (D-413). 12675-01's pack holds two DXFs
+    # the content reader had already refused as drawings of parts — dimensions and a title
+    # block, no flat pattern — and this gate refused the concept read for them: "measured CAD
+    # is never sighted over", about files that measured nothing. The record of the refusal is
+    # the merge's own, read here rather than re-derived.
+    _never_measured = set()
+    try:
+        from costed_facts import dxf_record_code_and_evidence, dxf_record_names  # noqa: PLC0415
+        dxf = summary.get("dxf_augmentation") if isinstance(summary.get("dxf_augmentation"), Mapping) else {}
+        for key in ("unmatched_dxf", "skipped"):
+            for it in (dxf.get(key) or []):
+                code, _ev = dxf_record_code_and_evidence(it)
+                if code == "drawing_export_not_a_flat":
+                    _never_measured.update(n.lower() for n in dxf_record_names(it))
+    except Exception:                                                  # noqa: BLE001
+        _never_measured = set()
+
     for raw in (files or []):
-        suffix = Path(str(raw)).suffix.lower()
+        # The paths are written on the box; split on either separator, as every other reader
+        # of a staged path does — Path(...).name on another platform is the whole string.
+        _base = re.split(r"[\\/]", str(raw or ""))[-1]
+        suffix = ("." + _base.rsplit(".", 1)[-1].lower()) if "." in _base else ""
         if suffix in _MEASURABLE_CAD:
-            return (f"the pack contains {Path(str(raw)).name} — measured CAD is never "
-                    f"sighted over")
+            if suffix == ".dxf" and _base.lower() in _never_measured:
+                continue
+            return (f"the pack contains {_base} — measured CAD is never sighted over")
 
     writeup = summary.get("manufacturing_writeup")
     parts = (writeup or {}).get("parts") if isinstance(writeup, dict) else None
