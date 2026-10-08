@@ -387,3 +387,119 @@ def test_the_fallbacks_label_is_the_vision_read_not_the_model():
     html = jrh._render_concept_takeoff(s)
     assert "CONCEPT READ OF A DESIGN-INTENT SHEET" in html and "12675-01-02" in html
     assert "no SolidWorks extract" in html
+
+
+# ── D-414: a take-off is only a take-off where the model gives a stock basis ────────────
+#
+# 12675-01, 8 Oct 11:35: the GA chosen correctly, and its whole tree was one body —
+# "12675-01-Stacking Holder Block", 1250 × 600, no gauge, no flat, no section, no mass — plus
+# "12675-01-Bag Stack" ×2 holding only the customer's bag. The block counted as a take-off, a
+# catalogue "each" row priced it at £0.80, the empty stack carried packing labour, and the GA
+# sheet was never read because the model door had returned parts. £27.71 a unit, £23 of it
+# packaging and delivery.
+
+STACKING_BLOCK = "12675-01-Stacking Holder Block"
+BAG_STACK = "12675-01-Bag Stack"
+BAG_STAKABLE = "12675-M&S Customer Bag_Estimated Stakable"
+V2_MDF = "12675-01-02 BM V2 MDF Base"
+V2_SS = "12675-01-02 BM V2 Stainless"
+
+
+def _real_job() -> sw.NativeJob:
+    """The real tree's shape: the GA is a block and a bag stack; the V2 holds two bodies."""
+    return sw.NativeJob(
+        found=True,
+        assembly_pns=[GA, V2, BAG_STACK],
+        meta={"top_assembly": V2, "extract_path": r"\\share\12675-01\_sw_native_extract.json"},
+        part_signals={
+            STACKING_BLOCK: P(part_number=STACKING_BLOCK, material="MILD STEEL", bbox_mm=[1250, 600, 1200]),
+            BAG_STAKABLE: P(part_number=BAG_STAKABLE),
+            V2_MDF: P(part_number=V2_MDF, material="MDF", bbox_mm=[400, 300, 18]),
+            V2_SS: P(part_number=V2_SS, material="STAINLESS STEEL", is_sheet_metal=True, thickness_mm=5.0,
+                     flat_length_mm=400, flat_width_mm=300, flat_pattern=True,
+                     ops_hint=["laser_cutting", "folding"]),
+        },
+        hierarchy={
+            GA: [(STACKING_BLOCK, 1), (BAG_STACK, 2)],
+            BAG_STACK: [(BAG_STAKABLE, 3)],
+            V2: [(V2_MDF, 1), (V2_SS, 1)],
+        })
+
+
+def test_a_block_with_no_stock_basis_is_not_a_take_off_and_says_why():
+    s = _summary()
+    s["declared_product"] = "12675-01"
+    r = mt.takeoff(s, _real_job(), declared="12675-01", drawing_number="12675-01")
+    assert r["design"] == GA, "the GA is still the design chosen"
+    assert r["parts"] == [], "a block model is not a priced product"
+    assert STACKING_BLOCK in r["why_not"] and "no gauge" in r["why_not"] and "no section" in r["why_not"]
+    assert "1250 × 600 × 1200" in r["why_not"]
+    assert "nothing to cut, fold, weld or coat" in r["why_not"]
+    assert "concept_takeoff" not in s, "nothing is labelled a take-off when there is none"
+
+
+def test_a_stack_holding_only_the_customers_bags_is_set_aside_with_them():
+    r = mt.takeoff(_summary(), _real_job(), declared="12675-01", drawing_number="12675-01")
+    gone = {e["part_number"] for e in r["excluded"]}
+    assert BAG_STAKABLE in gone and BAG_STACK in gone
+    why = next(e["why"] for e in r["excluded"] if e["part_number"] == BAG_STACK)
+    assert "only reference models" in why
+
+
+def test_stock_basis_is_a_flat_with_its_gauge_a_section_with_its_length_or_a_bought_in():
+    assert mt.stock_basis({"blank_length_mm": 400, "blank_width_mm": 300, "normalized_thickness_mm": 5}) == "flat"
+    assert mt.stock_basis({"blank_length_mm": 400, "blank_width_mm": 300}) is None, "a blank with no gauge"
+    assert mt.stock_basis({"section_stock": {"a": 30, "b": 30, "t": 2, "length_mm": 1200}}) == "section"
+    assert mt.stock_basis({"section_stock": {"a": 30, "b": 30, "t": 2}}) is None, "a section with no length"
+    assert mt.stock_basis({"is_bought_in": True}) == "bought-in"
+    assert mt.stock_basis({"normalized_material": "MILD_STEEL", "bbox_mm": [1250, 600, 1200]}) is None
+
+
+def test_where_some_bodies_have_a_basis_the_rest_are_asked_about_never_priced():
+    job = _real_job()
+    job.hierarchy[GA] = [(STACKING_BLOCK, 1), (BAG_STACK, 2), (V2_SS, 2)]
+    s = _summary()
+    r = mt.takeoff(s, job, declared="12675-01", drawing_number="12675-01")
+    names = [p["part_number"] for p in r["parts"]]
+    assert names == [GA, V2_SS], names
+    assert r["undetailed"] == [STACKING_BLOCK]
+    root = r["parts"][0]
+    assert root["assembly_children"] == [V2_SS], "the root holds only what is on the bill"
+    qs = root.get("manufacturing_questions") or []
+    assert qs and STACKING_BLOCK in qs[0]["issue"] and "not on the bill" in qs[0]["issue"]
+    assert s["concept_takeoff"]["parts"] == 1
+
+
+def test_the_scan_records_that_the_model_door_answered():
+    src = (_ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert 'summary["model_takeoff_door"] = {' in src
+
+
+def test_the_concept_read_is_not_refused_for_models_the_take_off_already_asked():
+    import concept_scan as cs
+    models = [r"C:\stage\12675-01-GA Stacking Block Model.SLDASM", r"C:\stage\12675-01-Stacking Holder Block.SLDPRT",
+              r"C:\stage\12675-01-02 Block Model V2.SLDASM", r"C:\stage\12675-01-02 BM V2 Stainless.SLDPRT",
+              r"C:\stage\12675-01-GA Stacking Block Model.SLDDRW"]
+    s = {"dxf_augmentation": {"unmatched_dxf": [
+            {"path": REAL_DXFS[0], "reason": "drawing_export_not_a_flat: 17 dimension entities — this is a drawing of the part, not its flat pattern"},
+            {"path": REAL_DXFS[1], "reason": "drawing_export_not_a_flat: 22 dimension entities — this is a drawing of the part, not its flat pattern"}]},
+         "manufacturing_writeup": {"parts": []},
+         "model_takeoff_door": {"ran": True, "design": GA,
+                                "why_not": f"the model under {GA} holds no part with a stock basis"}}
+    files = REAL_PDFS + REAL_DXFS + models
+    assert cs.why_not_sightable(s, files) is None
+    no_door = dict(s); no_door.pop("model_takeoff_door")
+    assert "SLDASM" in (cs.why_not_sightable(no_door, files) or ""), "without the door's answer, models still refuse"
+    assert "STEP" in (cs.why_not_sightable(s, files + [r"C:\stage\x.STEP"]) or "").upper()
+
+
+def test_the_bom_check_says_what_a_design_intent_pack_is():
+    import invariants as inv
+    s = {"document_analysis": {"bom_rows": [], "bom_readers_unread": [
+            {"scope": "job", "path": "A", "detail": "deterministic reader found no BOM table on any page of this job"},
+            {"scope": "job", "path": "B", "detail": "vision reader returned no BOM table on any page of this job"}]},
+         "concept_takeoff": {"source": "vision_concept", "design": "12675-01-GA"}}
+    v = inv.check_both_bom_readers_ran(s)
+    msg = " ".join(str(x.get("message") or "") for x in v)
+    assert "design-intent sheets with no parts list" in msg and "sighted on the design-intent sheet" in msg
+    assert "did not run" not in msg

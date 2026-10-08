@@ -247,6 +247,52 @@ def choose_design_sheets(paths: Iterable[Any], *, declared: str = "", drawing_nu
     return out
 
 
+def _num(v: Any) -> Optional[float]:
+    try:
+        f = float(v)
+        return f if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def stock_basis(part: Dict[str, Any]) -> Optional[str]:
+    """What this body can be costed from — "flat", "section", "bought-in" — or None (D-414).
+
+    A flat needs its blank AND its gauge; a section needs its length; a bought-in carries its
+    own price basis. A body with only an envelope and a material word is a block, and a
+    catalogue "each" price on it is a price for nothing."""
+    if not isinstance(part, dict):
+        return None
+    if part.get("is_bought_in"):
+        return "bought-in"
+    ss = part.get("section_stock")
+    if isinstance(ss, dict) and _num(ss.get("length_mm")):
+        return "section"
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    blank = ((_num(part.get("blank_length_mm")) and _num(part.get("blank_width_mm")))
+             or (_num(ng.get("blank_length_mm")) and _num(ng.get("blank_width_mm"))))
+    if blank and _num(part.get("normalized_thickness_mm")):
+        return "flat"
+    return None
+
+
+def what_it_lacks(part: Dict[str, Any]) -> str:
+    """The plain words for why a body has no stock basis."""
+    bits = []
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    if not ((_num(part.get("blank_length_mm")) and _num(part.get("blank_width_mm")))
+            or (_num(ng.get("blank_length_mm")) and _num(ng.get("blank_width_mm")))):
+        bits.append("no flat")
+    if not _num(part.get("normalized_thickness_mm")):
+        bits.append("no gauge")
+    ss = part.get("section_stock")
+    if not (isinstance(ss, dict) and _num(ss.get("length_mm"))):
+        bits.append("no section")
+    bb = [b for b in (_num(v) for v in (part.get("bbox_mm") or [])) if b]
+    env = f"; envelope {' × '.join(f'{b:g}' for b in bb)} mm" if bb else ""
+    return ", ".join(bits) + env
+
+
 def members_of(job: Any, root: str) -> Dict[str, float]:
     """Every body and sub-assembly under `root`, with its count per product, from the tree."""
     hierarchy = dict(getattr(job, "hierarchy", None) or {})
@@ -317,6 +363,7 @@ def takeoff(summary: Dict[str, Any], job: Any, *, declared: str = "", drawing_nu
 
     signals = dict(getattr(job, "part_signals", None) or {})
     asm_keys = {_clean(a).upper() for a in (getattr(job, "assembly_pns", None) or [])}
+    hierarchy = dict(getattr(job, "hierarchy", None) or {})
     excluded: List[Dict[str, str]] = []
     kept: Dict[str, float] = {}
     for pn, qty in members.items():
@@ -326,6 +373,27 @@ def takeoff(summary: Dict[str, Any], job: Any, *, declared: str = "", drawing_nu
                                                        f"modelled for fit, not a part we make"})
             continue
         kept[pn] = qty
+    # A SUB-ASSEMBLY THAT HOLDS ONLY REFERENCE MODELS IS ONE ITSELF (D-414). 12675-01's GA
+    # holds "12675-01-Bag Stack" ×2, whose only member is the customer's bag: the bag was set
+    # aside and the empty stack stayed, an assembly line with packing labour in its scope.
+    # Repeated until nothing changes, so a stack of stacks goes with them.
+    _gone = {_clean(e["part_number"]).upper() for e in excluded}
+    _changed = True
+    while _changed:
+        _changed = False
+        for pn in list(kept):
+            key = _clean(pn).upper()
+            if key not in asm_keys:
+                continue
+            kids = [_clean(c).upper() for c, _q in (hierarchy.get(pn) or
+                                                     next((v for k, v in hierarchy.items()
+                                                           if _clean(k).upper() == key), []))]
+            if kids and all(k in _gone for k in kids):
+                excluded.append({"part_number": pn, "why": "an assembly holding only reference models — "
+                                                           "the customer's goods stacked for fit, not a part we make"})
+                _gone.add(key)
+                kept.pop(pn)
+                _changed = True
     if not kept:
         out["why_not"] = (f"every member under {chosen} is a reference model: "
                           f"{', '.join(e['part_number'] for e in excluded)}")
@@ -374,28 +442,88 @@ def takeoff(summary: Dict[str, Any], job: Any, *, declared: str = "", drawing_nu
 
     # THE SUBTREE AS ITS OWN JOB, so the connector stamps exactly this design: the other roots'
     # edges would otherwise mint their parents over shared members and make a second product.
+    def _sub_job(keys: set) -> Any:
+        sub_hier = {}
+        for parent, kids in hierarchy.items():
+            if _clean(parent).upper() not in keys:
+                continue
+            sub_hier[parent] = [(c, q) for c, q in (kids or []) if _clean(c).upper() in keys]
+        rows = []
+        for pn, qty in kept.items():
+            if _clean(pn).upper() not in keys:
+                continue
+            sig = signals.get(_clean(pn))
+            rows.append(NativeBomRow(part_number=_clean(pn), quantity=float(qty),
+                                     material=str(getattr(sig, "material", "") or ""),
+                                     is_assembly=_clean(pn).upper() in asm_keys))
+        return NativeJob(bom=rows, part_signals=signals,
+                         assembly_pns=[a for a in (getattr(job, "assembly_pns", None) or [])
+                                       if _clean(a).upper() in keys],
+                         meta=dict(getattr(job, "meta", None) or {}, top_assembly=chosen),
+                         found=True, hierarchy=sub_hier)
+
     sub_keys = {_clean(pn).upper() for pn in kept} | {_clean(chosen).upper()}
-    sub_hier = {}
-    for parent, kids in (getattr(job, "hierarchy", None) or {}).items():
-        if _clean(parent).upper() not in sub_keys:
-            continue
-        sub_hier[parent] = [(c, q) for c, q in (kids or []) if _clean(c).upper() in sub_keys]
-    rows = []
-    for pn, qty in kept.items():
-        sig = signals.get(_clean(pn))
-        rows.append(NativeBomRow(part_number=_clean(pn), quantity=float(qty),
-                                 material=str(getattr(sig, "material", "") or ""),
-                                 is_assembly=_clean(pn).upper() in asm_keys))
-    sub = NativeJob(bom=rows, part_signals=signals,
-                    assembly_pns=[a for a in (getattr(job, "assembly_pns", None) or [])
-                                  if _clean(a).upper() in sub_keys],
-                    meta=dict(getattr(job, "meta", None) or {}, top_assembly=chosen),
-                    found=True, hierarchy=sub_hier)
-    applied = apply_native_to_pre_estimate(parts, sub)
-    stamped = apply_native_hierarchy_to_parts(parts, sub)
+    applied = apply_native_to_pre_estimate(parts, _sub_job(sub_keys))
+
+    # ── A TAKE-OFF IS ONLY A TAKE-OFF WHERE THE MODEL GIVES A STOCK BASIS (D-414) ────────
+    # 12675-01, 8 Oct 11:35: the GA's only body was "Stacking Holder Block", 1250 × 600 with no
+    # gauge, no flat, no section and no mass — a block model, not a part. It counted as a
+    # take-off, a catalogue "each" row priced it at £0.80, no cut, fold, weld or coat could be
+    # costed, and because the model door had returned parts the concept read never opened the
+    # GA sheet. A body is a part this book can cost only when the model gives it a stock basis:
+    # a flat blank with its gauge, a section with its length, or a bought-in. Where NO
+    # fabricated body has one, the take-off is refused with the reason and the concept read of
+    # the same design's sheet answers instead; where SOME have one, the rest are kept off the
+    # bill and asked about on the design, never priced from a catalogue word.
+    leaves = [p for p in parts[1:] if not p.get("is_assembly_parent")]
+    based = [p for p in leaves if stock_basis(p)]
+    undetailed = [p for p in leaves if not stock_basis(p)]
+    fabricated_based = [p for p in based if stock_basis(p) != "bought-in"]
+    if not fabricated_based:
+        lacking = "; ".join(f"{p.get('part_number')} ({what_it_lacks(p)})" for p in undetailed)
+        out["why_not"] = (f"the model under {chosen} holds no part with a stock basis — "
+                          + (lacking + " — " if lacking else "no fabricated body at all — ")
+                          + "so nothing to cut, fold, weld or coat can be costed from it")
+        out.update({"design": chosen, "chosen_by": how, "other_designs": list(others),
+                    "excluded": excluded, "undetailed": [p.get("part_number") for p in undetailed],
+                    "applied": applied})
+        return out
+    if undetailed:
+        _drop = {id(p) for p in undetailed}
+        parts = [p for p in parts if id(p) not in _drop]
+        for p in undetailed:
+            kept.pop(next((k for k in kept if _clean(k).upper() == _clean(p.get("part_number")).upper()), ""), None)
+    # an assembly left with nothing under it carries no product and no labour
+    _changed = True
+    while _changed:
+        _changed = False
+        keys_now = {_clean(p.get("part_number")).upper() for p in parts}
+        for p in list(parts[1:]):
+            if not p.get("is_assembly_parent"):
+                continue
+            k = _clean(p.get("part_number")).upper()
+            kids = [_clean(c).upper() for parent, cs in hierarchy.items()
+                    if _clean(parent).upper() == k for c, _q in (cs or [])]
+            if not any(c in keys_now for c in kids):
+                parts.remove(p)
+                kept.pop(next((x for x in kept if _clean(x).upper() == k), ""), None)
+                _changed = True
+    sub_keys = {_clean(p.get("part_number")).upper() for p in parts}
+    stamped = apply_native_hierarchy_to_parts(parts, _sub_job(sub_keys))
+    if undetailed:
+        from source_precedence import raise_manufacturing_question     # noqa: PLC0415
+        names = ", ".join(f"{p.get('part_number')} ({what_it_lacks(p)})" for p in undetailed)
+        raise_manufacturing_question(
+            root_rec,
+            f"{len(undetailed)} body(ies) under {chosen} have no stock basis in the model and are "
+            f"not on the bill: {names}",
+            "left off the bill — a body with no gauge, section or flat is not a part this book can cost",
+            "detail them in the model (gauge or section), or give their size and material, then re-run",
+            SOURCE)
 
     out.update({"parts": parts, "design": chosen, "chosen_by": how, "other_designs": list(others),
-                "excluded": excluded, "applied": applied, "hierarchy_stamped": stamped})
+                "excluded": excluded, "applied": applied, "hierarchy_stamped": stamped,
+                "undetailed": [p.get("part_number") for p in undetailed]})
 
     meta = dict(getattr(job, "meta", None) or {})
     summary[KEY] = {

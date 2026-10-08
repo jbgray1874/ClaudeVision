@@ -442,6 +442,15 @@ def why_not_sightable(summary: Mapping[str, Any],
     except Exception:                                                  # noqa: BLE001
         _never_measured = set()
 
+    # THE MODEL DOOR ALREADY ANSWERED (D-414). On a design-intent pack the job's SolidWorks
+    # models are offered to the take-off first; where it ran and recorded why it gave nothing
+    # to cost (no extract, or no body with a stock basis), the model files are not measured
+    # CAD this read would be guessing over — they were asked and said nothing. Without that
+    # record they still refuse, as before.
+    _door = summary.get("model_takeoff_door") if isinstance(summary.get("model_takeoff_door"), Mapping) else {}
+    _models_answered = bool(_door.get("ran") and str(_door.get("why_not") or "").strip())
+    _MODEL_SUFFIXES = {".sldprt", ".sldasm", ".slddrw"}
+
     for raw in (files or []):
         # The paths are written on the box; split on either separator, as every other reader
         # of a staged path does — Path(...).name on another platform is the whole string.
@@ -449,6 +458,8 @@ def why_not_sightable(summary: Mapping[str, Any],
         suffix = ("." + _base.rsplit(".", 1)[-1].lower()) if "." in _base else ""
         if suffix in _MEASURABLE_CAD:
             if suffix == ".dxf" and _base.lower() in _never_measured:
+                continue
+            if suffix in _MODEL_SUFFIXES and _models_answered:
                 continue
             return (f"the pack contains {_base} — measured CAD is never sighted over")
 
