@@ -11452,10 +11452,27 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         _dec_block = (summary or {}).get("estimator_decisions") or {}
         _excluded_cl = {str(c).strip().upper()
                         for c in (_dec_block.get("commercial_excluded") or [])}
-        for _code, _desc in (
+        # NOTHING TO PACK, NO PACKAGING (D-409). "Always-present" assumed a product. The
+        # 12675-01 run of 8 Oct 2026 minted no part — the pack was design-intent sheets and
+        # the run said so — and still carried £14.50 packaging and £8.50 delivery, which the
+        # customer's terms then turned into a £25.46 unit price for nothing. The gate asks
+        # the record (the scan's stop) and the part list (anything that ships); if the gate
+        # itself cannot run, the lines are minted as before, since a crash here must not
+        # silently empty a real book.
+        try:
+            import commercial_lines as _cl_gate
+            _nothing_to_ship = _cl_gate.nothing_to_ship(summary, parts)
+        except Exception as _ns_exc:                        # noqa: BLE001
+            print(f"   [commercial] the nothing-to-ship gate could not run "
+                  f"({type(_ns_exc).__name__}: {_ns_exc}) — lines minted as usual", flush=True)
+            _nothing_to_ship = None
+        if _nothing_to_ship:
+            print(f"   [commercial] no PACKAGING or DELIVERY line — {_nothing_to_ship}",
+                  flush=True)
+        for _code, _desc in (() if _nothing_to_ship else (
             ("PACKAGING", "Packaging (box / pallet — per-unit share, estimator to price)"),
             ("DELIVERY", "Delivery (per-unit share of order haulage — estimator to price)"),
-        ):
+        )):
             if _code in _existing_now:
                 continue
             # AN ESTIMATOR'S "NOT REQUIRED" IS AN ANSWER, NOT A GAP. Tony: "Delivery is

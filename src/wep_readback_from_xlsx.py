@@ -440,28 +440,22 @@ def read_unit_price_composition(com_ws, material: Optional[float], labour: Optio
 
 
 def _scan_total(com_ws, label_needles: Tuple[str, ...], max_row: int, max_col: int) -> Optional[float]:
-    """Find a row whose text contains one of the needles, return the rightmost numeric on that row."""
-    for r in range(1, max_row + 1):
-        row_has_label = False
-        for c in range(1, min(max_col, 16) + 1):
-            v = _cell_value(com_ws, r, c)
-            if isinstance(v, str):
-                low = v.lower()
-                if any(n in low for n in label_needles):
-                    row_has_label = True
-                    break
-        if not row_has_label:
-            continue
-        # rightmost numeric on this row = the computed subtotal
-        best = None
-        for c in range(1, max_col + 1):
-            v = _cell_value(com_ws, r, c)
-            f = _safe_float(v)
-            if f is not None and f != 0:
-                best = f
-        if best is not None:
-            return best
-    return None
+    """Find a row whose text contains one of the needles, return the rightmost numeric on that row.
+
+    ONE READER FOR WHERE A TOTAL LIVES. _scan_total_cell learnt on 11650-05 that a total of
+    exactly zero is a total; this copy kept its own `f != 0` and went on returning None for a
+    nil subtotal. On 12675-01 (8 Oct 2026) a sheet with no labour rows computed Total Labour
+    Cost 0.00, this read it as missing, the record said "Excel returned as null (an error cell
+    is missing data, never zero)" about a cell holding a zero, the composition reader had no
+    labour to work with and the unit cost went out as "PENDING — NOT TRACEABLE TO A WORKBOOK
+    CELL" on a sheet whose unit cell held a figure (D-409). The same rule written twice and
+    corrected once — the shape dxf_can_rule_out_folding was written to end. The cell finder is
+    the one reader now; this returns what the cell it found holds.
+    """
+    cell = _scan_total_cell(com_ws, label_needles, max_row, max_col)
+    if not cell:
+        return None
+    return _safe_float(_cell_value(com_ws, cell[0], cell[1]))
 
 
 def _used_bounds(com_ws) -> Tuple[int, int]:

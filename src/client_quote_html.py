@@ -1511,9 +1511,15 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         _unit_figure = _order_figure = "&mdash;"
         _unit_caption = "per unit, ex VAT"
         _order_caption = "ex VAT"
-        _pending_note = (
-            '\n      <div class="estimator-action">Enter the unit cost on the Estimate sheet '
-            'and regenerate — the price follows from the workbook.</div>')
+        if _state["price"].get("nothing_to_cost"):
+            # NOT "ENTER THE UNIT COST" ON A RUN THAT COSTED NOTHING (D-409). The one useful
+            # sentence on an empty book is why it is empty and what answers the pack.
+            _pending_note = ('\n      <div class="estimator-action">'
+                             + _esc(str(_state["price"].get("why") or "")) + '</div>')
+        else:
+            _pending_note = (
+                '\n      <div class="estimator-action">Enter the unit cost on the Estimate sheet '
+                'and regenerate — the price follows from the workbook.</div>')
     else:
         _price_class, _order_class = "unit", "ov"
         _unit_figure, _order_figure = _money(unit_price), _money(order_value)

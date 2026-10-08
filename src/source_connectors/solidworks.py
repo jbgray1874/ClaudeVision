@@ -1520,7 +1520,8 @@ def _job_numbers(codes: Iterable[Any]) -> Set[str]:
     return out
 
 
-def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict[str, Any]:
+def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob,
+                            job_identity: Iterable[Any] = ()) -> Dict[str, Any]:
     """Does this extract actually describe the job in front of us?
 
     AN EXTRACT FOR ANOTHER JOB IS WORSE THAN NO EXTRACT.
@@ -1553,8 +1554,16 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict
     cannot say which failure it is costs days, and the best evidence in the building gets
     thrown away quietly while the sheet still prints a total.
 
-    Returns {"belongs", "matched", "candidates", "job_parts", "top_assembly",
-             "shares_job_number", "extract_codes", "job_codes"}.
+    THE JOB'S OWN NUMBER COUNTS AS THE JOB'S (D-410). The job number was read off the PARTS
+    only, so a pack that produced no part records had no job number at all, and its own
+    extract — top assembly "12675-01-02 Block Model V2" under job 12675-01, a design-intent
+    pack with nothing to mint — was reported as "describes a different job — the pointer is
+    wrong". `job_identity` carries the drawing number and the job folder's name: the job's
+    identity whether or not a part was minted. It widens only the REPORT of kinship; the
+    guard itself (zero matches against a non-empty extract) is unchanged.
+
+    Returns {"belongs", "matched", "candidates", "job_parts", "job_has_no_parts",
+             "top_assembly", "shares_job_number", "extract_codes", "job_codes"}.
     """
     exact, tail, lead = _native_match_index(job)
     matched = 0
@@ -1567,15 +1576,18 @@ def extract_is_for_this_job(parts: List[Dict[str, Any]], job: NativeJob) -> Dict
     _job_codes = sorted({str(p.get("part_number") or "") for p in (parts or [])
                          if isinstance(p, dict) and p.get("part_number")})
     _top = str((job.meta or {}).get("top_assembly") or "")
+    _identity = [str(x) for x in (job_identity or ()) if str(x or "").strip()]
+    _job_parts_n = len([p for p in (parts or []) if isinstance(p, dict)])
     return {
         "belongs": bool(matched) or not job.part_signals,
         "matched": matched,
         "candidates": len(job.part_signals),
-        "job_parts": len([p for p in (parts or []) if isinstance(p, dict)]),
+        "job_parts": _job_parts_n,
+        "job_has_no_parts": _job_parts_n == 0,
         "top_assembly": _top,
         "shares_job_number": bool(
             _job_numbers(_extract_codes + ([_top] if _top else []))
-            & _job_numbers(_job_codes)),
+            & (_job_numbers(_job_codes) | _job_numbers(_identity))),
         "extract_codes": _extract_codes[:12],
         "job_codes": _job_codes[:12],
     }

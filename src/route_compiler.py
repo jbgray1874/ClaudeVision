@@ -2482,6 +2482,12 @@ def build_part_graph(
             top_id = product_root
         else:
             _stop = len(top_ids) > 1
+            # A ROOT WITH NO NUMBER IS SAID, NOT PRINTED AS "()". 12675-01's design-intent
+            # pack resolved one root whose identity was blank, and the sentence read "The
+            # pack has one top-level assembly (), which is what is costed" (D-409).
+            _named_roots = [str(t) for t in top_ids if str(t or "").strip()]
+            _one_root = (f"({', '.join(_named_roots)})" if _named_roots
+                         else "that carries no drawing number of its own")
             _product_issues.append({
                 "code": "declared_product_not_resolved",
                 "declared": _declared,
@@ -2496,7 +2502,7 @@ def build_part_graph(
                               f"so NOTHING is rolled up — every line is at its own drawing "
                               f"count. Correct the Drawing Number and re-run."
                               if _stop else
-                              f". The pack has one top-level assembly ({', '.join(top_ids)}), "
+                              f". The pack has one top-level assembly {_one_root}, "
                               f"which is what is costed — confirm it is the product.")),
             })
             print(f"   [graph] DECLARED PRODUCT {_declared!r} NOT RESOLVED "

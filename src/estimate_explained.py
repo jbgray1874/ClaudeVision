@@ -1682,12 +1682,22 @@ def build(workbook: Path, scan_json: Optional[Path],
     _unpriced = [r for r in _unpriced if id(r) not in _classified]
     add("## The questions, answered first")
     add("")
-    add(f"- **What does a unit cost, and of what?** "
-        f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
-        f"{_gbp(totals['labour'])}"
-        + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
-           if _other_gbp else "")
-        + ".")
+    try:
+        from run_stop import nothing_to_cost as _ntc, sentence as _stop_sentence
+        _stop = _ntc(scan_doc)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
+    if _stop:
+        # THE FIRST ANSWER ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409) — not "£25.46 —
+        # material £23.00 + labour £0.00" over packaging and delivery for nothing.
+        add(f"- **What does a unit cost, and of what?** {_stop_sentence(_stop)}")
+    else:
+        add(f"- **What does a unit cost, and of what?** "
+            f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
+            f"{_gbp(totals['labour'])}"
+            + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
+               if _other_gbp else "")
+            + ".")
     # THE BANNER'S TALLY, NOT A SECOND ONE (D-349). This counted bill-of-materials lines
     # only, so the 12645 book of 29 Sep 21:27 said "1 line(s) carry no price at all — Roller
     # Shutter" beneath a banner of "21 prices missing": twenty Sheet Steel rows with no cost

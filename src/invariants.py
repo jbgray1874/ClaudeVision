@@ -860,12 +860,17 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
         # second is this guard working and a pointer to fix; the first is a defect in our
         # matching, and it is silent, and it is expensive.
         _own = sw.get("refused_own_job")
+        _empty = sw.get("job_has_no_parts")
         out.append(_violation(
             "native_extract_refused", BLOCKING if _own else WARNING,
             (f"The SolidWorks extract was REFUSED and nothing from it was applied — this job "
              f"is costed from drawings alone. "
-             + (f"Its codes share a job number with this job's, so it IS this job's extract "
-                f"and the connector could not match it: a naming convention it does not know."
+             + ((f"Its codes share a job number with this job's, so it IS this job's extract; "
+                 f"the pack produced no part records to match it against, so nothing was taken "
+                 f"off from the model — the model is the parts list where the pack has none."
+                 if _empty else
+                 f"Its codes share a job number with this job's, so it IS this job's extract "
+                 f"and the connector could not match it: a naming convention it does not know.")
                 if _own else
                 f"Its codes share no job number with this job's, so it describes a different "
                 f"job — the pointer is wrong, and this job's own models were never read.")),
