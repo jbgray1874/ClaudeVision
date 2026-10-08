@@ -286,7 +286,9 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #       made from its panels; a legend is not a note (D-416)
 #   s3  the goods' unit weight and the labelled parts reported, so the check can verify them
 #       from what the sheet prints (D-417)
-SHEET_PROMPT_VERSION = "s3"
+#   s4  a face with a window is still a panel; an internal divider spans the inside of the body
+#       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
+SHEET_PROMPT_VERSION = "s4"
 SHEET_TEXT_MAX_CHARS = 6000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
@@ -318,7 +320,9 @@ rules and the ones after them differ, THESE RULES WIN.
 6. MAKE THE BODY FROM ITS PANELS. Where the sheet shows a box, carcass or frame of one material and
    gauge, list the panels or members that make it (faces, base, top, internal dividers), each
    sized from the body's dimensions, with the windows and cut-outs it shows as part of the panel,
-   never as separate bars. Give each its route from the list below: cut it, fold it where corners
+   never as separate bars. A face with a window or opening cut in it is still a panel — list it,
+   with the opening cut from it; only a side the plan view shows open has no panel. An internal
+   divider or shelf spans the inside of the body between the walls it meets. Give each its route from the list below: cut it, fold it where corners
    are formed, weld it where the sheet says welded, finish it as the note says.
 7. Add to every part "drawn": the view and label where the sheet draws or names it, or "" if the
    sheet does not show it.
@@ -363,7 +367,7 @@ pad or trim lines to hit a figure: every line must be drawn on the sheet and siz
 
 # The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
-_SHEET_PROMPT_FINGERPRINT = "1287e1f7b6b9"
+_SHEET_PROMPT_FINGERPRINT = "72a1d6c427c9"
 
 
 def is_brief_page(path: Any) -> bool:
@@ -1120,6 +1124,44 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
                     failures.append(f"the sheet states '{_finish}' and nothing in the bill "
                                     f"carries {op.replace('_', ' ')}")
 
+    # ── THE GOODS NAMED, THEIR SIZES NOT GIVEN (D-418) ────────────────────────────────────
+    # The 14:42 read sized the divider 186 mm — the bag's 186.5 — and reported no goods
+    # dimensions, so the goods check had nothing to hold it to. A read that names goods and
+    # gives none of their sizes leaves that check blind, and the bill cannot be called checked.
+    if made and (goods_count > 1 or str(facts.get("goods") or "").strip()) \
+            and not (facts.get("goods_dimensions_mm") or facts.get("dimensions_to_goods_mm")):
+        unverified.append("the read names the goods but gives none of their dimensions, so a part "
+                          "sized off the goods could not be caught")
+
+    # ── EVERY SIZE IS THE BODY'S OR THE SHEET'S (D-418) ───────────────────────────────────
+    # A made part's length and width are a body dimension (or one less a few gauges, for a part
+    # inside the walls), or a figure the sheet prints. A size that is neither is the read's own
+    # arithmetic — "600 overall less two sides and bag stack spacing" gave the divider 186 —
+    # and is unverified, named, for the estimator.
+    if body_checked:
+        _g = gauge or 0.0
+        _bodyish = set()
+        for d in dims:
+            for k in range(0, 5):
+                for t in ({_g} if _g else {0.0}):
+                    _bodyish.add(round(d - k * t, 1))
+        _odd: List[str] = []
+        for p in made:
+            blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+            for x in (_num(blank.get("length")), _num(blank.get("width"))):
+                if not x:
+                    continue
+                if any(abs(x - b) <= 1.0 for b in _bodyish):
+                    continue
+                if printed and round(x, 3) in printed:
+                    continue
+                if not printed and not words:
+                    continue
+                _odd.append(f"{str(p.get('name') or 'a part').strip()} {x:g} mm")
+        if _odd:
+            unverified.append("sized from neither the body nor a figure printed on the sheet: "
+                              + ", ".join(_odd[:6]))
+
     # ── THE BODY IS VERIFIED ONLY WHERE SOMETHING INDEPENDENT GAVE IT (D-417) ─────────────
     if body_checked and body_source != "the SolidWorks model's envelope":
         _raw_to_goods = {round(_num(v), 1) for v in (facts.get("dimensions_to_goods_mm") or [])
@@ -1268,6 +1310,27 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     answer, aside = set_aside_undrawn(answer)
     check["sheet_text_chars"] = len(words)
     return {"read": read, "answer": answer, "check": check, "set_aside": aside}
+
+
+def apply_sheet_notes_to_unit(unit: Optional[Dict[str, Any]],
+                              facts_by_sheet: Mapping[str, Mapping[str, Any]]) -> bool:
+    """The design sheet's own weld note, stated on the unit it describes (D-418).
+
+    The 14:42 book asked "Welding on 12675-01-CPT00 is inferred, not drawn" beside a sheet that
+    prints WELDED AND FINISHED FLUSH. The note reader (weld_symbols.apply_sheet_weld_notes,
+    D-397) keys a sheet's notes on the part its title block names — 12675-01-GA — and the unit
+    the concept read minted is 12675-01-CPT00, so the note never reached it. The sheet read IS
+    the unit's own sheet: its notes (legend already removed) are given to the unit under the
+    unit's number, and the same reader decides. Returns True when a weld was stated."""
+    if not isinstance(unit, dict) or not facts_by_sheet:
+        return False
+    try:
+        from weld_symbols import _clean_pn, apply_sheet_weld_notes   # noqa: WPS433
+    except Exception:                                               # noqa: BLE001
+        return False
+    merged = {"notes": " ".join(str((f or {}).get("notes") or "") for f in facts_by_sheet.values()),
+              "text": "\n".join(str((f or {}).get("text") or "") for f in facts_by_sheet.values())}
+    return bool(apply_sheet_weld_notes([unit], {_clean_pn(unit.get("part_number")): merged}))
 
 
 def raise_sheet_questions(parts: List[Dict[str, Any]], check: Mapping[str, Any],

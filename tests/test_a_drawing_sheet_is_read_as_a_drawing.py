@@ -201,7 +201,8 @@ def test_an_unsettled_goods_split_is_unverified_never_agrees():
 def test_with_the_bags_weight_printed_both_readings_are_weighed():
     """Count × unit weight, both printed: 30 kg. Not saying whether 67.44 includes them, a bill
     too light under BOTH readings (37.44 and 67.44) fails; one that fits only one is unverified."""
-    facts = dict(FACTS, weight_includes_goods="not stated", goods_weight_kg=0)
+    facts = dict(FACTS, weight_includes_goods="not stated", goods_weight_kg=0,
+                 goods_dimensions_mm=[556.5, 530, 662, 186.5, 380], dimensions_to_goods_mm=[1580])
     light = dict(_the_1205_bill(), sheet_facts=facts)
     light["parts"] = [p for p in light["parts"] if p["name"] != "OUTER VERTICAL POST"]
     check = cs.sheet_check(light, GA_WORDS)
@@ -599,3 +600,70 @@ def test_an_unverified_bill_is_asked_on_the_unit_too():
     q = unit["manufacturing_questions"][0]
     assert q["issue"].startswith("The sighted bill could not be verified against the sheet")
     assert "not a checked budget" in q["assumption"]
+
+
+
+# ── D-418: the 14:42 book — front and back missing, the divider off a bag, the weld "inferred" ──
+#
+# On b18e690 the read returned two 1250 × 400 sides, a 600 × 400 base, a 1250 × 186 divider (the
+# bag's 186.5) and four labelled feet; no front or back face. About 23 kg of blanks against 37 kg
+# of stand (0.62) passed a lower bound of 0.6, and the report asked whether the unit was welded
+# beside a sheet that prints WELDED AND FINISHED FLUSH.
+
+def _the_1442_bill():
+    return {"product": {"name": "STACKING BAG HOLDER"},
+            "parts": [_made("LEFT SIDE PANEL", 1250, 400),
+                      _made("RIGHT SIDE PANEL", 1250, 400),
+                      _made("CENTRAL DIVIDER", 1250, 186, drawn="section A-A, labelled"),
+                      _made("BASE PLATE", 600, 400),
+                      dict(_feet(), name="ADJUSTABLE FEET")],
+            "unit_operations": ["welding", "dress_welds", "powder_coating", "assembly"]}
+
+
+def test_the_1442_bill_is_too_light_for_the_stand_and_fails():
+    check = cs.sheet_check(_with(_the_1442_bill()), REAL_TEXT, envelope=ENVELOPE)
+    assert check["verdict"] == "disagrees"
+    assert 22 < check["sighted_weight_kg"] < 24
+    assert "parts are missing or undersized" in " ".join(check["failures"])
+    # The divider's 186 is neither the body's nor a printed figure: named for the estimator.
+    assert any("CENTRAL DIVIDER 186 mm" in u for u in check["unverified"])
+
+
+def test_a_read_that_names_the_goods_but_not_their_sizes_is_unverified():
+    facts = dict(FULL_FACTS, goods_dimensions_mm=[], dimensions_to_goods_mm=[],
+                 weight_includes_goods="not stated", goods_count=0, goods_unit_weight_kg=0)
+    check = cs.sheet_check(_with(_the_1442_bill(), facts), REAL_TEXT, envelope=ENVELOPE)
+    assert not check["agrees"]
+    assert any("names the goods but gives none of their dimensions" in u for u in check["unverified"])
+
+
+def test_the_stand_the_sheet_draws_still_agrees_under_the_tighter_band():
+    check = cs.sheet_check(_with(_the_sheets_bill()), REAL_TEXT, envelope=ENVELOPE)
+    assert check["agrees"], (check["failures"], check["unverified"])
+    inside = _with(_the_sheets_bill())
+    inside["parts"][3] = _made("CENTRAL SOLID DIVIDER", 1246, 596, drawn="section A-A")
+    assert cs.sheet_check(inside, REAL_TEXT, envelope=ENVELOPE)["agrees"], \
+        "a divider inside the walls is the body less two gauges"
+
+
+def test_the_prompt_says_a_face_with_a_window_is_still_a_panel():
+    text = cs.concept_prompt_text([b"png"], sheet=True, sheet_words=REAL_TEXT)
+    assert "A face with a window or opening cut in it is still a panel" in text
+    assert "An internal\n   divider or shelf spans the inside of the body" in text
+
+
+def test_the_design_sheets_weld_note_is_stated_on_the_unit():
+    unit = {"part_number": "12675-01-CPT00", "review_flags": [],
+            "inferred_operations": ["welding", "assembly"]}
+    facts = {"12675-01-GA": {"notes": "2MM STEEL CONSTRUCTION WELDED AND FINISHED FLUSH "
+                                      "POWDER COATED - RAL 7021 BLACK GREY CENTRAL SOLID DIVIDER",
+                             "text": "WELD SPECIFICATION: ALL WELDS TO BE TIG UNLESS STATED"}}
+    assert cs.apply_sheet_notes_to_unit(unit, facts) is True
+    assert unit["textual_operations"] == ["welding", "dress_welds"]
+    assert unit["operation_sources"]["welding"] == "drawing_deterministic"
+    assert unit["weld_stated_by_note"] == "WELDED"
+    assert cs.apply_sheet_notes_to_unit(None, facts) is False
+    plain = {"part_number": "X-CPT00", "review_flags": []}
+    assert cs.apply_sheet_notes_to_unit(plain, {"X": {"notes": "POWDER COATED"}}) is False
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "concept_scan.apply_sheet_notes_to_unit(_unit, _swf(_pack))" in src

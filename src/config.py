@@ -1896,7 +1896,12 @@ CONCEPT_IMPLIED_FITTINGS = (
 # lower bound is missing or undersizing parts; above the upper, oversizing or double-counting.
 # 12675-01 V1: about 15 kg sighted against 37 kg of stand (0.39) was the read that prompted it;
 # the sheet's own panels, gross, weigh about 55 kg (1.46).
-CONCEPT_SHEET_WEIGHT_BAND = (0.6, 2.0)
+# D-418: the lower bound was 0.6, and the 14:42 read — two sides, a base and a 186 mm divider,
+# the front and back faces missing — weighed 23 kg against 37 kg (0.62) and passed. Blanks are
+# gross: a product cannot weigh more than the sheet it is cut from, so a bill well under the
+# stated weight is missing parts. 0.8, not 1.0, because the goods' weight a sheet states is
+# often an estimate ("ESTIMATED BAG WEIGHT") and bought-ins add a little.
+CONCEPT_SHEET_WEIGHT_BAND = (0.8, 2.0)
 # A made part longer or wider than the product body by more than this, and not folded, breaks
 # the sheet's envelope.
 CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
@@ -3772,6 +3777,8 @@ SHEET_WELD_NOTE_PATTERNS = [
 #   the dressing that goes with it, where the note says so
 SHEET_WELD_DRESS_PATTERNS = [
     r"\bDRESS(?:ED)?\b",
+    # "WELDED AND FINISHED FLUSH" (12675-01's GA, D-418): a weld ground flush is a dressed weld.
+    r"\b(?:FINISHED|GROUND)\s+FLUSH\b",
 ]
 
 # ── THE WELD PROCESS THE PACK STATES, NAMED ON THE WELD ROW (D-393) ───────────────────────
