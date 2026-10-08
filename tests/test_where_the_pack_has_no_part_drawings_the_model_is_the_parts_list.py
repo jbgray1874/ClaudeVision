@@ -382,7 +382,9 @@ def test_the_fallbacks_label_is_the_vision_read_not_the_model():
          "chosen_by": "the sheet the GA naming convention marks as the product", "other_designs": ["12675-01-02"],
          "excluded": [], "parts": 6, "model_takeoff_why_not": "no SolidWorks extract of this job's own was available"}
     assert mt.sentence(t).startswith("Concept read of the design-intent sheet 12675-01-GA by the vision model")
-    assert mt.banner(t).startswith("CONCEPT READ OF A DESIGN-INTENT SHEET — 12675-01-GA")
+    # A vision read with no sheet check recorded is an unchecked figure, and says so (D-417).
+    assert mt.banner(t).startswith(
+        "UNCHECKED CONCEPT FIGURE — CONCEPT READ OF A DESIGN-INTENT SHEET — 12675-01-GA")
     s = dict(_summary(), concept_takeoff=t)
     html = jrh._render_concept_takeoff(s)
     assert "CONCEPT READ OF A DESIGN-INTENT SHEET" in html and "12675-01-02" in html
