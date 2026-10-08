@@ -1069,6 +1069,23 @@ def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str,
     return pn_key
 
 
+def dxf_may_mint_a_part(dxf_path: Path, report: Optional[Dict[str, Any]] = None,
+                        part_number: str = "") -> bool:
+    """A DXF that is a drawing of a part — a sheet export with dimensions, a title block and
+    notes — never mints a part (D-406). 12675-01: "12675-01-02 Block Model V2.dxf" was minted
+    as an orphan, its geometry then refused as a drawing, and the record survived as a
+    bought-in priced by an AI market figure at £8.50 beside packaging and delivery for it.
+    The refusal is recorded in the report's unmatched list so the file is not silently lost."""
+    _why = drawing_export_reason(dxf_path)
+    if not _why:
+        return True
+    if isinstance(report, dict):
+        report.setdefault("unmatched_dxf", []).append({
+            "path": str(dxf_path), "part_number": part_number,
+            "reason": f"drawing_export_not_a_flat: {_why}"})
+    return False
+
+
 def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path: Path) -> Dict[str, Any]:
     """Standalone part record for a flat DXF with no PDF detail page in the writeup."""
     parsed_pn = part_number_from_dxf_path(dxf_path) or part_number
@@ -1647,6 +1664,8 @@ def _split_parent_flats_to_children(
                 # Submitted, not gap-filled — see the note at the flat-application site.
                 _apply_field(target, "normalized_material", _mat_fn, "dxf_filename")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
+        elif not dxf_may_mint_a_part(chosen, report):
+            pass                          # a drawing of a part is not a part (D-406)
         else:
             pn = _orphan_child_pn(parent, chosen, _ci, _taken_keys)
             orphan = _create_orphan_dxf_part(summary, pn, chosen)
@@ -3424,6 +3443,8 @@ def augment_summary_with_dxf(
                 "path": str(path), "part_number": pn,
                 "reason": "code_belongs_to_another_assembly_in_this_job_number"})
             continue
+        if not part and not dxf_may_mint_a_part(path, report, pn):
+            continue                      # a drawing of a part is not a part (D-406)
         if not part:
             part = _create_orphan_dxf_part(summary, pn, path)
             parts.append(part)
