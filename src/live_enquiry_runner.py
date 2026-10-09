@@ -233,15 +233,46 @@ def names_the_drawing(folder_name: str, key: str) -> bool:
     return rest == "" or bool(re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z(]|$)", rest))
 
 
-def _customer_folders_map() -> Dict[str, str]:
-    pairs = dict(getattr(config, "LIVE_ENQUIRY_CUSTOMER_FOLDERS", {}) or {})
-    extra = os.getenv("SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS", "")
-    if extra:
-        try:
-            pairs.update(json.loads(extra))
-        except ValueError:
-            print("   [live] SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS is not JSON; ignored", flush=True)
-    return {customer_key(k): v for k, v in pairs.items()}
+def _customer_words(name: str) -> List[str]:
+    """A customer's name as words that survive spelling: case, punctuation, AND/&, a plural
+    s and the company words (LTD, UK, PLC — config.LIVE_ENQUIRY_CUSTOMER_NOISE_WORDS) gone."""
+    noise = {w.upper() for w in getattr(config, "LIVE_ENQUIRY_CUSTOMER_NOISE_WORDS", ())}
+    words = []
+    for w in re.findall(r"[0-9A-Z&]+", str(name or "").upper().replace(" AND ", " & ")):
+        if w in noise:
+            continue
+        words.append(w[:-1] if len(w) > 3 and w.endswith("S") else w)
+    return words
+
+
+def _one_leads_the_other(a: List[str], b: List[str]) -> bool:
+    """FANATICS PARIS and Fanatics, TTI and TTi Milwaukee, M & S and M&S Food: the shorter
+    name, run together, is the longer's opening words run together."""
+    if not a or not b:
+        return False
+    short, long_ = (a, b) if len("".join(a)) <= len("".join(b)) else (b, a)
+    joined, ends, run = "".join(short), set(), ""
+    for w in long_:
+        run += w
+        ends.add(len(run))
+    return "".join(long_).startswith(joined) and len(joined) in ends
+
+
+def customer_folders(folders: Sequence[Path], customer: str) -> List[Path]:
+    """The folder(s) the sheet's Customer names — by name, no list of aliases (D-423).
+
+    The same name however it is spelt wins outright. Otherwise every folder whose name leads,
+    or is led by, the customer's: "FANATICS PARIS" finds Fanatics. A folder carrying a drawing
+    number is a pack, never a customer. More than one is returned as found — the caller holds
+    the row and names them; it never picks."""
+    want = _customer_words(customer)
+    if not want:
+        return []
+    named = [f for f in folders if not re.search(r"\d{4,}", f.name)]
+    same = [f for f in named if "".join(_customer_words(f.name)) == "".join(want)]
+    if same:
+        return same
+    return [f for f in named if _one_leads_the_other(want, _customer_words(f.name))]
 
 
 def _subfolders(folder: Path) -> List[Path]:
@@ -295,9 +326,11 @@ class LiveEnquiryShare:
             return Located("held", f"the Live Enquiry root {self.root} cannot be read from this "
                                    f"machine")
         clients = _subfolders(self.root)
-        want = customer_key(_customer_folders_map().get(customer_key(row.customer),
-                                                        row.customer))
-        client = [c for c in clients if customer_key(c.name) == want]
+        client = customer_folders(clients, row.customer)
+        if len(client) > 1:
+            return Located("held", f"{len(client)} folders could be '{row.customer}': "
+                                   f"{', '.join(c.name for c in client)} — leave one, or "
+                                   f"spell the Customer as its folder", source=self.name)
         key = drawing_key(row.drawing)
         client_dir = client[0] if client else None
         hits = ([d for d in _subfolders(client_dir) if names_the_drawing(d.name, key)]
@@ -310,13 +343,9 @@ class LiveEnquiryShare:
             at_root = bool(hits)
         if not hits:
             if client_dir is None:
-                close = [c.name for c in clients if want and not names_the_drawing(c.name, key)
-                         and (want in customer_key(c.name) or customer_key(c.name) in want)]
-                hint = (f"; folders that look close: {', '.join(close)} — rename the folder, "
-                        f"or add the pair to LIVE_ENQUIRY_CUSTOMER_FOLDERS") if close else ""
                 return Located("waiting", f"no '{row.customer}' folder under the Live Enquiry "
-                                          f"root, and no {row.drawing} pack at the root, "
-                                          f"yet{hint}", source=self.name)
+                                          f"root, and no {row.drawing} pack at the root, yet",
+                               source=self.name)
             return Located("waiting", f"no {row.drawing} folder under {client_dir.name} yet",
                            client_folder_name=client_dir.name, source=self.name)
         where = "the root" if at_root else client_dir.name

@@ -149,15 +149,39 @@ def test_customer_and_drawing_folders_are_matched_by_name(root, ledger):
     assert got["9848-00-GA1"].located.folder == root / "TTi" / "9848-00"
 
 
-def test_a_customer_is_never_matched_nearly(root, ledger, monkeypatch):
+def test_a_customer_finds_its_folder_by_name_however_it_is_spelt(root, ledger):
+    """No alias list (D-423): FANATICS PARIS finds Fanatics, M & S finds M&S, Boots UK Ltd
+    finds Boots; a folder named for a pack is never a customer."""
     _pack(root, "Fanatics", "12349-02-74-102", "a.pdf")
+    _pack(root, "M&S", "12340-01M", "b.pdf")
+    _pack(root, "Boots", "9000-01", "c.pdf")
+    _pack(root, "12633-00-GA-Avanti", ".", "d.pdf")
+    rows = L.rows_from_table(_table(_line("FANATICS PARIS", "12349-02-74-102", "10 off"),
+                                    _line("m and s", "12340-01M", "10 off"),
+                                    _line("Boots UK Ltd", "9000-01", "10 off"),
+                                    _line("Avanti", "12633-03-GA", "10 off")))
+    got = _decide(rows, root, ledger)
+    assert got["12349-02-74-102"].status == "ready"
+    assert got["12349-02-74-102"].located.client_folder_name == "Fanatics"
+    assert got["12340-01M"].status == "ready" and got["9000-01"].status == "ready"
+    assert got["12633-03-GA"].status == "waiting"      # the 12633-00 pack is not "Avanti"
+
+
+def test_two_folders_that_could_be_the_customer_hold_the_row(root, ledger):
+    _pack(root, "TTi Milwaukee", "12665-01-GA", "a.pdf")
+    _pack(root, "TTi Ryobi", "12665-01-GA", "b.pdf")
+    rows = L.rows_from_table(_table(_line("TTI", "12665-01-GA", "10 off")))
+    d = _decide(rows, root, ledger)["12665-01-GA"]
+    assert d.status == "held" and "TTi Milwaukee" in d.reason and "TTi Ryobi" in d.reason
+
+
+def test_the_same_name_wins_over_a_longer_one(root, ledger):
+    _pack(root, "Fanatics", "1-01", "a.pdf")
+    _pack(root, "Fanatics Paris", "12349-02-74-102", "b.pdf")
     rows = L.rows_from_table(_table(_line("FANATICS PARIS", "12349-02-74-102", "10 off")))
-    d = _decide(rows, root, ledger)["12349-02-74-102"]
-    assert d.status == "waiting" and "Fanatics" in d.reason
-    assert "LIVE_ENQUIRY_CUSTOMER_FOLDERS" in d.reason
-    monkeypatch.setenv("SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS", json.dumps(
-        {"FANATICS PARIS": "Fanatics"}))
-    assert _decide(rows, root, ledger)["12349-02-74-102"].status == "ready"
+    assert _decide(rows, root, ledger)["12349-02-74-102"].located.client_folder_name \
+        == "Fanatics Paris"
+    assert not L._one_leads_the_other(["FANATIC", "SPORT"], ["FANATIC", "PARI"])
 
 
 def test_no_folder_or_no_drawings_waits_and_two_folders_that_fit_hold(root, ledger):
