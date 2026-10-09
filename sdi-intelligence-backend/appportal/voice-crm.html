@@ -951,7 +951,10 @@ function encodeWav(chunks, inRate, outRate){
 // The mic is normally released before every reply, so replies play loud and
 // through the speaker. If re-opening it makes the phone ask for permission
 // again (Chrome on iPhone can), it is kept open between turns instead.
-let KEEP_MIC=false, KEPT_STREAM=null, MIC_OPENS=0;
+// Chrome on iPhone shows a "Microphone access allowed" banner every time the
+// mic is opened, which was every turn (Nick, 8 Oct): there it is kept open
+// for the whole conversation from the start, and released when it ends.
+let KEEP_MIC=/CriOS/.test(UA), KEPT_STREAM=null, MIC_OPENS=0;
 function liveStream(s){ return s&&s.getAudioTracks().some(t=>t.readyState==='live'&&!t.muted); }
 function releaseMic(){ if(KEPT_STREAM){ KEPT_STREAM.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); KEPT_STREAM=null; } }
 async function startRecording(mode){

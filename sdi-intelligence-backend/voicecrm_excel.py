@@ -72,6 +72,11 @@ def _norm(name) -> str:
     return " ".join(str(name or "").split()).lower()
 
 
+def fingerprint(cells: list) -> str:
+    """Public name for the row version stamp (used by voicecrm.confirm)."""
+    return _fingerprint(cells)
+
+
 def _fingerprint(cells: list) -> str:
     """Version stamp for one row: hash of its rendered text, order preserved."""
     return hashlib.sha256(
@@ -397,6 +402,10 @@ class ExcelStore:
             "eTag": _fingerprint(cells),
             "_wb": wb,
             "_addr": addr,
+            # The row as read and each column's place in it: lets confirm()
+            # tell this person's own just-saved changes from someone else's.
+            "_cells": cells,
+            "_col": {h: j for j, h in enumerate(headers) if h},
         }, None
 
     def is_formula(self, token: str, item: dict, field: str) -> bool:

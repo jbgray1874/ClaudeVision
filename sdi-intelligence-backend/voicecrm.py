@@ -458,6 +458,29 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
     }
 
 
+def _only_own_changes(item: dict, entry: dict) -> bool:
+    """True when the row differs from the read-back only by changes this same
+    person has saved to it since - e.g. "end date today, status completed" is
+    two saves to one row, and the second must not see the first as someone
+    else's edit. Those cells are put back to their earlier values and the row
+    re-stamped: if that matches the stamp taken at the read-back, nothing
+    else changed. Excel rows only; a SharePoint List keeps its strict check."""
+    cells, cols = item.get("_cells"), item.get("_col")
+    if not (EXCEL and cells is not None and cols):
+        return False
+    own = _journal.applied_to(entry["item_id"], entry["user_oid"], entry["created"],
+                              exclude=entry["proposal_id"])
+    if not own:
+        return False
+    cells = list(cells)
+    for change in reversed(own):                    # newest first, back to the start
+        j = cols.get(change["field"])
+        if j is None or j >= len(cells):
+            return False
+        cells[j] = change["old_value"] or ""
+    return voicecrm_excel.fingerprint(cells) == entry["etag"]
+
+
 @router.post("/api/voicecrm/confirm")
 def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require_user)):
     """Apply a proposal, once. A repeated confirm returns the first outcome."""
@@ -499,8 +522,10 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
         return {"state": "not_your_record", "detail": "That record is no longer yours."}
 
     # Someone else edited the record while we were talking about it. Abandon the
-    # proposal rather than overwrite their change.
-    if entry["etag"] and item.get("eTag") and item["eTag"] != entry["etag"]:
+    # proposal rather than overwrite their change. Changes this person saved to
+    # the same row a moment ago (the earlier parts of one "yes") don't count.
+    if (entry["etag"] and item.get("eTag") and item["eTag"] != entry["etag"]
+            and not _only_own_changes(item, entry)):
         _journal.finish(body.proposal_id, "conflict",
                         "The record changed between proposal and confirmation.")
         return {"state": "conflict",
@@ -753,6 +778,10 @@ Dates: resolve relative dates ("next Tuesday", "end of the month") against
 "today", and write new values as YYYY-MM-DD. Never guess the year or swap day
 and month; ask if unclear. The sheet shows dates month-first (9/4/2026 is
 4 September 2026) - say dates in words when speaking ("the fourth of September").
+
+If they ask you to report a problem or an error, say that every failed or
+partly saved update is already recorded automatically for James to look at,
+so there is nothing else they need to do, then carry on helping.
 
 Never invent facts that are not in the records. Interpreting a misheard name
 as the job it plainly sounds like is not guessing; making up a value, date or
