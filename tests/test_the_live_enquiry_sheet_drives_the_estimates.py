@@ -381,3 +381,45 @@ def test_the_portal_client_speaks_the_pages_api():
         server.shutdown()
     assert seen[0] == ("/api/estimate", "k", "8188-08")
     assert seen[1][:2] == ("/api/estimate/abc123", "k")
+
+
+# ── the share as it is today (9 Oct scan) ─────────────────────────────────────────────
+def test_an_older_pack_at_the_root_is_found_by_its_exact_number(root, ledger):
+    """The first live scan: Avanti's packs sit at the root, named by drawing number —
+    "12633-10-GA-AvantiConsumableHolderandChillerDisplay" — not under an Avanti folder."""
+    _pack(root, "12633-10-GA-AvantiConsumableHolderandChillerDisplay", ".", "12633-10-GA.pdf")
+    _pack(root, "12633-10-02-GA Bracket", ".", "x.pdf")            # another drawing
+    _pack(root, "12120-01-GA- DIGITAL TICKETING BRACKET", ".", "y.pdf")
+    rows = L.rows_from_table(_table(_line("Avanti", "12633-10-GA", "Consumable holder 50 off"),
+                                    _line("M&S", "12120-01-GA", "10 off")))
+    got = _decide(rows, root, ledger)
+    d = got["12633-10-GA"]
+    assert d.status == "ready" and d.located.folder.name.startswith("12633-10-GA-Avanti")
+    assert "at the root" in d.located.reason
+    assert L.request_body(d)["client"] == "Avanti"
+    assert got["12120-01-GA"].status == "ready"
+
+
+def test_a_digit_after_the_number_is_another_drawing():
+    assert L.names_the_drawing("12633-10-GA-Avanti", "12633-10")
+    assert L.names_the_drawing("1282 - Milwaukee Wall Bay", "1282")
+    assert not L.names_the_drawing("12633-10-02-GA", "12633-10")
+    assert not L.names_the_drawing("12633-100-GA", "12633-10")
+    assert not L.names_the_drawing("Avanti", "12633-10")
+
+
+def test_the_customer_folder_wins_over_the_root(root, ledger):
+    _pack(root, "M&S", "8188-08", "ga.pdf")
+    _pack(root, "8188-08 old copy", ".", "old.pdf")
+    rows = L.rows_from_table(_table(_line("M&S", "8188-08", "10 off")))
+    d = _decide(rows, root, ledger)["8188-08"]
+    assert d.located.folder == root / "M&S" / "8188-08" and "at the root" not in d.reason
+
+
+def test_a_named_baseline_marks_a_job_whose_pack_is_not_found(root, ledger):
+    rows = L.rows_from_table(_table(_line("Avanti", "12633-01-GA", "Wine lifter 50 off"),
+                                    _line("Avanti", "12633-02-GA", "Beer plinth 50 off")))
+    assert L.baseline(rows, [L.LiveEnquiryShare(root)], ledger) == []      # unnamed: needs a pack
+    assert L.baseline(rows, [L.LiveEnquiryShare(root)], ledger, ["12633-01-GA"]) == ["12633-01-GA"]
+    got = _decide(rows, root, ledger)
+    assert got["12633-01-GA"].status == "done" and got["12633-02-GA"].status == "waiting"

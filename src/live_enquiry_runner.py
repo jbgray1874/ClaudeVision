@@ -17,6 +17,9 @@ folder under that, and the drawings directly in it are the pack — never its su
 
     <root>\\M&S\\8188-08\\0348503_8188-08-GA_..._REV_H.PDF
 
+The older layout is found too: a pack at the root named by its exact drawing number,
+"12633-10-GA-AvantiConsumableHolderandChillerDisplay". The customer's folder is looked in first.
+
 THE PORTAL DOES THE ESTIMATE. Every ready row is queued through POST /api/estimate exactly as a
 person queues it from the page — same staging, same runner, same deliverables, filed to the
 same place — and the next row is queued only when that one has finished. Nothing here prices
@@ -215,6 +218,21 @@ def _lead_token(folder_name: str) -> str:
     return re.split(r"\s+-\s+|\s+|\(", folder_name.strip(), maxsplit=1)[0]
 
 
+def names_the_drawing(folder_name: str, key: str) -> bool:
+    """A folder named by this drawing: its number, then nothing, a sheet tail or words.
+    "12633-10-GA-AvantiConsumableHolder" names 12633-10-GA; "12633-10-02-GA" does not — a
+    digit after the number is another drawing, never a description."""
+    if not key:
+        return False
+    if drawing_key(_lead_token(folder_name)) == key or drawing_key(folder_name) == key:
+        return True
+    flat = re.sub(r"\s+", "", str(folder_name or "").upper().replace("_", "-"))
+    if not flat.startswith(key):
+        return False
+    rest = flat[len(key):]
+    return rest == "" or bool(re.match(r"^-(?:(?:GA|SA)\d*)?(?:-?[A-Z(]|$)", rest))
+
+
 def _customer_folders_map() -> Dict[str, str]:
     pairs = dict(getattr(config, "LIVE_ENQUIRY_CUSTOMER_FOLDERS", {}) or {})
     extra = os.getenv("SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS", "")
@@ -280,34 +298,45 @@ class LiveEnquiryShare:
         want = customer_key(_customer_folders_map().get(customer_key(row.customer),
                                                         row.customer))
         client = [c for c in clients if customer_key(c.name) == want]
-        if not client:
-            close = [c.name for c in clients
-                     if want and (want in customer_key(c.name) or customer_key(c.name) in want)]
-            hint = (f"; folders that look close: {', '.join(close)} — rename the folder, or "
-                    f"add the pair to LIVE_ENQUIRY_CUSTOMER_FOLDERS") if close else ""
-            return Located("waiting", f"no '{row.customer}' folder under the Live Enquiry root "
-                                      f"yet{hint}", source=self.name)
-        client_dir = client[0]
         key = drawing_key(row.drawing)
-        hits = [d for d in _subfolders(client_dir)
-                if drawing_key(_lead_token(d.name)) == key or drawing_key(d.name) == key]
+        client_dir = client[0] if client else None
+        hits = ([d for d in _subfolders(client_dir) if names_the_drawing(d.name, key)]
+                if client_dir else [])
+        at_root = False
         if not hits:
+            # THE OLDER LAYOUT: a pack at the root named by its drawing number,
+            # "12633-10-GA-AvantiConsumableHolderandChillerDisplay". The number must be exact.
+            hits = [d for d in clients if names_the_drawing(d.name, key)]
+            at_root = bool(hits)
+        if not hits:
+            if client_dir is None:
+                close = [c.name for c in clients if want and not names_the_drawing(c.name, key)
+                         and (want in customer_key(c.name) or customer_key(c.name) in want)]
+                hint = (f"; folders that look close: {', '.join(close)} — rename the folder, "
+                        f"or add the pair to LIVE_ENQUIRY_CUSTOMER_FOLDERS") if close else ""
+                return Located("waiting", f"no '{row.customer}' folder under the Live Enquiry "
+                                          f"root, and no {row.drawing} pack at the root, "
+                                          f"yet{hint}", source=self.name)
             return Located("waiting", f"no {row.drawing} folder under {client_dir.name} yet",
                            client_folder_name=client_dir.name, source=self.name)
+        where = "the root" if at_root else client_dir.name
+        client_name = "" if at_root else client_dir.name
         if len(hits) > 1:
-            return Located("held", f"{len(hits)} folders under {client_dir.name} fit "
-                                   f"{row.drawing}: {', '.join(h.name for h in hits)} — "
-                                   f"leave one", client_folder_name=client_dir.name,
-                           source=self.name)
+            return Located("held", f"{len(hits)} folders under {where} fit {row.drawing}: "
+                                   f"{', '.join(h.name for h in hits)} — leave one",
+                           client_folder_name=client_name, source=self.name)
         folder = hits[0]
         files = pack_files(folder)
         drawings = [p for p in files if p.suffix.lower() in DRAWING_EXTENSIONS]
+        old_layout = (f" (at the root, not under a '{row.customer}' folder)" if at_root else "")
         if not drawings:
-            return Located("waiting", f"{folder.name} has no drawings in it yet (only files "
-                                      f"directly in the folder are read)", folder=folder,
-                           client_folder_name=client_dir.name, files=files, source=self.name)
-        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}", folder=folder,
-                       client_folder_name=client_dir.name, files=files, source=self.name)
+            return Located("waiting", f"{folder.name}{old_layout} has no drawings in it yet "
+                                      f"(only files directly in the folder are read)",
+                           folder=folder, client_folder_name=client_name, files=files,
+                           source=self.name)
+        return Located("found", f"{len(drawings)} drawing(s) in {folder.name}{old_layout}",
+                       folder=folder, client_folder_name=client_name, files=files,
+                       source=self.name)
 
 
 class DesignArea:
@@ -461,8 +490,16 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
             return Decision(row, "held", f"the same job as row {seen[key]}")
         seen[key] = row.row
     located = locate(row, sources)
+    job = ledger["jobs"].get(key) or {}
+    attempts = job.get("attempts") or []
+    if not attempts and job.get("baseline") == "*":
+        return Decision(row, "done", f"run by hand before the runner (baselined "
+                                     f"{job.get('baselined_at')})", located=located)
     if located.status != "found":
         return Decision(row, located.status, located.reason, located=located)
+    if not attempts and job.get("baseline") == fingerprint(located.files):
+        return Decision(row, "done", f"run by hand before the runner (baselined "
+                                     f"{job.get('baselined_at')})", located=located)
     qty, qsource = quantities_for(row, located, ledger.get("quantities", {}))
     if not qty:
         return Decision(row, "held",
@@ -470,16 +507,11 @@ def decide(row: EnquiryRow, sources: Sequence[Any], ledger: Dict[str, Any],
                         f"{config.LIVE_ENQUIRY_QTY_FILES[0]} in {located.folder.name}, or "
                         f"`qty {row.drawing} 1,5,10`", located=located)
     fp = fingerprint(located.files)
-    job = ledger["jobs"].get(key) or {}
-    attempts = job.get("attempts") or []
     last = attempts[-1] if attempts else {}
     d = Decision(row, "ready", "first run", located=located, quantities=qty,
                  quantity_source=qsource, fingerprint=fp, last=last)
     if not last:
-        if job.get("baseline") == fp:
-            d.status, d.reason = "done", f"run by hand before the runner (baselined " \
-                                         f"{job.get('baselined_at')})"
-        elif job.get("baseline"):
+        if job.get("baseline"):
             d.reason = "the pack has changed since it was baselined"
         return d
     same = last.get("fingerprint") == fp and list(last.get("quantities") or []) == qty
@@ -513,7 +545,7 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
     The sheet carries jobs estimated by hand before this runner existed; started cold it would
     queue every one of them again. A baselined job stays done until its pack changes. Only
     rows asked for (AI CHECK YES) whose pack is on the share are marked, and with `only`, just
-    those drawings."""
+    those drawings — which are marked even where their pack is not found."""
     want = {drawing_key(d) for d in only}
     marked: List[str] = []
     for row in rows:
@@ -524,13 +556,15 @@ def baseline(rows: Sequence[EnquiryRow], sources: Sequence[Any], ledger: Dict[st
         if _not_one_drawing(row.drawing) or not row.customer:
             continue
         located = locate(row, sources)
-        if located.status != "found":
+        if located.status != "found" and not want:
             continue
         job = ledger["jobs"].setdefault(job_key(row), {
             "customer": row.customer, "drawing": row.drawing, "attempts": []})
         if job.get("attempts"):
             continue                      # it has really run; its own record stands
-        job["baseline"] = fingerprint(located.files)
+        # NAMED, IT IS DONE WHEREVER ITS PACK IS: "baseline 12633-01-GA" for a job estimated by
+        # hand from a folder the share does not lay out as customer\drawing. "*" = any pack.
+        job["baseline"] = fingerprint(located.files) if located.status == "found" else "*"
         job["baselined_at"] = _now()
         marked.append(row.drawing)
     return marked
