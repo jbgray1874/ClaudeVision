@@ -5676,6 +5676,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # (5496 / 6364mm on 11762-17) is an OUTLINE, never a developed length, so it is NOT used.
         _wl = _safe_float(part.get("wire_length_mm"))
         _length_assumed = False
+        # A LENGTH DERIVED FROM THE SHEET'S OWN OUTLINE BEATS A DEFAULT (D-437). The sheet that
+        # draws a wire frame states its outline (1081 × 206 EXT.); wire_sheet_reader records
+        # the perimeter beside the part, never as the schedule length the bar formula trusts.
+        # It is costed here, said to be derived, and left as an estimator input to confirm.
+        _length_derived = False
+        if (not _wl or _wl <= 0) and _safe_float(part.get("wire_length_derived_mm")):
+            _wl = float(part["wire_length_derived_mm"])
+            _length_derived = True
         if not _wl or _wl <= 0:
             # Assume a SHORT developed length by FORM until the detail is measured: a compact
             # formed wire (a U, a hook, a clip) is a fraction of a stand / frame. Config-driven,
@@ -5704,7 +5712,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at £{_rate_t:.0f}/t"
             + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
                "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
-               if _length_assumed else "."))
+               if _length_assumed else
+               f" — developed length DERIVED from {part.get('wire_length_derived_from')}: the "
+               f"wire runs round the outline, so this is the frame's perimeter and no more; "
+               f"confirm it, or give the schedule length."
+               if _length_derived else "."))
         return {
             "material": material,
             "thickness_mm": None,               # a DIAMETER is not a thickness
@@ -5718,21 +5730,25 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "stock_estimate": {
                 "wire_length_mm": _wl, "wire_gauge_mm": _wg,
                 "length_assumed": _length_assumed,
+                "length_derived_from": (str(part.get("wire_length_derived_from") or "")
+                                        if _length_derived else None),
                 "metres_per_tonne": round(_mpt, 1) if _mpt else None,
             },
             "cost_method": ("wire_tonne_rate_assumed_length" if _length_assumed
+                            else "wire_tonne_rate_outline_length" if _length_derived
                             else "workbook_bar_formula"),
             "stock_form": "wire",
             "wire_gauge_mm": _wg,
             "wire_length_mm": _wl,
             "requires_flat_blank": False,
-            "estimator_input_required": _length_assumed,
+            "estimator_input_required": _length_assumed or _length_derived,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
             "price_source": _build_price_source_metadata(
                 external_result, fallback_source="config_wire_cost_per_tonne",
                 applied=True,
                 applied_basis=("assumed_length_x_tonne_rate" if _length_assumed
+                               else "outline_perimeter_x_tonne_rate" if _length_derived
                                else "bar_diameter_x_length_gauge_lookup")),
         }
 

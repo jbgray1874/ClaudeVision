@@ -4898,6 +4898,18 @@ def _finalize_scan_summary(
     # 3 mm mild steel. A material that arrives after the price is a note, not a material.
     _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
                                      summary.get("pages") or [])
+    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
+    # costing reaches for a default gauge and an assumed length.
+    try:
+        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
+        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
+                                 summary.get("pages") or [])
+        if _n_wire:
+            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
+                  f"that draws them", flush=True)
+    except Exception as _wire_exc:                                  # noqa: BLE001
+        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
