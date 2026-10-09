@@ -260,7 +260,7 @@ QUANTITY_PATTERN = r"\b(?:QTY|QUANTITY)\s*[:\-]?\s*(\d+)\b"
 # kept because other people's drawings do write it that way.
 THICKNESS_PATTERN = (
     r"\b(?:"
-    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE)"
+    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE|MATL)"
     r"|(?:THK|THICKNESS|GAUGE)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)?"
     r")\b"
 )
@@ -4628,3 +4628,28 @@ LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
 # The design area, through the endpoint James will provide. Unset: the share is the only
 # source of a pack.
 DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
+
+# The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
+# code-shaped token with a longer run is words joined across spaces — the M&S border's
+# "• 6063 - ALUMINIUM FOR EXTRUSION" printed below the drawing-number cell (D-421).
+TITLE_BLOCK_CODE_MAX_LETTER_RUN = 4
+
+# A size followed by one of these words is the size of that thing, not a sheet's gauge (D-421):
+# "20MM MAG TAPE" and "20MM MAGTAPE TO BASE FOLD" on 8188-08 were read as a 20 mm gauge and,
+# as the pooled pack's only figure, handed to every part. Read by the unlabelled fallback only;
+# a labelled THK / THICKNESS / MATL. figure is the sheet's statement and is not filtered.
+GAUGE_NOT_BEFORE_WORDS = ("TAPE", "MAGTAPE", "MAG", "DOWEL", "DOWELS", "GLUE", "MAGNET",
+                          "MAGNETS", "SCREW", "SCREWS", "BOLT", "RIVET", "INSERT", "NUTSERT",
+                          "HOLE", "HOLES", "DIA", "WIDE", "LONG", "DEEP", "HIGH", "FEET", "FOOT",
+                          "LIP", "GAP", "RADIUS", "BASE", "EDGE", "EDGING", "BAND", "STRIP",
+                          "MESH", "X")
+
+# The family a canonical material name belongs to, for "does this document state one material
+# or several" (D-421). Substrings of the canonical name; the first family that matches wins.
+MATERIAL_FAMILY_WORDS = (
+    ("STEEL", ("STEEL", "ZINTEC", "GALV")),
+    ("BOARD", ("MDF", "TIMBER", "PLY", "WOOD", "BOARD", "VENEER")),
+    ("ALUMINIUM", ("ALUMIN",)),
+    ("PLASTIC", ("ACRYLIC", "PERSPEX", "PMMA", "PETG", "POLYCARB", "PVC", "FOAMEX", "ABS",
+                 "HIPS")),
+)

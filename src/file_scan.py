@@ -1818,6 +1818,22 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     return json_path, text_path, log_path, csv_path
 
 
+def _material_family(name: Any) -> str:
+    """The family a stated material belongs to — MILD STEEL and ZINTEC are one, MDF and
+    TIMBER are one (boards), ACRYLIC another — by the engine's own canonical material."""
+    try:
+        from json_normaliser import normalise_material
+        canon = str(normalise_material(str(name or "")) or "").upper()
+    except Exception:                                                     # noqa: BLE001
+        canon = str(name or "").upper()
+    if not canon or canon in {"UNKNOWN", "NONE", "?"}:
+        return ""
+    for family, words in (getattr(config, "MATERIAL_FAMILY_WORDS", None) or ()):
+        if any(w in canon for w in words):
+            return family
+    return canon
+
+
 def _inherit_document_material_to_parts(
     parts: List[Dict[str, Any]],
     document_analysis: Dict[str, Any],
@@ -1837,6 +1853,15 @@ def _inherit_document_material_to_parts(
     tb_norm = (document_analysis.get("title_block") or {}).get("normalized") or {}
     doc_mat_raw = tb_norm.get("primary_material") or None
     if not doc_mat_norm and not doc_mat_raw:
+        return
+    # A DOCUMENT OF SEVERAL MATERIALS HAS NONE TO HAND DOWN (D-421). 8188-08 pools a GA
+    # ("MATERIAL: VARIOUS"), steel, acrylic and MDF sheets; its document material came out
+    # TIMBER and the wire frame and two wave layers — parts with no sheet of their own —
+    # inherited it. One family stated is a GA's material; two or more is a mixed pack.
+    _families = {_material_family(m) for m in
+                 ((document_analysis.get("title_block") or {}).get("materials") or [])}
+    _families.discard("")
+    if len(_families) > 1:
         return
     for part in parts:
         # Display boards (VINYL-* / DISPLAY BOARD) must NOT inherit the assembly's

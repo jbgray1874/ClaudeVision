@@ -949,14 +949,31 @@ def strip_weights_not_the_parts(text: str) -> str:
     return _weight_qualifier_re().sub(" ", text or "")
 
 
+def _not_before_words() -> set:
+    if "not_before" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _w = getattr(_cfg, "GAUGE_NOT_BEFORE_WORDS", None) or ()
+        except Exception:                                            # noqa: BLE001
+            _w = ()
+        _VOCAB_RES["not_before"] = {str(w).upper() for w in _w}
+    return _VOCAB_RES["not_before"]
+
+
 def _extract_thickness_fallbacks(text: str) -> List[str]:
     # A SECTION'S SIZE IS NOT A GAUGE (D-406): "40 x 20mm OVAL TUBE" read 20 mm on 12675-01.
+    # NOR IS A TAPE'S WIDTH (D-421): "20MM MAG TAPE" read 20 mm on 8188-08 — a size followed by
+    # the thing it sizes (config.GAUGE_NOT_BEFORE_WORDS) is that thing's.
     normalized = strip_section_sizes(_text_for_gauges(text))
-    values = _findall_unique(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE)
+    stop = _not_before_words()
     filtered: List[str] = []
-    for value in values:
+    for m in re.finditer(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE):
+        value = m.group(1)
         number = _safe_float(value)
         if number is None:
+            continue
+        nxt = re.match(r"\s*([A-Za-z]+)", normalized[m.end():m.end() + 24])
+        if nxt and nxt.group(1).upper() in stop:
             continue
         if 0.2 <= number <= 20.0 and value not in filtered:
             filtered.append(value)
