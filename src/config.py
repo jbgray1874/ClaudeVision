@@ -658,6 +658,12 @@ CUT_METHOD_BY_MATERIAL: list = [
      "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
 
+# THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
+# draw a part, legend removed; one method named stamps it, two named put the question on the
+# part and the rule above prices the working figure.
+CUT_METHOD_WORDS = {"laser": ("LASER", "LASERED", "LASER CUT"),
+                    "router": ("CNC", "ROUTED", "ROUTER", "PIN ROUT", "PIN-ROUT")}
+
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
 # ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack

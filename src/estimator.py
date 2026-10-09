@@ -5191,6 +5191,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         or _sub_asm_by_bom
         or _canonical_parent
     )
+    # A WELDMENT CUT FROM ITS OWN SECTION CUT LIST CARRIES ITS OWN STEEL (D-439). 8188-29-001,
+    # the goalpost: its sheet's table lists the pieces (2 x 300, 1 x 1,272 of 25.4 x 25.4 x
+    # 1.22) and its note says WELD AND DRESS THE CORNERS. Read as a parent, its material was
+    # "carried by children" it does not have — £0.00 of tube on the replay once the 300 mm
+    # catalogue row (rightly) no longer matched. The pieces are its stock, costed as the
+    # section below; the weld stays the parent's work. A parent with children of its own
+    # still defers to them.
+    _own_cut_list = (isinstance(part.get("section_stock"), dict)
+                     and len([x for x in (part["section_stock"].get("cut_lengths_mm") or [])
+                              if _safe_float(x)]) >= 1
+                     and not (part.get("assembly_children") or []))
+    if _is_weldment_parent and _own_cut_list:
+        _is_weldment_parent = False
+        _note = ("weldment cut from its own section cut list — the pieces are its stock, "
+                 "priced as the section; the weld is its work")
+        if _note not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(_note)
     if _is_weldment_parent:
         # ONE PARENT TEST, NOT TWO THAT DISAGREE.
         #
@@ -9165,6 +9182,42 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _laser_signal = True
         if _cut_method in ("guillotine", "router", "rout", "saw", "cnc_rout"):
             _laser_signal = False
+        # A MEASURED FLAT IS CUT BY SOMETHING (D-440). Dropping the laser for want of a signal
+        # left 8188-08-015 — a 2,355 x 100 acrylic layer with a DXF flat — cut by nothing. Where
+        # no machine is named, the shop's own rule for the material names it (config
+        # CUT_METHOD_BY_MATERIAL: acrylic is lasered unless the drawing or the CAM calls for
+        # CNC); where the drawing names the router, the router is charged, at its department's
+        # rate, and the laser is not. Both are said on the part.
+        _cut_basis = ""
+        if not (_laser_signal or _bonded) and _L > 0 and _W > 0:
+            if _cut_method in ("router", "rout", "cnc_rout"):
+                _cut_basis = "router"
+            elif not _cut_method:          # a named guillotine or saw is a cutter; the rule is for silence
+                _mat_key = re.sub(r"[\s-]+", "_", str(part.get("normalized_material") or "").upper())
+                _rule = next((r for r in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or [])
+                              if str(r.get("material") or "").upper() == _mat_key), None)
+                _method = str((_rule or {}).get("method") or "").lower()
+                if _method == "laser":
+                    _laser_signal, _cut_basis = True, "shop rule"
+                elif _method == "router":
+                    _cut_basis = "router"
+        if _cut_basis == "router":
+            _rt.pop("laser_cutting", None)
+            _st.pop("laser_cutting", None)
+            # timed as the metal CNC row is (config LABOUR_RULES cnc_routing: contour ÷ feed,
+            # never under the department's minimum run), on the same perimeter the laser used
+            _cnc_rule = LABOUR_RULES.get("cnc_routing") or LABOUR_RULES.get("cnc") or {}
+            _cnc_sec = max(float(_cnc_rule.get("min_run_min", 8.0)) * 60.0,
+                           2.0 * (_L + _W) * float(_cnc_rule.get("sec_per_mm_contour", 0.04)))
+            _rt.setdefault("cnc_routing", round(_cnc_sec / 60.0, 4))
+            _st.setdefault("cnc_routing", round(float(_cnc_rule.get("setup_min", 4.0)), 2))
+            part.setdefault("review_flags", []).append(
+                f"cut on the CNC, not the laser — "
+                f"{part.get('cut_method_source') or 'the drawing names the router'}")
+        elif _cut_basis == "shop rule":
+            part.setdefault("review_flags", []).append(
+                f"lasered per the shop rule for {str(part.get('normalized_material') or '').upper()} "
+                f"— the drawing names no cutter; confirm laser or CNC")
         if not (_laser_signal or _bonded):
             # not lasered: drop the laser op the block added above
             _rt.pop("laser_cutting", None)
@@ -9250,6 +9303,8 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                         "linebend", "glue"):
             if _rt.get(_acr_op) or _st.get(_acr_op):
                 record_operation(part, _acr_op, "acrylic_route_rule")
+        if "cnc_routing" in _rt:
+            record_operation(part, "cnc_routing", "acrylic_route_rule")
 
         process["acrylic_ops_canonical"] = True
         process["acrylic_route_v2"] = True

@@ -4910,6 +4910,17 @@ def _finalize_scan_summary(
     except Exception as _wire_exc:                                  # noqa: BLE001
         print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
               flush=True)
+    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
+    try:
+        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
+        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
+                                  summary.get("pages") or [])
+        if _n_cut:
+            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
+                  f"sheet that draws them", flush=True)
+    except Exception as _cut_exc:                                   # noqa: BLE001
+        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
+              flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
