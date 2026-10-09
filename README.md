@@ -224,6 +224,16 @@ python src\main.py --pdf "<pack>.pdf" --generate-ai-spreadsheet --deliverables `
 | `SDI_MAX_PARITY_UPLOAD_MB` | *(portal backend)* Cap on each side of an uploaded parity comparison (default **20**). Either side may instead be a path on the share, which is not capped |
 | `SDI_BRAND_ASSETS_DIR` | *(portal backend)* Folder holding the brand logos the portal header serves — the **same folder** `src/client_quote_html.py` reads for the quotation header, so the two cannot show different marks (default `C:\ClaudeVision\assets\customer_logos`) |
 | `SDI_BRAND_LOGO_KEY` | *(portal backend)* Filename stem of SDI's own logo within that folder, matched case- and space-insensitively (default `wearesdi`) |
+| `SDI_LIVE_ENQUIRY_WORKBOOK` | *(Live Enquiry runner, `run-live-enquiry.ps1`)* UNC path of the estimators' Live Enquiry workbook. Read, never written. **No default** — where the live copy is kept is the estimators' to say |
+| `SDI_LIVE_ENQUIRY_SHEET` | *(Live Enquiry runner)* The tab holding the live rows (default `Sheet1`) |
+| `SDI_LIVE_ENQUIRY_PASSWORD` | *(Live Enquiry runner)* The workbook's password, if it carries one (needs `msoffcrypto-tool`). `.env` only |
+| `SDI_LIVE_ENQUIRY_ROOT` | *(Live Enquiry runner)* The packs: `<root>\<customer>\<drawing>` (default the UNC `...\AI Estimating\Live Enquiry`) |
+| `SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS` | *(Live Enquiry runner)* JSON pairs, sheet Customer → share folder name, for a customer whose folder is named otherwise (e.g. `{"FANATICS PARIS": "Fanatics"}`). Nothing is matched nearly without one |
+| `SDI_LIVE_ENQUIRY_EMAIL_TO` | *(Live Enquiry runner)* Who the portal e-mails each finished estimate to. **Empty** (default): filed, sent to nobody |
+| `SDI_LIVE_ENQUIRY_POLL_MINUTES` / `SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES` / `SDI_LIVE_ENQUIRY_MAX_ATTEMPTS` | *(Live Enquiry runner)* How often `watch` reads the sheet (**15**), how long it waits on one run before it stops queueing behind it (**240**), and how many tries a failing job gets before it waits for `retry` (**1**) |
+| `SDI_LIVE_ENQUIRY_LEDGER` | *(Live Enquiry runner)* Its record of every run (default `output\live_enquiry\ledger.json`); `live_enquiry_status.csv` is written beside it on every scan |
+| `SDI_DESIGN_AREA_ENDPOINT` | *(Live Enquiry runner)* The design area's endpoint, a second source of packs. **Unset** until it is given; the share is then the only source |
+| `SDI_SERVER` / `SDI_API_KEY` | *(runner and Live Enquiry runner)* The portal the estimates are queued through (default `http://10.0.0.5:8071`) and its `X-SDI-Key` |
 
 ## Quick health check
 
