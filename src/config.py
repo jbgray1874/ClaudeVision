@@ -4603,11 +4603,10 @@ LIVE_ENQUIRY_HOLD_NOTES = (r"\bWAIT(?:ING)?\b.*\bDRAWINGS?\b", r"\bON\s+HOLD\b",
 # A drawing number's sheet-type tail, so the sheet's "12633-01-GA" finds the folder
 # "12633-01" and the folder "12633-01-GA Wine lifter" finds "12633-01".
 LIVE_ENQUIRY_SHEET_SUFFIX = r"[-_ ](?:GA|SA)\d*$"
-# Where the share's folder name differs from the sheet's Customer: sheet name -> folder name.
-# Empty by default — a customer matches its folder by name, and nothing is matched "nearly"
-# (a near match is how one customer's pack gets priced as another's). Extra pairs can be given
-# as JSON in SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS without a code change.
-LIVE_ENQUIRY_CUSTOMER_FOLDERS = {}
+# Words a customer's name carries that never tell two customers apart (D-423): the sheet's
+# Customer finds its folder by name, however either is spelt, with no list of aliases.
+LIVE_ENQUIRY_CUSTOMER_NOISE_WORDS = ("LTD", "LIMITED", "PLC", "UK", "GROUP", "THE", "INC",
+                                     "CO", "COMPANY")
 # A file in the drawing folder that states the quantities, for a row whose sheet gives none:
 # one line, e.g. "1, 5, 10, 50". The first is the run quantity, the rest are breaks.
 LIVE_ENQUIRY_QTY_FILES = ("QUANTITIES.txt", "QTY.txt")
