@@ -585,7 +585,7 @@ async def transcribe(request: Request, user: dict = Depends(auth.require_user)):
         return {"state": "too_long", "detail": "That was longer than a minute — please say it in shorter parts."}
     out = voicecrm_speech.transcribe(audio)
     print(f"[voicecrm.transcribe] user={(user or {}).get('email', '')} bytes={len(audio)} "
-          f"state={out.get('state')} chars={len(out.get('text', ''))} "
+          f"state={out.get('state')} chars={len(out.get('text', ''))} parts={out.get('parts', 0)} "
           f"secs={time.monotonic() - started:.1f}", flush=True)
     return out
 
