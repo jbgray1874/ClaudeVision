@@ -9723,6 +9723,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # A FIGURE PRICED ON AN UNRESOLVED READING (D-432) travels with the costed record, or
         # the sheet writer — which reads only this dict — prints it as if nothing were asked.
         "_price_unresolved": part.get("_price_unresolved"),
+        # THE QUESTIONS TRAVEL WITH THE COSTED RECORD (D-433). A record the table reader adds
+        # after estimate_document is costed on a COPY (cost_uncosted_bought_in_records), and
+        # a question raised on the copy died with it: 8188-08's magnet line reached the 17:37
+        # book with no question at all. A snapshot, merged with the raw record's by issue.
+        "manufacturing_questions": [dict(q) for q in (part.get("manufacturing_questions")
+                                                      or []) if isinstance(q, dict)] or None,
     }
 
 

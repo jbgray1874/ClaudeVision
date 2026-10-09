@@ -794,12 +794,22 @@ def job_parts(source: Any) -> List[Dict[str, Any]]:
             continue
         identity = str(estimate.get("part_number") or "").strip().upper()
         merged = dict(provenance.get(identity) or {})
+        _raw_q = list(merged.get("manufacturing_questions") or [])
         # The estimate wins on everything it actually carries. A key present but empty must
         # not clobber a real reading from the drawing record — that is how a part with a
         # costed thickness and no geometry fields ended up looking like it had neither.
         for key, value in estimate.items():
             if value not in (None, "", [], {}) or key not in merged:
                 merged[key] = value
+        # ONE PART'S QUESTIONS, FROM BOTH RECORDS (D-433): the estimate's snapshot and the raw
+        # record's later ones are joined by issue, never one list replacing the other.
+        _qs, _seen_issue = [], set()
+        for _q in _raw_q + list(estimate.get("manufacturing_questions") or []):
+            if isinstance(_q, Mapping) and str(_q.get("issue") or "") not in _seen_issue:
+                _seen_issue.add(str(_q.get("issue") or ""))
+                _qs.append(_q)
+        if _qs:
+            merged["manufacturing_questions"] = _qs
         # ...except identity and multiplicity, which are the canonical answer by definition.
         merged["part_number"] = estimate.get("part_number")
         if estimate.get("quantity") is not None:
