@@ -431,6 +431,58 @@ async function post(url,data){
   return r.json();
 }
 
+// The answer as lines of JSON: each sentence of a spoken answer as soon as it
+// is written (onSay), then the full result. Anything unexpected - an older
+// server, the sign-in gateway, a proxy that won't stream - falls back to the
+// plain request, which handles all of those.
+async function postStream(url, data, onSay){
+  let r;
+  try{
+    r=await fetch(url+'/stream',{method:'POST',headers:{'Content-Type':'application/json'},
+                                body:JSON.stringify(data),redirect:'manual'});
+  }catch(e){ return post(url, data); }
+  // The sign-in gateway and server errors: handled exactly as post() does.
+  if(r.type==='opaqueredirect'||r.status===0){
+    if(renewSignIn()) throw new Error('refreshing sign-in');
+    throw new Error('your sign-in needs renewing — reload the page');
+  }
+  if(r.status===401){
+    saveReplay();
+    location.href='/auth/login?next='+encodeURIComponent('/app/voice-crm.html'+location.search);
+    throw new Error('signing you in again');
+  }
+  const ct=(r.headers&&r.headers.get&&r.headers.get('content-type'))||'';
+  if(r.status===404||r.status===405||(r.ok&&(!ct.includes('json')||!r.body||!r.body.getReader))){
+    diag('no streaming ('+r.status+')');          // an older server: ask the plain way
+    return post(url, data);
+  }
+  if(!r.ok){
+    diag('post http '+r.status+' interpret/stream');
+    throw new Error(r.status===502||r.status===504?'the server took too long to answer':'the server returned an error ('+r.status+')');
+  }
+  try{ sessionStorage.removeItem('sdiRenew'); }catch(e){}
+  const reader=r.body.getReader(), dec=new TextDecoder();
+  let buf='', result=null;
+  const line=l=>{
+    l=l.trim(); if(!l) return;
+    let o; try{ o=JSON.parse(l); }catch(e){ return; }
+    if(o.type==='say'){ if(o.text) onSay(o.text); }
+    else{ result=o; }
+  };
+  try{
+    for(;;){
+      const {done, value}=await reader.read();
+      if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      let i; while((i=buf.indexOf('\n'))>=0){ line(buf.slice(0,i)); buf=buf.slice(i+1); }
+    }
+    line(buf+dec.decode());
+  }catch(e){ diag('stream broke'); }
+  if(!result) throw new Error('the connection to the server dropped — check your signal and try again');
+  delete result.type;
+  return result;
+}
+
 // ── Voice loop ──────────────────────────────────────────────────────────────
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
@@ -520,10 +572,12 @@ const unlockTTS=unlockAudio;   // older name, still used by the briefing
 ['touchend','click','keydown'].forEach(ev=>document.addEventListener(ev,unlockAudio,{capture:true,passive:true}));
 
 function isSpeaking(){
+  if(CUR_Q&&!CUR_Q.finished&&!CUR_Q.cancelled&&CUR_Q.seq===SAY_SEQ) return true;   // between sentences too
   if(!AUDIO.paused&&!AUDIO.ended) return true;
   try{ return !!(window.speechSynthesis&&(speechSynthesis.speaking||speechSynthesis.pending)); }catch(e){ return false; }
 }
 function stopSpeaking(){
+  if(CUR_Q){ CUR_Q.cancelled=true; CUR_Q=null; }
   try{ AUDIO.pause(); }catch(e){}
   try{ if(window.speechSynthesis&&(speechSynthesis.speaking||speechSynthesis.pending)) speechSynthesis.cancel(); }catch(e){}
 }
@@ -548,7 +602,7 @@ async function keepAwake(on){
   }catch(e){}
 }
 
-let LAST_SAID='', SAY_SEQ=0, LAST_AUDIO_URL=null, LAST_AUDIO_TEXT='';
+let LAST_SAID='', SAY_SEQ=0, CUR_Q=null;
 // then === undefined: in a voice conversation, listen again afterwards.
 // then === null: say it and do nothing more (typed turns).
 // opts.quiet: speak without logging (the 🔊 replay). opts.private: the text
@@ -560,34 +614,96 @@ function say(text, then, opts){
   if(!opts.quiet){ clearThinking(); log('app', text, opts.private); LAST_SAID=text; }
   // Never listen while speaking: the mic would hear the reply.
   stopListening();
-  if(then===undefined) then=CONVO?()=>{ if(CONVO) startListening(PENDING?'confirm':'command'); }:null;
-  const seq=++SAY_SEQ;
-  let fired=false;
-  const once=()=>{ if(fired) return; fired=true; if(then&&seq===SAY_SEQ) then(); };
-  stopSpeaking();
-  if(USE_SERVER_VOICE()){
-    speakServer(text, seq).then(res=>{
-      if(seq!==SAY_SEQ) return;                 // a newer reply took over
-      if(res==='fallback') speakLocal(text, once); else once();
-    });
-  }else speakLocal(text, once);
+  if(then===undefined) then=listenAfter();
+  const q=newSpeech(then);
+  // The first sentence is fetched on its own so it starts sooner; the rest
+  // is fetched alongside it as one piece and plays straight after.
+  const parts=splitFirst(text);
+  parts.forEach(t=>q.add(t, true));
+  q.end();
 }
-// The reply in the natural voice. Resolves 'done', 'blocked' (shown, tap 🔊)
-// or 'fallback' (use the phone's own voice instead).
-async function speakServer(text, seq){
-  if(LAST_AUDIO_URL&&LAST_AUDIO_TEXT===text) return playUrl(LAST_AUDIO_URL, text);   // replay: no new request
-  let blob;
+function listenAfter(){ return CONVO?()=>{ if(CONVO) startListening(PENDING?'confirm':'command'); }:null; }
+function splitFirst(text){
+  const t=String(text||'').trim(), m=t.match(/^.{12,}?[.!?](?=\s+\S)/);
+  return m?[m[0], t.slice(m[0].length).trim()]:[t];
+}
+// A reply spoken as it arrives: sentences are queued and played in order,
+// each fetched in the natural voice as soon as it is queued (at most two
+// fetches per reply: the free voice tier allows 20 a minute). If the natural
+// voice can't play, the phone's own voice takes over for the rest.
+function newSpeech(then){
+  stopSpeaking();
+  const q={seq:++SAY_SEQ, list:[], i:0, ended:false, busy:false, fallback:false, blocked:false,
+           cancelled:false, finished:false, then, held:''};
+  CUR_Q=q;
+  // now: fetch this piece straight away. Otherwise only the first piece is,
+  // and later sentences wait to go up together when the reply is complete.
+  q.add=(t, now)=>{
+    t=String(t||'').trim(); if(!t) return;
+    if(now||!q.list.length){ push(t); }
+    else q.held=(q.held?q.held+' ':'')+t;
+  };
+  q.item=t=>{
+    const item={text:t};
+    if(USE_SERVER_VOICE()&&!q.fallback) item.audio=fetchVoice(t);
+    return item;
+  };
+  const push=t=>{ q.list.push(q.item(t)); pumpSpeech(q); };
+  q.end=then2=>{
+    if(then2!==undefined) q.then=then2;
+    if(q.held){ const h=q.held; q.held=''; push(h); }
+    q.ended=true; pumpSpeech(q);
+  };
+  return q;
+}
+async function pumpSpeech(q){
+  if(q.busy) return;
+  q.busy=true;
+  const live=()=>!q.cancelled&&q.seq===SAY_SEQ;
   try{
-    const r=await fetch('../api/voicecrm/speak',{method:'POST',redirect:'manual',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
-    const ct=(r.headers&&r.headers.get('content-type'))||'';
-    if(!r.ok||!ct.startsWith('audio/')){ diag('natural voice unavailable ('+r.status+')'); return 'fallback'; }
-    blob=await r.blob();
-  }catch(e){ diag('natural voice failed'); return 'fallback'; }
-  if(seq!==SAY_SEQ) return 'done';
-  if(LAST_AUDIO_URL) URL.revokeObjectURL(LAST_AUDIO_URL);
-  LAST_AUDIO_URL=URL.createObjectURL(blob); LAST_AUDIO_TEXT=text;
-  return playUrl(LAST_AUDIO_URL, text);
+    while(live()){
+      if(q.i>=q.list.length&&q.held){                // caught up: fetch what has arrived since
+        const h=q.held; q.held=''; q.list.push(q.item(h)); continue;
+      }
+      if(q.i>=q.list.length){
+        if(q.ended){ q.finished=true; if(CUR_Q===q) CUR_Q=null; if(q.then) q.then(); }
+        break;
+      }
+      const item=q.list[q.i++];
+      if(q.blocked) continue;                          // shown on screen; 🔊 plays it
+      let res='fallback';
+      if(item.audio&&!q.fallback){
+        const url=await item.audio;
+        if(!live()) break;
+        if(url) res=await playUrl(url, item.text);
+      }
+      if(!live()) break;
+      if(res==='blocked'){ q.blocked=true; continue; }
+      if(res==='fallback'){ q.fallback=true; await new Promise(r=>speakLocal(item.text, r)); }
+    }
+  }finally{ q.busy=false; }
+}
+// The natural voice for one piece of text, as a playable URL (null: use the
+// phone's voice). Recent pieces are kept, so 🔊 replays without a new fetch.
+const VOICE_CACHE=new Map();
+function fetchVoice(text){
+  if(VOICE_CACHE.has(text)) return VOICE_CACHE.get(text);
+  const p=(async()=>{
+    try{
+      const r=await fetch('../api/voicecrm/speak',{method:'POST',redirect:'manual',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+      const ct=(r.headers&&r.headers.get('content-type'))||'';
+      if(!r.ok||!ct.startsWith('audio/')){ diag('natural voice unavailable ('+r.status+')'); return null; }
+      return URL.createObjectURL(await r.blob());
+    }catch(e){ diag('natural voice failed'); return null; }
+  })();
+  VOICE_CACHE.set(text, p);
+  p.then(u=>{ if(!u) VOICE_CACHE.delete(text); });
+  while(VOICE_CACHE.size>12){
+    const k=VOICE_CACHE.keys().next().value, old=VOICE_CACHE.get(k); VOICE_CACHE.delete(k);
+    old.then(u=>{ if(u) setTimeout(()=>URL.revokeObjectURL(u),60000); });
+  }
+  return p;
 }
 function playUrl(url, text){
   return new Promise(resolve=>{
@@ -835,7 +951,10 @@ function encodeWav(chunks, inRate, outRate){
 // The mic is normally released before every reply, so replies play loud and
 // through the speaker. If re-opening it makes the phone ask for permission
 // again (Chrome on iPhone can), it is kept open between turns instead.
-let KEEP_MIC=false, KEPT_STREAM=null, MIC_OPENS=0;
+// Chrome on iPhone shows a "Microphone access allowed" banner every time the
+// mic is opened, which was every turn (Nick, 8 Oct): there it is kept open
+// for the whole conversation from the start, and released when it ends.
+let KEEP_MIC=/CriOS/.test(UA), KEPT_STREAM=null, MIC_OPENS=0;
 function liveStream(s){ return s&&s.getAudioTracks().some(t=>t.readyState==='live'&&!t.muted); }
 function releaseMic(){ if(KEPT_STREAM){ KEPT_STREAM.getTracks().forEach(t=>{ try{ t.stop(); }catch(e){} }); KEPT_STREAM=null; } }
 async function startRecording(mode){
@@ -973,8 +1092,34 @@ async function handleTranscript(t){
     return;
   }
   setState('Working out what you meant…');
-  const r=await post('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS,history});
+  // An answer is spoken sentence by sentence as it is written, instead of
+  // after the whole of it has arrived.
+  let q=null, bubble=null, heard='';
+  const onSay=part=>{
+    if(!q){
+      clearThinking(); stopListening();
+      q=newSpeech(null); bubble=log('app', part); heard=part;
+      setState('Answering…');
+    }else{
+      heard+=' '+part;
+      bubble.dataset.text=heard; bubble.innerHTML='<b>CRM</b> · '+esc(heard);
+      $('dvreply').textContent=heard; $('vclog').scrollTop=$('vclog').scrollHeight;
+    }
+    LAST_SAID=heard;
+    q.add(part);
+  };
+  let r;
+  try{ r=await postStream('../api/voicecrm/interpret',{transcript:t,projects:projSummary(),columns:COLUMNS,history}, onSay); }
+  catch(e){ if(q) stopSpeaking(); throw e; }
   CUR_TEXT=null; DRIVE_FAILS=0;
+  // Already spoken in full as it arrived: just finish off.
+  if(q&&r.say_streamed&&(r.state==='read'||r.state==='clarify')){
+    LAST_SAID=r.say; bubble.dataset.text=r.say;
+    q.end(TURN==='voice'?listenAfter():null);
+    if(!q.cancelled) setState(r.state==='clarify'?'Tap the mic to answer.':'Done. Tap the mic for the next one.');
+    return;
+  }
+  if(q){ stopSpeaking(); bubble.remove(); }       // the final answer differs: say that instead
 
   if(r.state==='update'){ IN_FLIGHT=true; try{
     // One sentence can carry several changes ("spoke to them today, confidence
@@ -1224,6 +1369,13 @@ function micTap(){
   unlockAudio();
   // Recording and already heard something: a tap sends it now.
   if(rec&&rec._send&&rec.heard&&!rec.cancelled&&$('mic').classList.contains('live')){ diag('tap to send'); rec._send(); return; }
+  // Talking over a reply: a tap cuts it short and listens straight away.
+  if(CONVO&&isSpeaking()&&!$('mic').classList.contains('live')){
+    diag('interrupted');
+    SAY_SEQ++; stopSpeaking();
+    startListening(PENDING?'confirm':'command');
+    return;
+  }
   if(CONVO||$('mic').classList.contains('live')){
     stopSpeaking();
     endConversation(DRIVE?'Paused. Tap the big button to carry on.':'Stopped. Tap the mic to talk again.');
@@ -1250,7 +1402,7 @@ function driveSync(){
   const m=$('dvmic'), live=$('mic').classList.contains('live');
   m.classList.toggle('live', live);
   m.classList.toggle('paused', !CONVO);
-  $('dvmiclabel').textContent=live?'Listening — tap to pause':CONVO?(isSpeaking()?'Speaking':'Working…'):'Tap to talk';
+  $('dvmiclabel').textContent=live?'Listening — tap to pause':CONVO?(isSpeaking()?'Speaking — tap to interrupt':'Working… tap to pause'):'Tap to talk';
   // Phones drop the screen lock when the page is hidden; take it back.
   if(DRIVE&&!WAKE&&document.visibilityState==='visible') keepAwake(true);
 }

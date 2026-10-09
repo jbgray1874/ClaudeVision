@@ -125,6 +125,15 @@ class UpdateJournal:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def applied_to(self, item_id: str, user_oid: str, since: float, exclude: str = "") -> list[dict]:
+        """One person's changes written to one record since a time, oldest first."""
+        rows = self._conn().execute(
+            """SELECT * FROM updates WHERE state = 'applied' AND item_id = ? AND user_oid = ?
+               AND applied >= ? AND proposal_id != ? ORDER BY applied""",
+            (item_id, user_oid or "", float(since), exclude)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
     def counts(self) -> dict[str, int]:
         rows = self._conn().execute("SELECT state, COUNT(*) c FROM updates GROUP BY state").fetchall()
         return {r["state"]: r["c"] for r in rows}
