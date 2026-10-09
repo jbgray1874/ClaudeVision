@@ -2801,6 +2801,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                             # — D-281 had lifted the mark only for the legacy resolver's
                             # candidates (D-295). Carried as the service gave it.
                             "price_is_reproducible": anchor.get("price_is_reproducible"),
+                            # WHAT THE PRICE BUYS. The catalogue rungs name their unit of sale
+                            # (each, M, a length); a purchased line cut from stock is priced
+                            # on it (D-441), so it travels with the figure.
+                            "uom": anchor.get("uom"),
                             # The anchor already knows what it is — a UDEF row, a historical
                             # quote line, or a web/AI estimate. Dropping that here is what
                             # left an LLM price indistinguishable from a catalogue hit by the
@@ -9426,6 +9430,31 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # deriving it via the material+labour path below produced absurd figures (a £132 foam-
     # tape) because these stubs have no real geometry to cost. Respect the upstream price.
     if bought_in_candidate and system_unit_cost is not None:
+        # A PURCHASED LINE CUT FROM STOCK IS PRICED AS THE PIECE, NOT AS THE STOCK (D-441).
+        # 8188-08 STRENGTHENER, "EXTRUSION 92: LENGTH =100mm" x 24: the figure found for
+        # EXTRUSION 92 buys whatever the seller sells — a metre, a stock length — and
+        # quantity x that figure charges twenty-four of them for 2.4 m of extrusion. The
+        # piece takes its share of the metre or the length, with the section cut-loss
+        # allowance; where the unit of sale is "each" or unknown it is read as a stock
+        # length as a working figure and the line asks. cut_piece_pricing has the rule.
+        try:
+            from cut_piece_pricing import price_as_cut_piece as _cut_piece
+            _piece = _cut_piece(part.get("description"),
+                                _extract_selected_price(system_cost_result),
+                                system_unit_cost, quantity, order_qty)
+        except Exception:                                            # noqa: BLE001
+            _piece = None
+        if _piece:
+            part["cut_piece_pricing"] = {k: v for k, v in _piece.items() if k != "question"}
+            part["cut_piece_pricing"]["stock_unit_price_gbp"] = round(float(system_unit_cost), 4)
+            system_unit_cost = float(_piece["unit_gbp"])
+            part.setdefault("review_flags", []).append(
+                f"purchased line cut from stock: {_piece['basis']}")
+            if _piece.get("question"):
+                part["estimator_input_required"] = True
+                source_precedence.raise_manufacturing_question(
+                    part, _piece["question"]["issue"], _piece["question"]["assumption"],
+                    _piece["question"]["action"], "cut_piece_pricing.price_as_cut_piece")
         # A standard-commodity provisional takes no bench-fitting uplift — it is placed during
         # the assembly labour the parent already carries — so its unit total IS the buy price.
         #

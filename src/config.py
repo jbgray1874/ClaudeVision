@@ -664,6 +664,18 @@ CUT_METHOD_BY_MATERIAL: list = [
 CUT_METHOD_WORDS = {"laser": ("LASER", "LASERED", "LASER CUT"),
                     "router": ("CNC", "ROUTED", "ROUTER", "PIN ROUT", "PIN-ROUT")}
 
+# A PURCHASED LINE CUT FROM STOCK (D-441, cut_piece_pricing). A line naming a thing bought by
+# the length AND stating a cut length ("EXTRUSION 92: LENGTH =100mm") is a piece cut from
+# stock: priced on its metres at a per-metre rate, on its share of a stock length at a
+# per-length price, and read as a stock length with a question where the unit of sale is
+# "each" or unknown — never silently quantity × the stock length. The cut-loss allowance is
+# SECTION_STOCK_POLICY's; the standard stock length SECTION_STOCK_LENGTH_MIN_MM.
+BOUGHT_IN_STOCK_BY_LENGTH_WORDS = ("EXTRUSION", "PROFILE", "TUBE", "BAR", "ROD", "STRIP",
+                                   "ANGLE", "CHANNEL", "SECTION", "RAIL", "TRACK", "TRIM",
+                                   "EDGING", "BEAD", "BOX SECTION", "RHS", "SHS", "CHS")
+CUT_LENGTH_WORDS = ("LENGTH", "LGTH", "LG", "LONG", "L")
+UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LENGTH")
+
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
 # ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack
