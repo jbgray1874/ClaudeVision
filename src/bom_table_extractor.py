@@ -35,9 +35,24 @@ HDR_MATERIAL = {"MATERIAL", "MATL", "MAT", "MATERIAL SPEC", "SPEC"}
 # a family this weak could anchor a phantom weight column onto an SDI header row. A
 # header CELL printing "MASS (KG)" reaches "MASS KG" through bracket-stripping.
 HDR_WEIGHT = {"WEIGHT", "WT", "MASS", "UNIT WEIGHT", "WEIGHT KG", "MASS KG"}
+# A CUT LIST PRINTS ITS LENGTHS IN A COLUMN OF THEIR OWN (D-429). 8188-29-001's sheet reads
+# "ITEM QTY DESCRIPTION LENGTH / 1 2 25.40 x 25.40 x 1.22mm TUBE 300 / 2 1 … TUBE 1272"; with
+# no family for LENGTH the column was dropped, the two rows confirmed the profile and nothing
+# else, and the goalpost was costed as one 300 mm piece. No bare "L": it is a dimension label.
+HDR_LENGTH = {"LENGTH", "LEN", "CUT LENGTH", "LENGTH MM", "CUT LENGTH MM"}
 
 _HDR_FAMILIES = [("item", HDR_ITEM), ("code", HDR_CODE), ("desc", HDR_DESC),
-                 ("qty", HDR_QTY), ("material", HDR_MATERIAL), ("weight", HDR_WEIGHT)]
+                 ("qty", HDR_QTY), ("material", HDR_MATERIAL), ("weight", HDR_WEIGHT),
+                 ("length", HDR_LENGTH)]
+
+
+def length_cell_mm(text: Any) -> Optional[float]:
+    """A LENGTH cell's figure in mm: one number, optionally followed by "mm", else None."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*(?:mm)?\s*", str(text or ""), re.IGNORECASE)
+    if not m:
+        return None
+    v = float(m.group(1))
+    return v if v > 0 else None
 
 
 def _clean(cell: Any) -> str:
@@ -159,6 +174,9 @@ def _rows_from_header_mapped_table(tbl: List[List[Any]], colmap: Dict[str, int],
         _tok = _code_token(part_ref)
         if _tok:
             row_out["code_token"] = _tok
+        _len = length_cell_mm(_cell(raw, "length"))
+        if _len:
+            row_out["length_mm"] = _len
         # The row's own printed material and mass, through the same unit rules the
         # words and vision readers use (lazy import: the words reader imports this
         # module, so a top-level import here would be a cycle).
