@@ -643,6 +643,7 @@ _READER_WORDS = {
     "solidworks_api": "the SOLIDWORKS model",
     "solidworks_flat_pattern": "the SOLIDWORKS flat pattern — measured",
     "solidworks_applied_material": "the material applied in the SOLIDWORKS model",
+    "drawn_on_sheet": "the sheet that draws it — it has no sheet of its own",
     "dxf": "the part's DXF",
     "dxf_flat_pattern": "the part's DXF flat pattern — measured",
     "dxf_filename": "the DXF's own filename",

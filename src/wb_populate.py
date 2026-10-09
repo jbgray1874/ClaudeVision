@@ -5024,6 +5024,84 @@ def _claim_covers(stated_ops: Any, operation: Any) -> bool:
         return False
 
 
+def _member_stated_hours(hours: Dict[str, Any], covered: Any, engine_ops: Any) -> float:
+    """One member's stated hours a piece for the row's operation, or 0.
+
+    A stated time belongs to its own operation and to no other: the department alias is
+    asked only for an operation that is not itself a stated-time one, and never takes a
+    stated operation's figure as its source (the six-off book's generic assembly row picked
+    up the final pack's stated 8 minutes that way)."""
+    for _eop in (engine_ops or []):
+        if not _claim_covers(covered, _eop):
+            continue
+        _v = _safe(hours.get(str(_eop).strip().lower()))
+        if not _v and not is_stated_time_operation(_eop):
+            # The same operation under the department's other name — "assembly" on the
+            # route, "handling" in the costing, one PACM row on the sheet. Never for a stated
+            # operation, in either direction: excluding the TARGET stops a generic row
+            # borrowing one; excluding stated ops as SOURCES stops it from the other end.
+            try:
+                from department_codes import code_for as _dept_of2
+                _want2 = _dept_of2(_eop)
+                if _want2:
+                    for _ak, _av in hours.items():
+                        if is_stated_time_operation(_ak):
+                            continue
+                        if _dept_of2(_ak) == _want2 and _safe(_av):
+                            _v = _safe(_av)
+                            break
+            except Exception:                                        # noqa: BLE001
+                pass
+        if _v and _v > 0:
+            return float(_v)
+    return 0.0
+
+
+def stated_row_hours(group: Dict[str, Any], stated_time_by_pn: Dict[str, str],
+                     stated_hours_by_pn: Dict[str, Dict[str, Any]],
+                     stated_ops_by_pn: Dict[str, Any]) -> Tuple[float, List[str]]:
+    """The row's run hours a finished unit where a member's time was STATED, and who stated it.
+
+    EVERY MEMBER, EACH TIMES ITS PIECES (D-428). Tim Wilkes on 12173-02: weld and dress "very
+    low". The Weld (CO2) row grouped 12173-05-01M x4, -05-101 x4 and -06-201 x7 — fifteen
+    pieces — and this read the FIRST member's stated 6 minutes and charged the row as if it
+    were the whole: 15 pieces at 150/hr, six minutes for fifteen welds. The grouping had
+    already summed them (1.355 h); the stated branch threw that away.
+
+    So the row's hours are the group's own sum (each member's hours a piece x its pieces),
+    with each claimed member's computed share replaced by its stated one. A member with no
+    claim keeps its computed share; nothing is invented for a member with no hours at all."""
+    g = group or {}
+    by_part = {str(k).strip().upper(): v for k, v in (g.get("hours_by_part") or {}).items()}
+    # A time stated ONCE PER FINISHED UNIT is booked once however many members carry it.
+    _once = bool(g.get("stated_once_per_finished_unit"))
+    total = 0.0 if _once else (_safe(g.get("run_hours_per_unit")) or 0.0)
+    claimed: List[str] = []
+    for _gp in (g.get("parts") or []):
+        _gk = str(_gp).strip().upper()
+        if _gk not in stated_time_by_pn:
+            continue                     # hours exist for most parts; a CLAIM does not
+        _hrs = stated_hours_by_pn.get(_gk) or {}
+        _v = _member_stated_hours(_hrs, stated_ops_by_pn.get(_gk) or (), g.get("engine_ops"))
+        if not _v:
+            continue
+        if _once:
+            total = max(total, _v)
+            claimed.append(_gk)
+            continue
+        _rec = by_part.get(_gk) or {}
+        _q = _safe(_rec.get("qty_per_unit"), 1) or 1
+        _computed = 0.0
+        if _rec:
+            for _eop in (g.get("engine_ops") or []):
+                _computed = _safe(_hrs.get(str(_eop).strip().lower())) or 0.0
+                if _computed:
+                    break
+        total += (_v - _computed) * _q
+        claimed.append(_gk)
+    return (round(total, 6) if claimed and total > 0 else 0.0), claimed
+
+
 def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str],
                                       stated_ops: Any = None) -> bool:
     """True when any part on this labour row was timed from a figure a department gave us.
@@ -7636,56 +7714,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Everything else is untouched: a group with no stated time walks the chain exactly
         # as before, and the medians keep doing the job they are good at.
-        _stated_hours = None
-        _stated_from = ""
-        for _gp in (g.get("parts") or []):
-            _gk = str(_gp).strip().upper()
-            if _gk not in _stated_time_by_pn:
-                continue                 # hours exist for most parts; a CLAIM does not
-            _hrs = _stated_hours_by_pn.get(_gk)
-            if not _hrs:
-                continue
-            _covered = _stated_ops_by_pn.get(_gk) or ()
-            for _eop in (g.get("engine_ops") or []):
-                # 008 is plated, so its PACK time is stated. Its laser time is not.
-                if not _claim_covers(_covered, _eop):
-                    continue
-                _v = _safe(_hrs.get(str(_eop).strip().lower()))
-                if not _v and not is_stated_time_operation(_eop):
-                    # The same operation under the department's other name — "assembly" on
-                    # the route, "handling" in the costing, one PACM row on the sheet.
-                    #
-                    # NEVER FOR A STATED OPERATION, IN EITHER DIRECTION. This fallback asks
-                    # "any operation on this part that bills to the same bench", and the
-                    # bench is PACM for the generic assembly row, the pack OUT and the pack
-                    # BACK alike. On the six-off book the GENERIC assembly row — 007, 008,
-                    # 101 and the felt pad — found no `assembly` hours, reached for the
-                    # bench and picked up the final pack's stated 8 minutes a unit, which
-                    # is 7.5/hr on a row that should have been at the department's own
-                    # rate. One stated figure, charged twice, on a row nobody had stated
-                    # anything about.
-                    #
-                    # A stated time belongs to its own operation and to no other. Excluding
-                    # the TARGET stops a generic row borrowing one; excluding stated ops as
-                    # SOURCES below stops the same thing from the other end.
-                    try:
-                        from department_codes import code_for as _dept_of2
-                        _want2 = _dept_of2(_eop)
-                        if _want2:
-                            for _ak, _av in _hrs.items():
-                                if is_stated_time_operation(_ak):
-                                    continue
-                                if _dept_of2(_ak) == _want2 and _safe(_av):
-                                    _v = _safe(_av)
-                                    break
-                    except Exception:                                # noqa: BLE001
-                        pass
-                if _v and _v > 0:
-                    _stated_hours, _stated_from = float(_v), _gk
-                    break
-            if _stated_hours:
-                break
-
+        _stated_hours, _stated_members = stated_row_hours(
+            g, _stated_time_by_pn, _stated_hours_by_pn, _stated_ops_by_pn)
+        _stated_from = ", ".join(_stated_members)
         if _stated_hours and _stated_hours > 0:
             _tp_stated = float(_qty) / _stated_hours
             ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_stated, 4))
@@ -7693,8 +7724,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             g["workbook_row"] = row
             _flag(f"throughput for '{wb_op}' is {_tp_stated:.2f}/hr — "
                   f"{_stated_shop_time_source(g, _stated_time_by_pn)}, read from "
-                  f"{_stated_from}'s own record ({_stated_hours * 60:.1f} min a unit). A "
-                  f"stated time does not compete with a department median; it replaces it.",
+                  f"{_stated_from}'s own record{'s' if len(_stated_members) > 1 else ''}: "
+                  f"{_qty} piece(s) in {_stated_hours * 60:.1f} min a finished unit, every "
+                  f"member times its own pieces. A stated time does not compete with a "
+                  f"department median; it replaces it.",
                   flags)
             row += 1
             continue

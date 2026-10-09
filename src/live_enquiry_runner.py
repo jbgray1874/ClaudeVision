@@ -916,6 +916,16 @@ def _cycle(args: argparse.Namespace, s: Dict[str, Any], portal: Portal) -> None:
     write_status(plan(read_sheet(s["workbook"]), _sources(s["root"]), ledger), s["ledger"])
 
 
+def _log_to(path: str) -> None:
+    """Everything printed goes to `path`, line-buffered and appended — the scheduled task
+    (D-425) runs under pythonw with no console, where print() would go nowhere."""
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "a", encoding="utf-8", buffering=1)
+    sys.stdout = fh
+    sys.stderr = fh
+    print(f"\n===== {_now()} live enquiry runner, pid {os.getpid()} =====", flush=True)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description="Drive AI estimates from the Live Enquiry sheet.")
     ap.add_argument("command",
@@ -927,7 +937,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--server", default=os.getenv("SDI_SERVER", "http://10.0.0.5:8071"))
     ap.add_argument("--api-key", default=os.getenv("SDI_API_KEY", ""))
     ap.add_argument("--max", type=int, default=None, help="run at most this many this cycle")
+    ap.add_argument("--log", default="",
+                    help="append everything printed to this file (the scheduled task runs "
+                         "windowless, so this is the only place its output goes)")
     args = ap.parse_args(argv)
+    if args.log:
+        _log_to(args.log)
     s = _settings(args)
 
     if args.command == "qty":

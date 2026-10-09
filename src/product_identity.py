@@ -29,7 +29,7 @@ except Exception:                                                    # noqa: BLE
     ASSEMBLY_ROLE_TOKENS = frozenset({"GA", "ASSY", "ASSEMBLY", "ARR", "ARRANGEMENT", "GEN"})
 
     def strip_assembly_role(identity: str) -> str:
-        m = re.match(r"^(.*\S)[\s\-]+([A-Za-z]+)$", str(identity or "").strip())
+        m = re.match(r"^(.*[^\s_\-])[\s_\-]+([A-Za-z]+)$", str(identity or "").strip())
         if m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS:
             return m.group(1)
         return str(identity or "").strip()

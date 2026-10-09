@@ -447,3 +447,15 @@ def test_a_named_baseline_marks_a_job_whose_pack_is_not_found(root, ledger):
     assert L.baseline(rows, [L.LiveEnquiryShare(root)], ledger, ["12633-01-GA"]) == ["12633-01-GA"]
     got = _decide(rows, root, ledger)
     assert got["12633-01-GA"].status == "done" and got["12633-02-GA"].status == "waiting"
+
+
+def test_the_windowless_task_logs_to_a_file(tmp_path, monkeypatch):
+    """D-425: the scheduled task runs under pythonw, where print goes nowhere."""
+    log = tmp_path / "watch.log"
+    saved = (sys.stdout, sys.stderr)
+    try:
+        L.main(["list", "--ledger", str(tmp_path / "ledger.json"), "--log", str(log)])
+    finally:
+        sys.stdout.flush()
+        sys.stdout, sys.stderr = saved
+    assert "live enquiry runner" in log.read_text(encoding="utf-8")
