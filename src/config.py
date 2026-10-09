@@ -260,7 +260,7 @@ QUANTITY_PATTERN = r"\b(?:QTY|QUANTITY)\s*[:\-]?\s*(\d+)\b"
 # kept because other people's drawings do write it that way.
 THICKNESS_PATTERN = (
     r"\b(?:"
-    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE)"
+    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE|MATL)"
     r"|(?:THK|THICKNESS|GAUGE)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)?"
     r")\b"
 )
@@ -1919,6 +1919,16 @@ CONCEPT_COMPONENT_WORDS = (
 CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "CASTOR",
                                 "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
 CONCEPT_LABEL_MAX_WORDS = 4
+
+# A short "<gauge>mm <material>" note on a design sheet ("2mm STEEL CONSTRUCTION", D-419), and
+# the stock material it names. Plain STEEL on a design sheet is mild steel unless it says
+# otherwise; stainless and galvanised are named.
+CONCEPT_SHEET_MATERIAL_WORDS = {
+    "MILD STEEL": "MILD STEEL", "STAINLESS STEEL": "STAINLESS STEEL",
+    "STAINLESS": "STAINLESS STEEL", "GALVANISED STEEL": "GALVANISED STEEL",
+    "ZINTEC": "ZINTEC", "STEEL": "MILD STEEL", "ALUMINIUM": "ALUMINIUM",
+    "ACRYLIC": "ACRYLIC", "MDF": "MDF", "MFMDF": "MFMDF", "PLYWOOD": "PLYWOOD",
+}
 
 # A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
 CONCEPT_FINISH_OPERATIONS = (
@@ -4552,3 +4562,94 @@ CONSISTENCY_CHECK_OWNER = {
 # that reader's set, which drives its own header detection). A customer whose title block
 # genuinely reads "DESCRIPTION: ITEM HOLDER" would lose that description — narrow the list.
 PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.", "LENGTH")
+
+
+# ── THE LIVE ENQUIRY RUNNER (D-420) ──────────────────────────────────────────────────
+# The estimators' Live Enquiry workbook drives AI estimates, one after another. A row names a
+# customer and a drawing; the pack is <LIVE_ENQUIRY_ROOT>\<customer folder>\<drawing folder>,
+# and only the files directly in the drawing folder are the pack (never its sub-folders). The
+# runner READS the workbook and never writes it; what it did is kept in its own ledger.
+# src/live_enquiry_runner.py. Paths are UNC, never a drive letter: K: is per-logon and is
+# not there at all for a service account.
+LIVE_ENQUIRY_ROOT = os.getenv(
+    "SDI_LIVE_ENQUIRY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
+# The workbook itself. No default: where the estimators keep it is theirs to say, and a guess
+# that reads last month's copy would run the wrong jobs with every appearance of working.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "")
+LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
+# Header words -> the field each column carries. Matched on the header text, so a column moved
+# or inserted on the sheet is still found. A cell with no header is a note (the sheet's
+# unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
+LIVE_ENQUIRY_COLUMNS = (
+    ("customer", r"\bCUSTOMER\b"),
+    ("drawing", r"\bDRAWING\b"),
+    ("description", r"\bJOB\b.*\bDESC"),
+    ("received", r"\bENQUIRY\b.*\bRECEIVED\b"),
+    ("due", r"\bREQUESTED\b|\bCOMPLETION\b"),
+    ("ai_check", r"\bAI\b"),
+    ("estimator", r"\bESTIMATOR\b"),
+    ("account_manager", r"\bACCOUNT\b"),
+    ("quantities", r"\bQTY\b|\bQUANTIT|\bAMOUNTS?\b"),
+)
+# The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
+LIVE_ENQUIRY_ASKED = ("YES", "Y")
+# A Drawing No. that is not one drawing: the row needs a pack made up by a person.
+LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
+# A note on the row that stops it, whatever else the row says. The person wrote it; the
+# runner does not second-guess it because a folder happens to have appeared.
+LIVE_ENQUIRY_HOLD_NOTES = (r"\bWAIT(?:ING)?\b.*\bDRAWINGS?\b", r"\bON\s+HOLD\b",
+                           r"\bCANCELL?ED\b", r"\bDO\s+NOT\s+RUN\b", r"\bNO\s+AI\b")
+# A drawing number's sheet-type tail, so the sheet's "12633-01-GA" finds the folder
+# "12633-01" and the folder "12633-01-GA Wine lifter" finds "12633-01".
+LIVE_ENQUIRY_SHEET_SUFFIX = r"[-_ ](?:GA|SA)\d*$"
+# Where the share's folder name differs from the sheet's Customer: sheet name -> folder name.
+# Empty by default — a customer matches its folder by name, and nothing is matched "nearly"
+# (a near match is how one customer's pack gets priced as another's). Extra pairs can be given
+# as JSON in SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS without a code change.
+LIVE_ENQUIRY_CUSTOMER_FOLDERS = {}
+# A file in the drawing folder that states the quantities, for a row whose sheet gives none:
+# one line, e.g. "1, 5, 10, 50". The first is the run quantity, the rest are breaks.
+LIVE_ENQUIRY_QTY_FILES = ("QUANTITIES.txt", "QTY.txt")
+# The job description states a quantity only in these forms ("50 OFF", "QTY 250").
+LIVE_ENQUIRY_QTY_IN_TEXT = (r"\b(\d{1,6})\s*(?:OFF|PCS|PIECES|UNITS)\b",
+                            r"\bQTY\.?\s*:?\s*(\d{1,6})\b")
+LIVE_ENQUIRY_POLL_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_POLL_MINUTES", "15"))
+# How long one estimate may take before the runner stops waiting on it. The run is not
+# abandoned — the portal keeps it — the runner just stops queueing behind it this cycle.
+LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES", "240"))
+# A failed run is tried this many times in all, then waits for `retry` from a person.
+LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
+# Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is
+# checked before an estimator sees it.
+LIVE_ENQUIRY_EMAIL_TO = os.getenv("SDI_LIVE_ENQUIRY_EMAIL_TO", "")
+LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
+                                str(BASE_DIR / "output" / "live_enquiry" / "ledger.json"))
+# The design area, through the endpoint James will provide. Unset: the share is the only
+# source of a pack.
+DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
+
+# The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
+# code-shaped token with a longer run is words joined across spaces — the M&S border's
+# "• 6063 - ALUMINIUM FOR EXTRUSION" printed below the drawing-number cell (D-421).
+TITLE_BLOCK_CODE_MAX_LETTER_RUN = 4
+
+# A size followed by one of these words is the size of that thing, not a sheet's gauge (D-421):
+# "20MM MAG TAPE" and "20MM MAGTAPE TO BASE FOLD" on 8188-08 were read as a 20 mm gauge and,
+# as the pooled pack's only figure, handed to every part. Read by the unlabelled fallback only;
+# a labelled THK / THICKNESS / MATL. figure is the sheet's statement and is not filtered.
+GAUGE_NOT_BEFORE_WORDS = ("TAPE", "MAGTAPE", "MAG", "DOWEL", "DOWELS", "GLUE", "MAGNET",
+                          "MAGNETS", "SCREW", "SCREWS", "BOLT", "RIVET", "INSERT", "NUTSERT",
+                          "HOLE", "HOLES", "DIA", "WIDE", "LONG", "DEEP", "HIGH", "FEET", "FOOT",
+                          "LIP", "GAP", "RADIUS", "BASE", "EDGE", "EDGING", "BAND", "STRIP",
+                          "MESH", "X")
+
+# The family a canonical material name belongs to, for "does this document state one material
+# or several" (D-421). Substrings of the canonical name; the first family that matches wins.
+MATERIAL_FAMILY_WORDS = (
+    ("STEEL", ("STEEL", "ZINTEC", "GALV")),
+    ("BOARD", ("MDF", "TIMBER", "PLY", "WOOD", "BOARD", "VENEER")),
+    ("ALUMINIUM", ("ALUMIN",)),
+    ("PLASTIC", ("ACRYLIC", "PERSPEX", "PMMA", "PETG", "POLYCARB", "PVC", "FOAMEX", "ABS",
+                 "HIPS")),
+)

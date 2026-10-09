@@ -634,7 +634,7 @@ def test_a_read_that_names_the_goods_but_not_their_sizes_is_unverified():
                  weight_includes_goods="not stated", goods_count=0, goods_unit_weight_kg=0)
     check = cs.sheet_check(_with(_the_1442_bill(), facts), REAL_TEXT, envelope=ENVELOPE)
     assert not check["agrees"]
-    assert any("names the goods but gives none of their dimensions" in u for u in check["unverified"])
+    assert any("the goods are named but the read gave none of their dimensions" in u for u in check["unverified"])
 
 
 def test_the_stand_the_sheet_draws_still_agrees_under_the_tighter_band():
@@ -667,3 +667,44 @@ def test_the_design_sheets_weld_note_is_stated_on_the_unit():
     assert cs.apply_sheet_notes_to_unit(plain, {"X": {"notes": "POWDER COATED"}}) is False
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     assert "concept_scan.apply_sheet_notes_to_unit(_unit, _swf(_pack))" in src
+
+
+# ── D-419: the 15:07 book — the read gave no sheet facts, so nothing was weighed ──────────
+#
+# On fb0a2ff the read returned two sides, a 1250 × 400 divider and a base (the front and back
+# still missing) and no sheet_facts at all, so the check could only say "the sheet states no
+# weight". The sheet prints the weight, the bags, their weight, the gauge and the finish.
+
+def test_the_sheets_own_text_states_its_weight_goods_gauge_and_finish():
+    facts = cs.sheet_stated_facts(REAL_TEXT + "\nWEIGHT: 67.44kg")
+    assert facts == {"stated_weight_kg": 67.44, "goods_count": 20, "goods": "CUSTOMER BAGS",
+                     "goods_unit_weight_kg": 1.5, "thickness_mm": 2.0, "material": "MILD STEEL",
+                     "finish": "POWDER COATED - RAL 7021 BLACK GREY"}
+    # The weight field's value on the line before its label, as another reader orders it.
+    assert cs.sheet_stated_facts("67.44kg\nWEIGHT:\nCOLOUR:")["stated_weight_kg"] == 67.44
+    # Ambiguous is not stated; a legend bullet is never read.
+    assert "stated_weight_kg" not in cs.sheet_stated_facts("WEIGHT: 67.44kg\nWEIGHT: 12kg")
+    assert "thickness_mm" not in cs.sheet_stated_facts("• Q195 UP TO 3mm THICK FOR POWDER COATED STEEL")
+    assert "goods_count" not in cs.sheet_stated_facts("2 x STACKS OF 10 BAGS")
+
+
+def test_the_1507_bill_fails_on_the_sheets_own_weight_and_names_the_missing_faces():
+    bill = {"parts": [_made("LEFT SIDE PANEL", 1250, 400, ops=("laser_cutting", "folding")),
+                      _made("RIGHT SIDE PANEL", 1250, 400, ops=("laser_cutting", "folding")),
+                      _made("CENTRAL SOLID DIVIDER", 1250, 400),
+                      _made("BASE PANEL", 600, 400),
+                      dict(_feet(), name="ADJUSTABLE FEET")],
+            "unit_operations": ["welding", "powder_coating", "assembly"]}
+    check = cs.sheet_check(bill, REAL_TEXT + "\nWEIGHT: 67.44kg", envelope=ENVELOPE)
+    assert check["read_gave_facts"] is False and "stated_weight_kg" in check["facts_from_sheet_text"]
+    assert check["weight_readings_kg"] == [67.44, 37.44]
+    words = " ".join(check["failures"])
+    assert "against 37.4 kg of product on the sheet" in words
+    assert "no panel matches the body's 1250 × 600 mm face(s)" in words
+
+
+def test_the_reads_own_printed_figure_is_never_overwritten_by_the_text():
+    bill = _with(_the_sheets_bill(), dict(FULL_FACTS, stated_weight_kg=67.44))
+    check = cs.sheet_check(bill, REAL_TEXT + "\nWEIGHT: 67.44kg", envelope=ENVELOPE)
+    assert "stated_weight_kg" not in check["facts_from_sheet_text"]
+    assert check["agrees"], (check["failures"], check["unverified"])

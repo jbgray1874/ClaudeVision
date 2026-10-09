@@ -436,15 +436,29 @@ def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
     joined: List[Tuple[float, str]] = []
     for row in band:
         for start in range(len(row)):
+            # A JOIN ENDS WHERE A WORD ENDS (D-421). Text laid down a character at a time —
+            # the M&S border's specification list is — comes back as one-letter words that
+            # touch, and every prefix of "6063 - ALUMINIUM FOR EXTRUSION" was a candidate:
+            # "6063-AL", "6063-ALUM". Only a join whose next word is across a real space, a
+            # cell border or nothing at all is a token; the whole word is then judged.
             text = row[start]["text"]
             right_edge = row[start]["x1"]
-            for nxt in row[start + 1:]:
+            following = row[start + 1:]
+            for k, nxt in enumerate(following):
                 if nxt["x0"] - right_edge > _max_join_gap(nxt):
                     break  # a cell border, not a space
                 text += nxt["text"]
                 right_edge = nxt["x1"]
-                joined.append((row[start]["top"], text))
+                after = following[k + 1] if k + 1 < len(following) else None
+                if after is None or after["x0"] - right_edge >= _min_space(after):
+                    joined.append((row[start]["top"], text))
     return _lowest_drawing_number(candidates + joined)
+
+
+def _min_space(word: dict) -> float:
+    """The narrowest gap that is a space rather than two letters of one word touching."""
+    height = float(word.get("bottom", 0.0)) - float(word.get("top", 0.0))
+    return max(height, 1.0) * 0.15
 
 
 # A real space between words is a fraction of the text's own height; the distance across
@@ -461,14 +475,38 @@ def _max_join_gap(word: dict) -> float:
     return max(height, 6.0) * _JOIN_GAP_AS_FRACTION_OF_HEIGHT
 
 
+def _title_block_spelling(text: Any) -> str:
+    """A title block's code as the graph spells it. An underscore in a drawing-number cell is
+    a separator: 8188-08's GA prints "8188-08_GA", and read as written it matched no shape, so
+    the product's own sheet named no owner and its rows hung from whatever else was lowest."""
+    return str(text or "").strip().replace("_", "-")
+
+
+def _reads_as_words(code: str) -> bool:
+    """A drawing number's letters are a designator (GA, SA05, 01M), never a word. The M&S
+    border prints its specification list below the drawing-number cell — "• 6063 - ALUMINIUM
+    FOR EXTRUSION", "• 304 - STAINLESS STEEL" — and joined across its spaces that is a
+    code-shaped token lower on the page than the real one: on 8188-08 every sheet of three
+    PDFs read "6063-ALUMINIUMFOREXTRUSION", which became the root of the whole product and
+    pulled the deleted swing stopper in with it."""
+    try:
+        import config as _cfg
+        longest = int(getattr(_cfg, "TITLE_BLOCK_CODE_MAX_LETTER_RUN", 4))
+    except Exception:                                                     # noqa: BLE001
+        longest = 4
+    return bool(re.search(r"[A-Z]{%d,}" % (longest + 1), code.upper()))
+
+
 def _lowest_drawing_number(candidates: List[Tuple[float, str]]) -> Optional[str]:
     """The drawing-number-shaped candidate lowest on the page — a title block sits at the
     bottom, and codes quoted higher up are the BOM's rows or a cross-reference to another
     sheet. Among candidates on one line, the longer is the more specific."""
     best: Optional[Tuple[float, str]] = None
     for top, text in candidates:
-        code = str(text or "").strip()
+        code = _title_block_spelling(text)
         if not part_code_conventions.looks_like_a_drawing_number(code):
+            continue
+        if _reads_as_words(code):
             continue
         if best is None or (top, len(code)) > (best[0], len(best[1])):
             best = (top, code.upper())

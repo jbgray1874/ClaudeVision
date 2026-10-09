@@ -912,6 +912,106 @@ def sheet_labels(words: str, facts: Optional[Mapping[str, Any]] = None) -> List[
     return out
 
 
+def sheet_stated_facts(words: str) -> Dict[str, Any]:
+    """What the sheet's own text states, read without the model (D-419).
+
+    The 15:07 read of 12675-01 returned no sheet_facts at all, so the check had no weight to
+    weigh the bill against and could only call it unverified — while the sheet prints
+    "WEIGHT: 67.44kg", "20 x CUSTOMER BAGS", "ESTIMATED BAG WEIGHT - 1.5kg", "2mm STEEL
+    CONSTRUCTION" and "POWDER COATED - RAL 7021". Each is read here from a line of its own:
+    the title block's weight field; a "<count> x <label>" line with no other figure (the goods);
+    "<word> WEIGHT <n>kg" where the word is the goods' noun (their unit weight); a short
+    "<gauge>mm <material>" note (config.CONCEPT_SHEET_MATERIAL_WORDS); and a short finish note
+    (config.CONCEPT_FINISH_OPERATIONS). Legend bullets and long lines are never read. A figure
+    found twice with two values is left out — ambiguous is not stated."""
+    lines = [" ".join(l.split()) for l in str(words or "").splitlines()]
+    lines = [l for l in lines if l and not l.startswith(("•", "-", "*"))]
+    out: Dict[str, Any] = {}
+
+    def _one(values: List[Any]) -> Any:
+        vals = sorted({v for v in values if v})
+        return vals[0] if len(vals) == 1 else None
+
+    weights = []
+    for i, l in enumerate(lines):
+        m = re.match(r"^WEIGHT\s*:?\s*(\d+(?:\.\d+)?)\s*KG\b", l, re.IGNORECASE)
+        if m:
+            weights.append(float(m.group(1)))
+            continue
+        if re.match(r"^WEIGHT\s*:?\s*$", l, re.IGNORECASE):
+            for j in (i - 2, i - 1, i + 1, i + 2):
+                if 0 <= j < len(lines):
+                    m2 = re.match(r"^(\d+(?:\.\d+)?)\s*KG$", lines[j], re.IGNORECASE)
+                    if m2:
+                        weights.append(float(m2.group(1)))
+    if _one(weights):
+        out["stated_weight_kg"] = _one(weights)
+
+    goods = [(int(m.group(1)), m.group(2).strip()) for m in
+             (re.match(r"^(\d+)\s*[xX×]\s*([A-Za-z][A-Za-z \-&]*)$", l) for l in lines) if m]
+    if len({g for g in goods}) == 1:
+        count, label = goods[0]
+        out["goods_count"], out["goods"] = count, label
+        nouns = _words_of(label)
+        unit = []
+        for l in lines:
+            for m in re.finditer(r"\b([A-Za-z]+)\s+WEIGHT\s*[-:=]?\s*(\d+(?:\.\d+)?)\s*KG\b",
+                                 l, re.IGNORECASE):
+                if _singular(m.group(1)) in nouns:
+                    unit.append(float(m.group(2)))
+        if _one(unit):
+            out["goods_unit_weight_kg"] = _one(unit)
+
+    materials = dict(_vocab("CONCEPT_SHEET_MATERIAL_WORDS", {}) or {})
+    gauges, mats = [], []
+    for l in lines:
+        if len(l.split()) > 6:
+            continue
+        for word in sorted(materials, key=len, reverse=True):
+            m = re.search(rf"\b(\d+(?:\.\d+)?)\s*MM\s+{re.escape(word)}\b", l, re.IGNORECASE)
+            if m:
+                gauges.append(float(m.group(1)))
+                mats.append(str(materials[word]))
+                break
+    if _one(gauges) and _one(mats):
+        out["thickness_mm"], out["material"] = _one(gauges), _one(mats)
+
+    finishes = []
+    for l in lines:
+        if len(l.split()) > 8 or l.rstrip().endswith(":"):
+            continue
+        if any(re.search(pat, l, re.IGNORECASE) for pat, _op in _finish_operations()):
+            finishes.append(l)
+    if len(set(finishes)) == 1:
+        out["finish"] = finishes[0]
+    return out
+
+
+def _uncovered_faces(dims: List[float], made: List[Mapping[str, Any]], tol: float) -> List[str]:
+    """The body's face sizes no made part matches — "1250 × 600" — where the body has three
+    dimensions; a folded part matched to no face may be any of them, and leaves them unnamed."""
+    if len(dims) < 3:
+        return []
+    h, w, d = dims[:3]
+    faces = [(h, w), (h, d), (w, d)]
+    sizes = []
+    for p in made:
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        a, b = sorted((_num(blank.get("length")), _num(blank.get("width"))), reverse=True)
+        folded = "folding" in {str(o or "").strip().lower() for o in (p.get("operations") or [])}
+        sizes.append((a, b, folded))
+    out = []
+    for fa, fb in faces:
+        if any(abs(a - fa) <= tol + 10 and abs(b - fb) <= tol + 10 for a, b, _f in sizes):
+            continue
+        spare = [a * b for a, b, f in sizes if f and not any(
+            abs(a - x) <= tol + 10 and abs(b - y) <= tol + 10 for x, y in faces)]
+        if any(area >= fa * fb for area in spare):
+            continue
+        out.append(f"{fa:g} × {fb:g}")
+    return out
+
+
 def sheet_check(answer: Mapping[str, Any], words: str = "",
                 envelope: Any = None) -> Dict[str, Any]:
     """The sighted bill against the sheet's stated body, goods and weight.
@@ -933,7 +1033,15 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         tol = float(getattr(config, "CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM", 5.0))
     except Exception:                                               # noqa: BLE001
         lo, hi, tol = 0.6, 2.0, 5.0
-    facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    facts = dict(answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {})
+    read_gave_facts = bool(facts)
+    # WHAT THE READ LEFT OUT, THE SHEET'S OWN TEXT SUPPLIES (D-419): never over the read's own
+    # printed figure, only where it gave none.
+    from_text: List[str] = []
+    for key, value in sheet_stated_facts(words).items():
+        if value and not facts.get(key):
+            facts[key] = value
+            from_text.append(key)
     printed = _figures_in(words)
     not_on_sheet: List[str] = []
 
@@ -1053,11 +1161,16 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         too_light = light_testable and not unweighed and all(sighted < lo * r for r in readings)
         too_heavy = all(sighted > hi * r for r in (readings or [stated]))
         if too_light:
-            r = max(readings)
+            r = min(readings)                 # too light even against the lighter reading
+            # WHICH FACES, WHERE THE BODY SAYS (D-419): the 15:07 read dropped the front and
+            # back twice; "missing or undersized" alone did not tell it where to look.
+            _bare = _uncovered_faces(dims, made, tol) if body_checked else []
             failures.append(
                 f"the made parts weigh about {sighted:.1f} kg as sized, against "
                 f"{r:.1f} kg of product on the sheet ({_of(r)}) — {sighted / r:.0%} of it, so "
-                f"parts are missing or undersized")
+                f"parts are missing or undersized"
+                + (f" — no panel matches the body's {' or '.join(_bare)} mm face(s)"
+                   if _bare else ""))
         elif too_heavy:
             r = min(readings or [stated])
             failures.append(
@@ -1130,8 +1243,8 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     # gives none of their sizes leaves that check blind, and the bill cannot be called checked.
     if made and (goods_count > 1 or str(facts.get("goods") or "").strip()) \
             and not (facts.get("goods_dimensions_mm") or facts.get("dimensions_to_goods_mm")):
-        unverified.append("the read names the goods but gives none of their dimensions, so a part "
-                          "sized off the goods could not be caught")
+        unverified.append("the goods are named but the read gave none of their dimensions, so a "
+                          "part sized off the goods could not be caught")
 
     # ── EVERY SIZE IS THE BODY'S OR THE SHEET'S (D-418) ───────────────────────────────────
     # A made part's length and width are a body dimension (or one less a few gauges, for a part
@@ -1194,7 +1307,8 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "weight_readings_kg": [round(r, 2) for r in readings],
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
             "ratio": round(ratio, 3) if ratio is not None else None,
-            "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet}
+            "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet,
+            "read_gave_facts": read_gave_facts, "facts_from_sheet_text": from_text}
 
 
 def sheet_check_sentence(check: Mapping[str, Any]) -> str:
