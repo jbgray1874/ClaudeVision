@@ -393,6 +393,34 @@ def _project_ref(fields: dict) -> str:
     return ""
 
 
+_ISO_DATE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+_SHEET_DATE = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{4})$")
+_DAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December")
+
+
+def _spoken_value(value) -> str:
+    """A value as it should be read back: dates in words ("Monday 12 October"),
+    so a wrong day is easy to hear. "2026-10-12" (what is written) and the
+    sheet's month-first "10/12/2026" both become words; anything else is as is."""
+    text = str(value if value is not None else "").strip()
+    m = _ISO_DATE.match(text)
+    if m:
+        y, mo, d = (int(g) for g in m.groups())
+    else:
+        m = _SHEET_DATE.match(text)
+        if not m:
+            return text
+        mo, d, y = (int(g) for g in m.groups())   # the tracker shows dates month-first
+    try:
+        when = date(y, mo, d)
+    except ValueError:
+        return text
+    words = f"{_DAYS[when.weekday()]} {when.day} {_MONTHS[when.month - 1]}"
+    return words if when.year == date.today().year else f"{words} {when.year}"
+
+
 @router.post("/api/voicecrm/propose")
 def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require_user)):
     """Validate a change and read it back. Nothing is written by this call."""
@@ -450,10 +478,12 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
         "proposal_id": pid,
         # What the voice agent reads back, verbatim, before taking a yes.
         "readback": (f"On {ref or 'item ' + body.item_id}, change {body.field} "
-                     f"from '{old_value or 'blank'}' to '{body.new_value}'. Is that right?"),
+                     f"from '{_spoken_value(old_value) or 'blank'}' to '{_spoken_value(body.new_value)}'. "
+                     f"Is that right?"),
         # The parts, so the app can read several changes back as one.
         "item_id": body.item_id, "project_ref": ref, "field": body.field,
         "old_value": old_value or "", "new_value": body.new_value,
+        "old_spoken": _spoken_value(old_value), "new_spoken": _spoken_value(body.new_value),
         "expires_in_seconds": journal.PROPOSAL_TTL_SECONDS,
     }
 
@@ -570,7 +600,9 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
                     f"(approved by {APPROVED_BY})")
     return {"state": "applied", "proposal_id": body.proposal_id,
             "project_ref": entry["project_ref"], "field": entry["field"],
-            "old_value": entry["old_value"], "new_value": entry["new_value"]}
+            "old_value": entry["old_value"], "new_value": entry["new_value"],
+            "old_spoken": _spoken_value(entry["old_value"]),
+            "new_spoken": _spoken_value(entry["new_value"])}
 
 
 @router.post("/api/voicecrm/transcribe")

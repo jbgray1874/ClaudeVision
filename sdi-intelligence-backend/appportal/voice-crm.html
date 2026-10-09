@@ -1203,8 +1203,9 @@ function readbackFor(list, same){
   if(list.length===1) return pre+list[0].readback;
   const refs=[...new Set(list.map(p=>p.project_ref||p.item_id))];
   const one=refs.length===1;
+  // Dates are read in words ("Monday 12 October"), so a wrong day is heard.
   const parts=list.map(p=>p.field+(one?'':' on '+(p.project_ref||p.item_id))
-                       +' to '+(p.new_value||'blank'));
+                       +' to '+(p.new_spoken||p.new_value||'blank'));
   return pre+list.length+' changes'+(one?' on '+refs[0]:'')+': '+parts.join('; ')
          +'. Is that right?';
 }
@@ -1290,7 +1291,7 @@ async function answerConfirm(yes){
     if(c.state==='applied'){
       saved.push(c);
       log('app','✓ Updated '+c.field+' on '+(c.project_ref||'that record')+': '
-          +(c.old_value||'blank')+' → '+c.new_value, NOT_FOR_MODEL.test(c.field));
+          +(c.old_spoken||c.old_value||'blank')+' → '+(c.new_spoken||c.new_value), NOT_FOR_MODEL.test(c.field));
     }else if(c.state==='conflict'){
       problems.push(p.field+': the record changed while we were talking');
       log('app','✗ '+p.field+' not saved — the record changed while we were talking.');
@@ -1302,10 +1303,10 @@ async function answerConfirm(yes){
   }
   }finally{ IN_FLIGHT=false; }
   const priv={private:saved.some(c=>NOT_FOR_MODEL.test(c.field))};
-  const spoken=saved.map(c=>c.field+' is now '+c.new_value+'.').join(' ');
+  const spoken=saved.map(c=>c.field+' is now '+(c.new_spoken||c.new_value)+'.').join(' ');
   if(saved.length&&!problems.length){
     say(saved.length===1
-        ? 'Done. '+saved[0].field+' on '+(saved[0].project_ref||'that record')+' is now '+saved[0].new_value+'.'
+        ? 'Done. '+saved[0].field+' on '+(saved[0].project_ref||'that record')+' is now '+(saved[0].new_spoken||saved[0].new_value)+'.'
         : 'Done — I updated '+saved.length+' lines. '+spoken, undefined, priv);
     setState('Written and journalled.');
   }else if(saved.length){
