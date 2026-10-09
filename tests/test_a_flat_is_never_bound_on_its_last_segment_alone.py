@@ -39,8 +39,10 @@ def test_the_parts_own_file_still_binds_exactly():
 
 
 def test_a_shorter_code_still_finds_the_part_it_ends():
-    assert _bind("12-002.DXF", {"8188-12-002": {"part_number": "8188-12-002"}})[1:] == \
-        ("8188-12-002", "segment")
+    """The rung itself, given a code whose segments are all the part's last ones."""
+    part, basis = djm._lookup_part_with_basis({"8188-12-002": {"part_number": "8188-12-002"}},
+                                              "12-002")
+    assert (part or {}).get("part_number") == "8188-12-002" and basis == "segment"
 
 
 def test_the_stoppers_file_stays_with_its_own_family():
