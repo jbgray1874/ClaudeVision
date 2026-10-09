@@ -79,6 +79,9 @@ _BUCKET_FOR = {"drawing": DRAWINGS, "commerce": PRICES, "estimator": CONFIRM,
 # falls back to the bucket's own instruction rather than inventing advice — a made-up action is
 # worse than none, because it gets followed.
 _ACTION = {
+    "unresolved_reading_priced": "Confirm the reading with the drawing office or the customer "
+                                 "(for example 2 m or 2 mm), then price the line on it; the "
+                                 "quote waits until then.",
     "price_not_reproducible": "Replace with a catalogue or supplier rate, or accept it and "
                               "quote this as an estimate rather than a firm price.",
     "material_has_no_rate_in_this_engine": "Enter a rate for the material, or confirm the part "
