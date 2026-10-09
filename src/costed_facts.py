@@ -1960,17 +1960,6 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     money = charged_unit if charged_unit is not None else engine_unit
     _row_says_ai = "ai estimate" in tokens and "indicative" in tokens
 
-    # A FIGURE HELD FOR A QUESTION IS NEITHER A PRICE NOR A GAP (D-430). The line shows it
-    # and the unit does not carry it; the question on the line is the open item, and it
-    # carries the money — so it is not counted again as a market figure or a missing price.
-    _hold = part.get("_price_held")
-    if isinstance(_hold, Mapping):
-        _hu = engine_unit or 0.0
-        return {"class": "held_for_question", "firmness": UNPRICED, "owner": "estimator",
-                "label": (f"HELD out of the unit cost"
-                          + (f" — £{_hu:,.2f} a unit on the printed reading" if _hu else "")
-                          + f": {_hold.get('reason') or 'a reading awaits confirmation'}")}
-
     if cross_ref and block in _FABRICATED_BLOCKS:
         # A BOM row whose money is on a fabricated block. Nil HERE by design; the money is
         # reported on the fabricated line for the same part.
@@ -2764,8 +2753,6 @@ def costed_job(source: Any) -> Dict[str, Any]:
     # ── what a person has to decide, worst first ────────────────────────────────
     decisions: List[Dict[str, Any]] = []
     for l in unpriced:
-        if l["price_origin"].get("class") == "held_for_question":
-            continue                     # its question is the open item, with the money (D-430)
         # A LINE UNPRICED FOR WANT OF A GAUGE SAYS SO. A board whose only thickness readings
         # were the drawing's tolerance text is left without a gauge rather than charged at the
         # table's 3 mm (12173-03-01J); the line is NOT PRICED, and what it needs is the gauge,
@@ -3005,9 +2992,6 @@ def costed_job(source: Any) -> Dict[str, Any]:
         else:
             _line = _by_pn.get(_pn.upper())
             _gbp = (_money_of(_line) if _line is not None else None) or None
-            # A HELD LINE CARRIES NO MONEY ON THE SHEET; ITS QUESTION CARRIES THE HELD FIGURE.
-            if isinstance(part.get("_price_held"), Mapping):
-                _gbp = round(part_material_cost(part)[1], 2) or _gbp
         if str(mq.get("subject") or "") == "welding":
             _weld_asked.add(_pn.upper())
         _qrow: Dict[str, Any] = {"part": _pn, "kind": "manufacturing_decision",

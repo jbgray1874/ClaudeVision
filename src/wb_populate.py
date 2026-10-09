@@ -925,23 +925,18 @@ def cut_list_text(stock_estimate: Any) -> str:
     return f"cut {parts} = {sum(pieces):,.6g} mm"
 
 
-def held_line(pe: Dict[str, Any], price: Any, qty: Any) -> Optional[Dict[str, Any]]:
-    """The figure a BOM line HOLDS rather than charges, or None when the line prices normally.
+def unresolved_reading_note(pe: Dict[str, Any]) -> str:
+    """The words a BOM line carries when its figure rests on a reading nobody has confirmed.
 
-    HELD IS NOT FREE AND IS NOT CHARGED (D-430). A line whose record carries `_price_held` —
-    a reading a person has been asked to confirm, such as a printed size in two units — shows
-    its figure in the description and leaves the price cell empty, so the unit cost does not
-    carry it and the sheet does not read the line as free. The money is said once, here; the
-    question on the line carries it as the amount at stake."""
-    hold = (pe or {}).get("_price_held")
-    unit = _safe(price)
-    if not isinstance(hold, dict) or not unit or unit <= 0:
-        return None
-    q = _safe(qty, 1) or 1
-    reason = str(hold.get("reason") or "a reading is awaiting confirmation")
-    return {"unit_gbp": round(unit, 4), "ext_gbp": round(unit * q, 2), "reason": reason,
-            "note": (f"HELD £{unit:,.2f} a unit, £{unit * q:,.2f} at {q:g}, on the printed "
-                     f"reading — {reason}; not in the unit cost until it is confirmed")}
+    PRICED, MARKED, QUOTE BLOCKED (D-432). The figure stays in the price cell — a blank would
+    total a lighter unit with nothing saying it is incomplete — and the line says the reading
+    is open, so nobody reads the working figure as settled."""
+    mark = (pe or {}).get("_price_unresolved")
+    if not isinstance(mark, dict):
+        return ""
+    units = " and ".join(str(u) for u in (mark.get("units") or []))
+    return ("UNRESOLVED READING" + (f" ({units} in one size)" if units else "")
+            + ": priced as printed, a working figure — customer quote blocked until confirmed")
 
 
 def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
@@ -6162,32 +6157,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
             # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
             price = _bom_line_price(pe)
-        # A HELD FIGURE IS SHOWN, NOT SUMMED (D-430).
-        _held = held_line(pe, price, qty)
-        if _held:
-            price = None
-            pe["_price_held_gbp"] = _held["ext_gbp"]
-            from estimator_inputs import UNPRICED as _HELD_GAP
-            if _line["status"] == _HELD_GAP:
-                _line = dict(_line, note={"kind": "held_for_question", "note": _held["note"]})
-            else:
-                desc = f"{str(desc)[:70]}  —  {_held['note']}"
-            try:
-                import price_provenance as _pp
-                _pp.mark_withheld(pe, f"held: {_held['reason']}")
-                _wl = summary.setdefault("withheld_price_lines", [])
-                _hc = str(pe.get("part_number") or "").strip().upper()
-                if _hc and _hc not in _wl:
-                    _wl.append(_hc)
-            except Exception:                                   # noqa: BLE001
-                pass
-            _flag(f"BOM {pe.get('part_number')}: {_held['note']}.", flags)
+        # A FIGURE ON AN UNRESOLVED READING SAYS SO ON ITS LINE (D-432); the price stands.
+        _unres = unresolved_reading_note(pe)
+        if _unres:
+            desc = f"{str(desc)[:60]}  —  {_unres}"
+            _flag(f"BOM {pe.get('part_number')}: {_unres}.", flags)
         # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
         # line carries; a record that still says its bought-in price reached the total when
         # the cell is empty is one fact with two writers, and the consistency check reported
         # exactly that on the 21:57 book: eleven £0 lines "reached the total as AI prices".
         reconcile_price_stamp_with_sheet(pe, price, summary)
-        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
+        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:200 if _unres else 120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
         # A PER-ORDER LINE AMORTISES THROUGH THE SHEET'S OWN LOOKUP, NOT A FROZEN LITERAL.
