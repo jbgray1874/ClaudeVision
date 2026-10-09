@@ -207,7 +207,7 @@ def reconciled_bom_rows_for_job(
             #     assumption. Copied only when a reader actually stamped them, so an
             #     SDI row without the columns is byte-identical.
             for _ev in ("material_text", "thickness_mm", "stated_weight_kg",
-                        "segmentation_uncertain", "code_token"):
+                        "segmentation_uncertain", "code_token", "length_mm"):
                 _v = r.get(_ev)
                 if _v not in (None, ""):
                     _row_out[_ev] = _v
@@ -370,6 +370,15 @@ def apply_stated_cut_list_to_parts(parts: Any, bom_rows: Any) -> int:
         s = detect_section_stock(str(r.get("description") or ""))
         if not s or s.get("detection_path") != "canonical_profile":
             continue
+        # THE TABLE'S OWN LENGTH COLUMN (D-429), where the description does not print one:
+        # "ITEM QTY DESCRIPTION LENGTH" puts the piece's length beside the profile, not in it.
+        if not s.get("length_mm"):
+            try:
+                _col_len = float(r.get("length_mm") or 0)
+            except (TypeError, ValueError):
+                _col_len = 0.0
+            if _col_len > 0:
+                s = dict(s, length_mm=_col_len)
         key = (min(float(s["a"]), float(s["b"])), max(float(s["a"]), float(s["b"])),
                float(s["t"]), str(s.get("profile_form") or ""))
         if not s.get("length_mm"):

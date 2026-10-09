@@ -37,5 +37,7 @@ def test_the_bought_in_line_carries_the_question_and_keeps_its_price():
     qs = [q for q in part.get("manufacturing_questions") or []
           if q.get("source") == "extractor_patterns.size_mixing_units"]
     assert len(qs) == 1 and "50mm x 10mm x 2m" in qs[0]["issue"], qs
-    assert qs[0]["assumption"] == "priced as printed"
+    # D-432: priced as a working figure, the reading marked open, the quote blocked
+    assert qs[0]["assumption"].startswith("priced on the printed reading as a working figure")
+    assert part["_price_unresolved"]["reason"].startswith("the printed size 50mm x 10mm x 2m")
     assert part["unit_cost_gbp"] == 48.5

@@ -5787,6 +5787,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                       "section_length_reader_from": str(
                           part.get("_section_length_reader_from") or ""),
                       "section_length_indicative": _len_indicative}
+        # THE PIECES BOUGHT, NOT ONLY THEIR SUM (D-429). A cut list costed as its sum says so
+        # on the line, so 1,872 mm can be checked against 2 x 300 + 1 x 1,272 on the sheet.
+        if _len_reader == "cut_list_sum":
+            _cl = [v for v in (_safe_float(x) for x in
+                               ((part.get("section_stock") or {}).get("cut_lengths_mm") or [])
+                               if not isinstance(x, (dict, list))) if v and v > 0]
+            if len(_cl) > 1:
+                _len_stamp["cut_lengths_mm"] = sorted(_cl)
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
@@ -7196,11 +7204,24 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             _mix = _mixed_units(f"{part.get('description') or ''} {part.get('part_number') or ''}")
             if _mix:
                 from source_precedence import raise_manufacturing_question as _ask
+                # PRICED AS A WORKING FIGURE, MARKED UNRESOLVED, QUOTE BLOCKED (D-432). On
+                # 8188-08 the £706 of two-metre magnets sat in the unit while the line asked
+                # whether they were 2 mm. Holding the money out (D-430, withdrawn) left the
+                # sheet totalling a unit £706 lighter with nothing saying it was incomplete —
+                # more misleading than the figure. So the figure stays in, the line says it is
+                # an unresolved reading, and the customer quote is blocked until a person says
+                # which size it is (invariants.check_an_unresolved_reading_blocks_the_quote).
+                part["_price_unresolved"] = {
+                    "reason": (f"the printed size {_mix['text']} mixes "
+                               f"{' and '.join(_mix['units'])}"),
+                    "units": list(_mix["units"]),
+                    "source": "extractor_patterns.size_mixing_units"}
                 _ask(part,
                      (f"{part.get('part_number')}: the printed size {_mix['text']} mixes "
                       f"{' and '.join(_mix['units'])} — a misprinted unit changes what is bought "
                       f"and its price"),
-                     "priced as printed",
+                     ("priced on the printed reading as a working figure; the customer quote "
+                      "is blocked until the size is confirmed"),
                      ("confirm the size (for example whether a figure in metres is meant in "
                       "millimetres) and the price that goes with it"),
                      "extractor_patterns.size_mixing_units")
@@ -9699,6 +9720,15 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "punch_calibration": part.get("punch_calibration"),
         "section_costing_adjustment": part.get("section_costing_adjustment"),
         "review_flags": part.get("review_flags") or [],
+        # A FIGURE PRICED ON AN UNRESOLVED READING (D-432) travels with the costed record, or
+        # the sheet writer — which reads only this dict — prints it as if nothing were asked.
+        "_price_unresolved": part.get("_price_unresolved"),
+        # THE QUESTIONS TRAVEL WITH THE COSTED RECORD (D-433). A record the table reader adds
+        # after estimate_document is costed on a COPY (cost_uncosted_bought_in_records), and
+        # a question raised on the copy died with it: 8188-08's magnet line reached the 17:37
+        # book with no question at all. A snapshot, merged with the raw record's by issue.
+        "manufacturing_questions": [dict(q) for q in (part.get("manufacturing_questions")
+                                                      or []) if isinstance(q, dict)] or None,
     }
 
 

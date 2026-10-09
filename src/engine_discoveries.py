@@ -45,6 +45,9 @@ _PACK = {
     "dims_required",
     "no_part_dxf",
     "blank_and_cut_path_disagree",
+    # A size printed in two units ("50mm x 10mm x 2m"): the pack is ambiguous about what is
+    # bought, and the drawing office or the customer answers it (D-432).
+    "unresolved_reading_priced",
 }
 
 # A PRICE THIS BUSINESS HAS NOT PUT IN SDILIVE YET. Nothing is wrong with the drawing and

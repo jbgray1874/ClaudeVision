@@ -1176,6 +1176,41 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         parts=_names, lines=guessed[:10], count=len(guessed))]
 
 
+def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str, Any]]:
+    """A line priced on a reading nobody has confirmed blocks the customer quote (D-432).
+
+    8188-08: fourteen magnets printed "50mm x 10mm x 2m" are priced as two-metre magnets —
+    £706.16 of the unit. The figure stays in as a working figure (a blank would total a lighter
+    unit that says nothing is missing), so the quote is what is stopped: not a firm price
+    until a person says which size it is. Independent of price_not_reproducible, which would
+    lift the day a catalogue row turned up for the misread size while the question stood."""
+    if not isinstance(summary, dict):
+        return _unevaluated("unresolved_reading_priced", "This job is not a readable structure.")
+    found: Dict[str, str] = {}
+    holders = [summary, summary.get("estimate_summary") or {},
+               summary.get("manufacturing_writeup") or {}]
+    for holder in holders:
+        if not isinstance(holder, dict):
+            continue
+        for key in ("part_estimates", "canonical_part_estimates", "parts"):
+            for p in holder.get(key) or []:
+                if not isinstance(p, dict) or not isinstance(p.get("_price_unresolved"), dict):
+                    continue
+                pn = str(p.get("part_number") or "").strip()
+                if pn and pn.upper() not in {k.upper() for k in found}:
+                    found[pn] = str(p["_price_unresolved"].get("reason") or "an unconfirmed reading")
+    if not found:
+        return []
+    names = sorted(found)
+    return [_violation(
+        "unresolved_reading_priced", BLOCKING,
+        f"{len(names)} line(s) are priced on a reading nobody has confirmed: "
+        + "; ".join(f"{n} — {found[n]}" for n in names[:6])
+        + ". The figure is in the unit as a working figure; the customer quote waits until "
+          "the reading is confirmed and the price that goes with it is settled.",
+        parts=names, count=len(names))]
+
+
 def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
     """Where several sources answered with different prices, is the spread visible?
 
@@ -4541,6 +4576,7 @@ CHECKS = (
     check_an_assembly_is_not_charged_as_a_blank,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
+    check_an_unresolved_reading_blocks_the_quote,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
     check_both_bom_readers_ran,

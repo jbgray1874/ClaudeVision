@@ -909,6 +909,36 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
+def cut_list_text(stock_estimate: Any) -> str:
+    """"cut 2 × 300 + 1 × 1,272 = 1,872 mm" for a section costed as its cut list, else "".
+
+    The line said the goalpost's name and its price; the length bought was only in the record,
+    so a book could not show whether the column was read and the price was not (D-429)."""
+    se = stock_estimate if isinstance(stock_estimate, dict) else {}
+    pieces = [p for p in (_safe(x) for x in (se.get("cut_lengths_mm") or [])) if p and p > 0]
+    if len(pieces) < 2:
+        return ""
+    counts: Dict[float, int] = {}
+    for p in pieces:
+        counts[round(p, 1)] = counts.get(round(p, 1), 0) + 1
+    parts = " + ".join(f"{n} × {L:,.6g}" for L, n in sorted(counts.items()))
+    return f"cut {parts} = {sum(pieces):,.6g} mm"
+
+
+def unresolved_reading_note(pe: Dict[str, Any]) -> str:
+    """The words a BOM line carries when its figure rests on a reading nobody has confirmed.
+
+    PRICED, MARKED, QUOTE BLOCKED (D-432). The figure stays in the price cell — a blank would
+    total a lighter unit with nothing saying it is incomplete — and the line says the reading
+    is open, so nobody reads the working figure as settled."""
+    mark = (pe or {}).get("_price_unresolved")
+    if not isinstance(mark, dict):
+        return ""
+    units = " and ".join(str(u) for u in (mark.get("units") or []))
+    return ("UNRESOLVED READING" + (f" ({units} in one size)" if units else "")
+            + ": priced as printed, a working figure — customer quote blocked until confirmed")
+
+
 def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
                                      summary: Optional[Dict[str, Any]] = None) -> bool:
     """When the sheet writes no price on a bought-in line, its record says so too.
@@ -5966,6 +5996,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _dims = _own_size_mm(pe)
         if _dims and not re.search(r"\d+(?:\.\d+)?\s*[x×]\s*\d+", str(desc or "")):
             desc = f"{desc}  {_dims[0]:g} × {_dims[1]:g}"
+        _cut = cut_list_text(se)
+        if _cut:
+            desc = f"{desc}  —  {_cut}"
         # code: THIS part's own number; fall back to catalogue code only if the part has none
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate
@@ -6124,12 +6157,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
             # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
             price = _bom_line_price(pe)
+        # A FIGURE ON AN UNRESOLVED READING SAYS SO ON ITS LINE (D-432); the price stands.
+        _unres = unresolved_reading_note(pe)
+        if _unres:
+            desc = f"{str(desc)[:60]}  —  {_unres}"
+            _flag(f"BOM {pe.get('part_number')}: {_unres}.", flags)
         # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
         # line carries; a record that still says its bought-in price reached the total when
         # the cell is empty is one fact with two writers, and the consistency check reported
         # exactly that on the 21:57 book: eleven £0 lines "reached the total as AI prices".
         reconcile_price_stamp_with_sheet(pe, price, summary)
-        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
+        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:200 if _unres else 120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
         # A PER-ORDER LINE AMORTISES THROUGH THE SHEET'S OWN LOOKUP, NOT A FROZEN LITERAL.

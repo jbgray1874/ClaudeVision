@@ -2029,7 +2029,6 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     parts = manufacturing_writeup.get("parts", [])
 
     _inherit_document_material_to_parts(parts, document_analysis)
-    _inherit_sheet_material_to_parts(parts, summary.get("pages") or [])
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),
@@ -4850,6 +4849,12 @@ def _finalize_scan_summary(
                                        or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+    # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
+    # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
+    # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as
+    # 3 mm mild steel. A material that arrives after the price is a note, not a material.
+    _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
+                                     summary.get("pages") or [])
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
