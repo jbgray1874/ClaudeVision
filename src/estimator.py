@@ -5787,6 +5787,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                       "section_length_reader_from": str(
                           part.get("_section_length_reader_from") or ""),
                       "section_length_indicative": _len_indicative}
+        # THE PIECES BOUGHT, NOT ONLY THEIR SUM (D-429). A cut list costed as its sum says so
+        # on the line, so 1,872 mm can be checked against 2 x 300 + 1 x 1,272 on the sheet.
+        if _len_reader == "cut_list_sum":
+            _cl = [v for v in (_safe_float(x) for x in
+                               ((part.get("section_stock") or {}).get("cut_lengths_mm") or [])
+                               if not isinstance(x, (dict, list))) if v and v > 0]
+            if len(_cl) > 1:
+                _len_stamp["cut_lengths_mm"] = sorted(_cl)
 
         # A hollow rolled section is METAL by definition — it cannot be timber/MDF/wood. On these
         # drawings the deterministic reader sometimes tags a tube 'TIMBER' off a nearby spec note,
@@ -7196,11 +7204,21 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             _mix = _mixed_units(f"{part.get('description') or ''} {part.get('part_number') or ''}")
             if _mix:
                 from source_precedence import raise_manufacturing_question as _ask
+                # HELD, NOT CHARGED (D-430). A question beneath a charged figure is not the
+                # same as holding the money: on 8188-08 the £706 of two-metre magnets sat in
+                # the unit while the line asked whether they were 2 mm. The figure on the
+                # printed reading stays on the line, shown and not summed, until a person
+                # says which size it is.
+                part["_price_held"] = {
+                    "reason": (f"the printed size {_mix['text']} mixes "
+                               f"{' and '.join(_mix['units'])}"),
+                    "source": "extractor_patterns.size_mixing_units"}
                 _ask(part,
                      (f"{part.get('part_number')}: the printed size {_mix['text']} mixes "
                       f"{' and '.join(_mix['units'])} — a misprinted unit changes what is bought "
                       f"and its price"),
-                     "priced as printed",
+                     ("held out of the unit cost: the figure on the printed reading is shown "
+                      "on the line and not summed"),
                      ("confirm the size (for example whether a figure in metres is meant in "
                       "millimetres) and the price that goes with it"),
                      "extractor_patterns.size_mixing_units")
@@ -9699,6 +9717,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "punch_calibration": part.get("punch_calibration"),
         "section_costing_adjustment": part.get("section_costing_adjustment"),
         "review_flags": part.get("review_flags") or [],
+        # A FIGURE HELD FOR A QUESTION (D-430) travels with the costed record, or the sheet
+        # writer — which reads only this dict — charges it as if nothing had been asked.
+        "_price_held": part.get("_price_held"),
     }
 
 

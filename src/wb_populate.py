@@ -909,6 +909,41 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
+def cut_list_text(stock_estimate: Any) -> str:
+    """"cut 2 × 300 + 1 × 1,272 = 1,872 mm" for a section costed as its cut list, else "".
+
+    The line said the goalpost's name and its price; the length bought was only in the record,
+    so a book could not show whether the column was read and the price was not (D-429)."""
+    se = stock_estimate if isinstance(stock_estimate, dict) else {}
+    pieces = [p for p in (_safe(x) for x in (se.get("cut_lengths_mm") or [])) if p and p > 0]
+    if len(pieces) < 2:
+        return ""
+    counts: Dict[float, int] = {}
+    for p in pieces:
+        counts[round(p, 1)] = counts.get(round(p, 1), 0) + 1
+    parts = " + ".join(f"{n} × {L:,.6g}" for L, n in sorted(counts.items()))
+    return f"cut {parts} = {sum(pieces):,.6g} mm"
+
+
+def held_line(pe: Dict[str, Any], price: Any, qty: Any) -> Optional[Dict[str, Any]]:
+    """The figure a BOM line HOLDS rather than charges, or None when the line prices normally.
+
+    HELD IS NOT FREE AND IS NOT CHARGED (D-430). A line whose record carries `_price_held` —
+    a reading a person has been asked to confirm, such as a printed size in two units — shows
+    its figure in the description and leaves the price cell empty, so the unit cost does not
+    carry it and the sheet does not read the line as free. The money is said once, here; the
+    question on the line carries it as the amount at stake."""
+    hold = (pe or {}).get("_price_held")
+    unit = _safe(price)
+    if not isinstance(hold, dict) or not unit or unit <= 0:
+        return None
+    q = _safe(qty, 1) or 1
+    reason = str(hold.get("reason") or "a reading is awaiting confirmation")
+    return {"unit_gbp": round(unit, 4), "ext_gbp": round(unit * q, 2), "reason": reason,
+            "note": (f"HELD £{unit:,.2f} a unit, £{unit * q:,.2f} at {q:g}, on the printed "
+                     f"reading — {reason}; not in the unit cost until it is confirmed")}
+
+
 def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
                                      summary: Optional[Dict[str, Any]] = None) -> bool:
     """When the sheet writes no price on a bought-in line, its record says so too.
@@ -5966,6 +6001,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _dims = _own_size_mm(pe)
         if _dims and not re.search(r"\d+(?:\.\d+)?\s*[x×]\s*\d+", str(desc or "")):
             desc = f"{desc}  {_dims[0]:g} × {_dims[1]:g}"
+        _cut = cut_list_text(se)
+        if _cut:
+            desc = f"{desc}  —  {_cut}"
         # code: THIS part's own number; fall back to catalogue code only if the part has none
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate
@@ -6124,6 +6162,26 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
             # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
             price = _bom_line_price(pe)
+        # A HELD FIGURE IS SHOWN, NOT SUMMED (D-430).
+        _held = held_line(pe, price, qty)
+        if _held:
+            price = None
+            pe["_price_held_gbp"] = _held["ext_gbp"]
+            from estimator_inputs import UNPRICED as _HELD_GAP
+            if _line["status"] == _HELD_GAP:
+                _line = dict(_line, note={"kind": "held_for_question", "note": _held["note"]})
+            else:
+                desc = f"{str(desc)[:70]}  —  {_held['note']}"
+            try:
+                import price_provenance as _pp
+                _pp.mark_withheld(pe, f"held: {_held['reason']}")
+                _wl = summary.setdefault("withheld_price_lines", [])
+                _hc = str(pe.get("part_number") or "").strip().upper()
+                if _hc and _hc not in _wl:
+                    _wl.append(_hc)
+            except Exception:                                   # noqa: BLE001
+                pass
+            _flag(f"BOM {pe.get('part_number')}: {_held['note']}.", flags)
         # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
         # line carries; a record that still says its bought-in price reached the total when
         # the cell is empty is one fact with two writers, and the consistency check reported

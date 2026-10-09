@@ -37,5 +37,7 @@ def test_the_bought_in_line_carries_the_question_and_keeps_its_price():
     qs = [q for q in part.get("manufacturing_questions") or []
           if q.get("source") == "extractor_patterns.size_mixing_units"]
     assert len(qs) == 1 and "50mm x 10mm x 2m" in qs[0]["issue"], qs
-    assert qs[0]["assumption"] == "priced as printed"
+    # D-430: the figure is held, not charged — the record keeps it, the sheet shows it
+    assert qs[0]["assumption"].startswith("held out of the unit cost")
+    assert part["_price_held"]["reason"].startswith("the printed size 50mm x 10mm x 2m")
     assert part["unit_cost_gbp"] == 48.5

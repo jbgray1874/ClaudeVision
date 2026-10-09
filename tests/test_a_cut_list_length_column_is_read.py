@@ -70,3 +70,26 @@ def test_a_length_in_the_description_still_wins_over_the_column():
              "bom_parent_known": True}]
     bp.apply_stated_cut_list_to_parts([part], rows)
     assert part["section_stock"]["cut_lengths_mm"] == [500.0]
+
+
+def test_the_costing_buys_the_sum_and_the_line_shows_the_pieces():
+    """The re-run must show 1,872 mm bought, two at 300 and one at 1,272 — not one stick of
+    1,272 mm. Read the column AND price it."""
+    import estimator
+    import wb_populate as wp
+    part = dict(_goalpost(), quantity=1)
+    rows = [dict(r, part_number="", bom_parent="8188-29-001", bom_parent_known=True)
+            for r in bte.bom_rows_from_tables([_TABLE])]
+    bp.apply_stated_cut_list_to_parts([part], rows)
+    me = estimator.estimate_material(part)
+    se = me["stock_estimate"]
+    assert se["section_length_mm"] == 1872.0 and se["section_length_reader"] == "cut_list_sum"
+    assert se["cut_lengths_mm"] == [300.0, 300.0, 1272.0]
+    assert abs(me["unit_material_mass_kg"] - 1.734) < 0.01
+    assert wp.cut_list_text(se) == "cut 2 × 300 + 1 × 1,272 = 1,872 mm"
+
+
+def test_one_piece_is_not_a_cut_list_on_the_line():
+    import wb_populate as wp
+    assert wp.cut_list_text({"cut_lengths_mm": [1272.0]}) == ""
+    assert wp.cut_list_text({}) == ""
