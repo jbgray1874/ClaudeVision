@@ -59,7 +59,8 @@ def test_the_report_still_counts_it_as_a_market_figure_in_the_unit():
 
 def test_an_unresolved_reading_blocks_the_customer_quote():
     summary = {"estimate_summary": {"part_estimates": [
-        {"part_number": "KINGDOM", "_price_unresolved": _MARK},
+        {"part_number": "KINGDOM", "_price_unresolved": _MARK,       # priced: it carries money
+         "material_estimate": {"unit_material_cost_gbp": 48.5}},
         {"part_number": "PSA1999C"}]}}
     v = invariants.check_an_unresolved_reading_blocks_the_quote(summary)
     assert len(v) == 1 and v[0]["severity"] == invariants.BLOCKING
