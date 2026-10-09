@@ -661,11 +661,23 @@ def client_log(body: ClientLogIn, request: Request, user: dict = Depends(auth.re
 
 @router.get("/api/voicecrm/journal")
 def journal_view(request: Request, limit: int = 25, user: dict = Depends(auth.require_user)):
-    """The audit trail: every proposal and what actually happened to it."""
-    return {"writes_enabled": WRITE_ENABLED, "approved_by": APPROVED_BY,
+    """The audit trail: every proposal and what actually happened to it.
+
+    The app's Recent activity panel reads this, for the pilot writers only: it
+    holds old and new values, contact details included, which readers of the
+    tracker are not meant to see through this screen."""
+    if not _may_write(user or {}):
+        return {"state": "not_a_writer", "detail": "Recent activity is for the pilot's writers."}
+    entries = _journal.recent(max(1, min(int(limit or 25), 100)))
+    for e in entries:
+        e["old_spoken"] = _spoken_value(e.get("old_value"))
+        e["new_spoken"] = _spoken_value(e.get("new_value"))
+        e.pop("user_oid", None)
+        e.pop("etag", None)
+    return {"state": "ok", "writes_enabled": WRITE_ENABLED, "approved_by": APPROVED_BY,
             "writers": sorted(WRITERS),
             "editable_fields": EDITABLE, "counts": _journal.counts(),
-            "entries": _journal.recent(limit)}
+            "entries": entries}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
