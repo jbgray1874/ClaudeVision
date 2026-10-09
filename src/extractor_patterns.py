@@ -1901,8 +1901,16 @@ def build_textual_manufacturing_summary(
         or feature_cues.get("angles_deg")
         or feature_cues.get("fold_count_textual")
     )
+    # THE STANDING SPECIFICATION IS NOT A ROUTE CUE, AT PAGE LEVEL AS AT PART LEVEL (D-438).
+    # The border legend — "POWDERCOATING: BETWEEN 80 - 120 MICRON", "Q195 UP TO 3mm THICK FOR
+    # POWDER COATED STEEL", "ALL WELDS TO BE TIG" — is printed on every sheet of a pack. The
+    # weld and material readers above read with it removed (D-394); this inference read the
+    # whole page, so every sheet minted powder_coating, and 8188-08-SA04 — an acrylic waves
+    # sub-assembly whose own title block states no finish at all — took a powder coat from
+    # the legend and carried it to the P.Coat row. A note stays on the sheet it is written
+    # on; a paragraph written on every sheet is a note on none of them.
     inferred_operations = infer_operations_from_text(
-        full_text + " " + notes_source,
+        strip_specification_legend(full_text) + " " + strip_specification_legend(notes_source),
         material=page_material,
         finishes=finishes,
         has_fold_geometry=has_fold_geometry,

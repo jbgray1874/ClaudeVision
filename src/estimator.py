@@ -2801,6 +2801,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                             # — D-281 had lifted the mark only for the legacy resolver's
                             # candidates (D-295). Carried as the service gave it.
                             "price_is_reproducible": anchor.get("price_is_reproducible"),
+                            # WHAT THE PRICE BUYS. The catalogue rungs name their unit of sale
+                            # (each, M, a length); a purchased line cut from stock is priced
+                            # on it (D-441), so it travels with the figure.
+                            "uom": anchor.get("uom"),
                             # The anchor already knows what it is — a UDEF row, a historical
                             # quote line, or a web/AI estimate. Dropping that here is what
                             # left an LLM price indistinguishable from a catalogue hit by the
@@ -5191,6 +5195,23 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         or _sub_asm_by_bom
         or _canonical_parent
     )
+    # A WELDMENT CUT FROM ITS OWN SECTION CUT LIST CARRIES ITS OWN STEEL (D-439). 8188-29-001,
+    # the goalpost: its sheet's table lists the pieces (2 x 300, 1 x 1,272 of 25.4 x 25.4 x
+    # 1.22) and its note says WELD AND DRESS THE CORNERS. Read as a parent, its material was
+    # "carried by children" it does not have — £0.00 of tube on the replay once the 300 mm
+    # catalogue row (rightly) no longer matched. The pieces are its stock, costed as the
+    # section below; the weld stays the parent's work. A parent with children of its own
+    # still defers to them.
+    _own_cut_list = (isinstance(part.get("section_stock"), dict)
+                     and len([x for x in (part["section_stock"].get("cut_lengths_mm") or [])
+                              if _safe_float(x)]) >= 1
+                     and not (part.get("assembly_children") or []))
+    if _is_weldment_parent and _own_cut_list:
+        _is_weldment_parent = False
+        _note = ("weldment cut from its own section cut list — the pieces are its stock, "
+                 "priced as the section; the weld is its work")
+        if _note not in (part.get("review_flags") or []):
+            part.setdefault("review_flags", []).append(_note)
     if _is_weldment_parent:
         # ONE PARENT TEST, NOT TWO THAT DISAGREE.
         #
@@ -5676,6 +5697,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
         # (5496 / 6364mm on 11762-17) is an OUTLINE, never a developed length, so it is NOT used.
         _wl = _safe_float(part.get("wire_length_mm"))
         _length_assumed = False
+        # A LENGTH DERIVED FROM THE SHEET'S OWN OUTLINE BEATS A DEFAULT (D-437). The sheet that
+        # draws a wire frame states its outline (1081 × 206 EXT.); wire_sheet_reader records
+        # the perimeter beside the part, never as the schedule length the bar formula trusts.
+        # It is costed here, said to be derived, and left as an estimator input to confirm.
+        _length_derived = False
+        if (not _wl or _wl <= 0) and _safe_float(part.get("wire_length_derived_mm")):
+            _wl = float(part["wire_length_derived_mm"])
+            _length_derived = True
         if not _wl or _wl <= 0:
             # Assume a SHORT developed length by FORM until the detail is measured: a compact
             # formed wire (a U, a hook, a clip) is a fraction of a stand / frame. Config-driven,
@@ -5704,7 +5733,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at £{_rate_t:.0f}/t"
             + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
                "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
-               if _length_assumed else "."))
+               if _length_assumed else
+               f" — developed length DERIVED from {part.get('wire_length_derived_from')}: the "
+               f"wire runs round the outline, so this is the frame's perimeter and no more; "
+               f"confirm it, or give the schedule length."
+               if _length_derived else "."))
         return {
             "material": material,
             "thickness_mm": None,               # a DIAMETER is not a thickness
@@ -5718,21 +5751,25 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             "stock_estimate": {
                 "wire_length_mm": _wl, "wire_gauge_mm": _wg,
                 "length_assumed": _length_assumed,
+                "length_derived_from": (str(part.get("wire_length_derived_from") or "")
+                                        if _length_derived else None),
                 "metres_per_tonne": round(_mpt, 1) if _mpt else None,
             },
             "cost_method": ("wire_tonne_rate_assumed_length" if _length_assumed
+                            else "wire_tonne_rate_outline_length" if _length_derived
                             else "workbook_bar_formula"),
             "stock_form": "wire",
             "wire_gauge_mm": _wg,
             "wire_length_mm": _wl,
             "requires_flat_blank": False,
-            "estimator_input_required": _length_assumed,
+            "estimator_input_required": _length_assumed or _length_derived,
             "part_confidence_overall": _part_confidence_overall(part),
             "part_geometry_reliability": _part_geometry_reliability(part),
             "price_source": _build_price_source_metadata(
                 external_result, fallback_source="config_wire_cost_per_tonne",
                 applied=True,
                 applied_basis=("assumed_length_x_tonne_rate" if _length_assumed
+                               else "outline_perimeter_x_tonne_rate" if _length_derived
                                else "bar_diameter_x_length_gauge_lookup")),
         }
 
@@ -9149,6 +9186,42 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _laser_signal = True
         if _cut_method in ("guillotine", "router", "rout", "saw", "cnc_rout"):
             _laser_signal = False
+        # A MEASURED FLAT IS CUT BY SOMETHING (D-440). Dropping the laser for want of a signal
+        # left 8188-08-015 — a 2,355 x 100 acrylic layer with a DXF flat — cut by nothing. Where
+        # no machine is named, the shop's own rule for the material names it (config
+        # CUT_METHOD_BY_MATERIAL: acrylic is lasered unless the drawing or the CAM calls for
+        # CNC); where the drawing names the router, the router is charged, at its department's
+        # rate, and the laser is not. Both are said on the part.
+        _cut_basis = ""
+        if not (_laser_signal or _bonded) and _L > 0 and _W > 0:
+            if _cut_method in ("router", "rout", "cnc_rout"):
+                _cut_basis = "router"
+            elif not _cut_method:          # a named guillotine or saw is a cutter; the rule is for silence
+                _mat_key = re.sub(r"[\s-]+", "_", str(part.get("normalized_material") or "").upper())
+                _rule = next((r for r in (getattr(config, "CUT_METHOD_BY_MATERIAL", []) or [])
+                              if str(r.get("material") or "").upper() == _mat_key), None)
+                _method = str((_rule or {}).get("method") or "").lower()
+                if _method == "laser":
+                    _laser_signal, _cut_basis = True, "shop rule"
+                elif _method == "router":
+                    _cut_basis = "router"
+        if _cut_basis == "router":
+            _rt.pop("laser_cutting", None)
+            _st.pop("laser_cutting", None)
+            # timed as the metal CNC row is (config LABOUR_RULES cnc_routing: contour ÷ feed,
+            # never under the department's minimum run), on the same perimeter the laser used
+            _cnc_rule = LABOUR_RULES.get("cnc_routing") or LABOUR_RULES.get("cnc") or {}
+            _cnc_sec = max(float(_cnc_rule.get("min_run_min", 8.0)) * 60.0,
+                           2.0 * (_L + _W) * float(_cnc_rule.get("sec_per_mm_contour", 0.04)))
+            _rt.setdefault("cnc_routing", round(_cnc_sec / 60.0, 4))
+            _st.setdefault("cnc_routing", round(float(_cnc_rule.get("setup_min", 4.0)), 2))
+            part.setdefault("review_flags", []).append(
+                f"cut on the CNC, not the laser — "
+                f"{part.get('cut_method_source') or 'the drawing names the router'}")
+        elif _cut_basis == "shop rule":
+            part.setdefault("review_flags", []).append(
+                f"lasered per the shop rule for {str(part.get('normalized_material') or '').upper()} "
+                f"— the drawing names no cutter; confirm laser or CNC")
         if not (_laser_signal or _bonded):
             # not lasered: drop the laser op the block added above
             _rt.pop("laser_cutting", None)
@@ -9234,6 +9307,8 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                         "linebend", "glue"):
             if _rt.get(_acr_op) or _st.get(_acr_op):
                 record_operation(part, _acr_op, "acrylic_route_rule")
+        if "cnc_routing" in _rt:
+            record_operation(part, "cnc_routing", "acrylic_route_rule")
 
         process["acrylic_ops_canonical"] = True
         process["acrylic_route_v2"] = True
@@ -9355,6 +9430,31 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # deriving it via the material+labour path below produced absurd figures (a £132 foam-
     # tape) because these stubs have no real geometry to cost. Respect the upstream price.
     if bought_in_candidate and system_unit_cost is not None:
+        # A PURCHASED LINE CUT FROM STOCK IS PRICED AS THE PIECE, NOT AS THE STOCK (D-441).
+        # 8188-08 STRENGTHENER, "EXTRUSION 92: LENGTH =100mm" x 24: the figure found for
+        # EXTRUSION 92 buys whatever the seller sells — a metre, a stock length — and
+        # quantity x that figure charges twenty-four of them for 2.4 m of extrusion. The
+        # piece takes its share of the metre or the length, with the section cut-loss
+        # allowance; where the unit of sale is "each" or unknown it is read as a stock
+        # length as a working figure and the line asks. cut_piece_pricing has the rule.
+        try:
+            from cut_piece_pricing import price_as_cut_piece as _cut_piece
+            _piece = _cut_piece(part.get("description"),
+                                _extract_selected_price(system_cost_result),
+                                system_unit_cost, quantity, order_qty)
+        except Exception:                                            # noqa: BLE001
+            _piece = None
+        if _piece:
+            part["cut_piece_pricing"] = {k: v for k, v in _piece.items() if k != "question"}
+            part["cut_piece_pricing"]["stock_unit_price_gbp"] = round(float(system_unit_cost), 4)
+            system_unit_cost = float(_piece["unit_gbp"])
+            part.setdefault("review_flags", []).append(
+                f"purchased line cut from stock: {_piece['basis']}")
+            if _piece.get("question"):
+                part["estimator_input_required"] = True
+                source_precedence.raise_manufacturing_question(
+                    part, _piece["question"]["issue"], _piece["question"]["assumption"],
+                    _piece["question"]["action"], "cut_piece_pricing.price_as_cut_piece")
         # A standard-commodity provisional takes no bench-fitting uplift — it is placed during
         # the assembly labour the parent already carries — so its unit total IS the buy price.
         #

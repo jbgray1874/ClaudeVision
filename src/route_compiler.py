@@ -1143,6 +1143,45 @@ def _raw_identity_aliases(
                         "other": str(i_rec.get("description") or ""),
                         "from_identity": ident,
                     })
+
+    # ── A WRAPPED PARTS-LIST CELL IS ONE LINE (D-435) ─────────────────────────────────
+    # 8188-08-SA03's table prints the insert's code cell wrapped: "FIXING M6x12mm" over
+    # "THREADED INSERT, HEADED HEX DRIVE". One reader took the first line as the code and the
+    # rest as the description; another took the whole cell as the identity, with no
+    # description. Two nodes, each x4, and the drawing's four inserts were charged as eight
+    # (17:37 book, £0.42 + £0.92). An identity whose squashed spelling is EXACTLY another
+    # identity's code and description joined is that row read as one cell — not a near
+    # match, a structural identity. The coded spelling survives: it is what a catalogue
+    # holds and a person looks up. The two counts must not disagree, nor the two kinds.
+    _pool3 = [i for i in (set(raw) | set(extracted)) if i not in aliases]
+    _coded: Dict[str, List[str]] = {}
+    for ident in _pool3:
+        desc = str(_rec_of(ident).get("description") or "").strip()
+        if not desc:
+            continue
+        joined = _squashed(ident + " " + desc)
+        if len(joined) >= 10 and joined != _squashed(ident):
+            _coded.setdefault(joined, []).append(ident)
+    for ident in _pool3:
+        if ident in aliases:
+            continue
+        hosts = [h for h in (_coded.get(_squashed(ident)) or [])
+                 if h != ident and h not in aliases]
+        if len(hosts) != 1:
+            continue
+        host = hosts[0]
+        ri, rh = _rec_of(ident), _rec_of(host)
+        if not _quantities_do_not_disagree(number(ri.get("quantity"), None),
+                                           number(rh.get("quantity"), None)):
+            continue
+        if not _kinds_are_compatible(ri, rh):
+            continue
+        aliases[ident] = host
+        if isinstance(rh, dict):
+            _note = (f"{ident} is this row read as one cell — the code and the description "
+                     f"of {host} joined; one line, not two")
+            if _note not in (rh.get("review_flags") or []):
+                rh.setdefault("review_flags", []).append(_note)
     return aliases
 
 

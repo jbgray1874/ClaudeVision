@@ -964,10 +964,22 @@ def _lookup_part_with_basis(parts_by_key: Dict[str, Dict[str, Any]], part_number
     # match "-202" — the near-match presumption Dave Wright ruled out ("better left as zero
     # cost and flagging it"). The trailing segment must equal the candidate's own, and be long
     # enough to mean something.
-    suffix = key.split("-")[-1]
+    #
+    # AND EVERY SEGMENT THE FILE HAS, NOT ONLY ITS LAST (D-434). 8188-08's folder holds
+    # "8188-12-002 MS 2MM.DXF", a part of the swing stopper. Its last segment "002" equals the
+    # frame base 8188-29-002's, so it was bound to the base; two flats at two gauges then made
+    # the base an "assembly" of two minted pieces, both of which the product scope set aside,
+    # and the 1,292 x 200 x 3 base left the book. A file's code may stand for a LONGER code
+    # only where the file's own segments are the candidate's last segments, whole: "12-002"
+    # may be 8188-12-002; "8188-12-002" is never 8188-29-002.
+    _fsegs = [x for x in key.split("-") if x]
+    suffix = _fsegs[-1] if _fsegs else ""
     for candidate_key, part in parts_by_key.items():
-        if (len(suffix) >= 3 and candidate_key.split("-")[-1] == suffix) \
-                or candidate_key.replace("-", "") == key.replace("-", ""):
+        _csegs = [x for x in candidate_key.split("-") if x]
+        if candidate_key.replace("-", "") == key.replace("-", ""):
+            return part, "segment"
+        if (len(suffix) >= 3 and len(_csegs) >= len(_fsegs)
+                and _csegs[len(_csegs) - len(_fsegs):] == _fsegs):
             return part, "segment"
     # Tolerant fall-back: bridge abbreviated DXF part numbers ("1449C", "1450")
     # to full BOM numbers ("1449-01C", "1450-01C") via leading numeric block +

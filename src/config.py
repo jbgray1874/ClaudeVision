@@ -658,6 +658,24 @@ CUT_METHOD_BY_MATERIAL: list = [
      "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
 
+# THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
+# draw a part, legend removed; one method named stamps it, two named put the question on the
+# part and the rule above prices the working figure.
+CUT_METHOD_WORDS = {"laser": ("LASER", "LASERED", "LASER CUT"),
+                    "router": ("CNC", "ROUTED", "ROUTER", "PIN ROUT", "PIN-ROUT")}
+
+# A PURCHASED LINE CUT FROM STOCK (D-441, cut_piece_pricing). A line naming a thing bought by
+# the length AND stating a cut length ("EXTRUSION 92: LENGTH =100mm") is a piece cut from
+# stock: priced on its metres at a per-metre rate, on its share of a stock length at a
+# per-length price, and read as a stock length with a question where the unit of sale is
+# "each" or unknown — never silently quantity × the stock length. The cut-loss allowance is
+# SECTION_STOCK_POLICY's; the standard stock length SECTION_STOCK_LENGTH_MIN_MM.
+BOUGHT_IN_STOCK_BY_LENGTH_WORDS = ("EXTRUSION", "PROFILE", "TUBE", "BAR", "ROD", "STRIP",
+                                   "ANGLE", "CHANNEL", "SECTION", "RAIL", "TRACK", "TRIM",
+                                   "EDGING", "BEAD", "BOX SECTION", "RHS", "SHS", "CHS")
+CUT_LENGTH_WORDS = ("LENGTH", "LGTH", "LG", "LONG", "L")
+UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LENGTH")
+
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
 # ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack
@@ -4032,6 +4050,16 @@ WORKBOOK_INPUT_DEFAULTS = {
 
 # Wire gauge lookup table — workbook rows 151-159: H=gauge_mm, I=metres_per_tonne.
 # Used by estimate_material() wire path: price_per_metre = wire_£_per_tonne / metres_per_tonne.
+# A WIRE PART READ OFF THE SHEET THAT DRAWS IT (D-437, wire_sheet_reader). A callout "6 WIRE
+# WORK FRAME" states the gauge; "1081 EXT." by "206 EXT." states the outline. The largest gauge
+# a callout may state (a bigger figure beside WIRE is a pitch or a length); the words that label
+# an external figure; the words that make a part wire for this reader where nothing else has
+# said so; the words that make it a closed frame, whose developed length is its perimeter.
+WIRE_GAUGE_CALLOUT_MAX_MM = 12.0
+WIRE_OUTLINE_LABEL_WORDS = ("EXT.", "EXT", "EXTERNAL", "O/A", "OVERALL")
+WIRE_PART_WORDS = ("WIRE MESH", "WELDED WIRE", "WIRE FORM", "WIREWORK", "WIRE WORK", "WIRE ")
+WIRE_FRAME_WORDS = ("FRAME", "LOOP", "RING", "HOOP")
+
 WIRE_GAUGE_TABLE = {
     2.0:  40550.0,
     2.5:  25950.0,

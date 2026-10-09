@@ -1890,6 +1890,35 @@ def _inherit_document_material_to_parts(
             part.setdefault("material_inherited_from", "document_level")
 
 
+def word_coded_row_is_a_purchase(part_number: Any, description: Any) -> bool:
+    """Is a parts-list row whose code cell holds a WORD a purchased line to keep (D-436)?
+
+    8188-08-SA04's table prints "Strengthener | EXTRUSION 92: LENGTH =100mm | 24". The code
+    cell is a word, so the validity gate — written for finish and title-block text, and
+    demanding a digit — rejected it, the record lost its identity, and the 24 lengths of
+    extrusion were on the bill the product reaches with no line on the sheet. A word in the
+    code cell is not a code, but with a description the row reader calls a part it is the
+    drawing's own name for a thing we buy, and the line stands under that name: a word
+    alone, no placeholder, no category word (FIXING, P/P — those are shared rows), no finish
+    word, and a description that reads as a part, never a note, a finish or a material."""
+    pn = " ".join(str(part_number or "").split())
+    if len(pn) < 3 or not re.fullmatch(r"[A-Za-z][A-Za-z ]*", pn):
+        return False
+    up = pn.upper()
+    if any(w in up for w in ("COATED", "GLOSS", "POWDER", "MATT", "PRIMER", "FINISH")):
+        return False
+    try:
+        from part_identity import (ROW_ROLE_PART, is_placeholder_identity,
+                                   parts_list_row_role)
+        from part_code_conventions import is_category_not_a_code
+    except Exception:                                                 # noqa: BLE001
+        return False
+    if is_placeholder_identity(pn) or is_category_not_a_code(pn):
+        return False
+    desc = " ".join(str(description or "").split())
+    return bool(desc) and parts_list_row_role(desc) == ROW_ROLE_PART
+
+
 def _inherit_sheet_material_to_parts(
     parts: List[Dict[str, Any]],
     pages: List[Dict[str, Any]],
@@ -2635,6 +2664,20 @@ def _finalize_scan_summary(
                 _p["part_number"] = _pn
             if _p.get("part_number") and not _is_valid_part_number(_p["part_number"]):
                 _bad = _p["part_number"]
+                # A WORD IN THE CODE CELL WITH A PART'S DESCRIPTION IS A PURCHASED LINE
+                # (D-436), kept under the drawing's own word, not rejected to a nameless
+                # record the sheet cannot carry.
+                if word_coded_row_is_a_purchase(_bad, _p.get("description")):
+                    _p["part_number"] = str(_bad).strip().upper()
+                    _p["is_bought_in"] = True
+                    _roles = _p.setdefault("page_roles", [])
+                    if isinstance(_roles, list) and "bought_in" not in _roles:
+                        _roles.append("bought_in")
+                    _p.setdefault("review_flags", []).append(
+                        f"word-coded parts-list row: the code cell prints '{_bad}', a word, "
+                        f"not a code; kept as a purchased line under that word, priced by "
+                        f"its description")
+                    continue
                 _p["part_number"] = None
                 _p.setdefault("review_flags", []).append({
                     "severity": "warning",
@@ -4855,6 +4898,29 @@ def _finalize_scan_summary(
     # 3 mm mild steel. A material that arrives after the price is a note, not a material.
     _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
                                      summary.get("pages") or [])
+    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
+    # costing reaches for a default gauge and an assumed length.
+    try:
+        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
+        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
+                                 summary.get("pages") or [])
+        if _n_wire:
+            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
+                  f"that draws them", flush=True)
+    except Exception as _wire_exc:                                  # noqa: BLE001
+        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
+    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
+    try:
+        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
+        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
+                                  summary.get("pages") or [])
+        if _n_cut:
+            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
+                  f"sheet that draws them", flush=True)
+    except Exception as _cut_exc:                                   # noqa: BLE001
+        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
+              flush=True)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 
