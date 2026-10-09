@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from source_precedence import apply_field as _apply_field
+from source_precedence import source_of as _source_of
 
 try:
     import pdfplumber  # type: ignore
@@ -1889,6 +1890,75 @@ def _inherit_document_material_to_parts(
             part.setdefault("material_inherited_from", "document_level")
 
 
+def _inherit_sheet_material_to_parts(
+    parts: List[Dict[str, Any]],
+    pages: List[Dict[str, Any]],
+) -> None:
+    """A part with no sheet of its own takes the material of the sheet that draws it (D-426).
+
+    8188-08: wave layers 014 and 015 are drawn on 013's sheet, whose title block states
+    ACRYLIC, and have no title block of their own. The document states several materials, so
+    it hands down none (D-421), and the model's library appearance — MILD_STEEL, the default
+    the same sheet overruled on 013 — was the only reading: both layers were nested on the
+    Sheet Steel block, lasered on the metal laser, folded and powder coated.
+
+    Only a sheet that states ONE family hands anything down, only to a made part, and only
+    where none of the part's pages is its own; the part's own title block always outranks
+    this, and where it displaces another family the record says so as a question."""
+    if not parts or not pages:
+        return
+
+    def _bare(code: Any) -> str:
+        return re.sub(r"[\s\-_]+", "", str(code or "").upper())
+
+    sheets: Dict[str, Tuple[List[str], List[str]]] = {}
+    for pg in pages:
+        pa = pg.get("page_analysis")
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        sheets[str(pg.get("page_number") or "").strip()] = (
+            [str(n) for n in (tb.get("drawing_numbers") or []) if n],
+            [str(m) for m in (tb.get("materials") or []) if str(m or "").strip()],
+        )
+    for part in parts:
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("is_bought_in") or part.get("is_assembly_parent") \
+                or part.get("is_sub_assembly") or "bought_in" in [
+                    str(r).lower() for r in (part.get("page_roles") or [])]:
+            continue
+        drawn_on = [str(p).strip() for p in (part.get("pages") or []) if str(p).strip() in sheets]
+        if not drawn_on:
+            continue
+        if any(_bare(pn) in {_bare(n) for n in sheets[p][0]} for p in drawn_on):
+            continue                     # its own sheet speaks through the drawing readers
+        stated = [m for p in drawn_on for m in sheets[p][1]]
+        families = {_material_family(m) for m in stated}
+        families.discard("")
+        if len(families) != 1:
+            continue
+        try:
+            from json_normaliser import normalise_material
+            material = str(normalise_material(stated[0]) or stated[0])
+        except Exception:                                                 # noqa: BLE001
+            material = stated[0]
+        before = str(part.get("normalized_material") or "").strip()
+        before_src = str(_source_of(part, "normalized_material") or "")
+        sheet = ", ".join(f"p.{p}" + (f" ({sheets[p][0][0]})" if sheets[p][0] else "")
+                          for p in drawn_on)
+        if not _apply_field(part, "normalized_material", material, "drawn_on_sheet"):
+            continue
+        part["material_inherited_from"] = f"the sheet that draws it: {sheet}"
+        if not part.get("materials"):
+            part["materials"] = [stated[0]]
+        if before and _material_family(before) not in families:
+            part.setdefault("review_flags", []).append(
+                f"material: {pn} has no sheet of its own; the sheet that draws it ({sheet}) "
+                f"states {stated[0]}, taken over '{before}'"
+                + (" — the model's library appearance, not a spec"
+                   if before_src == "solidworks_applied_material" else
+                   f" from {before_src}" if before_src else "")
+                + ". Confirm the material against the drawing.")
+
+
 def _fill_part_revisions_from_pages(summary: Dict[str, Any]) -> None:
     """Populate each part's revision from its OWN drawing's title block.
 
@@ -1959,6 +2029,7 @@ def _build_additive_summary_sections(summary: Dict[str, Any]) -> None:
     parts = manufacturing_writeup.get("parts", [])
 
     _inherit_document_material_to_parts(parts, document_analysis)
+    _inherit_sheet_material_to_parts(parts, summary.get("pages") or [])
 
     summary["drawing_metadata"] = {
         "source_file": summary.get("source_file"),

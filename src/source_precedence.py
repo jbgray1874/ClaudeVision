@@ -260,6 +260,14 @@ SOURCE_RANK: Dict[str, int] = {
     # evidence in the pack. The analyser tags which kind it is; an extract that predates the
     # tag carries no applied-material observation and so behaves exactly as before.
     "solidworks_applied_material": 68,
+    # THE SHEET THAT DRAWS A PART WITH NO SHEET OF ITS OWN (D-426). 8188-08's wave layers 014
+    # and 015 are drawn on 013's sheet, whose title block states ACRYLIC; neither has a title
+    # block of its own, so the model's library appearance (MILD_STEEL — the same default the
+    # sheet overruled on 013) was the only reading, and both were lasered, folded and powder
+    # coated as 3 mm steel. The sheet's callout covers what it draws: above the appearance,
+    # because it is the drawing's word; below the drawing text, because it is not the part's
+    # own title block.
+    "drawn_on_sheet": 69,
     # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
     # off the drawing, not a guess — but it is one inference away from a measurement: an
     # overall is the finished part, and only a flat one has the same extent as its blank.
@@ -484,6 +492,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "solidworks_api":         "the SolidWorks model",
     "solidworks_flat_pattern": "the SolidWorks flat pattern",
     "solidworks_applied_material": "the SolidWorks library material (appearance, not a spec)",
+    "drawn_on_sheet":         "the sheet that draws the part (it has no sheet of its own)",
     "dxf":                    "the DXF",
     "dxf_flat_pattern":       "the DXF flat pattern",
     "mirror_of_measured":     "the measured opposite hand",
@@ -777,6 +786,7 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "title_block": "the drawing",
     "drawing_deterministic": "the drawing",
     "drawing_notes": "the drawing",
+    "drawn_on_sheet": "the drawing",
     "bom_table": "the drawing",
     "bom_tree": "the drawing",
     "pdf_overall_dims": "the drawing",

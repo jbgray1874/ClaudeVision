@@ -270,9 +270,14 @@ def strip_assembly_role(identity: str) -> str:
     """The identity with one trailing SHEET-ROLE token removed — "11908-21 GA" and
     "11908-21-GA" both give "11908-21"; "ABC-LEFT" is returned untouched, because LEFT
     is a hand, not a role. Purely-alphabetic tokens only: GA2's digit names a second
-    drawing and never strips."""
+    drawing and never strips.
+
+    An underscore is a separator like a dash (D-426): the M&S title block prints
+    "8188-08_GA" and its model file is 8188-08_GA.SLDASM, and with the underscore kept the
+    Drawing Number 8188-08 named no assembly, nothing was rolled up, and the swing stopper
+    the GA dropped at Rev G was priced beside the product."""
     text = str(identity or "").strip()
-    m = re.match(r"^(.*\S)[\s\-]+([A-Za-z]+)$", text)
+    m = re.match(r"^(.*[^\s_\-])[\s_\-]+([A-Za-z]+)$", text)
     if m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS:
         return m.group(1)
     return text
