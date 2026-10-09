@@ -116,6 +116,13 @@
   .diag summary{cursor:pointer}
   .diag pre{white-space:pre-wrap;margin-top:6px;max-height:180px;overflow:auto;font-family:var(--mono)}
 
+  .act-row{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:13.5px}
+  .act-row:last-child{border-bottom:0}
+  .act-when{flex:0 0 74px;font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);padding-top:2px}
+  .act-what{flex:1;min-width:0;color:var(--ink-dim)}
+  .act-what b{color:var(--ink);font-weight:600}
+  .act-note{font-size:12px;color:var(--ink-faint);margin-top:2px}
+
   /* ── Drive mode ── one screen, big type, readable at a glance from a
      dashboard holder. Everything is done by voice; the buttons are for
      when the car is parked. */
@@ -181,6 +188,16 @@
       <button class="btn" id="mrsend" style="display:none" onclick="sendReview()">Email it now</button>
     </div>
     <div id="mrbody" style="white-space:pre-wrap;font-size:14px;line-height:1.5;margin-top:12px"></div>
+  </div>
+
+  <div class="vc" id="act" style="display:none">
+    <h4>Recent activity</h4>
+    <div class="vc-state" id="actstate">Every change proposed through the app, newest first, and what
+      happened to it: saved, declined, or not saved and why.</div>
+    <div class="vc-confirm show" style="margin-top:10px">
+      <button class="btn" type="button" onclick="loadActivity()">Show recent activity</button>
+    </div>
+    <div id="actbody" style="margin-top:6px"></div>
   </div>
 
   <div id="body"><div class="msg">Checking…</div></div>
@@ -602,6 +619,26 @@ async function keepAwake(on){
   }catch(e){}
 }
 
+// Drive mode tones, so a driver knows without looking: two rising notes when
+// the app starts listening, one low note when it has heard and is working.
+// Played only once the phone has allowed sound (the tap that started Drive mode).
+function tone(kind){
+  if(!DRIVE) return;
+  try{
+    if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
+    if(ACTX.state!=='running') return;
+    const t=ACTX.currentTime, g=ACTX.createGain(), o=ACTX.createOscillator();
+    const up=kind==='listen', end=t+(up?0.2:0.13);
+    o.type='sine';
+    o.frequency.setValueAtTime(up?660:520, t);
+    if(up) o.frequency.setValueAtTime(880, t+0.09);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.22, t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, end);
+    o.connect(g); g.connect(ACTX.destination); o.start(t); o.stop(end+0.02);
+  }catch(e){}
+}
+
 let LAST_SAID='', SAY_SEQ=0, CUR_Q=null;
 // then === undefined: in a voice conversation, listen again afterwards.
 // then === null: say it and do nothing more (typed turns).
@@ -822,6 +859,7 @@ let CONVO=false, SILENT_RUNS=0;
 // out a dropped signal, keeps the screen on, and shows one big glanceable
 // screen. It only stops on "that's all", the big button, or Exit.
 let DRIVE=false, DRIVE_FAILS=0, DRIVE_SYNC=null;
+const REPEAT=/^(please )?(say (that|it) again|repeat( that| it)?|pardon( me)?|come again|sorry,? what was that|what did you say)( please)?[.?!]*$/i;
 const STOP_WORDS=/^(stop|stop listening|that'?s all|that is all|good ?bye|bye|i'?m done|thanks?|thank you|thanks?,? that'?s all|thank you,? that'?s all)[.!]?$/i;
 // Some Android phones report one sentence as a run of growing pieces
 // ("what's", "what's most", "what's most at risk"), and joining them all gave
@@ -875,6 +913,14 @@ function handleHeard(t){
   }
   SILENT_RUNS=0;
   if(isEcho(t)){ setState('That was me talking — go ahead.'); if(CONVO) startListening(LISTEN_MODE); return; }
+  // "Say that again": the last reply (or read-back) once more, then carry on -
+  // a waiting change still waits for its yes or no.
+  if(REPEAT.test(t)){
+    log('you', t); diag('repeat');
+    if(LAST_SAID) say(LAST_SAID, undefined, {quiet:true});
+    else say('I haven\'t said anything yet. Go ahead.');
+    return;
+  }
   if(LISTEN_MODE==='command'&&STOP_WORDS.test(t)){
     log('you', t); endConversation();
     say(DRIVE?'Okay — I\'ve stopped listening. Tap the big button when you need me.':'Okay — tap the mic when you need me.');
@@ -902,9 +948,11 @@ function startListening(mode, carried, restarts){
   r._cancel=()=>{ done=true; clear(); try{ r.abort(); }catch(e){} };
   const finish=()=>{
     if(done) return; done=true; clear(); try{ r.stop(); }catch(e){}
+    if(all()) tone('heard');
     handleHeard(all());
   };
   r.onstart=()=>{ $('mic').classList.add('live'); diag('mic on ('+LISTEN_MODE+')');
+    if(!carried&&!SILENT_RUNS) tone('listen');
     setState(carried?'“'+carried+'”':LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
     // Carrying on a sentence: it ends after the usual pause if nothing more comes.
     if(carried) firstT=setTimeout(finish, pause);
@@ -1023,7 +1071,10 @@ async function startRecording(mode){
     chunks.push(new Float32Array(d));
     let sq=0; for(let i=0;i<d.length;i++) sq+=d[i]*d[i];
     const rms=Math.sqrt(sq/d.length), now=performance.now();
-    if(now-t0<400){ noise=Math.max(noise,rms); return; }        // the room's own noise
+    // The room's own noise, measured once the listening tone (Drive mode) has played.
+    const calm=DRIVE?250:0;
+    if(now-t0<calm) return;
+    if(now-t0<calm+400){ noise=Math.max(noise,rms); return; }
     const loud=rms>Math.max(0.012,noise*2.5);
     // Drive mode waits a long time for the first word while the road noise
     // rises and falls with speed: keep following it (slowly down, at once up).
@@ -1037,12 +1088,14 @@ async function startRecording(mode){
   };
   src.connect(proc); proc.connect(ACTX.destination);
   $('mic').classList.add('live'); diag('mic on ('+LISTEN_MODE+', recording)');
+  if(!SILENT_RUNS) tone('listen');
   setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause for 3 seconds when you\'re done, or tap the mic to send.');
   const pause=LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS;
   const send=async()=>{
     if(me.cancelled) return; me.cancelled=true; cleanup();
     $('mic').classList.remove('live');
     if(!me.heard) return handleHeard('');
+    tone('heard');
     setState('Got it — working out what you said…');
     const wav=encodeWav(chunks, rate, 16000);
     diag('sending '+Math.round(wav.size/1024)+' KB');
@@ -1203,8 +1256,9 @@ function readbackFor(list, same){
   if(list.length===1) return pre+list[0].readback;
   const refs=[...new Set(list.map(p=>p.project_ref||p.item_id))];
   const one=refs.length===1;
+  // Dates are read in words ("Monday 12 October"), so a wrong day is heard.
   const parts=list.map(p=>p.field+(one?'':' on '+(p.project_ref||p.item_id))
-                       +' to '+(p.new_value||'blank'));
+                       +' to '+(p.new_spoken||p.new_value||'blank'));
   return pre+list.length+' changes'+(one?' on '+refs[0]:'')+': '+parts.join('; ')
          +'. Is that right?';
 }
@@ -1290,7 +1344,7 @@ async function answerConfirm(yes){
     if(c.state==='applied'){
       saved.push(c);
       log('app','✓ Updated '+c.field+' on '+(c.project_ref||'that record')+': '
-          +(c.old_value||'blank')+' → '+c.new_value, NOT_FOR_MODEL.test(c.field));
+          +(c.old_spoken||c.old_value||'blank')+' → '+(c.new_spoken||c.new_value), NOT_FOR_MODEL.test(c.field));
     }else if(c.state==='conflict'){
       problems.push(p.field+': the record changed while we were talking');
       log('app','✗ '+p.field+' not saved — the record changed while we were talking.');
@@ -1302,10 +1356,10 @@ async function answerConfirm(yes){
   }
   }finally{ IN_FLIGHT=false; }
   const priv={private:saved.some(c=>NOT_FOR_MODEL.test(c.field))};
-  const spoken=saved.map(c=>c.field+' is now '+c.new_value+'.').join(' ');
+  const spoken=saved.map(c=>c.field+' is now '+(c.new_spoken||c.new_value)+'.').join(' ');
   if(saved.length&&!problems.length){
     say(saved.length===1
-        ? 'Done. '+saved[0].field+' on '+(saved[0].project_ref||'that record')+' is now '+saved[0].new_value+'.'
+        ? 'Done. '+saved[0].field+' on '+(saved[0].project_ref||'that record')+' is now '+(saved[0].new_spoken||saved[0].new_value)+'.'
         : 'Done — I updated '+saved.length+' lines. '+spoken, undefined, priv);
     setState('Written and journalled.');
   }else if(saved.length){
@@ -1357,6 +1411,38 @@ async function sendReview(){
   catch(e){ $('mrstate').textContent='The service did not answer: '+e.message; return; }
   $('mrstate').textContent=r.state==='sent'?'Sent to '+(r.recipients||[]).join(', ')+'.'
     :'Not sent: '+(r.reason||r.detail||r.state);
+}
+
+// ── Recent activity (pilot writers) ────────────────────────────────────────
+const ACT_STATE={applied:['Saved','c-ok'],declined:['Declined','c-off'],conflict:['Not saved','c-warn'],
+  failed:['Not saved','c-warn'],expired:['Not confirmed','c-off'],proposed:['Waiting for yes','c-off']};
+async function loadActivity(){
+  $('actstate').textContent='Loading…'; $('actbody').innerHTML='';
+  let r;
+  try{ const res=await fetch('../api/voicecrm/journal?limit=30',{cache:'no-store',redirect:'manual'});
+       if(res.type==='opaqueredirect'||res.status===0){ renewSignIn(); return; }
+       r=await res.json(); }
+  catch(e){ $('actstate').textContent='The service did not answer: '+e.message; return; }
+  if(r.state!=='ok'){ $('actstate').textContent=r.detail||r.state; return; }
+  const now=Date.now()/1000, list=r.entries||[];
+  const when=t=>{ const d=new Date(t*1000);
+    return d.toLocaleDateString('en-GB',{day:'numeric',month:'short'})+' '+d.toTimeString().slice(0,5); };
+  const today=list.filter(e=>new Date(e.created*1000).toDateString()===new Date().toDateString());
+  const n=k=>today.filter(e=>e.state===k).length;
+  $('actstate').textContent=list.length
+    ? 'Today: '+n('applied')+' saved, '+n('declined')+' declined, '+(n('conflict')+n('failed'))+' not saved.'
+    : 'No changes have been proposed yet.';
+  $('actbody').innerHTML=list.map(e=>{
+    // A proposal left unanswered past 15 minutes can no longer be confirmed.
+    const st=e.state==='proposed'&&now-e.created>900?'expired':e.state;
+    const [label,cls]=ACT_STATE[st]||[st,'c-off'];
+    const who=String(e.user_name||'').split(' ')[0];
+    const note=(st==='conflict'||st==='failed')?'<div class="act-note">'+esc(e.outcome||'')+'</div>':'';
+    return '<div class="act-row"><div class="act-when">'+esc(when(e.created))+'</div><div class="act-what">'
+      +'<b>'+esc(e.field)+'</b> on '+esc(e.project_ref||e.item_id)+': '
+      +esc(e.old_spoken||e.old_value||'blank')+' → <b>'+esc(e.new_spoken||e.new_value)+'</b>'
+      +(who?' · '+esc(who):'')+note+'</div>'+badge(label,cls)+'</div>';
+  }).join('');
 }
 
 // Send from the box. Blurring first ends the phone keyboard's own dictation
@@ -1431,10 +1517,14 @@ function driveSync(){
 }
 // listen: start listening straight away (a tap); false after a reload, where
 // the phone needs a tap before the mic or the voice can start again.
-function startDrive(listen){
+function startDrive(listen, msg){
   if(DRIVE&&!listen) return;
   DRIVE=true; DRIVE_FAILS=0;
   unlockAudio();
+  if(listen){                       // inside the tap: allow the tones too
+    try{ if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
+         if(ACTX.state!=='running') ACTX.resume().catch(()=>{}); }catch(e){}
+  }
   try{ sessionStorage.setItem('sdiDrive','1'); }catch(e){}
   $('drive').classList.add('show'); document.body.classList.add('driving');
   if(PENDING) showConfirm();
@@ -1446,7 +1536,7 @@ function startDrive(listen){
     stopSpeaking();
     startListening(PENDING?'confirm':'command');
   }else if(!listen){
-    setState('Tap the big button to carry on.');
+    setState(msg||'Tap the big button to carry on.');
   }
   driveSync();
 }
@@ -1597,11 +1687,16 @@ async function main(){
 
   // Drive mode needs a way to listen: the browser's own, or the server's.
   if(ST.interpret_ready&&(SR||ST.speech_ready)) $('drivebtn').style.display='';
+  if(ST.writes_enabled) $('act').style.display='block';
   await loadRecords();
   restoreReplay();
   // Back after a sign-in renewal mid-drive: the big screen again, waiting for a tap.
   let drove=false; try{ drove=sessionStorage.getItem('sdiDrive')==='1'; }catch(e){}
   if(drove&&ST.interpret_ready) startDrive(false);
+  // The Drive mode shortcut (…/voice-crm.html?drive=1 on the Home Screen):
+  // straight to the big screen, one tap to start - phones need that tap.
+  else if(new URLSearchParams(location.search).get('drive')&&ST.interpret_ready&&(SR||ST.speech_ready))
+    startDrive(false, 'Tap the big button to start.');
 }
 main();
 </script>
