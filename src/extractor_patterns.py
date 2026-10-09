@@ -175,6 +175,27 @@ def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+_SIZE_WITH_UNITS = re.compile(
+    r"(?<![\w.])(\d+(?:\.\d+)?)\s*(mm|cm|m)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?"
+    r"(?:\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?)?(?![\w.])", re.IGNORECASE)
+
+
+def size_mixing_units(text: Any) -> Optional[Dict[str, Any]]:
+    """A printed size whose figures carry DIFFERENT units ("50mm x 10mm x 2m"), else None (D-426).
+
+    8188-08's GA lists 14 of "KINGDOM: 50mm x 10mm x 2m MAGNET"; the market lookup priced fourteen
+    two-metre magnets at £48.50 each (£706), where the GA's note calls them neo magnets taped to
+    the underside — most likely 2 mm. Nothing in the size says which, so it is a question, not a
+    correction: the line is priced as printed and the mix of units is put to a person."""
+    for m in _SIZE_WITH_UNITS.finditer(str(text or "")):
+        units = [u.lower() for u in m.groups()[1::2] if u]
+        if len(set(units)) > 1:
+            figures = [f"{v}{(u or '').lower()}" for v, u in zip(m.groups()[0::2], m.groups()[1::2])
+                       if v]
+            return {"text": m.group(0).strip(), "figures": figures, "units": sorted(set(units))}
+    return None
+
+
 def legend_cues_set_aside(text: Any) -> List[str]:
     """The operations a page's legend alone would have cued (weld and dressing), for the record:
     what the full text cues and the legend-stripped text does not."""

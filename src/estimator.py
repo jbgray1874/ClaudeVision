@@ -7190,6 +7190,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                      ("if SDI makes it, say so and the route's cutting, forming and welding "
                       "return; if it is bought, give the supplier or catalogue code"),
                      "bought_in_policy.make_buy_question")
+            # A SIZE IN TWO UNITS IS A QUESTION (D-426): "50mm x 10mm x 2m MAGNET" x14 was
+            # priced as fourteen two-metre magnets. Priced as printed; a person says which.
+            from extractor_patterns import size_mixing_units as _mixed_units
+            _mix = _mixed_units(f"{part.get('description') or ''} {part.get('part_number') or ''}")
+            if _mix:
+                from source_precedence import raise_manufacturing_question as _ask
+                _ask(part,
+                     (f"{part.get('part_number')}: the printed size {_mix['text']} mixes "
+                      f"{' and '.join(_mix['units'])} — a misprinted unit changes what is bought "
+                      f"and its price"),
+                     "priced as printed",
+                     ("confirm the size (for example whether a figure in metres is meant in "
+                      "millimetres) and the price that goes with it"),
+                     "extractor_patterns.size_mixing_units")
             if bought_in_conflict(part):
                 # Identity says buy, geometry says make. Do not let the engine pick a side.
                 part.setdefault("review_flags", []).append(
