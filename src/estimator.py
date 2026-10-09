@@ -9777,6 +9777,21 @@ def _announce_packing_status(cline: Dict[str, Any]) -> None:
         print(f"   [packing] {cline['method_status']}", flush=True)
 
 
+def commercial_line_wording(base: str, unit_gbp: float, from_house_rate: bool) -> str:
+    """The packaging or delivery row's words, matching its figure (D-424).
+
+    £0 keeps "estimator to price"; a house rate says it is one; anything else that carries a
+    figure is the market lookup's indication and is named as that — never a figure under
+    words saying nobody has priced it."""
+    text = str(base or "")
+    if not unit_gbp:
+        return text
+    said = ("house rate — verify" if from_house_rate
+            else "AI market figure — estimator to confirm")
+    return text.replace("estimator to price", said) if "estimator to price" in text \
+        else f"{text} ({said})"
+
+
 def _bought_in_part_stub(part_number: str, description: str, quantity: Any) -> Dict[str, Any]:
     """Minimal shape compatible with document_builder + estimate_part.
 
@@ -11565,6 +11580,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["description"] = (f"Packaging — bagged ({_bag_code}) + boxed "
                                         f"({_box_code}), Howard's stated method, priced "
                                         f"from SDI Live")
+            # THE ROW SAYS WHAT ITS FIGURE IS (D-424). Tim Wilkes, 12173-02, 9 Oct 2026: "It is
+            # adding a small packaging/delivery cost when it says estimator to cost." £85 and
+            # £65 sat on rows still worded "estimator to price" — a figure and a disclaimer that
+            # it had not been priced, on one line. A market figure is now named as one; the
+            # words "estimator to price" stay only where the line really is £0.
+            if not _from_method:
+                _stub["description"] = commercial_line_wording(
+                    _desc, float(_unit or 0.0), _from_hold)
             if _cline:
                 _stub["commercial_line"] = _cline
                 _announce_packing_status(_cline)
@@ -11582,6 +11605,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                  f"{(_cline or {}).get('packing_working')} — counts stated, prices live "
                  f"from the system this run; confirm the method fits this job before "
                  f"quoting.") if _from_method and _unit else
+                (f"AI MARKET FIGURE £{float(_unit):.2f}/unit — an indication from the market "
+                 f"lookup, not a quotation; confirm or replace it before quoting"
+                 + (f". Packing method: {(_cline or {}).get('method_status')}."
+                    if (_cline or {}).get("method_status") else "."))
+                if _unit else
                 (f"Commercial line — estimator to price. Packing method: "
                  f"{(_cline or {}).get('method_status')}.")
                 if (_cline or {}).get("method_status") else
