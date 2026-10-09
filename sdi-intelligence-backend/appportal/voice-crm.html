@@ -883,25 +883,32 @@ function handleHeard(t){
   TURN='voice';
   (LISTEN_MODE==='confirm'?handleConfirmSpeech(t):handleTranscript(t)).catch(reportFailure);
 }
-function startListening(mode){
+// carried / restarts: what was already heard this turn when the phone ended
+// recognition on its own mid-sentence, and how many times that has happened.
+function startListening(mode, carried, restarts){
   if(USE_SERVER_EARS()) return startRecording(mode);
   if(!SR) return;
   // The mic must never hear the app's own voice: stop speaking first.
   if(isSpeaking()){ stopSpeaking(); setTimeout(()=>{ if(CONVO) startListening(mode); },350); return; }
   LISTEN_MODE=mode||'command';
+  carried=String(carried||'').trim(); restarts=restarts||0;
   if(rec&&rec._cancel) rec._cancel();
   const r=new SR(); rec=r;
   r.lang='en-GB'; r.continuous=true; r.interimResults=true; r.maxAlternatives=1;
-  let finalText='', interim='', done=false, silenceT=null, firstT=null;
+  let finalText='', interim='', done=false, silenceT=null, firstT=null, lastHeard=0;
+  const pause=LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS;
+  const all=()=>(carried+' '+finalText+' '+interim).replace(/\s+/g,' ').trim();
   const clear=()=>{ clearTimeout(silenceT); clearTimeout(firstT); };
   r._cancel=()=>{ done=true; clear(); try{ r.abort(); }catch(e){} };
   const finish=()=>{
     if(done) return; done=true; clear(); try{ r.stop(); }catch(e){}
-    handleHeard(finalText+' '+interim);
+    handleHeard(all());
   };
   r.onstart=()=>{ $('mic').classList.add('live'); diag('mic on ('+LISTEN_MODE+')');
-    setState(LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
-    if(!DRIVE) firstT=setTimeout(finish, FIRST_WORD_MS); };
+    setState(carried?'“'+carried+'”':LISTEN_MODE==='confirm'?'Listening for yes or no…':'Listening… pause when you\'re done.');
+    // Carrying on a sentence: it ends after the usual pause if nothing more comes.
+    if(carried) firstT=setTimeout(finish, pause);
+    else if(!DRIVE) firstT=setTimeout(finish, FIRST_WORD_MS); };
   r.onresult=e=>{
     clearTimeout(firstT);
     if(!r._heard){ r._heard=true; diag('hearing speech'); }
@@ -911,12 +918,24 @@ function startListening(mode){
       (x.isFinal?fin:tmp).push(x[0].transcript);
     }
     finalText=joinHeard(fin)+' '; interim=joinHeard(tmp);
-    setState('“'+(finalText+interim).trim()+'”');
+    lastHeard=performance.now();
+    setState('“'+all()+'”');
     clearTimeout(silenceT);
-    silenceT=setTimeout(finish, LISTEN_MODE==='confirm'?CONFIRM_PAUSE_MS:PAUSE_MS);
+    silenceT=setTimeout(finish, pause);
   };
-  // Some phones end recognition on their own after a pause: use what was heard.
-  r.onend=()=>{ diag('mic off'+(done?'':' (by the phone)')); finish(); };
+  // Many Android phones end recognition by themselves at the first short
+  // pause - "change the confidence to 90 percent ... and the next steps to
+  // call the client Monday" was sent without its second half. Inside the
+  // usual pause, keep listening and add to what was already heard.
+  r.onend=()=>{
+    if(!done&&all()&&lastHeard&&performance.now()-lastHeard<pause&&restarts<6&&CONVO){
+      diag('mic off by the phone mid-sentence — carrying on');
+      done=true; clear();
+      startListening(LISTEN_MODE, all(), restarts+1);
+      return;
+    }
+    diag('mic off'+(done?'':' (by the phone)')); finish();
+  };
   r.onerror=e=>{
     diag('mic error '+e.error);
     if(e.error==='no-speech'||e.error==='aborted') return;   // onend follows
@@ -1044,7 +1063,11 @@ async function startRecording(mode){
     if(me.cancelled){ clearInterval(timer); return; }
     const now=performance.now();
     if(ACTX.state!=='running'){ diag('audio interrupted'); send(); return; }
-    if(mutedSince&&now-mutedSince>1000){ send(); return; }
+    // Muted by the phone: nothing heard yet ends the turn quickly; mid-sentence
+    // (a sat-nav announcement, a notification) the turn is held open for a few
+    // seconds so the rest of the sentence isn't cut off.
+    if(mutedSince&&!me.heard&&now-mutedSince>1000){ send(); return; }
+    if(mutedSince&&me.heard){ if(now-mutedSince>8000){ send(); return; } lastVoice=now; }
     if(me.heard&&now-lastVoice>pause) send();
     else if(!me.heard&&now-t0>FIRST_WORD_MS&&!DRIVE) send();   // drive mode just keeps waiting
     else if(me.heard&&now-spokeAt>45000) send();               // under Azure's 60 s limit
