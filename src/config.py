@@ -4562,3 +4562,69 @@ CONSISTENCY_CHECK_OWNER = {
 # that reader's set, which drives its own header detection). A customer whose title block
 # genuinely reads "DESCRIPTION: ITEM HOLDER" would lose that description — narrow the list.
 PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.", "LENGTH")
+
+
+# ── THE LIVE ENQUIRY RUNNER (D-420) ──────────────────────────────────────────────────
+# The estimators' Live Enquiry workbook drives AI estimates, one after another. A row names a
+# customer and a drawing; the pack is <LIVE_ENQUIRY_ROOT>\<customer folder>\<drawing folder>,
+# and only the files directly in the drawing folder are the pack (never its sub-folders). The
+# runner READS the workbook and never writes it; what it did is kept in its own ledger.
+# src/live_enquiry_runner.py. Paths are UNC, never a drive letter: K: is per-logon and is
+# not there at all for a service account.
+LIVE_ENQUIRY_ROOT = os.getenv(
+    "SDI_LIVE_ENQUIRY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
+# The workbook itself. No default: where the estimators keep it is theirs to say, and a guess
+# that reads last month's copy would run the wrong jobs with every appearance of working.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "")
+LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
+# Header words -> the field each column carries. Matched on the header text, so a column moved
+# or inserted on the sheet is still found. A cell with no header is a note (the sheet's
+# unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
+LIVE_ENQUIRY_COLUMNS = (
+    ("customer", r"\bCUSTOMER\b"),
+    ("drawing", r"\bDRAWING\b"),
+    ("description", r"\bJOB\b.*\bDESC"),
+    ("received", r"\bENQUIRY\b.*\bRECEIVED\b"),
+    ("due", r"\bREQUESTED\b|\bCOMPLETION\b"),
+    ("ai_check", r"\bAI\b"),
+    ("estimator", r"\bESTIMATOR\b"),
+    ("account_manager", r"\bACCOUNT\b"),
+    ("quantities", r"\bQTY\b|\bQUANTIT|\bAMOUNTS?\b"),
+)
+# The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
+LIVE_ENQUIRY_ASKED = ("YES", "Y")
+# A Drawing No. that is not one drawing: the row needs a pack made up by a person.
+LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
+# A note on the row that stops it, whatever else the row says. The person wrote it; the
+# runner does not second-guess it because a folder happens to have appeared.
+LIVE_ENQUIRY_HOLD_NOTES = (r"\bWAIT(?:ING)?\b.*\bDRAWINGS?\b", r"\bON\s+HOLD\b",
+                           r"\bCANCELL?ED\b", r"\bDO\s+NOT\s+RUN\b", r"\bNO\s+AI\b")
+# A drawing number's sheet-type tail, so the sheet's "12633-01-GA" finds the folder
+# "12633-01" and the folder "12633-01-GA Wine lifter" finds "12633-01".
+LIVE_ENQUIRY_SHEET_SUFFIX = r"[-_ ](?:GA|SA)\d*$"
+# Where the share's folder name differs from the sheet's Customer: sheet name -> folder name.
+# Empty by default — a customer matches its folder by name, and nothing is matched "nearly"
+# (a near match is how one customer's pack gets priced as another's). Extra pairs can be given
+# as JSON in SDI_LIVE_ENQUIRY_CUSTOMER_FOLDERS without a code change.
+LIVE_ENQUIRY_CUSTOMER_FOLDERS = {}
+# A file in the drawing folder that states the quantities, for a row whose sheet gives none:
+# one line, e.g. "1, 5, 10, 50". The first is the run quantity, the rest are breaks.
+LIVE_ENQUIRY_QTY_FILES = ("QUANTITIES.txt", "QTY.txt")
+# The job description states a quantity only in these forms ("50 OFF", "QTY 250").
+LIVE_ENQUIRY_QTY_IN_TEXT = (r"\b(\d{1,6})\s*(?:OFF|PCS|PIECES|UNITS)\b",
+                            r"\bQTY\.?\s*:?\s*(\d{1,6})\b")
+LIVE_ENQUIRY_POLL_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_POLL_MINUTES", "15"))
+# How long one estimate may take before the runner stops waiting on it. The run is not
+# abandoned — the portal keeps it — the runner just stops queueing behind it this cycle.
+LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES", "240"))
+# A failed run is tried this many times in all, then waits for `retry` from a person.
+LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
+# Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is
+# checked before an estimator sees it.
+LIVE_ENQUIRY_EMAIL_TO = os.getenv("SDI_LIVE_ENQUIRY_EMAIL_TO", "")
+LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
+                                str(BASE_DIR / "output" / "live_enquiry" / "ledger.json"))
+# The design area, through the endpoint James will provide. Unset: the share is the only
+# source of a pack.
+DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
