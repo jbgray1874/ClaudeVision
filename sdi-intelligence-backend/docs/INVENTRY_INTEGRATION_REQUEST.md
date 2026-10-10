@@ -1,0 +1,787 @@
+# InVentry integration request — ready to send
+
+This is the one thing blocking the BrightHR → InVentry pipeline. Everything up
+to the file is built, tested and producing real output; what has never been
+established is how InVentry *receives* it.
+
+## What we already know (found publicly, 23 Aug 2026)
+
+InVentry do have both routes — so the question is not *whether* they integrate,
+but which route carries **presence** and how we get onto it:
+
+- **An API exists, at least for partners.** timeware (a time & attendance
+  vendor) documents an API integration with InVentry, v4.11.0 onwards. Note the
+  direction though: their published description is personnel data flowing
+  *out of* InVentry into timeware. That is the opposite of what we need, so an
+  API existing does not by itself mean we can write presence *in*.
+- **A documented data import exists.** InVentry supply a spreadsheet with
+  mandatory and optional fields as part of installation, uploaded into the
+  onsite InVentry system, described in an **"InVentry Data Import Document" in
+  the Welcome pack**. Worth finding ours before emailing — it may answer the
+  format questions outright.
+- **Staff records can sync automatically** from Active Directory, Google
+  Workspace, and MIS systems. All are *roster* sync (who exists), not presence.
+- Their wording "your onsite InVentry system" suggests an on-premise server
+  component, which would make a share-based route plausible after all.
+
+**Do this first:** find the Welcome pack / InVentry Data Import Document, and
+check the admin console for an API keys or integrations page. Either may remove
+the need to ask at all.
+
+---
+
+**To:** support@inventry.co.uk
+**Phone (to chase):** 0113 322 9253, option 3
+**Subject:** Integration request — pushing staff and on-site presence data into InVentry (SDI Displays Ltd)
+
+---
+
+## Draft email
+
+> Hello,
+>
+> We're an existing InVentry customer — SDI Displays Ltd, Shepshed,
+> Leicestershire — using InVentry for sign-in at reception.
+>
+> We've built an integration on our own Windows server that pulls data from
+> BrightHR, our HR system, and we'd like InVentry to consume it automatically.
+> We produce two datasets, on demand and on a schedule:
+>
+> 1. **Active staff roster** — first name, surname, email address, refreshed
+>    when staff join or leave.
+> 2. **Live on-site list** — who is currently clocked in via BrightHR Blip,
+>    with their clock-in time, refreshed every few minutes.
+>
+> The goal is that InVentry's staff records stay current automatically, and that
+> the on-site register and fire evacuation list reflect who is actually in the
+> building rather than relying on people remembering to sign in at the terminal.
+>
+> We understand you support integration at several levels — an API (we've seen
+> your integration with timeware), MIS and Google Workspace sync, Active
+> Directory import, and a data import spreadsheet documented in the Welcome
+> pack. We'd like to know which of those routes we should be using.
+>
+> Our questions:
+>
+> 1. **Is there an API we can use to write data into InVentry**, and could you
+>    send us the documentation and whatever credentials it needs? If the API is
+>    read-only or partner-only, please say so and point us at the right route
+>    instead.
+>
+> 2. **If it's a watched folder — where must that folder live?** Our data is
+>    generated on our own application server. Is there an InVentry service
+>    running on our network that could read a local or shared path, and if so
+>    which account does it run as and what path should we target? (We can expose
+>    a UNC share on our file server if that's what's needed.)
+>
+> 3. **Can that same route carry live on-site presence**, or does it only
+>    support the staff roster? This is the part that matters most to us — the
+>    evacuation list is the reason for the project.
+>
+> 4. **If presence is supported:** what format and column headers do you expect,
+>    and is the file treated as the *full current state* — anyone not in the
+>    file is signed out — or as a set of individual sign-in/sign-out events?
+>
+> 5. **Which identifier do you match people on** — email address, an InVentry
+>    staff ID, or name? We currently have name and email from BrightHR. If you
+>    need your own staff ID, could we get an export of the current staff list
+>    with those IDs so we can map them?
+>
+> 6. **How often can this run?** We'd like to refresh presence roughly every
+>    five minutes. Is that reasonable, or are there constraints we should design
+>    around?
+>
+> 7. **Is our instance on-premise or cloud-hosted, which version are we on, and
+>    does this need enabling or licensing on our account?** We'd also like to
+>    know whether anything here is affected by upgrades.
+>
+> 8. **Could you re-send the InVentry Data Import Document** from our Welcome
+>    pack? We may not have it to hand, and it sounds like it covers the import
+>    format directly.
+>
+> 9. **Would Active Directory sync cover the staff roster for us?** We're on
+>    Microsoft Entra ID. If so we may only need an integration for the live
+>    on-site data, which would simplify things considerably.
+>
+> We're happy to share a sample of the data files, and a short call would work
+> well if that's easier than email.
+>
+> Kind regards,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+> james.gray@wearesdi.com
+
+---
+
+## What each answer unblocks
+
+| Their answer | What it decides |
+|---|---|
+| Route (folder / database / API) | Whether stage 2 and 3 keep writing a CSV, or need a database or HTTP client. The data layer is unaffected either way. |
+| Where the folder must live | `INVENTRY_CSV_PATH` / `INVENTRY_ONSITE_CSV_PATH`. Today's `C:\InVentryImports\` default is a placeholder and is not reachable from off-box. |
+| Presence supported? | Whether stage 3 goes live at all, or falls back to the discrepancy-report option below. |
+| Format, columns, full-state vs delta | `hr_blip_inventry.ONSITE_FIELDS` and whether "absent = signed out" holds. |
+| Match identifier | Whether name + email is enough, or an ID mapping table is needed. |
+| Frequency | The Task Scheduler interval. |
+| Hosting and licensing | Network route, and whether anything must be switched on by them. |
+| API available for writes? | Whether stage 3 gets an API driver instead of a file. An API would also sidestep the network-path problem entirely. |
+| AD sync viable? | Whether stages 1–2 (the BrightHR roster pull) are needed at all — see below. |
+
+## A strategic note
+
+If InVentry can sync the staff roster straight from Entra ID / Active Directory,
+then stages 1–2 of this pipeline are redundant: the roster would maintain itself
+without BrightHR in the loop. The thing BrightHR uniquely provides is **Blip
+presence** — who is clocked in right now — which no directory can supply.
+
+That would be a good outcome: less to maintain, and the project narrows to the
+one problem it actually exists to solve, the live fire roll call.
+
+## If presence isn't supported
+
+Worth raising on a call, in order of preference:
+
+1. **InVentry Anywhere** — the remote sign-in product may have an addressable
+   endpoint behind it.
+2. **MIS-style link** — InVentry advertise syncing from third-party databases.
+   We could publish a read-only view for them to pull from, inverting the
+   direction of travel. The BrightHR half is unchanged either way.
+3. **Discrepancy report only** — needs nothing from InVentry. We already know
+   who BrightHR says is on site; comparing that against InVentry's register and
+   reporting the difference daily gives H&S most of the safety value without any
+   write access.
+
+## Sample data to attach
+
+The pipeline already writes dated files to
+`\\sdi-dc01\shareddata$\Shared\IT\HRSystemsOutput`:
+
+- `brighthr_staff_<UTC>.json` — the roster
+- `blip_onsite_<UTC>.json` — the on-site list
+
+Attaching one of each makes the questions concrete. **Check the contents before
+sending** — these contain real staff names, so treat it as a personal-data
+disclosure to a supplier and keep it to a single small sample.
+
+---
+
+# Vendor correspondence
+
+## Round 1 — sent 25 Aug 2026 (ticket #1052488, via Simon Foister)
+
+Asked: how does InVentry receive data from an external system — watched folder,
+database, or API — and can that route carry live on-site presence?
+
+## Round 1 reply — Manuel Thomas, InVentry Support, 26 Aug 2026
+
+> We can pull data directly from your MIS, provided the users have been added to
+> your MIS. Alternatively, if you have a list of users in an Excel spreadsheet,
+> you can import them directly into the system by following the guide below:
+> *Manually Adding Personnel Records*.
+
+**Assessment: this does not answer the question.** It is a first-line reply that
+treats the request as "how do I add users", and neither option is usable:
+
+| Offered | Why it does not fit |
+|---|---|
+| Pull from MIS | We are a manufacturer with no MIS. A school concept. |
+| Manual spreadsheet import | Manual, and roster-only. We need unattended refresh every ~5 minutes. |
+
+Critically, **live on-site presence was not addressed at all** — both options
+concern personnel records (who exists), not who is in the building. Nothing here
+describes a watched folder or drop-off location.
+
+The one genuinely useful thread: if InVentry can *pull* from an MIS database,
+the same mechanism might be pointed at a database or view we publish. That is
+the "MIS link" the original handover mentioned, and it is worth pursuing.
+
+## Round 2 — to send
+
+Reply below. Two changes of approach: ask for escalation past first-line, and
+separate the two data flows explicitly, since conflating roster with presence is
+what caused the mismatch.
+
+> Hi Manny,
+>
+> Thanks for coming back to us. I think we may have crossed wires, so let me be
+> precise about what we're trying to do — and could this be passed to your
+> technical or integrations team? I don't think it's a first-line question.
+>
+> Two points on the options you suggested. We're a manufacturer rather than a
+> school, so we have no MIS. And the manual spreadsheet import won't work for
+> us: this needs to be automated and unattended, refreshing roughly every five
+> minutes.
+>
+> There are two separate data flows here, and I think only the first has been
+> addressed so far:
+>
+> 1. **Staff roster** — who exists. Around 190 people, changing only when
+>    someone joins or leaves.
+> 2. **Live on-site presence** — who is physically in the building right now.
+>    This is the one that matters most to us: it drives the fire evacuation
+>    list, and it changes continuously through the day as people clock in and
+>    out.
+>
+> Our staff clock in and out using BrightHR Blip. We already extract both
+> datasets automatically onto our own server. What we need is a supported way to
+> get them into InVentry with no human in the loop.
+>
+> So, specifically:
+>
+> 1. **Can InVentry's on-site register and evacuation list be updated
+>    programmatically by an external system** — can we tell InVentry "these
+>    people are currently on site"? If that simply isn't possible, please say so
+>    plainly and we'll stop pursuing it.
+>
+> 2. **You mentioned you can pull data directly from an MIS. Can that same pull
+>    mechanism point at a database or endpoint we provide instead?** If so, what
+>    connection method does it use, and what table and field structure does it
+>    expect?
+>
+> 3. **Do you have an API for writing data into InVentry?** We understand you
+>    have an API integration with timeware from v4.11.0 onwards. Could you send
+>    the documentation and tell us what credentials we would need?
+>
+> 4. **Is there an automated file-based import**, as opposed to the manual
+>    process in the guide? If so: where must the file live for your service to
+>    reach it, what format, and does it replace the whole list or apply changes
+>    to it?
+>
+> 5. **Which field do you match a person on** — email address, an InVentry staff
+>    ID, or name?
+>
+> For reference, this is the shape of what we hold for each person on site
+> (illustrative values):
+>
+> ```json
+> {
+>   "id": "062b2236-…",          // BrightHR employee ID, stable per person
+>   "first_name": "Jane",
+>   "surname": "Doe",
+>   "email": "jane.doe@wearesdi.com",
+>   "clocked_in": "2026-08-27T07:45:00Z"
+> }
+> ```
+>
+> We can supply any subset of that, as CSV, JSON, or a database view — whatever
+> suits your system. If you tell us the format you need, we'll produce it.
+>
+> Lastly, could you confirm **which version of InVentry we're running, and
+> whether our system is on-premise or hosted by you**? That determines which
+> network routes are even possible.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+
+## If round 2 also comes back roster-only
+
+Then presence-into-InVentry is probably not a supported capability, and the
+honest move is to stop trying to push it. The fallback needs nothing from
+InVentry: we already know who BrightHR says is on site, so comparing that
+against InVentry's register and reporting the difference gives H&S most of the
+safety value. Worth putting that to Simon as a decision rather than continuing
+to chase the vendor.
+
+---
+
+## Round 2 reply — Charlotte Fastenbauer (Product Coordinator), 16 Sep 2026
+
+Sent the Partner API documentation: *Customer API Overview*, *Partner API field
+information*, and *Linking your system to your partner*. This answered the
+integration question — see `docs/INVENTRY_API_NOTES.md`. The API supports
+writes, and staff sign-in/out through it is an established pattern.
+
+Client and push built against it (`hr_inventry_api.py`, `hr_onsite_push.py`).
+
+## Round 3 — to send
+
+The Postman collection was mentioned but did not arrive, and it holds the
+endpoint paths — the only thing now blocking a live run.
+
+> Hi Charlotte,
+>
+> Thank you for sending these over — they answered the main question. We've now
+> built the integration against the Partner API: it reads the personnel list,
+> matches our staff on the `PersonID` field, and posts sign-in events for whoever
+> our HR system shows as currently on site. It's tested against a local stub and
+> running in dry-run mode, so nothing is being written to InVentry yet.
+>
+> A few things before we can point it at our live system.
+>
+> **The one blocker:**
+>
+> 1. **The Postman collection.** Your email mentions it, but only the three PDFs
+>    came through — and the endpoint URLs are in the collection rather than the
+>    documents. Could you re-send it? A list of the request URLs would do just as
+>    well if that's easier.
+>
+> **To connect:**
+>
+> 2. **The partner secret.** The documentation says this is issued by InVentry
+>    Ltd. I don't believe we've had one — could you issue ours, or let me know if
+>    it came separately?
+>
+> 3. **Our API host.** Which machine serves the API for our site — the main
+>    reception touchscreen, or do we have the dedicated VM setup? And which
+>    scheme and port should we use?
+>
+> 4. **The Partner dropdown.** When creating the API key in the console, your
+>    guide notes the correct option should be confirmed with a manager. For an
+>    integration we've written ourselves, is **"End User Developer"** the right
+>    choice?
+>
+> 5. **The certificate.** As the API certificate is self-signed, we'd rather
+>    trust it explicitly than disable TLS verification. Can we export it from the
+>    InVentry machine, or can you supply it?
+>
+> 6. **Sandbox credentials.** You mention a sandbox at 162.13.119.241 with keys
+>    issued by InVentry. Could we have a set? We'd much rather prove this against
+>    the sandbox with dummy data than test on our live reception system.
+>
+> **On staff presence specifically:**
+>
+> 7. **The correct calls for signing a member of staff in and out.** The ANPR
+>    section lists exactly this capability. Are those the same endpoints we should
+>    use, and does anything need enabling on our account — a console toggle or a
+>    particular licence — as the ANPR endpoints appear to?
+>
+> 8. **Is there a field recording the source of a sign-in?** This one matters to
+>    us. We can't currently tell a sign-in we made from one made at the reception
+>    touchscreen, so we've deliberately disabled automatic sign-*out* — we don't
+>    want to sign someone out of the fire roll who signed themselves in and is
+>    still in the building. If any field distinguishes the two, we can enable
+>    sign-out safely.
+>
+> 9. **Matching on `PersonID`.** Can we query or filter personnel by `PersonID`,
+>    or should we retrieve the full list and match locally? And is `PersonID`
+>    expected to be unique per person? We plan to store our HR system's employee
+>    ID there (a 36-character GUID, so within the 40-character limit).
+>
+> 10. **POST volume.** We understand POST calls are exempt from the 20-per-minute
+>     limit. To sanity-check: we have around 190 staff, and a shift change could
+>     mean a burst of 50–100 sign-in posts within a minute or two. Is that
+>     comfortable for the system, or would you rather we paced it?
+>
+> 11. **Version.** Which version of InVentry are we running, and is there a
+>     minimum version or licence requirement for the Partner API?
+>
+> Happy to jump on a call if that's quicker than working through this by email.
+>
+> Kind regards,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+> james.gray@wearesdi.com · 07585 816501
+
+### Why each ask matters
+
+| Ask | Unblocks |
+|---|---|
+| 1. Postman collection | `INVENTRY_PATH_*` — nothing can run without the real paths |
+| 2. Partner secret | `INVENTRY_PARTNER_SECRET`; one of two required headers |
+| 3. API host | `INVENTRY_API_BASE_URL` |
+| 4. Partner dropdown | A key scoped to the wrong partner may be refused or mislogged |
+| 5. Certificate | `INVENTRY_API_CA_BUNDLE`, so TLS verification stays on |
+| 6. Sandbox keys | Proving the integration without touching the live reception system |
+| 7. Staff sign-in calls + licence | Confirms the endpoints and whether anything needs enabling |
+| 8. Source-of-sign-in field | Would let `INVENTRY_ENABLE_SIGN_OUT` be turned on safely |
+| 9. PersonID query/uniqueness | Whether we can filter server-side or must pull all personnel each run |
+| 10. POST burst | `SYNC_INTERVAL_MINUTES` and whether to pace writes |
+| 11. Version/licence | Whether anything here is gated |
+
+---
+
+## Round 3 reply — Charlotte Fastenbauer, 25 Sep 2026
+
+Sent the Postman collection (the endpoint paths) and answered everything else:
+
+- Use the **"End User Development"** partner option, not a partner integration.
+- The API host is likely the **main touchscreen** unless we run our own VM;
+  their support team can connect and confirm.
+- The **certificate** is exportable from the **V4 folder on the main unit**.
+- **`LastEventLocation`** shows where a sign-in came from — main touchscreen,
+  Quickscan, Anywhere app — named per site. Sign-outs from a rule carry a
+  reason. *This is what makes automatic sign-out safe.*
+- **`PersonID` should be unique per person**; on an AD-integrated site they
+  populate it with the PID from AD.
+- Their **QA team reviewed our load** (~190 staff, bursts of 50–100) and expect
+  no issues.
+
+Everything is now built against this. See `docs/INVENTRY_API_NOTES.md`.
+
+## Round 4 — sent 28 Sep 2026
+
+Only physical facts remained: console access, an admin login, the API host, and
+the certificate. Charlotte offered a support connection — this accepted it and
+asked for all four at once.
+
+> **Inaccurate as drafted.** "Built and running in dry run" was never true: the
+> integration had been tested offline against fixtures, but had never
+> authenticated against the live system. The phrase reached a real email before
+> it was caught. Round 5 corrects it. Never describe a pipeline as running until
+> a live call has returned something.
+
+> Hi Charlotte,
+>
+> Thank you — that answers everything, and the Postman collection was the
+> missing piece. The integration is built and running in dry run: it reads the
+> personnel list, matches our staff on `PersonID`, and posts sign-in events via
+> `AddPersonnelAction`. Your note about `LastEventLocation` was especially
+> useful — we now tag our own sign-ins with a distinctive location, so we can
+> never sign out someone who signed in at reception and is still in the
+> building.
+>
+> Yes please to the support connection. There are four things we need, and I
+> think one visit would cover all of them:
+>
+> 1. **The InVentry Console.** I don't have it installed, and I don't believe
+>    anyone here does. Could support install it — or provide the installer — and
+>    set me up with an admin login? I need it to enable the Partner API and
+>    create the key.
+>
+> 2. **The API host.** Which machine serves the API for our site, the main
+>    touchscreen or a VM, so we have the address for `https://<host>:4816`.
+>
+> 3. **The certificate** from the V4 folder on the main unit, so we can verify
+>    TLS properly rather than turning the check off.
+>
+> 4. **The partner secret.** The Postman collection has an `apikey` and a
+>    `partnersecret` pre-filled on the AddPersonnelAction request, and your
+>    overview says the partner secret is the same across on-premises
+>    installations. Could you confirm whether that value is the one we should
+>    use, or issue ours separately?
+>
+> One small technical question while I have you: does **`ActionLocation` accept
+> free text**, or must it match an existing location on our system? We're
+> sending a distinctive value so we can recognise our own sign-ins later — if it
+> has to be a real location, we'll create one for it.
+>
+> We're ready to go live as soon as we have the key and the host, so any day
+> this week works and I'm happy to be on the call when support connect.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+> james.gray@wearesdi.com · 07585 816501
+
+## Round 5 — to send
+
+Round 4 asked which partner secret to use as though we had not tried one. We
+have: the console key is created, the headers are going out correctly, and
+InVentry is rejecting them. That is a far more answerable question, and it is
+the only thing now blocking a first live cycle.
+
+Two additions to round 4's asks:
+
+* **Service restart.** A newly created key may only become active once the
+  InVentry service restarts. If so that explains the failure by itself.
+* **The contradiction in their own advice.** Charlotte said End User Development
+  "wouldn't require the Partner API", yet every endpoint in the collection is
+  under `/PartnerAPI/` and is rejected without a `partnersecret` header. This is
+  the likeliest root cause, and naming it is the fastest route to a real answer.
+
+The support connection is declined: the host question is settled (10.0.0.241)
+and console access was solved from Adam Stiff's instructions.
+
+> Hi Charlotte,
+>
+> Thank you — that was very helpful, and the Postman collection was the missing
+> piece. The integration is built and configured to run in dry run, logging what
+> it would change without writing anything. The one thing standing between us
+> and a first real cycle is authentication, and that's where I'm stuck.
+>
+> What I've done:
+>
+> - Confirmed our InVentry system at 10.0.0.241 is reachable on port 4816 from
+>   our network, and exported the certificate from the V4 folder.
+> - Created an API key in the console under Setup & Options → Partner API → Add
+>   API Key, with the partner set to **End User Development** as you suggested.
+>   Partner API is enabled.
+> - Called `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+>   request headers, using the `partnersecret` pre-filled in your Postman
+>   collection — your overview notes that value is the same across on-premises
+>   installations.
+>
+> The response is `Authentication failed`.
+>
+> So, two questions:
+>
+> 1. **The partner secret.** Is the value in the collection the one we should be
+>    using, or is one issued per site? I wonder whether I'm caught by your note
+>    that End User Development doesn't require the Partner API: every endpoint in
+>    the collection is under `/PartnerAPI/` and the call is rejected without a
+>    `partnersecret` header, so I'm not sure what an End User Development key is
+>    meant to be paired with. If there's a different secret, or a different
+>    endpoint set for end-user keys, that would explain this.
+>
+> 2. **Does the InVentry service need restarting before a newly created API key
+>    becomes active?** I've regenerated the key once. If it only takes effect
+>    after a restart that would explain the failure on its own, and I'd rather
+>    know before arranging any downtime.
+>
+> And one smaller thing for when we go live: does `ActionLocation` on
+> `AddPersonnelAction` accept free text, or must it match an existing location on
+> our system? We send a distinctive value so we can recognise our own sign-ins
+> and never sign out someone who signed in at reception. If it has to be a real
+> location, we'll create one.
+>
+> On the support connection — thank you, but I don't think we need it now. We've
+> established the software runs on 10.0.0.241, and a colleague passed on
+> instructions from Adam Stiff for reaching the console, so I can get to it
+> myself.
+>
+> Thanks for getting us this far so quickly.
+>
+> James
+
+## Round 6 — follow-up, 29 Sep 2026
+
+Round 5 went out on 28 Sep at 11:05 still carrying round 4's "built and running
+in dry run", and without the one fact that makes the partner secret urgent: the
+call is being rejected. This follow-up supplies it. It does not re-ask the two
+questions, it re-frames them as a failure with a specific cause.
+
+Console state verified the same day, from the live system:
+
+* **Settings → System → Partner API** (bottom of the left menu) — path confirmed.
+* **Enable partner API: On.**
+* One key, partner **"End User Developer"** — the option Charlotte named and the
+  one the documentation's example uses. So the key is correctly scoped.
+* **There is no Locations list anywhere in Settings.** The menu was walked end
+  to end: General options, Licencing, Integrations, Alerts and notifications,
+  Health assist, Door access control, Checkpoint, System. Locations cannot be
+  created customer-side, which kills the idea of sidestepping the
+  `ActionLocation` question by creating a real location. Charlotte's own
+  examples - "Main Touchscreen", "Quickscan", "Backdoor Quickscan" - look like
+  *device* names, so `LastEventLocation` probably reports the physical sign-in
+  point. `Checkpoint → Checkpoint devices` would confirm it.
+
+> Hi Charlotte,
+>
+> One update since yesterday, which makes question 1 more pressing than I put it.
+>
+> I've now created the API key — Setup & Options → System → Partner API → Add
+> API key, partner set to **End User Developer**, and "Enable partner API" is On.
+> Calling `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+> request headers returns **`Authentication failed`**. The `partnersecret` I'm
+> using is the one pre-filled in your Postman collection.
+>
+> So the key exists and is the right type, and the call is being rejected. Two
+> things would resolve it:
+>
+> 1. Is the `partnersecret` in the collection the one we should use, or is one
+>    issued per site?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active?
+>
+> Also, on my earlier `ActionLocation` question — I've been through Settings end
+> to end and there's no Locations list to add to, so I can't create one my side.
+> That makes the free-text answer the deciding factor for us.
+>
+> Thanks,
+> James
+
+## Round 7 — escalation, 6 Oct 2026
+
+Rounds 5 and 6 asked about the partner secret as one question among several.
+This one states the consequence plainly: the 401 is at the authentication
+layer, so **no endpoint is reachable at all**. GetPersonnel is as blocked as
+AddPersonnelAction. There is no partial path into InVentry — we cannot even
+read the personnel list.
+
+It also reverses the earlier decline of their support connection. That was
+right when the open question was which host serves the API; it is wrong now
+that the open question is authentication on their side.
+
+Everything claimed in it was verified first, and the list is included so the
+question cannot come back as "are you sure it isn't your end?".
+
+> Hi Charlotte,
+>
+> I need to escalate this, and I'd rather set out exactly where we are than
+> keep asking the same question.
+>
+> The integration is finished. It is built, tested, configured, and installed
+> against our system at 10.0.0.241:4816. It is blocked on one credential, and
+> it is not one we can create or obtain ourselves.
+>
+> **`GET /PartnerAPI/CheckAuth` returns HTTP 401.**
+>
+> The important part is where that 401 sits. It is at the authentication layer,
+> before any endpoint, and both headers go on every call — so this is not a
+> problem with one request or one feature. `GetPersonnel` is as blocked as
+> `AddPersonnelAction`. We cannot write to InVentry, and we cannot read from it
+> either. At the moment we have no working path into the system at all, so
+> there is nothing further we can test or build around it.
+>
+> Everything on our side has been checked rather than assumed:
+>
+> * The API is reachable — 10.0.0.241 on port 4816, confirmed from our network.
+> * TLS completes, with your certificate exported from the V4 folder and
+>   verified against the connection.
+> * "Enable partner API" is On in the console.
+> * There is one API key, with the partner set to **End User Developer** — the
+>   option you identified for a customer's own integration.
+> * That key matches the console character for character; it is not a stale one.
+> * `apikey` and `partnersecret` are sent as lowercase request headers, exactly
+>   as your documentation and Postman collection specify.
+> * The 401 is a response from your software, not a network or TLS failure.
+>
+> The only value in that chain we have not been able to verify independently is
+> the **partner secret**. We are sending the one pre-filled in your Postman
+> collection, on the basis that your overview describes it as common across
+> on-premises installations.
+>
+> So, three questions:
+>
+> 1. Is the partner secret in the collection the one we should be using, or is
+>    one issued per site? If per site, could you issue ours?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active? If so, that alone would explain this, and we will arrange
+>    the downtime.
+> 3. Is "End User Developer" definitely the right partner for a key that will
+>    be used against `/PartnerAPI/` endpoints? Your earlier note said this use
+>    wouldn't require the Partner API, but every endpoint in the collection
+>    sits under that path and is rejected without a `partnersecret` header, so
+>    I may have misunderstood which pairing is intended.
+>
+> **I'd now welcome the support connection you offered.** I declined it last
+> month because the open question then was which machine serves the API, and we
+> had answered that ourselves. The open question now is authentication inside
+> your software, which we cannot see from outside. Any day this week suits, and
+> I'm happy to be on the call.
+>
+> Two smaller things, neither urgent:
+>
+> * **`ActionLocation` on `AddPersonnelAction`** — does it accept free text, or
+>   must it name an existing location? I have been through Settings end to end
+>   and there is no Locations list I can add to, so I cannot make our value a
+>   real location. We send a distinctive value so the integration can recognise
+>   its own sign-ins and never sign out someone who signed in at reception —
+>   without that, we have to leave automatic sign-out switched off.
+> * **The certificate** is `CN=InVentry-PC` with no `subjectAltName`. Modern
+>   TLS stacks ignore the common name entirely, so verification fails for any
+>   hostname. `curl` still falls back to it, which disguises the problem. We've
+>   worked around it by pinning your certificate, so this isn't holding us up —
+>   but it will catch every customer who integrates this way, and it would be
+>   worth your development team reissuing with a SAN.
+>
+> For context on why I'm pushing: this feeds our fire evacuation list. The
+> point of it is that the roll call reflects who is actually in the building
+> rather than who remembered to sign in at reception. That's the reason it
+> matters to us rather than being a nice-to-have.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+
+## Round 7 reply — Charlotte Fastenbauer, 8 Oct 2026
+
+Three answers, all useful:
+
+1. **The partner secret is per site, and lives in our own database.** Support
+   will log on to our system, read it, and give it to us. So the value in the
+   Postman collection is *not* ours — which is exactly the 401, and closes the
+   question the last three emails have been asking. Their overview describing
+   it as "the same across on-premises installations" is, at best, misleading.
+2. **No service restart is needed** for a new API key. That hypothesis is dead.
+3. **`ActionLocation` accepts free text** — "within the Value section, you're
+   able to freetype whatever you like".
+
+Answer 3 unblocks automatic sign-out, which has been off since it was built.
+
+One caution before acting on it. "Within the Value section" reads like she is
+describing the key/value table in the Postman request, not making a statement
+about server-side validation. Accepting a value on the way in is also not the
+same as storing it and returning it as `LastEventLocation`, and the whole
+safety argument depends on the round trip, not on the POST succeeding. Treat it
+as good evidence, not proof: one `probe_inventry.py --sign-in` settles it, and
+that is a single record.
+
+This is the third time an inference about InVentry's behaviour has looked
+settled and not been - CN fallback, the Locations list, the shared secret. Run
+the probe.
+
+## Round 8 — full technical position, 10 Oct 2026
+
+Charlotte's 8 Oct reply answered the questions but the support connection has
+not happened. This sets out the complete technical position so the support
+engineer can act without a discovery call first, and so the one remaining ask
+is unambiguous.
+
+Everything in it was verified on the live system. Credentials are referenced,
+never quoted - the API key goes to the engineer on the call, not into an inbox.
+
+> Hi Charlotte,
+>
+> Thank you for the answers on the 8th — those cleared up the restart question
+> and `ActionLocation`. The support connection hasn't come through yet, so I
+> wanted to set out exactly where this stands, in enough detail that whoever
+> picks it up can go straight to the one thing we need.
+>
+> **Where it stands: `GET https://10.0.0.241:4816/PartnerAPI/CheckAuth` returns
+> HTTP 401.** That is the only thing between us and a working integration.
+>
+> **What we have configured and verified**
+>
+> * **Network** — 10.0.0.241 reachable on port 4816 from our network.
+> * **TLS** — your certificate exported from the V4 folder on the main unit and
+>   pinned, so the connection is verified rather than trusted blindly. One
+>   wrinkle covered below.
+> * **Console** — Setup & Options → System → Partner API. "Enable partner API"
+>   is On.
+> * **API key** — one key, created there with the Partner set to **End User
+>   Developer**, per your guidance. We have confirmed character by character
+>   that the key our software sends is the one currently shown in the console,
+>   so it is not a stale copy. I can read it out to the engineer on the call.
+> * **Headers** — `apikey` and `partnersecret`, both lowercase, as request
+>   headers, exactly as the documentation and your Postman collection specify.
+> * **Partner secret** — the 16-character value pre-filled in your Postman
+>   collection, which is what your overview document describes as common across
+>   on-premises installations.
+>
+> **What we have tried**
+>
+> * Both `https://InVentry-PC:4816` and `https://10.0.0.241:4816` — identical
+>   result, as expected, since the 401 is authentication rather than addressing.
+> * Regenerating the API key in the console and retrying (before you confirmed
+>   a restart isn't required).
+> * Verifying the response is genuinely from the InVentry application rather
+>   than a network or TLS failure — it is an HTTP 401, not a dropped connection.
+>
+> **What your answers have already resolved**
+>
+> * The InVentry service does not need restarting for a new key. Ruled out.
+> * `ActionLocation` accepts free text. That lets us enable automatic sign-out
+>   once we have confirmed the value is returned on the record.
+> * The partner secret is **per site and held in our own database** — which, as
+>   you say, means the value in the Postman collection is not ours. That
+>   explains the 401 precisely, and it is why nothing we can do here will fix it.
+>
+> **What is outstanding — one item**
+>
+> A member of your support team to connect, read our partner secret out of our
+> database, and give it to us. You escalated this on the 8th. Could you confirm
+> it is booked, and give me a ticket reference? I'm available at any notice and
+> will have everything staged so we can test authentication while the engineer
+> is still connected — if it still fails, they are right there to look at it.
+>
+> **One product note, not blocking us**
+>
+> Your certificate is issued as `CN=InVentry-PC` with no `subjectAltName`.
+> Modern TLS libraries ignore the common name entirely, so certificate
+> verification fails for every hostname, including the one on the certificate.
+> `curl` still falls back to the common name, which disguises the problem —
+> testing with curl succeeds while an application fails. We have worked around
+> it by pinning your certificate and disabling hostname checking, so this isn't
+> holding us up, but it will catch every customer who integrates this way. It
+> would be worth your development team reissuing with a SAN.
+>
+> For context on the urgency: this feeds our fire evacuation list. The whole
+> point is that the roll call reflects who is physically in the building rather
+> than who remembered to sign in at reception, so it matters to us rather more
+> than a typical integration would.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
