@@ -257,10 +257,83 @@ def report_backend_readiness(problems: List[str], notes: List[str],
                      "to clear a DEGRADED badge caused by the template.")
 
 
+def _http_probe(url: str, headers: Dict[str, str]) -> Tuple[str, str]:
+    """("REACHED"|"REFUSED"|"UNREACHABLE", detail) for an auth/metadata endpoint."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read(4000).decode("utf-8", "replace")
+            detail = ""
+            try:
+                data = _json.loads(body)
+                if isinstance(data, dict):
+                    detail = str(data.get("plan_name") or data.get("plan") or
+                                 (f"{len(data.get('data') or data.get('models') or [])} model(s)"
+                                  if (data.get("data") or data.get("models")) else ""))[:60]
+            except ValueError:
+                pass
+            return "REACHED", detail
+    except urllib.error.HTTPError as exc:
+        return "REFUSED", f"HTTP {exc.code} {exc.reason} — the ACCOUNT or key, not the query"
+    except Exception as exc:                                     # noqa: BLE001
+        return "UNREACHABLE", f"{type(exc).__name__}: {str(exc)[:80]}"
+
+
+def probe_pricing_rungs(problems: List[str]) -> None:
+    """Say, per rung the pricing ladder falls through, whether THIS machine can ask it."""
+    print()
+    k = os.environ.get("SERPAPI_API_KEY", "").strip()
+    if not k:
+        print("SerpAPI (web price search)   : NOT CONFIGURED — SERPAPI_API_KEY unset")
+    else:
+        state, detail = _http_probe(f"https://serpapi.com/account?api_key={k}", {})
+        print(f"SerpAPI (web price search)   : {state}" + (f" — {detail}" if detail else ""))
+        if state != "REACHED":
+            problems.append(f"SerpAPI {state}: web price search will refuse every query this "
+                            f"run ({detail}). A 429 is the account's rate limit — wait or "
+                            f"raise the plan; a new query cannot fix it.")
+    k = os.environ.get("XAI_API_KEY", "").strip()
+    if not k:
+        print("xAI / Grok (LLM fallback)    : NOT CONFIGURED — XAI_API_KEY unset")
+        problems.append("XAI_API_KEY is unset, so the xAI pricing fallback cannot run; with "
+                        "SerpAPI also down, unmatched lines fall to Anthropic or go unpriced.")
+    else:
+        state, detail = _http_probe("https://api.x.ai/v1/models",
+                                    {"Authorization": f"Bearer {k}"})
+        print(f"xAI / Grok (LLM fallback)    : {state}" + (f" — {detail}" if detail else ""))
+        if state != "REACHED":
+            problems.append(f"xAI {state} ({detail}) — the LLM market fallback is dead on this "
+                            f"machine.")
+    k = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not k:
+        print("Anthropic (LLM + web tool)   : NOT CONFIGURED — ANTHROPIC_API_KEY unset")
+    else:
+        state, detail = _http_probe("https://api.anthropic.com/v1/models",
+                                    {"x-api-key": k, "anthropic-version": "2023-06-01"})
+        print(f"Anthropic (LLM + web tool)   : {state}" + (f" — {detail}" if detail else ""))
+        if state != "REACHED":
+            problems.append(f"Anthropic {state} ({detail}) — the vision read and the LLM "
+                            f"estimate both need it.")
+    try:
+        import pyodbc                                            # noqa: F401
+        print("pyodbc (SDI Live driver)     : importable (reach it with --db)")
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"pyodbc (SDI Live driver)     : MISSING — {type(exc).__name__}")
+        problems.append("pyodbc is missing in THIS python, so SDI Live is unreachable from it: "
+                        "every catalogue and history figure would be carried or missing. Use "
+                        "the runner's venv python.")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--db", action="store_true",
                     help="also try to reach SDILive (slow when it is going to fail)")
+    ap.add_argument("--rungs", action="store_true",
+                    help="also probe each PRICING RUNG the engine falls through — SDI Live, "
+                         "SerpAPI, xAI, Anthropic — and say REACHED / REFUSED / NOT CONFIGURED")
     args = ap.parse_args()
 
     problems: list = []
@@ -365,6 +438,16 @@ def main() -> int:
                             "would come out low.")
     else:
         print("Price source (SDILive)       : not tested (pass --db)")
+
+    # ── the pricing rungs (D-456) ───────────────────────────────────────────────────
+    # "confirm the runner can reach SDI Live and the xAI pricing fallback. Today's replay did
+    # not establish that." — the 15:43 replay priced on carried figures because its python had
+    # no pyodbc and SerpAPI was refusing the ACCOUNT (429), and nothing could say so in one
+    # place. Each probe is an auth/metadata call, not a paid query, so this is safe any time.
+    if args.rungs:
+        probe_pricing_rungs(problems)
+    else:
+        print("Pricing rungs (web/LLM)      : not tested (pass --rungs)")
 
     report_backend_readiness(problems, notes, args.db)
 
