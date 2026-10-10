@@ -28,6 +28,7 @@ import re
 from typing import Any, Dict, List, Optional, Sequence
 
 import config
+from blank_credibility import blank_is_measured as _blank_is_measured
 from extractor_patterns import size_mixing_units
 
 _UNIT_MM = {"MM": 1.0, "CM": 10.0, "M": 1000.0}
@@ -68,8 +69,9 @@ def readings_of(mix: Dict[str, Any]) -> List[Dict[str, Any]]:
 
 
 def measured_job_yardstick_mm(parts: Sequence[Dict[str, Any]]) -> Optional[float]:
-    """The largest size anything MADE on the job measures: a flat's length or width, a stated
-    blank, a section's length or cut list. Purchased lines are not a yardstick for themselves."""
+    """The largest size anything MADE on the job measures: a measured flat's length or width,
+    an overall size its own drawing states, a section's stated length or cut list. Purchased
+    lines are not a yardstick for themselves; nothing inferred is a yardstick at all."""
     best: Optional[float] = None
     for p in parts or ():
         if not isinstance(p, dict) or _bought(p):
@@ -78,18 +80,31 @@ def measured_job_yardstick_mm(parts: Sequence[Dict[str, Any]]) -> Optional[float
         # fallback envelope (normalized_geometry `_inferred`, source geometry_inference); read
         # as "the largest size anything made on the job measures" it refused a 2 m magnet
         # against 500 mm on a job whose waves are 2.4 m long.
+        # AND A COPY OF AN ASSUMPTION IS STILL AN ASSUMPTION (D-454). Every flat-blank figure
+        # — on the part, in its geometry, or in the material_estimate the costing wrote from
+        # it — is admitted only where the part's blank was measured (one shared test,
+        # blank_credibility.blank_is_measured), so an inferred or weight-implied blank cannot
+        # come back here as "the largest size anything made on the job measures".
         _flags = " ".join(str(f) for f in (p.get("review_flags") or [])).lower()
         _envelope = "fallback envelope" in _flags or bool(p.get("blank_rejected_reason"))
-        cands: List[Any] = [] if _envelope else [p.get("overall_length_mm"), p.get("overall_width_mm"),
-                                                 p.get("blank_length_mm"), p.get("blank_width_mm")]
+        cands: List[Any] = []
         ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"), dict) else {}
-        if not (ng.get("_inferred") or str(ng.get("blank_length_mm_source") or "") in
-                ("geometry_inference", "fallback", "fallback_envelope") or _envelope):
-            cands += [ng.get("blank_length_mm"), ng.get("blank_width_mm")]
         me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
-        cands += [me.get("blank_length_mm"), me.get("blank_width_mm"),
-                  (me.get("stock_estimate") or {}).get("section_length_mm")
-                  if isinstance(me.get("stock_estimate"), dict) else None]
+        if not _envelope and _blank_is_measured(p):
+            cands += [p.get("blank_length_mm"), p.get("blank_width_mm"),
+                      ng.get("blank_length_mm"), ng.get("blank_width_mm"),
+                      me.get("blank_length_mm"), me.get("blank_width_mm")]
+        # An overall size the part's own drawing states is evidence too, unless the record
+        # says its geometry was inferred.
+        if not _envelope and not (ng.get("_inferred") or p.get("blank_is_inferred")
+                                  or p.get("_blank_provisional")):
+            cands += [p.get("overall_length_mm"), p.get("overall_width_mm")]
+        # A section length is a reading only on a stated rung, never the largest-dimension
+        # fallback or a length nothing gave.
+        if str(p.get("_section_length_source") or "") in ("section_stock", "stated_length",
+                                                         "developed_length"):
+            cands += [(me.get("stock_estimate") or {}).get("section_length_mm")
+                      if isinstance(me.get("stock_estimate"), dict) else None]
         ss = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
         cands += [ss.get("length_mm")]
         cuts = [c for c in (_num(x) for x in (ss.get("cut_lengths_mm") or [])) if c]

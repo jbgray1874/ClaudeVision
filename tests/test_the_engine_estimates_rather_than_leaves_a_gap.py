@@ -22,6 +22,7 @@ import estimator as e                                                 # noqa: E4
 def _acr(pn, L, W, area, kg, t=3.0):
     return {"part_number": pn, "description": "WAVE", "normalized_material": "ACRYLIC",
             "normalized_thickness_mm": t, "quantity": 1, "stated_weight_kg": kg,
+            "geometry_source": "dxf_flat_pattern",
             "normalized_geometry": {"blank_length_mm": L, "blank_width_mm": W, "blank_area_mm2": area}}
 
 
@@ -53,23 +54,61 @@ def _w013(**over):
     return p
 
 
-def test_an_unmeasured_blank_is_priced_on_the_weight_implied_width_said_as_provisional():
-    part = _w013()
+def test_an_unmeasured_blank_gets_a_material_area_allowance_said_as_one():
+    part = _w013(_related_measured_blanks=[{"part_number": "014", "long_mm": 2257.4, "short_mm": 199.99},
+                                           {"part_number": "015", "long_mm": 2354.72, "short_mm": 99.99}])
     pe = e.estimate_part(part, 1)
     me = pe["material_estimate"]
     assert me["blank_length_mm"] == 2190.34 and abs(me["blank_width_mm"] - 227.4) < 0.5
-    assert part["_blank_provisional"]["recorded_mm"] == [2190.34, 17.0]
+    rec = part["_blank_provisional"]
+    assert rec["basis"] == "mass_implied_area" and rec["recorded_mm"] == [2190.34, 17.0]
+    assert rec["measured_mm"] == [2190.34] and abs(rec["inferred_mm"][0] - 227.4) < 0.5
+    assert rec["area_range_m2"][0] < rec["net_area_m2"] < rec["area_range_m2"][1]
     flag = " ".join(str(f) for f in part["review_flags"])
-    assert "PROVISIONAL BLANK" in flag and "is INFERRED" in flag and "the 2190.34 mm side is the recorded figure" in flag
-    assert "014, 015, 008" in flag and "working figure, not a measurement" in flag
-    assert any(q["issue"].startswith("Blank of 013") for q in part["manufacturing_questions"])
+    assert "MATERIAL-AREA ALLOWANCE, NOT A MEASURED BLANK" in flag
+    assert "MEASURED/RECORDED: the 2190.34 mm length" in flag and "INFERRED: a net area of 0.498" in flag
+    assert "a weight gives an area, not a shape" in flag and "nesting yield are unknown" in flag
+    assert "014, 015, 008" in flag, "the parts the model material rests on are named"
+    assert "same material and gauge on this pack: 014, 015, 100-200 mm wide" in flag
+    assert any(q["issue"].startswith("Blank of 013: not measured — material priced as an area allowance")
+               for q in part["manufacturing_questions"])
     priced_on_17 = e.estimate_part(_w013(_pack_model_material=None), 1)["material_estimate"]
     assert me["unit_material_cost_gbp"] > priced_on_17["unit_material_cost_gbp"] * 5
 
 
+def test_the_allowance_is_marked_inferred_so_no_reader_takes_it_back_as_measured():
+    import blank_credibility as bc
+    import size_reading as sr
+    part = _w013()
+    e._apply_mass_implied_blank(part)
+    assert part["blank_is_inferred"] and not bc.blank_is_measured(part)
+    part["material_estimate"] = {"blank_length_mm": 2190.34, "blank_width_mm": 227.4}
+    assert sr.measured_job_yardstick_mm([part]) is None
+    assert e._measured_outline_kg(dict(part, blank_area_mm2=400000.0), 1190) is None
+
+
+def test_measured_model_extents_come_before_the_weight():
+    part = _w013(bbox_mm=[2195.0, 240.0, 3.0], bbox_mm_source="solidworks_api")
+    rec = e._apply_mass_implied_blank(part)
+    assert rec["basis"] == "model_extents" and rec["provisional_mm"] == [2195.0, 240.0]
+    assert rec["inferred_mm"] == []
+    assert "measured model extents" in " ".join(part["review_flags"])
+    unmeasured_box = _w013(bbox_mm=[2195.0, 240.0, 3.0])            # no measuring source
+    assert e._apply_mass_implied_blank(unmeasured_box)["basis"] == "mass_implied_area"
+
+
+def test_related_blanks_are_the_measured_parts_of_the_same_material_and_gauge():
+    parts = [dict(x) for x in _SIBS] + [_w013(), _acr("S", 500, 400, 200000, 1.0, t=6.0)]
+    e.related_measured_blanks(parts)
+    w = next(p for p in parts if p["part_number"] == "013")
+    assert [r["part_number"] for r in w["_related_measured_blanks"]] == ["014", "015", "008"]
+    assert "_related_measured_blanks" not in parts[-1], "a 6 mm part has no 6 mm relative"
+
+
 def test_no_pack_reading_a_measured_outline_or_an_assembly_leaves_the_blank_alone():
     for part in (_w013(_pack_model_material=None),
-                 _w013(normalized_geometry={"blank_length_mm": 2190.34, "blank_width_mm": 17.0,
+                 _w013(geometry_source="dxf_flat_pattern",
+                       normalized_geometry={"blank_length_mm": 2190.34, "blank_width_mm": 17.0,
                                             "blank_area_mm2": 30000.0}),
                  _w013(part_number="X_GA")):
         assert e._apply_mass_implied_blank(part) is None

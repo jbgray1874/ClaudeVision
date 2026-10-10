@@ -31,6 +31,13 @@ Keys understood (all optional; the replay keys behave as they do there):
   max_unit_material_mass_kg      {code: kg} — a title-block mass used as material fails here
   min_unit_material_mass_kg      {code: kg}
   quantity_breaks                [q] the book's Quantity Breaks columns (needs --xlsx)
+  provisional_material           {code: {min_unit_material_gbp}} — the line's material is priced
+                                 (at least the floor) and, where its blank was not measured, the
+                                 record says which dimensions were measured and which inferred
+  commercial_basis               [code] each commercial line names the basis it was priced on, holds
+                                 an order figure at every break, and — where that basis is SDI
+                                 history — says the history is comparable on customer and quantity
+  no_gauge_decision_on_assemblies true: no assembly record carries a gauge decision
 
 Exit status 0 when every pin holds, 1 otherwise.
 """
@@ -205,9 +212,10 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         guilty = [l.get("part_number") for l in lines if op.lower() in _ops(l)]
         res.add("forbidden_anywhere", op, not guilty, f"charged on {guilty}" if guilty else "")
     if facts.get("no_cut_assemblies"):
+        from part_code_conventions import carries_assembly_role
         guilty = [l.get("part_number") for l in lines
                   if (str(l.get("kind") or "").lower() == "assembly"
-                      or _sq(l.get("part_number")).endswith("GA"))
+                      or carries_assembly_role(str(l.get("part_number") or "")))
                   and _ops(l) & _CUTTING]
         res.add("no_cut_assemblies", "assemblies", not guilty,
                 f"cut: {guilty}" if guilty else "no assembly is cut")
@@ -247,6 +255,60 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         missing = [t for t in tokens if str(t).upper() not in blob]
         res.add("material_basis_names", code, not missing,
                 f"missing {missing}" if missing else f"names {tokens}")
+
+    # ── a provisional figure, said as one (D-454) ───────────────────────────────
+    _wparts = {_sq(p.get("part_number")): p for p in
+               ((summary.get("manufacturing_writeup") or {}).get("parts") or []) if isinstance(p, dict)}
+    for code, want in (facts.get("provisional_material") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        me = pe.get("material_estimate") or {}
+        money = _num(me.get("unit_material_cost_gbp"))
+        floor = _num((want or {}).get("min_unit_material_gbp")) or 0.0
+        rec = (_wparts.get(_sq(code)) or pe).get("_blank_provisional")
+        measured = (_wparts.get(_sq(code)) or {}).get("geometry_source") or ""
+        said = isinstance(rec, dict) and "measured_mm" in rec and "inferred_mm" in rec
+        ok = money is not None and money >= floor and (said or "dxf" in str(measured).lower())
+        res.add("provisional_material", code, ok,
+                f"material £{money} (floor £{floor:g}); "
+                + (f"basis {rec.get('basis')}, measured {rec.get('measured_mm')}, inferred "
+                   f"{rec.get('inferred_mm')}" if said else
+                   ("measured outline" if "dxf" in str(measured).lower() else
+                    "no provisional record and no measured outline")))
+    if facts.get("commercial_basis"):
+        cls = {str(c.get("code") or "").upper(): c for c in (summary.get("commercial_lines") or [])
+               if isinstance(c, dict)}
+        if not cls:
+            try:
+                from commercial_lines import collect_lines
+                cls = {str(c.get("code") or "").upper(): c for c in collect_lines(summary)
+                       if isinstance(c, dict)}
+            except Exception:                                    # noqa: BLE001
+                cls = {}
+        want_breaks = [int(q) for q in (facts.get("commercial_breaks") or facts.get("quantity_breaks") or [])]
+        for code in facts["commercial_basis"]:
+            c = cls.get(str(code).upper())
+            if not c:
+                res.add("commercial_basis", code, False, "no commercial line")
+                continue
+            basis = str(c.get("basis_chosen") or "")
+            breaks = {int(k): v for k, v in (c.get("order_gbp_at_breaks") or {}).items()}
+            missing = [q for q in want_breaks if q not in breaks]
+            hist_ok = ("history" not in basis.lower()) or ("comparable" in basis.lower()
+                                                           and "weak" not in basis.lower())
+            ok = bool(basis) and not missing and hist_ok
+            res.add("commercial_basis", code, ok,
+                    (f"basis: {basis or 'NOT NAMED'}; " +
+                     ("; ".join(f"{q}: £{float(breaks[q]) / max(q, 1):.2f}/unit" for q in sorted(breaks))
+                      or "no breaks held") +
+                     (f"; breaks missing {missing}" if missing else "") +
+                     ("" if hist_ok else "; history used without comparable customer and quantity")))
+    if facts.get("no_gauge_decision_on_assemblies"):
+        import costed_facts as _cf
+        from detail_page_geometry import not_cut_from_a_blank
+        guilty = [p.get("part_number") for p in _wparts.values()
+                  if not_cut_from_a_blank(p) and _cf.thickness_conflict(p)]
+        res.add("no_gauge_decision", "assemblies", not guilty,
+                f"gauge decision on {guilty}" if guilty else "no assembly carries a gauge decision")
 
     # ── mass ────────────────────────────────────────────────────────────────────
     for code, kg in (facts.get("max_unit_material_mass_kg") or {}).items():

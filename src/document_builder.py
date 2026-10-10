@@ -2287,7 +2287,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _JUNK_KW = (
         "MICRON", "THICKNESS", "PLATING", "COPYRIGHT", "TOLERANCE",
-        "DIMENSION", "MARKS &", "SPENCER", "USING TAPE", "TICKET TAPED",
+        "DIMENSION", "PROPERTY OF", "ALL RIGHTS", "USING TAPE", "TICKET TAPED",
         "COVERAGE", "NICKEL", "CHROME", "POWDERCOAT", "PROTOTYPE",
         "TIMBER-BASED", "TIMBER BASED", "ALUMINIUM-BASED",
     )
@@ -2535,9 +2535,10 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
         # a record already in the writeup. One shared predicate, asked where the record is born.
         try:
             from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
             if any(isinstance(p, dict) and _one_cell(pn, dsc if dsc != pn else "",
                                                      p.get("part_number"), p.get("description"))
-                   for p in parts):
+                   and _same_occ(row, p) for p in parts):
                 continue
         except Exception:                                                # noqa: BLE001
             pass

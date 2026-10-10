@@ -41,6 +41,7 @@ from part_identity import fold_one_cell_duplicates                    # noqa: E4
 
 def _wave():
     return {"part_number": "W-015", "description": "WAVE LAYER 1", "normalized_material": "ACRYLIC",
+            "geometry_source": "dxf_flat_pattern",
             "material_estimate": {"blank_length_mm": 2354.72, "blank_width_mm": 99.99}}
 
 

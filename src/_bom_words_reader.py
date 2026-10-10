@@ -660,46 +660,19 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
 # ── Grok known-good oracle (per-parent, code/desc-token -> qty) ──
 # We compare on (item, a recognisable token, qty) so minor desc wording differences
 # don't fail the check — the QUANTITIES and the presence of each item are what matter.
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [
-        ("1", "101", 1), ("2", "05M", 1),
-    ],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1),
-        ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        # item 3 = keyhole pem qty 2. Its DESCRIPTION is in a drawing note
-        # ("KEYHOLE PEM SIZE REQUIRED"), NOT the table cell, so a deterministic
-        # table reader correctly yields item 3 / qty 2 with a thin (blank) desc.
-        # We match on item+qty here; the note-desc is a separate enrichment step.
-        ("3", "", 2),
-    ],
-    # ---- 1282 Milwaukee Wall Bay (2013 template, "ITEM NO./PartNo" header) ----
-    # Known-good BOM extracted independently (Grok/pdf_browse) across the file set.
-    # Note codes carry hyphen/space variants on the drawing (e.g. "1450 - GA",
-    # "1453-GA C", "1455-C GA") which _normalize_bom_code repairs to canonical form.
-    "1448-GA": [
-        ("1", "1448-01", 1), ("2", "1448-02", 1),
-    ],
-    "1455-C-GA": [
-        ("1", "1455-C-101", 1), ("2", "1455-C-005", 1),
-        # item 3 = ELECTRICS 50cm LOOM (bought-in, no drawing code); item 4 = FIXING
-        # dome rivet x2. Match item+qty; the code column is a commodity spec here.
-        ("3", "", 1), ("4", "", 2),
-    ],
-    # The top-level GA parent token in 1282's title block — confirm its 7 lines.
-    "1282-GA": [
-        ("1", "1448-GA", 2), ("2", "1449-01C", 3), ("3", "1450-GA", 1),
-        ("4", "1453-GA-C", 1), ("5", "2621-01C", 1), ("6", "3886-GA", 2),
-        ("7", "1455-C-GA", 1),
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["words"], read only by verify().
+def _load_oracle(_key: str = "words"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 def _row_token(row: Dict[str, Any]) -> str:

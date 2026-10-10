@@ -3017,6 +3017,9 @@ def _measured_outline_kg(part: Dict[str, Any], density: float) -> Optional[float
     W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
     if not (area and t and L and W) or area > L * W * 1.01:
         return None
+    import blank_credibility as _bc
+    if not _bc.blank_is_measured(part):                     # D-454: an inferred area is no outline
+        return None
     return area * t * float(density) * 1e-9
 
 
@@ -3051,21 +3054,41 @@ def pack_model_material(parts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     return {"material": mat, "parts": who} if len(who) >= 2 else None
 
 
+def _model_extents_mm(part: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """The part's own measured model extents (a bounding box a measuring reader stamped), as
+    (long, short) in the sheet plane, or None. Depth is dropped — the gauge."""
+    import blank_credibility as _bc
+    for h in (part, part.get("normalized_geometry") or {}, part.get("native_geometry") or {}):
+        if not isinstance(h, dict) or not isinstance(h.get("bbox_mm"), (list, tuple)):
+            continue
+        src = h.get("bbox_mm_source") or part.get("bbox_mm_source")
+        if not _bc.cut_path_is_measured(src):
+            continue
+        dims = sorted([v for v in (_safe_float(b) for b in h["bbox_mm"]) if v], reverse=True)
+        if len(dims) >= 2:
+            return dims[0], dims[1]
+    return None
+
+
 def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """A provisional blank for a sheet part whose blank nothing measured (D-453).
+    """A MATERIAL-AREA ALLOWANCE for a sheet part whose outline nothing measured (D-453, D-454).
+
+    The order is the evidence order. (1) A measured outline (DXF or model flat) is the blank —
+    nothing here runs. (2) The part's own measured model extents are the envelope it is cut
+    from — used as the provisional blank, said as extents, not a flat. (3) Only where neither
+    exists: the sheet's stated weight, read in the material the pack's model printed its
+    weights in (established by two or more of the pack's own measured parts) at the stated
+    gauge, is a NET AREA. A weight gives an area and nothing else — not a shape, an aspect
+    ratio or a perimeter — so it is priced as a material allowance: that area carried as an
+    equivalent rectangle on the recorded length, so the sheet can nest it. It is not an outline,
+    the nesting yield of the real shape is unknown (a shaped part's envelope is larger), and
+    the line says so, with the measured and the inferred dimensions told apart, the range the
+    tolerance allows, and the measured blanks of related parts (same material and gauge) beside
+    it. The figure is marked inferred, so no reader can take it back as a measurement.
 
     8188-08-013 was priced on 2190 x 17 — a cut length with no measured width — at £2.34 while
-    its siblings 014 (2257 x 200) and 015 (2355 x 100) were measured. Its sheet states 11.731 kg;
-    the pack's measured parts show the model printed its weights in mild steel. Read in that
-    material at the stated gauge, the weight is 0.498 m² of plate: on the recorded length, an
-    equivalent rectangle 2190 x 227. That is an inference, not a measurement — a shaped part's
-    own envelope is wider than its equivalent rectangle — so the blank is priced as a WORKING
-    figure, the measured and inferred dimensions are said apart, and the question stays. Only
-    where the recorded blank is lighter than the stated weight, the implied width is wider than
-    the recorded one and no wider than the blank is long, and the pack's model material is
-    established by two or more of its own measured parts."""
-    pmm = part.get("_pack_model_material") if isinstance(part.get("_pack_model_material"), dict) else None
-    if not pmm or part.get("_blank_provisional"):
+    parts of the same material and gauge were measured at 100-200 mm wide."""
+    if part.get("_blank_provisional"):
         return None
     try:
         from detail_page_geometry import not_cut_from_a_blank as _nc
@@ -3082,39 +3105,108 @@ def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     stated = _stated_weight_kg_for_part(part)
     own = str(part.get("normalized_material") or "").upper().replace("_", " ")
     own_d = MATERIAL_DENSITY_KG_PER_M3.get(own) or MATERIAL_DENSITY_KG_PER_M3.get(own.replace(" ", "_"))
-    alt = str(pmm.get("material") or "").upper()
-    alt_d = MATERIAL_DENSITY_KG_PER_M3.get(alt) or MATERIAL_DENSITY_KG_PER_M3.get(alt.replace(" ", "_"))
-    if not (L and W and t and stated and own_d and alt_d) or _measured_outline_kg(part, own_d) is not None:
-        return None
+    if not (L and W and t and stated and own_d) or _measured_outline_kg(part, own_d) is not None:
+        return None                                   # (1) an outline was measured, or no basis
     long_, short = (L, W) if L >= W else (W, L)
-    if long_ * short * t * alt_d * 1e-9 >= stated * 0.95:
-        return None                                   # the recorded blank already carries the weight
-    w_impl = stated / (long_ * t * alt_d * 1e-9)
-    if not (short * 1.5 < w_impl <= long_):
-        return None
-    new = (long_, round(w_impl, 1)) if L >= W else (round(w_impl, 1), long_)
-    rec = {"recorded_mm": [L, W], "provisional_mm": list(new), "material_read": alt,
-           "evidence_parts": list(pmm.get("parts") or []), "stated_kg": stated, "gauge_mm": t}
+    pmm = part.get("_pack_model_material") if isinstance(part.get("_pack_model_material"), dict) else None
+    alt = str((pmm or {}).get("material") or "").upper()
+    alt_d = MATERIAL_DENSITY_KG_PER_M3.get(alt) or MATERIAL_DENSITY_KG_PER_M3.get(alt.replace(" ", "_"))
+    related = [r for r in (part.get("_related_measured_blanks") or []) if isinstance(r, dict)]
+    rel_txt = ""
+    if related:
+        ws = sorted(float(r["short_mm"]) for r in related if _safe_float(r.get("short_mm")))
+        if ws:
+            rel_txt = (f" Measured parts of the same material and gauge on this pack: "
+                       f"{', '.join(str(r.get('part_number')) for r in related[:6])}, "
+                       f"{ws[0]:.0f}-{ws[-1]:.0f} mm wide.")
+    ext = _model_extents_mm(part)
+    if ext and ext[1] > short * 1.5 and ext[0] >= long_ * 0.9:
+        # (2) THE MODEL'S OWN EXTENTS: the envelope the part is cut from, measured.
+        new_ext = (ext[0], ext[1]) if L >= W else (ext[1], ext[0])
+        rec = {"basis": "model_extents", "recorded_mm": [L, W], "provisional_mm": list(new_ext),
+               "measured_mm": list(ext), "inferred_mm": []}
+        why = (f"PROVISIONAL BLANK {new_ext[0]:g} x {new_ext[1]:g} mm from the part's measured "
+               f"model extents — recorded {L:g} x {W:g} had no measured outline. Extents are the "
+               f"envelope the part is cut from, not its flat; a folded part unfolds larger.{rel_txt}")
+        src = "model_extents_provisional"
+        question = (f"Blank of {part.get('part_number')}: no cut outline — priced on its model "
+                    f"extents {new_ext[0]:g} x {new_ext[1]:g} mm")
+    else:
+        if not (pmm and alt_d):
+            return None
+        if long_ * short * t * alt_d * 1e-9 >= stated * 0.95:
+            return None                               # the recorded blank already carries the weight
+        area_m2 = stated / (t * alt_d * 1e-9) / 1e6
+        w_impl = stated / (long_ * t * alt_d * 1e-9)
+        if not (short * 1.5 < w_impl <= long_):
+            return None
+        tol = float(getattr(config, "MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT", 8.0)) / 100.0
+        new_ext = (long_, round(w_impl, 1)) if L >= W else (round(w_impl, 1), long_)
+        rec = {"basis": "mass_implied_area", "recorded_mm": [L, W], "provisional_mm": list(new_ext),
+               "measured_mm": [long_], "inferred_mm": [round(w_impl, 1)], "net_area_m2": round(area_m2, 4),
+               "area_range_m2": [round(area_m2 * (1 - tol), 4), round(area_m2 * (1 + tol), 4)],
+               "material_read": alt, "evidence_parts": list(pmm.get("parts") or []),
+               "stated_kg": stated, "gauge_mm": t}
+        why = (f"MATERIAL-AREA ALLOWANCE, NOT A MEASURED BLANK — {part.get('part_number')} has no "
+               f"measured outline and no model extents. MEASURED/RECORDED: the {long_:g} mm length. "
+               f"INFERRED: a net area of {area_m2:.3f} m² (range {rec['area_range_m2'][0]:.3f}-"
+               f"{rec['area_range_m2'][1]:.3f} m² on the {tol * 100:.0f}% tolerance), from the "
+               f"sheet's {stated:.3f} kg read in {alt.lower()} — the material this pack's model "
+               f"printed its weights in, shown by {', '.join(rec['evidence_parts'][:6])} — at "
+               f"{t:g} mm. Carried as an equivalent rectangle {new_ext[0]:g} x {new_ext[1]:g} mm so "
+               f"the sheet can nest it: a weight gives an area, not a shape, so the real envelope "
+               f"and its nesting yield are unknown and probably larger, and the cut length is not "
+               f"taken from this rectangle.{rel_txt}")
+        src = "mass_implied_area_allowance"
+        question = (f"Blank of {part.get('part_number')}: not measured — material priced as an "
+                    f"area allowance of {area_m2:.3f} m² ({new_ext[0]:g} x {new_ext[1]:g} mm "
+                    f"equivalent rectangle) inferred from its sheet's weight")
     part["_blank_provisional"] = rec
-    ng["blank_length_mm"], ng["blank_width_mm"] = new
-    ng["blank_length_mm_source"] = ng["blank_width_mm_source"] = "mass_implied_provisional"
-    part["blank_length_mm"], part["blank_width_mm"] = new
-    why = (f"PROVISIONAL BLANK {new[0]:g} x {new[1]:g} mm — recorded {L:g} x {W:g} was not measured "
-           f"(no cut outline); the {long_:g} mm side is the recorded figure, the {w_impl:.0f} mm side "
-           f"is INFERRED: the sheet's {stated:.3f} kg read in {alt.lower()} — the material this pack's "
-           f"model printed its weights in, shown by {', '.join(rec['evidence_parts'][:6])} — at {t:g} mm "
-           f"is {stated / (t * alt_d * 1e-9) / 1e6:.3f} m² of plate, an equivalent rectangle. A shaped "
-           f"part's own envelope is wider, so this is a working figure, not a measurement")
+    part["blank_is_inferred"] = True
+    part["blank_inferred_reason"] = why
+    ng["blank_length_mm"], ng["blank_width_mm"] = new_ext
+    ng["blank_length_mm_source"] = ng["blank_width_mm_source"] = src
+    part["blank_length_mm"], part["blank_width_mm"] = new_ext
+    part["blank_length_mm_source"] = part["blank_width_mm_source"] = src
     part.setdefault("review_flags", []).append(why)
     try:
         from source_precedence import raise_manufacturing_question as _ask
-        _ask(part, f"Blank of {part.get('part_number')}: not measured — priced on a provisional "
-                   f"{new[0]:g} x {new[1]:g} mm inferred from its sheet's weight",
-             why, "confirm the blank from the model or a DXF with the cut outline; the material and "
-                  "the cut both follow it", "estimator._apply_mass_implied_blank")
+        _ask(part, question, why,
+             "confirm the blank from the model or a DXF with the cut outline; the material and "
+             "the cut both follow it", "estimator._apply_mass_implied_blank")
     except Exception:                                                 # noqa: BLE001
         pass
     return rec
+
+
+def related_measured_blanks(parts: List[Dict[str, Any]]) -> None:
+    """Stamp on each sheet part the measured blanks of the OTHER parts of the same material and
+    gauge on the pack (D-454) — related geometry a provisional figure is read beside."""
+    import blank_credibility as _bc
+    groups: Dict[Tuple[str, float], List[Dict[str, Any]]] = {}
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        mat = str(p.get("normalized_material") or "").upper()
+        t = _safe_float(p.get("normalized_thickness_mm"))
+        if mat and t:
+            groups.setdefault((mat, round(t, 2)), []).append(p)
+    for members in groups.values():
+        measured = []
+        for p in members:
+            if not _bc.blank_is_measured(p):
+                continue
+            ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"), dict) else {}
+            L = _safe_float(ng.get("blank_length_mm") or p.get("blank_length_mm"))
+            W = _safe_float(ng.get("blank_width_mm") or p.get("blank_width_mm"))
+            if L and W:
+                measured.append({"part_number": p.get("part_number"), "long_mm": max(L, W),
+                                 "short_mm": min(L, W)})
+        for p in members:
+            others = [m for m in measured if m["part_number"] != p.get("part_number")]
+            if others:
+                p["_related_measured_blanks"] = others
+
 
 def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
     """The blank at the charged gauge against the sheet's stated weight (D-392), or None.
@@ -6952,39 +7044,11 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _peg_family_punch_cycle(part: Dict[str, Any]):
-    """Machine-measured TruPunch cycle time for known peg-family panels.
-
-    These parts are punched (cluster + tooth + perimeter tooling), but the DXF/PDF
-    under-reads their perforation so the hole-count punch model collapses to ~0.
-    Returns (minutes, basis_note) keyed on description/PN + panel size, or None.
-    1m values are measured from TruPunch setup plans; 500mm is scaled x0.65.
-    """
-    table = getattr(config, "PUNCH_CYCLE_TIME_MIN", {}) or {}
-    blob = (str(part.get("description") or "") + " " + str(part.get("part_number") or "")).upper()
-    if "HALF PEG" in blob or "HALF HEIGHT PEG" in blob:
-        family = "HALF_PEG"
-    elif "PEG PANEL" in blob or "PEG METAL" in blob or "PEG" in blob:
-        family = "PEG_PANEL"
-    elif "BASE PLATE" in blob:
-        family = "BASE_PLATE"
-    else:
-        return None
-    sizes = table.get(family) or {}
-    if "1000MM" in blob or "1000 MM" in blob or " 1M " in (" " + blob + " "):
-        size = "1000mm"
-    elif "500MM" in blob or "500 MM" in blob:
-        size = "500mm"
-    else:
-        return None  # size not stated -- do not guess
-    minutes = sizes.get(size)
-    if not minutes:
-        return None
-    basis = (
-        f"Punch {minutes} min/part: TruPunch 1000 machine cycle, {family} {size} "
-        f"({'measured 1m plan' if size == '1000mm' else 'scaled x0.65 from 1m plan'}); "
-        f"DXF/PDF under-reads perforation -- verify with CNC programmer."
-    )
-    return (float(minutes), basis)
+    """None (D-454). This returned one job family's TruPunch cycle times for any part whose
+    description said PEG or BASE PLATE and 500MM / 1000MM. A measured cycle belongs to the
+    part it was measured on — an estimator-confirmed time on that job — and the punch model
+    (hits and perimeter) prices everything else."""
+    return None
 
 
 def _is_punch_part(part: Dict[str, Any], holes: int, desc_blob: str) -> bool:
@@ -10803,42 +10867,13 @@ def extract_bought_in_from_pages(
     secondary = " ".join(_page_text_for_bought_in_scan(p) for p in pages)
     all_text = (primary + " " + secondary).upper()
 
-    patterns: List[Tuple[str, str, str, int]] = [
-        (r"(\d+)?\s*(SHFP28|UKPOS[:.\s-]*SHFP28)", "SHFP28", "Pusher and Guide Rail 28mm", 4),
-        (r"(\d+)?\s*(MAGNET23)", "MAGNET23", "Magnet 20mm DIA x 5mm", 6),
-        (r"(\d+)?\s*(DBR39|VKF[:.\s-]*DBR39)", "VKF DBR39", "39mm Scanner Profile 280mm", 2),
-        (r"(\d+)?\s*(DBR18|VKF[:.\s-]*DBR18)", "VKF DBR18", "18mm Scanner Profile 280mm", 2),
-        (r"(\d+)?\s*(FIXING1784|RUBUSECSTRIP)", "FIXING1784", "Edging Seal Rubusecstrip 10m", 1),
-        (r"(\d+)?\s*(FIXING47|NUTSERT\s*M4|M4\s+THIN\s+SHEET)", "FIXING47", "M4 Thin Sheet Nutsert", 6),
-        (r"(\d+)?\s*(FIXING1067|BOLT\s*M4|M4\s*x\s*20)", "FIXING1067", "M4 x 20mm C/Snk Bolt", 6),
-        (r"(\d+)?\s*(PALLET1|PALLET\b)", "PALLET1", "Pallet", 1),
-        (r"(\d+)?\s*(BOX[- ]?296\s*[xX×]\s*404\s*[xX×]\s*40|BOX-296x404x40)", "BOX-296x404x40", "Box 296w x 404d x 40h", 1),
-    ]
-
+    # NO JOB'S ITEMS ARE LISTED HERE (D-454). A table of one job's bought-ins (a pusher rail,
+    # magnets, scanner profiles, nutserts, a box size) with invented default quantities ran on
+    # every job's text and matched loose words like "PALLET" and "M4 x 20" anywhere. Bought-in
+    # items are recognised by their exact SDI code with the BOM's own quantity, below.
     bought_in: List[Dict[str, Any]] = []
-    seen_codes: set[str] = set()
-
-    for regex, code, desc, default_qty in patterns:
-        pn_key = code.strip().upper()
-        if pn_key in existing_pns or code in seen_codes:
-            continue
-        matches = re.findall(regex, all_text, flags=re.IGNORECASE)
-        if not matches:
-            continue
-        seen_codes.add(code)
-
-        qty = default_qty
-        first = matches[0]
-        if isinstance(first, tuple):
-            lead = first[0] if first else ""
-            if lead and str(lead).strip().isdigit():
-                qty = int(str(lead).strip())
-
-        bought_in.append(_bought_in_part_stub(code, desc, qty))
-
     # General SDI-coded bought-in recognition (FIXING/VINYL/PRINT/SUBPLAS/POWDER by exact UDEF
-    # code). Runs AFTER the hard-coded patterns and dedups against both existing parts and the
-    # codes the patterns already produced, so nothing is double-counted. This is what catches
+    # code), deduped against the existing parts so nothing is double-counted. This is what catches
     # the per-job fixings & vinyl (FIXING125, VINYL76, ...) generically, no enumeration needed.
     _already = set(existing_pns) | {str(b.get("part_number", "")).strip().upper() for b in bought_in}
     _bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []

@@ -2781,9 +2781,13 @@ def canonicalise_part_estimates_for_workbook(
         # asked here too, where it is born, and the node is recorded as an alias.
         try:
             from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
+            # ...and only where it is the SAME occurrence (D-454): a node listed under a parent
+            # the held line was never listed under is the same item somewhere else.
             _host = next((k for k, v in normalised.items()
                           if _one_cell(identity, node.get("description"),
-                                       v.get("part_number") or k, v.get("description"))), None)
+                                       v.get("part_number") or k, v.get("description"))
+                          and _same_occ(node, v)), None)
         except Exception:                                        # noqa: BLE001
             _host = None
         if _host:

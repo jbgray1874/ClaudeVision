@@ -239,7 +239,9 @@ def test_the_businesss_rates_price_the_counted_shipment_at_every_break(monkeypat
     assert got["source_class"] == "sdi_commercial_rate"
     # pallet_per_bay 20 x 2 + wrap 6.5 x 2 = 53; the haulage/booking keys are DELIVERY's words
     assert got["order_gbp"] == 53.0, got
-    assert got["order_gbp_at_breaks"] == {1: 26.5, 5: 53.0, 50: 344.5}, got["order_gbp_at_breaks"]
+    # Every break the other bases price is priced here too (D-454); the asked ones are exact.
+    assert {q: got["order_gbp_at_breaks"][q] for q in (1, 5, 50)} == {1: 26.5, 5: 53.0, 50: 344.5}, \
+        got["order_gbp_at_breaks"]
     assert "pallet_per_bay GBP 20.00 x 2 pallets" in got["working"]
     cl._LIVE_RATE_CACHE.clear()
     dlv = cl._sdi_live_rate("DELIVERY", order)
