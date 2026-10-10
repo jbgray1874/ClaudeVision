@@ -1907,6 +1907,16 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
     if not isinstance(summary, dict):
         return _unevaluated("blank_vs_cut_path", "This job is not a readable structure.")
     parts = _parts(summary)
+    # THE BLANK THE MONEY CAME FROM (D-450). The raw record holds the first reading of a
+    # blank — on 8188-08-011 a 30 x 6 read off the page — while the costed record's
+    # material_estimate holds the DXF flat the sheet charged (157 x 745). A check about the
+    # money reads the costed record where one exists; blank_dimensions already prefers it.
+    _canon: Dict[str, Any] = {}
+    _es0 = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    for _lst in (_es0.get("canonical_part_estimates"), _es0.get("part_estimates")):
+        for _rec in (_lst or []):
+            if isinstance(_rec, dict) and _rec.get("part_number"):
+                _canon.setdefault(str(_rec["part_number"]).strip().upper(), _rec)
     if not parts:
         return []
 
@@ -1951,7 +1961,7 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         except Exception:                                            # noqa: BLE001
             pass
         import costed_facts as _cf
-        _blank = _cf.blank_dimensions(part)
+        _blank = _cf.blank_dimensions(_canon.get(str(part.get('part_number') or '').strip().upper()) or part)
         length = _blank["length_mm"] or 0.0
         width = _blank["width_mm"] or 0.0
         if _blank["conflict"]:

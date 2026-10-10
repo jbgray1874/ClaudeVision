@@ -152,3 +152,24 @@ def test_the_inference_says_it_is_inferred_and_what_it_rests_on():
     sr.apply_size_readings([mag, _made(2608.0)], summary)
     flag = " ".join(str(f) for f in mag["review_flags"])
     assert "inferred, not confirmed" in flag and "density" in flag
+
+
+def test_a_late_record_is_read_before_it_is_costed(monkeypatch):
+    """The 10:12 book: KINGDOM is a row only the table reader saw, appended after costing, so
+    the resolver that ran before costing never met it. The late pass reads it too."""
+    asked = {}
+
+    def _resolve(part):
+        asked["description"] = part.get("price_chain_description") or part.get("description")
+        return {"result": {"selected": {"source": "web", "price": 0.9}},
+                "applied_unit_cost": 0.9, "matched_part_code": "KINGDOM"}
+    monkeypatch.setattr(estimator, "_resolve_part_system_cost", _resolve)
+    made = dict(_made(2608.0), cost_breakdown={"total": 1.0})      # already costed
+    late = _magnet()
+    summary = {"estimate_summary": {"part_estimates": [made, late]},
+               "pages": [{"page_number": "1", "pypdf_text": "WEIGHT: 43631.32g"}]}
+    assert estimator.cost_uncosted_bought_in_records(summary) == 1
+    pe = summary["estimate_summary"]["part_estimates"][1]
+    assert asked["description"] == "50mm x 10mm x 2mm MAGNET"
+    assert pe["_price_unresolved"]["inferred_text"] == "50mm x 10mm x 2mm"
+    assert pe["material_estimate"]["unit_material_cost_gbp"] == 0.9

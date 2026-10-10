@@ -3016,8 +3016,13 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
     and the question is raised. No figure moves."""
     try:
         ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
-        L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
-        W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+        # THE BLANK THE MONEY CAME FROM (D-450). 8188-08-011 was checked as a 30 x 6 blank —
+        # a size read off the page — while its material was costed on the 157 x 745 DXF flat;
+        # the check contradicted the sheet beside it. estimate_part stamps the costed blank
+        # before the process pass, and that is what is weighed.
+        _cb = part.get("_costed_blank_mm") if isinstance(part.get("_costed_blank_mm"), (list, tuple)) else None
+        L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+        W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
         t = _safe_float(part.get("normalized_thickness_mm"))
         stated = _stated_weight_kg_for_part(part)
         if not (L and W and t and stated) or L <= 0 or W <= 0 or t <= 0 or stated <= 0:
@@ -5733,7 +5738,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _ext = _unit * quantity
             _mass = _wl / 1000.0 / _mpt * 1000.0
         part.setdefault("review_flags", []).append(
-            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at £{_rate_t:.0f}/t"
+            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at the config rate "
+            f"£{_rate_t:.0f}/t (the sheet's own Wire Cost Per Tonne cell recalculates the row)"
             + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
                "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
                if _length_assumed else
@@ -8964,6 +8970,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             "top-level unit/GA line (…-00-…) treated as assembly parent — material carried "
             "by children, fabrication route suppressed; estimator to verify")
     material = estimate_material(part)
+    # THE BLANK THE MATERIAL WAS COSTED ON, for every later check on this part (D-450).
+    try:
+        _mbl, _mbw = _safe_float(material.get("blank_length_mm")), _safe_float(material.get("blank_width_mm"))
+        if _mbl and _mbw and _mbl > 0 and _mbw > 0:
+            part["_costed_blank_mm"] = [_mbl, _mbw]
+    except Exception:                                                # noqa: BLE001
+        pass
     material = _price_declared_material_layers(part, material)
     if debug:
         print(f"[DEBUG] estimate_part material done {part_number}")
@@ -11421,6 +11434,20 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
     _late = [r for r in _pes if isinstance(r, dict) and r.get("cost_breakdown") is None
              and r.get("part_number")]
     if _late:
+        # A RULE RUNS WHERE THE LIVE RUN MEETS THE PART (D-433) — AND THE MAGNET IS A LATE
+        # RECORD. 8188-08's KINGDOM row is one only the table reader saw, appended here after
+        # costing, so the size resolver that ran before costing (D-445) never met it and the
+        # 10:12 book still priced fourteen two-metre bars. The late records are read against
+        # the job's yardsticks before they are costed, with every record as the measure.
+        try:
+            from size_reading import apply_size_readings as _size_late
+            _n_sz = _size_late(_late if not isinstance(_pes, list) else _pes, summary)
+            if _n_sz:
+                print(f"   [size] {_n_sz} late purchased line(s) read at the one size the job "
+                      f"allows; priced at that reading, still to confirm", flush=True)
+        except Exception as _sz_exc:                                 # noqa: BLE001
+            print(f"   [size] late two-unit sizes not resolved ({type(_sz_exc).__name__}: "
+                  f"{_sz_exc})", flush=True)
         try:
             from third_party_supply import mark_third_party_supplied
             _tp = mark_third_party_supplied(_late, summary)

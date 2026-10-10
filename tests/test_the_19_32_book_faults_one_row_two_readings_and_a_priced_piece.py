@@ -116,3 +116,16 @@ def test_a_second_spelling_of_one_priced_line_is_counted_once():
         {"part_number": "KINGDOM:", "_price_unresolved": _MARK, "material_estimate": {"unit_material_cost_gbp": 48.5}}]}}
     v = invariants.check_an_unresolved_reading_blocks_the_quote(summary)
     assert v[0]["detail"]["count"] == 1
+
+
+def test_the_writeups_minter_does_not_mint_a_whole_cell_reading_of_a_held_row():
+    """The 10:12 book: the reconcile asked the rule, but the record was already born in the
+    writeup's minter, keyed on the exact code. The minter asks it too."""
+    import document_builder as db
+    held = [{"part_number": "FIXING M6x12mm", "description": "THREADED INSERT, HEADED HEX DRIVE",
+             "quantity": 4, "page_roles": ["bought_in"]}]
+    rows = [{"part_number": "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE",
+             "description": "THREADED INSERT, HEADED HEX DRIVE", "quantity": 4, "bom_parent": "8188-08-SA03"},
+            {"part_number": "KINGDOM:", "description": "50mm x 10mm x 2m MAGNET", "quantity": 14}]
+    minted = db.bought_in_rows_without_records(rows, held)
+    assert [m["part_number"] for m in minted] == ["KINGDOM:"], minted
