@@ -28,6 +28,7 @@ estimator changing the quantity can see what the number was built from.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 import config
@@ -225,10 +226,21 @@ def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
     from price_provenance import stamp_source_name as _stamp_source_name
     try:
         from web_ai_price_lookup import lookup_web_ai_price as _look
+        # THE WHOLE ORDER, AND THE QUESTION AS WRITTEN (D-448). The brief said "priced FOR
+        # THE WHOLE ORDER of N units" and the researcher handed the model quantity 1 and no
+        # question; the model priced one unit's packaging and the line divided it by N.
+        _oq = brief.get("order_quantity")
+        try:
+            _oq = max(1, int(float(_oq))) if _oq is not None else 1
+        except (TypeError, ValueError):
+            _oq = 1
+        _desc = str(brief.get("description") or "")
+        if brief.get("ask"):
+            _desc = f"{_desc} — {brief['ask']}"
         found = _look({"material": str(brief.get("code") or "").title(),
-                       "description": brief.get("description"),
+                       "description": _desc,
                        "part_code": brief.get("code"),
-                       "quantity": 1,
+                       "quantity": _oq,
                        "wanted_unit": "order"},
                       enable_web_search=True, enable_llm_estimate=True) or {}
     except Exception:                                            # noqa: BLE001
@@ -487,6 +499,89 @@ def _held_rate(key: str) -> Optional[float]:
     return v if v > 0 else None
 
 
+_LIVE_RATE_CACHE: Dict[str, Any] = {}
+
+
+def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """SDI Live's own figure for a commercial line, or None (D-448).
+
+    First AIEstimating.vCurrentCommercialRate: a rate the business entered whose key names
+    this line (packaging_per_order, delivery_per_order, carriage ...), per order. Then the
+    history: dbo.historical_quote_material_line rows whose description carries this line's
+    words (config COMMERCIAL_HISTORY_WORDS), this customer's quotes first, then anyone's, the
+    median of the most recent config COMMERCIAL_HISTORY_MAX_ROWS lines, per unit, times the
+    order quantity — with the quotes it came from named on the line. Offline, or with no DB,
+    None: the market rung follows as before. Memoised per code and customer for the run."""
+    key = f"{code}|{order.get('customer') or ''}|{order.get('order_quantity') or 1}"
+    if key in _LIVE_RATE_CACHE:
+        return _LIVE_RATE_CACHE[key]
+    result: Optional[Dict[str, Any]] = None
+    conn = None
+    if not str(os.getenv("SDI_OFFLINE", "")).strip().lower() in {"1", "true", "yes"}:
+        try:
+            from estimator import _get_pricing_service as _gps      # the engine's one handle
+            ps = _gps()
+            conn = ps._get_db_connection() if ps is not None else None
+        except Exception:                                            # noqa: BLE001
+            conn = None
+    if conn is not None:
+        qty = max(1, int(_num(order.get("order_quantity")) or 1))
+        words = tuple(str(w).upper() for w in
+                      ((getattr(config, "COMMERCIAL_HISTORY_WORDS", {}) or {}).get(code) or (code,)))
+        try:
+            cur = conn.cursor()
+            # 1. a rate the business entered
+            try:
+                cur.execute("SELECT rate_key, value_gbp FROM AIEstimating.vCurrentCommercialRate")
+                for rk, val in cur.fetchall() or []:
+                    up = str(rk or "").upper()
+                    v = _num(val)
+                    if v and any(w in up for w in words) and ("ORDER" in up or "PER_JOB" in up):
+                        result = {"order_gbp": round(v, 2), "source_class": "sdi_commercial_rate",
+                                  "source_name": f"AIEstimating.CommercialRate {rk}",
+                                  "working": f"{rk} = GBP {v:,.2f} per order", "rows": []}
+                        break
+            except Exception:                                        # noqa: BLE001
+                pass
+            # 2. what past quotes charged
+            if result is None:
+                like = " OR ".join("UPPER(hml.line_description) LIKE ?" for _ in words)
+                n = int(getattr(config, "COMMERCIAL_HISTORY_MAX_ROWS", 12) or 12)
+                cur.execute(
+                    f"""SELECT TOP ({n}) hml.line_description, hml.unit_price_gbp, hh.drawing_number,
+                               hh.quote_date, hh.customer_name
+                        FROM dbo.historical_quote_material_line hml
+                        LEFT JOIN dbo.historical_quote_header hh ON hml.quote_id = hh.quote_id
+                        WHERE hml.unit_price_gbp IS NOT NULL AND hml.unit_price_gbp > 0 AND ({like})
+                        ORDER BY CASE WHEN UPPER(ISNULL(hh.customer_name, '')) = ? THEN 0 ELSE 1 END,
+                                 CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                                 hh.quote_date DESC""",
+                    *[f"%{w}%" for w in words], str(order.get("customer") or "").upper())
+                rows = [r for r in (cur.fetchall() or []) if _num(r[1])]
+                if rows:
+                    cust = str(order.get("customer") or "").upper()
+                    own = [r for r in rows if str(r[4] or "").upper() == cust] if cust else []
+                    use = own or rows
+                    prices = sorted(float(r[1]) for r in use)
+                    median = prices[len(prices) // 2] if len(prices) % 2 else \
+                        (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2.0
+                    jobs = ", ".join(str(r[2] or "?") for r in use[:6])
+                    result = {"order_gbp": round(median * qty, 2),
+                              "source_class": "sdi_history",
+                              "source_name": f"SDI Live history: {len(use)} {'own' if own else 'any-customer'} quote line(s)",
+                              "working": (f"median GBP {median:,.2f} a unit of {len(use)} "
+                                          f"{code.lower()} line(s) in SDI Live"
+                                          + (f" for {order.get('customer')}" if own else " (any customer)")
+                                          + f" ({jobs}) x {qty} units"),
+                              "rows": [{"description": str(r[0] or ""), "unit_price_gbp": float(r[1]),
+                                        "drawing_number": str(r[2] or ""), "quote_date": str(r[3] or ""),
+                                        "customer": str(r[4] or "")} for r in use]}
+        except Exception:                                            # noqa: BLE001
+            result = None
+    _LIVE_RATE_CACHE[key] = result
+    return result
+
+
 def _line(code: str, order: Dict[str, Any], description: str,
           held_key: str) -> Dict[str, Any]:
     qty = order.get("order_quantity") or 1
@@ -546,6 +641,18 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["method_source"] = _method.get("method_source")
         if _method.get("inferred_step_note"):
             out["inferred_step"] = True
+    elif _sdi_live_rate(code, order) is not None:
+        # SDI LIVE'S OWN FIGURE BEFORE THE MARKET (D-448): a rate the business has entered in
+        # AIEstimating.CommercialRate, else what past quotes charged for this line — the same
+        # customer first, then anyone — as a median of recent lines with the jobs named. A
+        # figure the business has already stood behind beats a researched one, and it is the
+        # same every run.
+        _live = _sdi_live_rate(code, order)
+        _order_gbp, _src = _live["order_gbp"], {
+            "source_class": _live["source_class"], "reproducible": True, "indicative": True,
+            "source_name": _live["source_name"]}
+        out["history_working"] = _live.get("working")
+        out["history_rows"] = _live.get("rows")
     else:
         # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────
         #
@@ -670,8 +777,9 @@ def shipment_shape(order: Dict[str, Any]) -> str:
     return "pallet"
 
 
-def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
+    order["customer"] = str(customer or "").strip()
     size = order.get("largest_part_mm")
     where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
     weight = (f"about {order['order_weight_kg']:.0f} kg total, "
@@ -687,8 +795,9 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
                  "PACKAGING")
 
 
-def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
+    order["customer"] = str(customer or "").strip()
     weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
               else "a part pallet")
     ship = order.get("shipment") or {}

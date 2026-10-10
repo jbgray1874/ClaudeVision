@@ -5824,6 +5824,8 @@ def compile_job_route(
     # on its members' own lines (D-387). Both leave the ruled-out decision and its reason.
     _member_finish_weld_is_the_assemblys(decisions, graph, issues)
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
+    # A bond, a coat or a routing is charged at one level of the tree (D-446).
+    _withhold_duplicate_level_ops(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -6447,6 +6449,106 @@ def _withhold_coats_with_nothing_to_coat(decisions: Sequence[Any], graph: Mappin
         if issues is not None:
             issues.append({"code": "coat_with_nothing_to_coat", "operation": _op, "part": _tid,
                            "members": _classes})
+    return withheld
+
+
+def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                  issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """An operation is charged at one level of the tree (D-446).
+
+    8188-08, the 19:32 book: Glue on 8188-08_GA (the acrylic route's inference) and again on
+    SA03 and SA04 (their sheets say BONDED); Wet Spray on SA04 and again on its member 013
+    (whose own sheet states WET SPRAYED); CNC Joinery on SA03 (the board-material default,
+    "unmeasured_default") and again, measured, on its MDF child 010. Each pair was raised as a
+    decision for an estimator. The pack decides most of them: a bond, a coat, a routing is done
+    once to a thing, and where an assembly and its members both carry one of config
+    ONE_LEVEL_OPERATIONS, the side whose evidence is weaker — a page word or a material default
+    against a stated finish or a measured time — is ruled out with the reason. Where the
+    evidence is equal the members keep it (the work is on the members; they already carry it)
+    and the assembly stands down. Nothing is deleted: the ruled-out decision keeps its reason
+    and the status provenance names this rule. A welded assembly's coat and powder have their
+    own rules and are not touched here.
+    """
+    try:
+        import config as _cfg
+        from source_precedence import rank as _rank
+    except Exception:                                                # pragma: no cover
+        return []
+    ops = {str(o).lower() for o in (getattr(_cfg, "ONE_LEVEL_OPERATIONS", None)
+                                    or ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic"))}
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    children = graph.get("children") or {}
+
+    def _descendants(_pn: str, _depth: int = 0) -> List[str]:
+        out: List[str] = []
+        for _k in (children.get(_pn) or {}):
+            out.append(str(_k))
+            if _depth < 8:
+                out.extend(_descendants(str(_k), _depth + 1))
+        return out
+
+    stated = {str(s).lower() for s in (getattr(_cfg, "ONE_LEVEL_STATED_SOURCES", None)
+                                        or ("drawing_notes", "drawing_deterministic", "dxf",
+                                            "dxf_geometry", "solidworks", "finish_field"))}
+
+    def _one(_src: Any) -> int:
+        _s = str(_src or "").lower()
+        # 2: the sheet, the flat or the model states it; 1: inferred, defaulted, or unknown.
+        # source_precedence's rank is honoured where it already places a reader above inference.
+        return 2 if (_s in stated or (_rank(_s) or 0) > (_rank("inference") or 0)) else 1
+
+    def _strength(_d: Any) -> int:
+        best = _one(getattr(_d, "source", ""))
+        for _c in (getattr(_d, "claims", None) or []):
+            if isinstance(_c, Mapping) and str(_c.get("status") or "").upper() == REQUIRED.upper():
+                best = max(best, _one(_c.get("source")))
+        return best
+
+    required = [d for d in decisions if d.status == REQUIRED and str(d.operation or "").lower() in ops]
+    by_target: Dict[Tuple[str, str], List[Any]] = {}
+    for d in required:
+        by_target.setdefault((str(d.target_id or ""), str(d.operation or "").lower()), []).append(d)
+    withheld: List[str] = []
+    for d in list(required):
+        if d.status != REQUIRED:
+            continue
+        _op = str(d.operation or "").lower()
+        _tid = str(d.target_id or "")
+        if kinds.get(_tid) != "assembly":
+            continue
+        below = [(k, dd) for k in _descendants(_tid) for dd in by_target.get((k, _op), []) if dd.status == REQUIRED]
+        if not below:
+            continue
+        parent_s = _strength(d)
+        child_s = max(_strength(dd) for _, dd in below)
+        words = _op.replace("_", " ")
+        if parent_s > child_s:
+            # the assembly's evidence is the stronger (its sheet states the finish; the members
+            # carry an inference): the members stand down
+            for k, dd in below:
+                dd.status = NOT_APPLICABLE
+                dd.reason = ((f"{dd.reason}; " if dd.reason else "")
+                             + f"{words} is charged once, on {_tid}, whose evidence for it is the "
+                               f"stronger ({d.source}); this member's ({dd.source}) is the weaker reading "
+                               f"of the same work")
+                dd.field_provenance["status"] = "operation_charged_at_one_level"
+                withheld.append(k)
+                if issues is not None:
+                    issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                                   "part": k, "kept_on": _tid})
+            continue
+        kept = ", ".join(sorted({k for k, _ in below}))
+        d.status = NOT_APPLICABLE
+        d.reason = ((f"{d.reason}; " if d.reason else "")
+                    + f"{words} is charged once, on the member(s) that carry it ({kept}); "
+                    + (f"this assembly's evidence ({d.source}) is the weaker reading of the same work"
+                       if parent_s < child_s else
+                       f"the evidence is equal on both and the work is on the members"))
+        d.field_provenance["status"] = "operation_charged_at_one_level"
+        withheld.append(_tid)
+        if issues is not None:
+            issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                           "part": _tid, "kept_on": kept})
     return withheld
 
 

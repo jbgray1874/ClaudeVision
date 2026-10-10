@@ -4931,6 +4931,16 @@ def _finalize_scan_summary(
     except Exception as _wire_exc:                                  # noqa: BLE001
         print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
               flush=True)
+    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
+    try:
+        from size_reading import apply_size_readings as _size_readings
+        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
+        if _n_sz:
+            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
+                  f"priced at that reading, still to confirm", flush=True)
+    except Exception as _sz_exc:                                    # noqa: BLE001
+        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
+              flush=True)
     # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
     try:
         from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets

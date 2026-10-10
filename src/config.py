@@ -676,6 +676,45 @@ BOUGHT_IN_STOCK_BY_LENGTH_WORDS = ("EXTRUSION", "PROFILE", "TUBE", "BAR", "ROD",
 CUT_LENGTH_WORDS = ("LENGTH", "LGTH", "LG", "LONG", "L")
 UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LENGTH")
 
+# A PURCHASED LINE'S WORDS NAME ITS MATERIAL (D-445, size_reading): the word on the line ->
+# the MATERIAL_DENSITY_KG_PER_M3 key, so a reading of its size can be weighed against the
+# heaviest thing the pack states. Only used to refute a reading, never to price one.
+PURCHASED_MATERIAL_WORDS = {"MAGNET": "MAGNET", "MAGNETS": "MAGNET", "MAGNETIC": "MAGNET",
+                            "NEODYMIUM": "NEODYMIUM", "FERRITE": "FERRITE",
+                            "STEEL": "MILD STEEL", "STAINLESS": "STAINLESS STEEL",
+                            "ALUMINIUM": "ALUMINIUM", "ALUMINUM": "ALUMINIUM", "BRASS": "BRASS",
+                            "ACRYLIC": "ACRYLIC", "PERSPEX": "ACRYLIC", "MDF": "MDF",
+                            "PLYWOOD": "PLYWOOD"}
+
+# AN OPERATION CHARGED AT ONE LEVEL OF THE TREE (D-446, route_compiler
+# _withhold_duplicate_level_ops): these are done once to a thing, not once per level of the
+# hierarchy that contains it. Where an assembly and its members both carry one, the side with
+# the weaker evidence (a page word or a material default against a stated finish or a
+# measured time) is ruled out with the reason; where the evidence is equal the members keep
+# it and the assembly stands down. Welds, powder and assembly events have their own rules.
+ONE_LEVEL_OPERATIONS = ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic")
+
+# AN EDGE THE SHEET SAYS THE CUTTER FINISHED NEEDS NO POLISH (D-447, the acrylic route). The
+# acrylic route diamond-polishes every acrylic part (the estimators' own sheets, corpus n=147,
+# say so), and that stands. Where a part's OWN finish or notes state that its edges are finished
+# by the cut — LASERED EDGES, LASER POLISHED — the edge is the finish, and Diamond Polish is
+# ruled out with that reason; a sheet that calls for polish keeps it.
+EDGE_FINISHED_BY_CUT_WORDS = ("LASERED EDGES", "LASERED EDGE", "LASER CUT EDGES", "LASER POLISHED",
+                              "LASER-POLISHED", "FLAME POLISHED EDGES")
+
+# WHICH ROUTE SOURCES STATE AN OPERATION, as against inferring it (D-446): a word on the
+# part's own sheet, a measured flat, the model. Everything else — a page inference, a material
+# default, a route rule — is the weaker evidence when one level of the tree has to stand down.
+ONE_LEVEL_STATED_SOURCES = ("drawing_notes", "drawing_deterministic", "dxf", "dxf_geometry",
+                            "solidworks", "solidworks_applied_material", "finish_field",
+                            "title_block", "drawn_on_sheet")
+
+# PACKAGING AND DELIVERY ARE LOOKED UP IN SDI LIVE'S OWN HISTORY BEFORE THE MARKET (D-448,
+# commercial_lines._history_rate): the words a past quote's line carries for each code.
+COMMERCIAL_HISTORY_WORDS = {"PACKAGING": ("PACKAG", "PACKING", "CARTON", "BOX", "PALLET"),
+                            "DELIVERY": ("DELIVER", "CARRIAGE", "HAULAGE", "TRANSPORT", "FREIGHT")}
+COMMERCIAL_HISTORY_MAX_ROWS = 12
+
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
 # ONE PACK, THREE PRICES. 12349-02 was run three times at 7 off on an unchanged drawing pack
@@ -1983,6 +2022,13 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "ACRYLIC": 1190,
     "PERSPEX": 1190,
     "POLYCARBONATE": 1200,
+    # PURCHASED MAGNETS (D-445, size_reading): used only to refute a reading of a size printed
+    # in two units — "could fourteen of these weigh more than the product?" — so the family's
+    # LIGHTEST common grade is the figure: ferrite. NdFeB is 7,400-7,600.
+    "MAGNET": 4900,
+    "FERRITE": 4900,
+    "NEODYMIUM": 7500,
+    "BRASS": 8500,
     # Physical constants, checkable against any materials datasheet.
     "PETG": 1270,
     "HIPS": 1050,

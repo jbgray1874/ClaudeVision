@@ -2681,7 +2681,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
     part_number = str(part.get("part_number") or "").strip()
     item_number = str(part.get("item_number") or "").strip()
     part_code = part_number or item_number
-    description = str(part.get("description") or "").strip()
+    # THE READING THE PACK ALLOWS IS WHAT THE PRICE CHAIN IS ASKED (D-445). A size printed in
+    # two units, resolved by the job's yardstick (size_reading), is asked of SDI Live and the
+    # market at the inferred reading; the printed description stays on the record.
+    description = str(part.get("price_chain_description") or part.get("description") or "").strip()
     if not part_code and not description:
         return {"result": {}, "applied_unit_cost": None, "matched_part_code": None}
 
@@ -7248,17 +7251,26 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 # more misleading than the figure. So the figure stays in, the line says it is
                 # an unresolved reading, and the customer quote is blocked until a person says
                 # which size it is (invariants.check_an_unresolved_reading_blocks_the_quote).
+                # READ BY WHAT CAN BE, WHERE THE PACK SAYS (D-445). size_reading holds the one
+                # reading the job's yardstick allows; the figure is then that reading's price,
+                # the line says so, and the quote still waits for a person.
+                _inf = part.get("size_reading_inferred") if isinstance(part.get("size_reading_inferred"), dict) else None
                 part["_price_unresolved"] = {
                     "reason": (f"the printed size {_mix['text']} mixes "
-                               f"{' and '.join(_mix['units'])}"),
+                               f"{' and '.join(_mix['units'])}"
+                               + (f" — read as {_inf['text']}: {_inf['why']}" if _inf else "")),
                     "units": list(_mix["units"]),
+                    "inferred_text": (_inf or {}).get("text"),
                     "source": "extractor_patterns.size_mixing_units"}
                 _ask(part,
                      (f"{part.get('part_number')}: the printed size {_mix['text']} mixes "
                       f"{' and '.join(_mix['units'])} — a misprinted unit changes what is bought "
                       f"and its price"),
-                     ("priced on the printed reading as a working figure; the customer quote "
-                      "is blocked until the size is confirmed"),
+                     ((f"read as {_inf['text']} ({_inf['why']}) and priced at that reading as a "
+                       f"working figure; the customer quote is blocked until the size is confirmed")
+                      if _inf else
+                      ("priced on the printed reading as a working figure; the customer quote "
+                       "is blocked until the size is confirmed")),
                      ("confirm the size (for example whether a figure in metres is meant in "
                       "millimetres) and the price that goes with it"),
                      "extractor_patterns.size_mixing_units")
@@ -9227,10 +9239,33 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             _rt.pop("laser_cutting", None)
             _st.pop("laser_cutting", None)
 
-        # FINISH: Diamond Polish for every acrylic part; powder is invalid on acrylic.
-        _rt["diamond_polish"] = round(_rt.get("diamond_polish", 0.0)
-                                      + float(_drv.get("diamond_polish_min_per_part", 0.5)), 4)
-        _st.setdefault("diamond_polish", float(_drv.get("diamond_polish_setup_min", 10.0)))
+        # FINISH: Diamond Polish for every acrylic part (the estimators' own sheets, corpus
+        # n=147) — UNLESS THE SHEET SAYS THE CUT FINISHED THE EDGE (D-447). 8188-08-013's own
+        # finish reads LASERED EDGES: the edge is the finish, and polishing it again is a charge
+        # the sheet rules out (config EDGE_FINISHED_BY_CUT_WORDS). A sheet that calls for polish
+        # keeps it whatever the cutter; a part the text already timed for polish is not timed
+        # twice. Powder is invalid on acrylic.
+        _own_finish_text = " ".join(str(x) for x in (
+            [part.get("finish"), part.get("surface_finish"), part.get("stated_finish"),
+             part.get("finish_text"), part.get("normalized_finish")]
+            + list(part.get("surface_finishes") or []) + list(part.get("process_notes") or []))
+            if x).upper()
+        _cut_words = tuple(str(w).upper() for w in (getattr(config, "EDGE_FINISHED_BY_CUT_WORDS", None) or ()))
+        _edge_said_finished = any(w in _own_finish_text for w in _cut_words)
+        _own_polish = ("diamond_polish" in {str(o).lower() for o in (part.get("textual_operations") or [])}
+                       or "diamond_polish" in _rt)
+        if _own_polish or not _edge_said_finished:
+            if "diamond_polish" not in _rt:
+                _rt["diamond_polish"] = round(float(_drv.get("diamond_polish_min_per_part", 0.5)), 4)
+            _st.setdefault("diamond_polish", float(_drv.get("diamond_polish_setup_min", 10.0)))
+        else:
+            _rt.pop("diamond_polish", None)
+            _st.pop("diamond_polish", None)
+            _said = next(w for w in _cut_words if w in _own_finish_text)
+            _why = (f"the sheet states {_said}: the cut edge is the finish, so Diamond Polish is "
+                    f"not charged on top of it (config EDGE_FINISHED_BY_CUT_WORDS)")
+            part.setdefault("operations_ruled_out", {})["diamond_polish"] = _why
+            part.setdefault("review_flags", []).append(f"no Diamond Polish charged: {_why}")
         # ── THE PEEL ALLOWANCE COMES OFF, BECAUSE THE SHOP SAYS IT IS NOT A THING ──────
         #
         # This booked "peel the protective film" as a Manual Labour (Acrylic) line on
@@ -11672,8 +11707,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # divided EVERY order by one — 400-off packaging landed at GBP 115 a unit
                 # instead of 29 pence.
                 _oq = _commercial_order_quantity(summary)
-                _cline = (_cl.packaging_line(parts, _oq) if _code == "PACKAGING"
-                          else _cl.delivery_line(parts, _oq))
+                _cust = None
+                try:
+                    _cust = job_customer(summary) if summary is not None else None
+                except Exception:                                    # noqa: BLE001
+                    _cust = None
+                _cline = (_cl.packaging_line(parts, _oq, customer=_cust) if _code == "PACKAGING"
+                          else _cl.delivery_line(parts, _oq, customer=_cust))
             except Exception as _cl_exc:                    # noqa: BLE001
                 # THE ONE PATH WITH NO VOICE. A crash here used to land as a bare £0
                 # wearing the ordinary estimator-to-price text — indistinguishable from a
