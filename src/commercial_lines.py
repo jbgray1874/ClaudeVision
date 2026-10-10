@@ -226,19 +226,17 @@ def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
     from price_provenance import stamp_source_name as _stamp_source_name
     try:
         from web_ai_price_lookup import lookup_web_ai_price as _look
-        # THE WHOLE ORDER, AND THE QUESTION AS WRITTEN (D-448). The brief said "priced FOR
-        # THE WHOLE ORDER of N units" and the researcher handed the model quantity 1 and no
-        # question; the model priced one unit's packaging and the line divided it by N.
+        # THE WHOLE ORDER (D-448). The brief said "priced FOR THE WHOLE ORDER of N units" and
+        # the researcher handed the model quantity 1; the model priced one unit's packaging and
+        # the line divided it by N. The question itself is the brief's, composed and refused
+        # on its evidence contract by indicative_price — it is not repeated into the words.
         _oq = brief.get("order_quantity")
         try:
             _oq = max(1, int(float(_oq))) if _oq is not None else 1
         except (TypeError, ValueError):
             _oq = 1
-        _desc = str(brief.get("description") or "")
-        if brief.get("ask"):
-            _desc = f"{_desc} — {brief['ask']}"
         found = _look({"material": str(brief.get("code") or "").title(),
-                       "description": _desc,
+                       "description": brief.get("description"),
                        "part_code": brief.get("code"),
                        "quantity": _oq,
                        "wanted_unit": "order"},
@@ -500,6 +498,7 @@ def _held_rate(key: str) -> Optional[float]:
 
 
 _LIVE_RATE_CACHE: Dict[str, Any] = {}
+_LIVE_RATE_STATUS: Dict[str, str] = {}
 
 
 def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -517,13 +516,16 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return _LIVE_RATE_CACHE[key]
     result: Optional[Dict[str, Any]] = None
     conn = None
+    status = "SDI_OFFLINE: SDI Live not asked"
     if not str(os.getenv("SDI_OFFLINE", "")).strip().lower() in {"1", "true", "yes"}:
         try:
             from estimator import _get_pricing_service as _gps      # the engine's one handle
             ps = _gps()
             conn = ps._get_db_connection() if ps is not None else None
-        except Exception:                                            # noqa: BLE001
+            status = "no SDI Live connection" if conn is None else "asked"
+        except Exception as _exc:                                    # noqa: BLE001
             conn = None
+            status = f"SDI Live not reachable ({type(_exc).__name__})"
     if conn is not None:
         qty = max(1, int(_num(order.get("order_quantity")) or 1))
         words = tuple(str(w).upper() for w in
@@ -543,6 +545,8 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                         break
             except Exception:                                        # noqa: BLE001
                 pass
+            if result is None:
+                status = "no CommercialRate key for this line"
             # 2. what past quotes charged
             if result is None:
                 like = " OR ".join("UPPER(hml.line_description) LIKE ?" for _ in words)
@@ -558,6 +562,8 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                                  hh.quote_date DESC""",
                     *[f"%{w}%" for w in words], str(order.get("customer") or "").upper())
                 rows = [r for r in (cur.fetchall() or []) if _num(r[1])]
+                if not rows:
+                    status += f"; no past quote line carries {'/'.join(w.lower() for w in words)}"
                 if rows:
                     cust = str(order.get("customer") or "").upper()
                     own = [r for r in rows if str(r[4] or "").upper() == cust] if cust else []
@@ -608,10 +614,18 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                               "rows": [{"description": str(r[0] or ""), "unit_price_gbp": float(r[1]),
                                         "drawing_number": str(r[2] or ""), "quote_date": str(r[3] or ""),
                                         "customer": str(r[4] or "")} for r in use]}
-        except Exception:                                            # noqa: BLE001
+        except Exception as _exc:                                    # noqa: BLE001
             result = None
+            status = f"SDI Live query failed ({type(_exc).__name__}: {str(_exc)[:80]})"
+    _LIVE_RATE_STATUS[key] = (f"{result['source_name']}" if result else status)
     _LIVE_RATE_CACHE[key] = result
     return result
+
+
+def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
+    """What the SDI Live rung found for this line, or why nothing — for the line's own note."""
+    key = f"{code}|{order.get('customer') or ''}|{order.get('order_quantity') or 1}"
+    return _LIVE_RATE_STATUS.get(key, "")
 
 
 def _line(code: str, order: Dict[str, Any], description: str,
@@ -721,6 +735,7 @@ def _line(code: str, order: Dict[str, Any], description: str,
             ) or {}
         except Exception:                                        # noqa: BLE001
             _res = {}
+        out["sdi_live_status"] = sdi_live_status(code, order)
         _res_gbp = _num(_res.get("price_gbp"))
         if _res_gbp and _res_gbp > 0:
             _ind = {"order_gbp": round(_res_gbp, 2), "source_class": "llm_indicative",
@@ -760,7 +775,8 @@ def _line(code: str, order: Dict[str, Any], description: str,
                     f"{out.get('packing_working')} = £{_order_gbp:,.2f} the order — counts "
                     f"stated, prices live from the system this run; confirm the method "
                     f"fits this job. " if out.get('packing_working') else "")
-                 + f"Described as: {description}."),
+                 + f"Described as: {description}."
+                 + (f" SDI Live: {out['sdi_live_status']}." if out.get("sdi_live_status") else "")),
     })
     return out
 

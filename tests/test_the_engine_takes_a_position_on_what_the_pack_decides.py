@@ -185,4 +185,14 @@ def test_the_researcher_asks_for_the_whole_order_with_the_question(monkeypatch):
     cl._commercial_researcher({"code": "PACKAGING", "description": "Protective packaging and a pallet",
                                "order_quantity": 50, "ask": "priced FOR THE WHOLE ORDER of 50 units"})
     assert seen["quantity"] == 50
-    assert "WHOLE ORDER" in seen["description"]
+    assert seen["description"] == "Protective packaging and a pallet", "the brief's question is composed by indicative_price, not repeated"
+
+
+def test_the_line_says_what_sdi_live_answered_or_why_nothing():
+    cl._LIVE_RATE_CACHE.clear(); cl._LIVE_RATE_STATUS.clear()
+    parts = [{"part_number": "P1", "description": "PANEL", "quantity": 1,
+              "normalized_material": "MILD STEEL", "blank_length_mm": 500.0,
+              "blank_width_mm": 300.0, "normalized_thickness_mm": 2.0}]
+    line = cl.packaging_line(parts, 1, customer="M&S")
+    assert line.get("sdi_live_status") == "SDI_OFFLINE: SDI Live not asked"
+    assert "SDI Live: SDI_OFFLINE" in str(line.get("note") or "") or line.get("order_gbp") is None

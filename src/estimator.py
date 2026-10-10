@@ -11421,6 +11421,20 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
     _late = [r for r in _pes if isinstance(r, dict) and r.get("cost_breakdown") is None
              and r.get("part_number")]
     if _late:
+        # A RULE RUNS WHERE THE LIVE RUN MEETS THE PART (D-433) — AND THE MAGNET IS A LATE
+        # RECORD. 8188-08's KINGDOM row is one only the table reader saw, appended here after
+        # costing, so the size resolver that ran before costing (D-445) never met it and the
+        # 10:12 book still priced fourteen two-metre bars. The late records are read against
+        # the job's yardsticks before they are costed, with every record as the measure.
+        try:
+            from size_reading import apply_size_readings as _size_late
+            _n_sz = _size_late(_late if not isinstance(_pes, list) else _pes, summary)
+            if _n_sz:
+                print(f"   [size] {_n_sz} late purchased line(s) read at the one size the job "
+                      f"allows; priced at that reading, still to confirm", flush=True)
+        except Exception as _sz_exc:                                 # noqa: BLE001
+            print(f"   [size] late two-unit sizes not resolved ({type(_sz_exc).__name__}: "
+                  f"{_sz_exc})", flush=True)
         try:
             from third_party_supply import mark_third_party_supplied
             _tp = mark_third_party_supplied(_late, summary)
