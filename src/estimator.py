@@ -1,3 +1,4 @@
+import copy
 import csv
 import hashlib
 import json
@@ -3108,6 +3109,12 @@ def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not (L and W and t and stated and own_d) or _measured_outline_kg(part, own_d) is not None:
         return None                                   # (1) an outline was measured, or no basis
     long_, short = (L, W) if L >= W else (W, L)
+    # A MEASURED OUTLINE ANYWHERE ON THE RECORD IS A MEASUREMENT (D-455). 8188-08-011 carries a
+    # DXF net area (117,027 mm² inside 157.11 x 745.16) beside a stale page read of 30 x 6; read
+    # against the stale figure it looked unmeasured and the report called its own flat
+    # "provisional model extents". A part whose flat pattern measured an outline is left alone.
+    if part.get("dxf_measured_outline") or part.get("dxf_augmented") or _costed_outline(part):
+        return None
     pmm = part.get("_pack_model_material") if isinstance(part.get("_pack_model_material"), dict) else None
     alt = str((pmm or {}).get("material") or "").upper()
     alt_d = MATERIAL_DENSITY_KG_PER_M3.get(alt) or MATERIAL_DENSITY_KG_PER_M3.get(alt.replace(" ", "_"))
@@ -3206,6 +3213,129 @@ def related_measured_blanks(parts: List[Dict[str, Any]]) -> None:
             others = [m for m in measured if m["part_number"] != p.get("part_number")]
             if others:
                 p["_related_measured_blanks"] = others
+
+
+def _costed_outline(part: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
+    """(L, W, net area) of the blank the money came from, where a cut outline was MEASURED, or
+    None (D-455). The same reading the weight check makes — the costed blank, and the net area
+    a flat pattern measured inside it — so a reading the report states and a reading the
+    costing uses cannot disagree. An area is only ever written by something that measured an
+    outline; a stale source word on the record is not what decides it."""
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    _cb = part.get("_costed_blank_mm") if isinstance(part.get("_costed_blank_mm"), (list, tuple)) else None
+    L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+    W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+    area = _safe_float(ng.get("blank_area_mm2") or part.get("blank_area_mm2")
+                       or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2"))
+    if part.get("blank_is_inferred") or part.get("_blank_provisional"):
+        return None
+    if not (L and W and area) or area > L * W * 1.01:
+        return None
+    return L, W, area
+
+
+def _model_material_vote(part: Dict[str, Any]) -> Optional[str]:
+    """The model default material a part's measured outline weighs its sheet's figure in, and
+    its own material does not — or None (D-455: the WEIGHT NOTE's own test, as a vote)."""
+    try:
+        from detail_page_geometry import not_cut_from_a_blank as _nc
+        if _nc(part):
+            return None
+    except Exception:                                                 # noqa: BLE001
+        pass
+    co = _costed_outline(part)
+    t = _safe_float(part.get("normalized_thickness_mm"))
+    stated = _stated_weight_kg_for_part(part)
+    own = str(part.get("normalized_material") or "").upper().replace("_", " ")
+    own_d = MATERIAL_DENSITY_KG_PER_M3.get(own) or MATERIAL_DENSITY_KG_PER_M3.get(own.replace(" ", "_"))
+    if not (co and t and stated and own_d):
+        return None
+    tol = float(getattr(config, "MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT", 8.0)) / 100.0
+    if abs(co[2] * t * own_d * 1e-9 - stated) <= stated * tol:
+        return None
+    for alt in (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL",)):
+        a = str(alt).upper()
+        ad = MATERIAL_DENSITY_KG_PER_M3.get(a) or MATERIAL_DENSITY_KG_PER_M3.get(a.replace(" ", "_"))
+        if a != own and ad and abs(co[2] * t * ad * 1e-9 - stated) <= stated * tol:
+            return a
+    return None
+
+
+def fill_unmeasured_blanks_from_the_job(parts: List[Dict[str, Any]],
+                                        part_estimates: List[Dict[str, Any]],
+                                        job_quantity: Optional[int] = None) -> List[str]:
+    """THE SECOND PASS (D-455): after every part is costed, the job's own measured parts decide
+    how a sheet weight reads, and a part whose blank nothing measured is re-costed on the
+    allowance that reading gives. Returns the part numbers re-costed.
+
+    The 15:43 book (f4b1a7b) said, in its own report, that five measured acrylic parts weigh
+    their sheets' figures in mild steel and that 013's weight fits 2190 x 227 — and still
+    charged 013 on 2190 x 17 at £2.34. The pre-costing pass that should have priced it read
+    the uncosted page dimensions, found no votes, and stood down. This pass reads exactly what
+    the weight check read, after the costing has stamped it, so the reading stated and the
+    reading charged are one."""
+    by_pn = {str(p.get("part_number") or "").strip().upper(): p for p in parts or [] if isinstance(p, dict)}
+    votes: Dict[str, List[str]] = {}
+    for p in by_pn.values():
+        v = _model_material_vote(p)
+        if v:
+            votes.setdefault(v, []).append(str(p.get("part_number")))
+    if len(votes) != 1:
+        return []
+    (mat, who), = votes.items()
+    if len(who) < 2:
+        return []
+    pmm = {"material": mat, "parts": who}
+    # Related geometry: the measured outlines of parts of the same material and gauge.
+    groups: Dict[Tuple[str, float], List[Dict[str, Any]]] = {}
+    for p in by_pn.values():
+        co = _costed_outline(p)
+        t = _safe_float(p.get("normalized_thickness_mm"))
+        if co and t:
+            groups.setdefault((str(p.get("normalized_material") or "").upper(), round(t, 2)), []).append(
+                {"part_number": p.get("part_number"), "long_mm": max(co[0], co[1]),
+                 "short_mm": min(co[0], co[1])})
+    redone: List[str] = []
+    for i, pe in enumerate(list(part_estimates)):
+        pn = str((pe or {}).get("part_number") or "").strip().upper()
+        part = by_pn.get(pn)
+        if part is None or part.get("_blank_provisional") or _costed_outline(part) is not None:
+            continue
+        if not _stated_weight_kg_for_part(part):
+            continue
+        key = (str(part.get("normalized_material") or "").upper(),
+               round(_safe_float(part.get("normalized_thickness_mm")) or 0.0, 2))
+        trial = copy.deepcopy(part)
+        trial["_pack_model_material"] = pmm
+        trial["_related_measured_blanks"] = [r for r in groups.get(key, [])
+                                             if str(r["part_number"]).upper() != pn]
+        # THE STALE READING GOES WITH THE STALE PRICE: the weight check that said "priced on
+        # the recorded blank until then", and its question, leave before the re-cost.
+        _pn0 = str(part.get("part_number"))
+        trial["review_flags"] = [f for f in (trial.get("review_flags") or [])
+                                 if not str(f).startswith("WEIGHT CHECK")]
+        trial["manufacturing_questions"] = [
+            q for q in (trial.get("manufacturing_questions") or [])
+            if not (isinstance(q, dict) and str(q.get("issue") or "").startswith(
+                (f"Gauge of {_pn0}", f"Blank of {_pn0}")))]
+        if _apply_mass_implied_blank(trial) is None:
+            continue
+        try:
+            new_pe = estimate_part(trial, job_quantity=job_quantity)
+        except Exception as exc:                                         # noqa: BLE001
+            print(f"   [weight] {part.get('part_number')} not re-costed on its allowance "
+                  f"({type(exc).__name__}: {exc}) — it stays on its recorded blank", flush=True)
+            continue
+        part.clear()
+        part.update(trial)
+        part_estimates[part_estimates.index(pe)] = new_pe
+        redone.append(str(part.get("part_number")))
+        _me = new_pe.get("material_estimate") or {}
+        print(f"   [weight] {part.get('part_number')} re-costed on its allowance "
+              f"{_me.get('blank_length_mm')} x {_me.get('blank_width_mm')} mm "
+              f"(the pack's model weighs in {mat.lower()}: {', '.join(who[:6])}) — "
+              f"material £{_me.get('unit_material_cost_gbp')}", flush=True)
+    return redone
 
 
 def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
@@ -7418,13 +7548,34 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             part["textual_operations"] = [
                 o for o in part["textual_operations"] if o not in ("laser_cutting", "saw")
             ]
+        # A CUT LIST IS CUT (D-455). The length is bought as one bar; a cut list on the
+        # part's own sheet — 8188-29-001's 2 x 300 + 1 x 1,272 — is the shop sawing pieces
+        # from it, and the 15:43 book carried that material with no cutting labour at all.
+        # One saw line, timed per cut from config (an allowance to confirm, not a measurement).
+        _cl_pieces = [v for v in (_safe_float(x) for x in (
+            (part.get("section_stock") or {}).get("cut_lengths_mm") or [])
+            if not isinstance(x, (dict, list))) if v and v > 0]
+        if _cl_pieces:
+            part["_saw_cut_list_pieces"] = list(_cl_pieces)
+            ops = list(ops) + ["saw"]
+            record_operation(part, "saw", str(
+                (part.get("section_stock") or {}).get("cut_lengths_mm_source")
+                or (part.get("section_stock") or {}).get("source")
+                or "drawing_deterministic"), inferred=False)
+            part.setdefault("review_flags", []).append(
+                f"sawn to its own cut list ({len(_cl_pieces)} piece(s): "
+                f"{' + '.join(f'{v:g}' for v in _cl_pieces)} mm) at "
+                f"{float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut — config "
+                f"SAW_SECONDS_PER_CUT, an allowance; confirm with the saw")
         part["section_costing_adjustment"] = {
             "rule": "section_bought_as_length_bent_inhouse",
             "basis": "bought_in_length_plus_bend_finish_handling",
-            "note": "RHS/tube bought as a length (not made in-house) -- no cut/saw. SDI "
-                    "bends the tube, so the bend op is retained; the bend COUNT may be "
-                    "under-read from the drawing -- verify bend count/time with the tube-bend "
-                    "operator. Coated in-house (SDI sprays everything).",
+            "note": ("RHS/tube bought as a length (not made in-house) -- not profile-cut. "
+                     + (f"Sawn to its cut list ({len(_cl_pieces)} pieces). "
+                        if _cl_pieces else "No cut list stated, so no saw charged. ")
+                     + "SDI bends the tube, so the bend op is retained; the bend COUNT may "
+                       "be under-read from the drawing -- verify bend count/time with the "
+                       "tube-bend operator. Coated in-house (SDI sprays everything)."),
         }
     if not _has_cut_op and cut_length_mm and cut_length_mm > 0 and not _section_no_dxf:
         if _mat_u in _SHEET_METALS or _mat_u in _CUT_BOARDS:
@@ -7706,6 +7857,13 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     setup_times_min: Dict[str, float] = {}
     run_times_min: Dict[str, float] = {}
+    # THE SAW ON A SECTION'S OWN CUT LIST (D-455), marked where the section rule decides ops.
+    _saw_pieces = [v for v in (_safe_float(x) for x in (part.get("_saw_cut_list_pieces") or [])) if v]
+    if _saw_pieces:
+        _per_cut_s = float(getattr(config, "SAW_SECONDS_PER_CUT", 90.0))
+        run_times_min["saw"] = round(len(_saw_pieces) * _per_cut_s / 60.0, 2)
+        setup_times_min["saw"] = float(
+            (getattr(config, "OPERATION_SETUP_MIN", {}) or {}).get("SAW", 10.0))
     powder_coating_detail: Optional[Dict[str, Any]] = None
 
     _is_wire_op_part = any(
@@ -12056,7 +12214,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                  f"quoting.") if _from_method and _unit else
                 (f"SDI LIVE FIGURE £{float(_unit):.2f}/unit — {_cl_src.get('source_name')}: "
                  f"{(_cline or {}).get('history_working') or ''} — the business's own figure "
-                 f"applied to this order; confirm it fits before quoting.")
+                 f"applied to this order; confirm it fits before quoting"
+                 # WHY THIS BASIS AND NOT THE SHIPMENT (D-455): the line says which basis won
+                 # and why the counted shipment did not, so weak history never wins silently.
+                 + (f". Basis: {(_cline or {}).get('basis_chosen')}"
+                    if (_cline or {}).get("basis_chosen") else "") + ".")
                 if _from_live and _unit else
                 (f"AI MARKET FIGURE £{float(_unit):.2f}/unit — an indication from the market "
                  f"lookup, not a quotation; confirm or replace it before quoting"
@@ -12667,6 +12829,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         except Exception:                                        # noqa: BLE001
             pass
 
+    # THE JOB'S OWN MEASURED PARTS FILL A BLANK NOTHING MEASURED (D-455), before any total.
+    try:
+        _refilled = fill_unmeasured_blanks_from_the_job(estimable_parts, part_estimates, _order_qty)
+        if _refilled and summary is not None:
+            summary.setdefault("blanks_filled_from_the_job", []).extend(_refilled)
+    except Exception as _e_fill:                                 # noqa: BLE001
+        print(f"   [weight] second pass not run ({type(_e_fill).__name__}: {_e_fill})", flush=True)
     # ALWAYS A NUMBER. After every part is costed, any REAL line still reading as free gets a
     # per-each market/LLM indicative so £0 never sits on a part the shop actually buys. Runs
     # AFTER the loop (so the seal's early return has already fired) AND refuses the seal markers

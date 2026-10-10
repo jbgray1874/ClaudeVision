@@ -36,7 +36,7 @@ signal that carries knowledge the drawing does not.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
@@ -1060,6 +1060,29 @@ def _same_material(a: Any, b: Any) -> bool:
     return bool((ca and _same_token(ca, sb)) or (cb and _same_token(cb, sa)))
 
 
+# Readings that describe a cut blank: on a record that is not cut from one (an assembly), two
+# such readings are not a disagreement anybody has to settle (D-455).
+_FIELDS_OF_A_CUT_PART = frozenset({"normalized_thickness_mm", "blank_length_mm", "blank_width_mm"})
+
+
+def _is_an_assembly_record(part: Mapping[str, Any]) -> bool:
+    """The same evidence detail_page_geometry.not_cut_from_a_blank weighs, asked of the record
+    alone: an assembly flag or children, or a code naming an assembly drawing where nothing —
+    an explicit is_assembly_parent=False or a measured flat — says otherwise."""
+    if not isinstance(part, Mapping):
+        return False
+    if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+            or part.get("assembly_children")):
+        return True
+    if part.get("is_assembly_parent") is False or part.get("dxf_augmented")             or part.get("dxf_measured_outline"):
+        return False
+    try:
+        from part_code_conventions import carries_assembly_role
+        return bool(carries_assembly_role(part.get("part_number")))
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
                 note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
     """Set a datum if this source is entitled to, and record where it came from.
@@ -1142,6 +1165,15 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
             and not (_material_field and _same_material(_cur, value))
             and str(source) in support_for(part, field, _cur)):
         _observe(part, field, value, source, applied=False)
+        # A GAUGE ON AN ASSEMBLY IS NOBODY'S DECISION (D-455). 8188-08_GA's sheet prints the
+        # gauges of the parts it draws; read onto the assembly record they are two readings of
+        # a field that prices nothing there, and the book asked "3 or 10 mm?" of a record that
+        # is not cut. Recorded, not asked.
+        # Decided from the record and the code's own shape (part_code_conventions, already in
+        # this module's closure) — never by importing the geometry stack, which the pricing
+        # service does not carry.
+        if leaf in _FIELDS_OF_A_CUT_PART and _is_an_assembly_record(part):
+            return False
         part.setdefault("_self_revisions", {}).setdefault(field, []).append(
             {"source": str(source), "from": _cur, "to": value})
         _others = [s for s in support_for(part, field, _cur) if s != str(source)]

@@ -2522,6 +2522,10 @@ ACRYLIC_OP_DRIVERS = {
 # The eleven below the first group exist on the template and were absent from the engine's card
 # entirely, so the engine could not cost or check them: two of them, Weld (CO2) and Wet Spray,
 # are used on 12349-02.
+# One saw cut on section stock, in seconds — an ALLOWANCE to confirm with the saw (D-455):
+# load, measure, cut, deburr the end. Applied once per piece on a part's own cut list.
+SAW_SECONDS_PER_CUT = 90.0
+
 OPERATION_SETUP_MIN = {
     "PACP": 15, "PACM": 15, "BENC": 30, "CNC": 10, "CNCJ": 15, "DPOL": 10,
     "DRES": 30, "DRIL": 30, "EDGE": 30, "FOLD": 30, "GLUE": 30, "GUIL": 15,

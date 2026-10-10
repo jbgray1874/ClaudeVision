@@ -2117,6 +2117,14 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
         return {"class": "sdi_live_commercial", "firmness": INDICATIVE_HOUSE, "owner": "estimator",
                 "label": ("SDI Live's own figure — " + (str(ps.get("source_name") or "past quotes")
                           ) + "; confirm it fits this order before quoting")}
+    # A PAST SDI QUOTE'S LINE IS SDI HISTORY, NOT A MARKET LOOKUP (D-455). 8188-08's insert
+    # was priced from a historical quote material line and the report filed it as "researched
+    # market price". It is reproducible SDI evidence, weak in one stated way: a per-unit share
+    # at that quote's own quantity.
+    if "historical_quote_material_line" in tokens or "historical quote" in tokens:
+        return {"class": "sdi_history_line", "firmness": INDICATIVE_HOUSE, "owner": "estimator",
+                "label": ("a past SDI quote's line price (SDI Live history) — a per-unit share at "
+                          "that quote's own quantity; confirm it fits this order")}
     if "plater_freight" in tokens:
         try:
             import config as _cfg                                    # noqa: PLC0415
