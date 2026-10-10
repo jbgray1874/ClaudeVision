@@ -701,13 +701,33 @@ def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
 _BREAKS_DEFAULT = (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
 
 
+_SHIPMENT_STATUS: Dict[str, str] = {}
+
+
+def _unit_word(value: Any) -> str:
+    """'per_pallet' / 'Per Pallet' / 'pallets' / 'PER-PALLET' -> 'pallet'."""
+    w = _re.sub(r"[_\-]+", " ", str(value or "").strip().lower())
+    w = _re.sub(r"^(?:gbp\s+)?per\s+", "", w).strip()
+    w = _re.sub(r"^(?:a|one|each)\s+", "", w).strip()
+    return w[:-1] if w.endswith("s") and not w.endswith("ss") else w
+
+
+def shipment_status(code: str, order: Dict[str, Any]) -> str:
+    """Why the counted shipment did or did not price this line, for the line's own note."""
+    return _SHIPMENT_STATUS.get(f"{code}|{order.get('order_quantity') or 1}", "")
+
+
 def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """{order_gbp, order_gbp_at_breaks, working, source_name, evidence} — the counted shipment
     priced at a researched per-pallet (or per-carton) rate, or None where nothing was counted
     or the market gave no evidenced unit rate (D-451)."""
     plan = order.get("shipment") or {}
     pallets, cartons = _num(plan.get("pallet_count")), _num(plan.get("carton_count"))
+    _status_key = f"{code}|{order.get('order_quantity') or 1}"
+    _SHIPMENT_STATUS.pop(_status_key, None)
     if not (pallets or cartons):
+        _SHIPMENT_STATUS[_status_key] = ("nothing was counted: no part on the order has a measured "
+                                         "blank to pack")
         return None
     qty = max(1, int(_num(order.get("order_quantity")) or 1))
     unit = "carton" if (cartons and not pallets) or (cartons and shipment_shape(order) == "parcel") else "pallet"
@@ -732,11 +752,23 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
                                             f"Give the carrier or supplier and the date."})
         # AN ANSWER IN THE UNIT ASKED, OR NONE (D-452): a figure quoted per order is not a
         # per-pallet rate, and multiplying it by the pallets would charge the order N times.
-        _said = str((_r or {}).get("unit") or "").strip().lower()
-        _units_ok = {unit, unit + "s", "per " + unit, "parcel" if unit == "carton" else unit}
-        if _num((_r or {}).get("price_gbp")) and _said in _units_ok:
+        # THE UNIT AS THE MODEL WRITES IT (D-455): "per_pallet", "Per Pallet", "pallets" are
+        # one unit. The 15:43 book's shipment basis was refused for a spelling, and weak
+        # history won by default. Normalised, then compared; a per-order or per-delivery
+        # figure is still not a pallet rate.
+        _said = _unit_word((_r or {}).get("unit"))
+        _units_ok = {unit} | ({"parcel", "box"} if unit == "carton" else set())
+        if not _num((_r or {}).get("price_gbp")):
+            _SHIPMENT_STATUS[_status_key] = (f"the market gave no per-{unit} figure for this "
+                                             f"shipment")
+        elif _said in _units_ok:
             rate = _r
-    except Exception:                                                # noqa: BLE001
+        else:
+            _SHIPMENT_STATUS[_status_key] = (f"the market answered per {_said or 'unstated unit'}, "
+                                             f"not per {unit} — refused, it cannot be multiplied "
+                                             f"by the {unit}s counted")
+    except Exception as _exc:                                        # noqa: BLE001
+        _SHIPMENT_STATUS[_status_key] = f"the market lookup failed ({type(_exc).__name__})"
         rate = None
     if not rate:
         return None
@@ -789,6 +821,7 @@ def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[
             and "quantity within" in str(live.get("comparability") or "")
         cs = None if comparable else _counted_shipment_price(code, order)
         hist_said = ((f"SDI Live history for comparison: {live.get('working')}") if live else "")
+        _ship_why = "" if cs else shipment_status(code, order)
         if live and comparable:
             out = {"basis": "SDI Live history, comparable on customer and quantity",
                    "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
@@ -805,7 +838,8 @@ def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[
                    "cross_check": (hist_said + " — not comparable (no quantity, size or shipment "
                                    "on those quotes), so the shipment basis is used") if live else ""}
         elif live:
-            out = {"basis": "SDI Live history only — weak comparability, no shipment could be priced",
+            out = {"basis": ("SDI Live history only — weak comparability; the counted shipment could "
+                             "not be priced" + (f" ({_ship_why})" if _ship_why else "")),
                    "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
                    "price_source": {"source_class": "sdi_history", "reproducible": True,
                                     "indicative": True, "source_name": live["source_name"]},

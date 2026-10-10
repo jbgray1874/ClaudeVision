@@ -68,6 +68,12 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
     if not (has_charges or has_setup):
         return 0
     from openpyxl.styles import Font                                  # noqa: PLC0415
+    # THE NOTE READS ITS OWN ROWS (D-455). A per-unit charge — the same £ at every quantity —
+    # is not money spread over the order, and the 15:43 book said it was beside a row reading
+    # £20.06 in every column. Said as the figures show it, and left out of the spread.
+    _ch_vals = [_money(r.get("order_charges_per_unit")) for r in rows]
+    _ch_vals = [v for v in _ch_vals if v is not None]
+    charges_flat = bool(_ch_vals) and len(rows) > 1 and (max(_ch_vals) - min(_ch_vals)) < 0.01
     base_q = int(rows[0]["quantity"])
     r = top
     ws.cell(row=r, column=1, value=f"What the fall from {base_q} off is made of").font = bold
@@ -98,7 +104,7 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
                 # 12696-01 at one off — not a making cost, and £24 above what the 2,500-off
                 # column falls to. So: (material + labour − spread) × unit / (material + labour),
                 # the same road quantity_sweep.commercial_correction takes.
-                spread = (charges or 0.0) + (setup or 0.0)
+                spread = (0.0 if charges_flat else (charges or 0.0)) + (setup or 0.0)
                 v = None
                 if (unit is not None and material is not None and labour is not None
                         and (charges is not None or setup is not None)
@@ -110,7 +116,12 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
             cell.alignment = Alignment(horizontal="right")
         r += 1
     note = []
-    if has_charges:
+    if has_charges and charges_flat:
+        note.append(f"Packaging and delivery are carried at £{_ch_vals[0]:.2f} a unit at every "
+                    f"quantity — a per-unit figure, so they do not fall with the order and are "
+                    f"not counted as spread money; check the basis on their lines before "
+                    f"quoting a break.")
+    elif has_charges:
         note.append("Packaging and delivery are priced for the whole order and divided by "
                     "the quantity, so most of their fall is arithmetic on an order figure — "
                     "check that figure before quoting a break.")

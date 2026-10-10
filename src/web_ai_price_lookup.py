@@ -139,7 +139,7 @@ Part specification:
 Respond with ONLY a JSON object in this exact format (no other text):
 {{
   "price_gbp": <number — unit price in GBP, realistic UK trade/subcontract price>,
-  "unit": "<each|per_kg|per_metre|per_m2>",
+  "unit": "<each|per_kg|per_metre|per_m2, or per_<the unit this request is sold by> when one is named>",
   "price_basis": "<brief explanation of what drives this price>",
   "low_estimate_gbp": <lower bound>,
   "high_estimate_gbp": <upper bound>,
@@ -578,7 +578,7 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
         f"Part specification:\n{spec_summary}\n\n"
         f"Search for: {query}\n\n"
         f"Return ONLY a JSON object:\n"
-        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre>", "source_url": "<url>", '
+        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre, or per_<the unit this request is sold by> when one is named>", "source_url": "<url>", '
         f'"supplier_name": "<name>", "price_basis": "<brief note>", "confidence": <0.4-0.65>}}'
     )
 

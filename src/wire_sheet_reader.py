@@ -140,6 +140,10 @@ def apply_wire_callouts_to_parts(parts: Sequence[Dict[str, Any]],
                 part["wire_length_derived_from"] = (
                     f"the frame outline {got['outline_text']} on {where}, as its perimeter "
                     f"2 × ({a:g} + {b:g})")
+                # THE EARLIER "LENGTH NOT KNOWN" IS NO LONGER TRUE (D-455): the length now rests
+                # on the outline the sheet states, so the note that said none was derived goes.
+                part["review_flags"] = [f for f in (part.get("review_flags") or [])
+                                        if "LENGTH is not known" not in str(f)]
                 touched = True
         if touched:
             changed += 1
