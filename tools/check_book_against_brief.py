@@ -38,6 +38,9 @@ Keys understood (all optional; the replay keys behave as they do there):
                                  an order figure at every break, and — where that basis is SDI
                                  history — says the history is comparable on customer and quantity
   no_gauge_decision_on_assemblies true: no assembly record carries a gauge decision
+  operation_times                {code: {op: {min_run_min, min_setup_min}}} — the op's charged
+                                 time reaches the stated floor (proves the work, not only the
+                                 word; the workbook row itself is verified only on the book)
 
 Exit status 0 when every pin holds, 1 otherwise.
 """
@@ -301,21 +304,54 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
             basis = str(c.get("basis_chosen") or "")
             breaks = {int(k): v for k, v in (c.get("order_gbp_at_breaks") or {}).items()}
             missing = [q for q in want_breaks if q not in breaks]
-            # Weak history IS the justified working basis where the line states why the
+            # Weak history IS the justified working basis where the line records why the
             # counted shipment could not price (the market refused, nothing counted) — the
             # policy asks for the best-supported basis SAID, not for history never to win.
+            # STRUCTURED EVIDENCE FIRST (D-457): the engine stamps shipment_refusal on the
+            # line; wording (the parenthesis) is accepted only for records saved before the
+            # field existed. "recorded no reason" is the engine saying its own evidence is
+            # missing, and never passes.
+            refusal = str(c.get("shipment_refusal") or "")
+            researched = bool(c.get("shipment_working"))
+            weak = "weak" in basis.lower()
+            justified = bool(refusal) and "recorded no reason" not in refusal
+            if not refusal and "(" in basis and "recorded no reason" not in basis:
+                justified = True                    # a pre-field record, reason in the words
             hist_ok = ("history" not in basis.lower()) or ("comparable" in basis.lower()
-                                                           and "weak" not in basis.lower()) \
-                or ("weak" in basis.lower() and "(" in basis
-                    and "recorded no reason" not in basis)
+                                                           and not weak) \
+                or (weak and justified)
+            klass = ("researched shipment" if researched else
+                     "comparable history" if "comparable" in basis.lower() and not weak else
+                     f"justified fallback — {refusal or 'reason in the basis words'}" if weak and hist_ok
+                     else "unjustified fallback")
             ok = bool(basis) and not missing and hist_ok
             res.add("commercial_basis", code, ok,
-                    (f"basis: {basis or 'NOT NAMED'}; " +
+                    (f"[{klass}] basis: {basis or 'NOT NAMED'}; " +
                      ("; ".join(f"{q}: £{float(breaks[q]) / max(q, 1):.2f}/unit" for q in sorted(breaks))
                       or "no breaks held") +
                      (f"; breaks missing {missing}" if missing else "") +
                      ("" if hist_ok else "; history won with no stated reason why the shipment "
                                         "basis did not price")))
+    for code, ops_want in (facts.get("operation_times") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        proc = pe.get("process_estimate") or {}
+        run = proc.get("run_times_min_per_unit") or {}
+        setup = proc.get("setup_times_min") or {}
+        hours = (pe.get("labour_estimate") or {}).get("run_hours_per_unit") or {}
+        for op, want in (ops_want or {}).items():
+            got_run = _num(run.get(op))
+            if got_run is None and _num(hours.get(op)) is not None:
+                got_run = round(float(hours[op]) * 60.0, 2)
+            got_setup = _num(setup.get(op))
+            ok = True
+            if _num((want or {}).get("min_run_min")) is not None:
+                ok = got_run is not None and got_run >= float(want["min_run_min"])
+            if ok and _num((want or {}).get("min_setup_min")) is not None:
+                ok = got_setup is not None and got_setup >= float(want["min_setup_min"])
+            res.add("operation_time", f"{code} {op}", ok,
+                    f"run {got_run} min (floor {(want or {}).get('min_run_min')}), "
+                    f"setup {got_setup} min (floor {(want or {}).get('min_setup_min')}); "
+                    f"the charged workbook row is proven only on the book")
     if facts.get("no_gauge_decision_on_assemblies"):
         import costed_facts as _cf
         from detail_page_geometry import not_cut_from_a_blank

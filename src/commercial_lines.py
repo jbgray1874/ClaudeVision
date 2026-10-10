@@ -848,6 +848,8 @@ def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[
         elif live:
             out = {"basis": ("SDI Live history only — weak comparability; the counted shipment could "
                              "not be priced" + (f" ({_ship_why})" if _ship_why else "")),
+                   # STRUCTURED, NOT PROSE (D-457): the gate reads this field, never the wording.
+                   "shipment_refusal": _ship_why,
                    "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
                    "price_source": {"source_class": "sdi_history", "reproducible": True,
                                     "indicative": True, "source_name": live["source_name"]},
@@ -927,6 +929,7 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["history_working"] = _ch.get("history_working")
         out["history_rows"] = _ch.get("history_rows")
         out["cross_check"] = _ch.get("cross_check")
+        out["shipment_refusal"] = _ch.get("shipment_refusal")
         if _ch.get("order_gbp_at_breaks"):
             out["order_gbp_at_breaks"] = _ch["order_gbp_at_breaks"]
         out["sdi_live_status"] = sdi_live_status(code, order)
