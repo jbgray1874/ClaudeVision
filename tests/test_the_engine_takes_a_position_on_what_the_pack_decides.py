@@ -196,3 +196,52 @@ def test_the_line_says_what_sdi_live_answered_or_why_nothing():
     line = cl.packaging_line(parts, 1, customer="M&S")
     assert line.get("sdi_live_status") == "SDI_OFFLINE: SDI Live not asked"
     assert "SDI Live: SDI_OFFLINE" in str(line.get("note") or "") or line.get("order_gbp") is None
+
+
+# ── D-449 ───────────────────────────────────────────────────────────────────────────────
+
+class _Cur:
+    """A stand-in SDI Live cursor: a CommercialRate view with per-pallet and per-order rates."""
+
+    def __init__(self):
+        self.rows = []
+
+    def execute(self, sql, *params):
+        if "vCurrentCommercialRate" in sql:
+            self.rows = [("pallet_per_bay", 20.0), ("packaging_wrap_per_pallet", 6.5),
+                         ("haulage_per_pallet", 45.0), ("delivery_booking_per_order", 12.0),
+                         ("labour_rate", 31.0)]
+        else:
+            self.rows = []
+
+    def fetchall(self):
+        return list(self.rows)
+
+
+class _Conn:
+    def cursor(self):
+        return _Cur()
+
+
+def test_the_businesss_rates_price_the_counted_shipment_at_every_break(monkeypatch):
+    import estimator
+    monkeypatch.setenv("SDI_OFFLINE", "0")
+    monkeypatch.setattr(estimator, "_get_pricing_service",
+                        lambda: type("PS", (), {"_get_db_connection": lambda self: _Conn()})())
+    import palletising
+    plans = {1: {"pallet_count": 1, "carton_count": 1}, 5: {"pallet_count": 2, "carton_count": 5},
+             50: {"pallet_count": 13, "carton_count": 50}}
+    monkeypatch.setattr(palletising, "plan_shipment", lambda parts, q: plans.get(int(q), {"pallet_count": 1}))
+    cl._LIVE_RATE_CACHE.clear(); cl._LIVE_RATE_STATUS.clear()
+    order = {"customer": "M&S", "order_quantity": 5, "order_weight_kg": 220.0,
+             "shipment": plans[5], "shippable_parts": [{"part_number": "P"}], "quantity_breaks": [1, 5, 50]}
+    got = cl._sdi_live_rate("PACKAGING", order)
+    assert got["source_class"] == "sdi_commercial_rate"
+    # pallet_per_bay 20 x 2 + wrap 6.5 x 2 = 53; the haulage/booking keys are DELIVERY's words
+    assert got["order_gbp"] == 53.0, got
+    assert got["order_gbp_at_breaks"] == {1: 26.5, 5: 53.0, 50: 344.5}, got["order_gbp_at_breaks"]
+    assert "pallet_per_bay GBP 20.00 x 2 pallets" in got["working"]
+    cl._LIVE_RATE_CACHE.clear()
+    dlv = cl._sdi_live_rate("DELIVERY", order)
+    assert dlv["order_gbp"] == 45.0 * 2 + 12.0
+    assert dlv["order_gbp_at_breaks"][50] == 45.0 * 13 + 12.0, "fifty headers travel on thirteen pallets, not one pallet's share divided by fifty"

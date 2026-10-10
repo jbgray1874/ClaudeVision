@@ -203,6 +203,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # carton and pallet count resting on the assembly envelope the weight had just been
         # cleared of — half a fix, and the half nobody reads.
         out["shipment"] = palletising.plan_shipment(shippable, order_qty)
+        out["shippable_parts"] = shippable          # for a re-plan at each break (D-449)
     except Exception:                                                # noqa: BLE001
         out["shipment"] = None
     return out
@@ -528,23 +529,75 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
             status = f"SDI Live not reachable ({type(_exc).__name__})"
     if conn is not None:
         qty = max(1, int(_num(order.get("order_quantity")) or 1))
-        words = tuple(str(w).upper() for w in
-                      ((getattr(config, "COMMERCIAL_HISTORY_WORDS", {}) or {}).get(code) or (code,)))
+        _all_words = getattr(config, "COMMERCIAL_HISTORY_WORDS", {}) or {}
+        words = tuple(str(w).upper() for w in (_all_words.get(code) or (code,)))
+        # A KEY THAT NAMES ANOTHER LINE'S WORK IS THAT LINE'S: haulage_per_pallet is delivery,
+        # though it says PALLET; carton_packing is packaging. A word only another line uses
+        # rules a key out of this one.
+        _unit_words = {"PALLET", "CARTON", "BOX", "KG", "UNIT", "EACH", "ORDER", "JOB", "CONSIGN"}
+        only_others = ({str(w).upper() for c, ws_ in _all_words.items() if c != code for w in ws_}
+                       - set(words) - _unit_words)                 # a unit of count belongs to no one line
         try:
             cur = conn.cursor()
-            # 1. a rate the business entered
+            # 1. A RATE THE BUSINESS ENTERED, APPLIED TO THE COUNTED SHIPMENT (D-449). The
+            # CommercialRate table holds rates per PALLET, per CARTON, per KG, per UNIT or per
+            # ORDER (its key says which: pallet_per_bay, carton_packing, haulage_per_pallet,
+            # delivery_per_order ...). The shipment is already counted (palletising.plan_shipment:
+            # cartons, pallets, weight), so each rate times its count is the line — and the same
+            # count is re-planned at every break quantity, so fifty headers are priced on fifty
+            # headers' pallets, not one header's share divided by fifty.
             try:
                 cur.execute("SELECT rate_key, value_gbp FROM AIEstimating.vCurrentCommercialRate")
+                comps = []
                 for rk, val in cur.fetchall() or []:
                     up = str(rk or "").upper()
                     v = _num(val)
-                    if v and any(w in up for w in words) and ("ORDER" in up or "PER_JOB" in up):
-                        result = {"order_gbp": round(v, 2), "source_class": "sdi_commercial_rate",
-                                  "source_name": f"AIEstimating.CommercialRate {rk}",
-                                  "working": f"{rk} = GBP {v:,.2f} per order", "rows": []}
-                        break
-            except Exception:                                        # noqa: BLE001
-                pass
+                    if not v or not any(w in up for w in words) or any(w in up for w in only_others):
+                        continue
+                    unit = ("pallet" if "PALLET" in up else "carton" if ("CARTON" in up or "BOX" in up)
+                            else "kg" if "KG" in up else "unit" if ("UNIT" in up or "EACH" in up)
+                            else "order" if ("ORDER" in up or "JOB" in up or "CONSIGN" in up) else None)
+                    if unit:
+                        comps.append((str(rk), v, unit))
+                if comps:
+                    import palletising as _pal
+                    shippable = order.get("shippable_parts") or []
+                    weight_each = (_num(order.get("order_weight_kg")) or 0.0) / qty
+
+                    def _count(unit: str, q: int) -> Optional[float]:
+                        if unit == "order":
+                            return 1.0
+                        if unit == "unit":
+                            return float(q)
+                        if unit == "kg":
+                            return weight_each * q if weight_each else None
+                        plan = (order.get("shipment") if q == qty else
+                                (_pal.plan_shipment(shippable, q) if shippable else None)) or {}
+                        n = _num(plan.get("pallet_count" if unit == "pallet" else "carton_count"))
+                        return float(n) if n else None
+
+                    def _total(q: int):
+                        t, parts_said, missing = 0.0, [], []
+                        for rk, v, unit in comps:
+                            n = _count(unit, q)
+                            if n is None:
+                                missing.append(f"{rk} (no {unit} count)")
+                                continue
+                            t += v * n
+                            parts_said.append(f"{rk} GBP {v:,.2f} x {n:g} {unit}{'s' if n != 1 else ''}")
+                        return t, parts_said, missing
+
+                    t_now, said, missing = _total(qty)
+                    if t_now > 0:
+                        breaks = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)})
+                        result = {"order_gbp": round(t_now, 2), "source_class": "sdi_commercial_rate",
+                                  "source_name": "AIEstimating.CommercialRate x the counted shipment",
+                                  "working": (" + ".join(said) + f" = GBP {t_now:,.2f} the order"
+                                              + (f"; not applied: {', '.join(missing)}" if missing else "")),
+                                  "order_gbp_at_breaks": {q: round(_total(q)[0], 2) for q in breaks},
+                                  "rows": []}
+            except Exception as _exc:                                # noqa: BLE001
+                status = f"CommercialRate not read ({type(_exc).__name__})"
             if result is None:
                 status = "no CommercialRate key for this line"
             # 2. what past quotes charged
@@ -631,8 +684,8 @@ def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
 def _line(code: str, order: Dict[str, Any], description: str,
           held_key: str) -> Dict[str, Any]:
     qty = order.get("order_quantity") or 1
-    out: Dict[str, Any] = {"code": code, "order_quantity": qty,
-                           "described_as": description, "basis": dict(order)}
+    out: Dict[str, Any] = {"code": code, "order_quantity": qty, "described_as": description,
+                           "basis": {k: v for k, v in order.items() if k != "shippable_parts"}}
     _held = _held_rate(held_key)
     _method = _method_price(order) if code == "PACKAGING" else None
     _method_gap = ""
@@ -699,6 +752,8 @@ def _line(code: str, order: Dict[str, Any], description: str,
             "source_name": _live["source_name"]}
         out["history_working"] = _live.get("working")
         out["history_rows"] = _live.get("rows")
+        if _live.get("order_gbp_at_breaks"):
+            out["order_gbp_at_breaks"] = _live["order_gbp_at_breaks"]   # counted at every break
     else:
         # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────
         #
