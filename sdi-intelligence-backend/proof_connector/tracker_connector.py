@@ -28,6 +28,7 @@ from datetime import date, timedelta
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse
@@ -181,6 +182,11 @@ Changing things - always in this order, never skipping a step:
 If they correct something, start again at step 1."""
 
 mcp = MCPServer(name="SDI Tracker (proof)", instructions=INSTRUCTIONS)
+# Marked so the apps know which actions only read (no approval prompt needed)
+# and that the one save is safe to repeat: a second confirm never saves twice.
+READS = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
+SAVES = ToolAnnotations(read_only_hint=False, destructive_hint=False, idempotent_hint=True,
+                        open_world_hint=False)
 
 
 class Change(BaseModel):
@@ -190,7 +196,7 @@ class Change(BaseModel):
                                        "to add to text, send the old text plus the new words")
 
 
-@mcp.tool(description="Look up tracker records. Leave search empty for all of them, or give a client, "
+@mcp.tool(annotations=READS, description="Look up tracker records. Leave search empty for all of them, or give a client, "
                       "business unit or job word. Each record has its id, its name and every column; "
                       "dates come with a spoken form.")
 def get_records(search: str = "") -> dict:
@@ -214,7 +220,7 @@ def get_records(search: str = "") -> dict:
     return {"today": spoken(TODAY.isoformat()), "count": len(out), "records": out, "note": note}
 
 
-@mcp.tool(description="Prepare one or more changes and get the read-back. SAVES NOTHING. Read the "
+@mcp.tool(annotations=READS, description="Prepare one or more changes and get the read-back. SAVES NOTHING. Read the "
                       "read_back to the person and wait for their answer before confirm_changes.")
 def propose_changes(changes: list[Change]) -> dict:
     started = time.monotonic()
@@ -254,7 +260,7 @@ def propose_changes(changes: list[Change]) -> dict:
             "not_included": problems, "saved": False}
 
 
-@mcp.tool(description="Save a proposal ONLY after the person has heard its read_back and answered. "
+@mcp.tool(annotations=SAVES, description="Save a proposal ONLY after the person has heard its read_back and answered. "
                       "Pass their reply exactly as they said it; only a plain yes saves.")
 def confirm_changes(proposal_id: str, user_reply: str) -> dict:
     started = time.monotonic()
@@ -291,7 +297,7 @@ def confirm_changes(proposal_id: str, user_reply: str) -> dict:
     return p["outcome"]
 
 
-@mcp.tool(description="What has been proposed, saved or declined recently, newest first.")
+@mcp.tool(annotations=READS, description="What has been proposed, saved or declined recently, newest first.")
 def recent_changes(limit: int = 10) -> dict:
     return {"entries": [{**e, "when": time.strftime("%H:%M", time.localtime(e["when"]))}
                         for e in reversed(JOURNAL[-limit:])]}
