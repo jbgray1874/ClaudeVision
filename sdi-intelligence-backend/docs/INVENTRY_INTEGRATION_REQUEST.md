@@ -701,3 +701,87 @@ that is a single record.
 This is the third time an inference about InVentry's behaviour has looked
 settled and not been - CN fallback, the Locations list, the shared secret. Run
 the probe.
+
+## Round 8 — full technical position, 10 Oct 2026
+
+Charlotte's 8 Oct reply answered the questions but the support connection has
+not happened. This sets out the complete technical position so the support
+engineer can act without a discovery call first, and so the one remaining ask
+is unambiguous.
+
+Everything in it was verified on the live system. Credentials are referenced,
+never quoted - the API key goes to the engineer on the call, not into an inbox.
+
+> Hi Charlotte,
+>
+> Thank you for the answers on the 8th — those cleared up the restart question
+> and `ActionLocation`. The support connection hasn't come through yet, so I
+> wanted to set out exactly where this stands, in enough detail that whoever
+> picks it up can go straight to the one thing we need.
+>
+> **Where it stands: `GET https://10.0.0.241:4816/PartnerAPI/CheckAuth` returns
+> HTTP 401.** That is the only thing between us and a working integration.
+>
+> **What we have configured and verified**
+>
+> * **Network** — 10.0.0.241 reachable on port 4816 from our network.
+> * **TLS** — your certificate exported from the V4 folder on the main unit and
+>   pinned, so the connection is verified rather than trusted blindly. One
+>   wrinkle covered below.
+> * **Console** — Setup & Options → System → Partner API. "Enable partner API"
+>   is On.
+> * **API key** — one key, created there with the Partner set to **End User
+>   Developer**, per your guidance. We have confirmed character by character
+>   that the key our software sends is the one currently shown in the console,
+>   so it is not a stale copy. I can read it out to the engineer on the call.
+> * **Headers** — `apikey` and `partnersecret`, both lowercase, as request
+>   headers, exactly as the documentation and your Postman collection specify.
+> * **Partner secret** — the 16-character value pre-filled in your Postman
+>   collection, which is what your overview document describes as common across
+>   on-premises installations.
+>
+> **What we have tried**
+>
+> * Both `https://InVentry-PC:4816` and `https://10.0.0.241:4816` — identical
+>   result, as expected, since the 401 is authentication rather than addressing.
+> * Regenerating the API key in the console and retrying (before you confirmed
+>   a restart isn't required).
+> * Verifying the response is genuinely from the InVentry application rather
+>   than a network or TLS failure — it is an HTTP 401, not a dropped connection.
+>
+> **What your answers have already resolved**
+>
+> * The InVentry service does not need restarting for a new key. Ruled out.
+> * `ActionLocation` accepts free text. That lets us enable automatic sign-out
+>   once we have confirmed the value is returned on the record.
+> * The partner secret is **per site and held in our own database** — which, as
+>   you say, means the value in the Postman collection is not ours. That
+>   explains the 401 precisely, and it is why nothing we can do here will fix it.
+>
+> **What is outstanding — one item**
+>
+> A member of your support team to connect, read our partner secret out of our
+> database, and give it to us. You escalated this on the 8th. Could you confirm
+> it is booked, and give me a ticket reference? I'm available at any notice and
+> will have everything staged so we can test authentication while the engineer
+> is still connected — if it still fails, they are right there to look at it.
+>
+> **One product note, not blocking us**
+>
+> Your certificate is issued as `CN=InVentry-PC` with no `subjectAltName`.
+> Modern TLS libraries ignore the common name entirely, so certificate
+> verification fails for every hostname, including the one on the certificate.
+> `curl` still falls back to the common name, which disguises the problem —
+> testing with curl succeeds while an application fails. We have worked around
+> it by pinning your certificate and disabling hostname checking, so this isn't
+> holding us up, but it will catch every customer who integrates this way. It
+> would be worth your development team reissuing with a SAN.
+>
+> For context on the urgency: this feeds our fire evacuation list. The whole
+> point is that the roll call reflects who is physically in the building rather
+> than who remembered to sign in at reception, so it matters to us rather more
+> than a typical integration would.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
