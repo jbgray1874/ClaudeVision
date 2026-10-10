@@ -3234,16 +3234,43 @@ def _costed_outline(part: Dict[str, Any]) -> Optional[Tuple[float, float, float]
     return L, W, area
 
 
+def _weight_check_reading(part: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
+    """(L, W, net area) as _blank_weight_check reads them (D-456): the costed blank, and the
+    measured net area where one is consistent with it, else the rectangle. An inferred blank is
+    a valid reading HERE — the test these numbers feed is a density ratio against the sheet's
+    stated weight, and 8188-08's waves carry measured DXF net areas beside sizes stamped
+    inferred (read off a shared sheet). Only a blank this rule itself wrote (a mass-implied
+    allowance) is refused: feeding it back would be circular."""
+    rec = part.get("_blank_provisional")
+    if isinstance(rec, dict) and str(rec.get("basis") or "") == "mass_implied_area":
+        return None
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    _cb = part.get("_costed_blank_mm") if isinstance(part.get("_costed_blank_mm"), (list, tuple)) else None
+    L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+    W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+    if not (L and W):
+        return None
+    area = _safe_float(ng.get("blank_area_mm2") or part.get("blank_area_mm2")
+                       or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2"))
+    if not (area and 0 < area <= L * W * 1.01):
+        area = L * W
+    return L, W, area
+
+
 def _model_material_vote(part: Dict[str, Any]) -> Optional[str]:
-    """The model default material a part's measured outline weighs its sheet's figure in, and
-    its own material does not — or None (D-455: the WEIGHT NOTE's own test, as a vote)."""
+    """The model default material a part weighs its sheet's figure in, and its own material
+    does not — or None (D-455/D-456: the WEIGHT NOTE's own test, as a vote, on the WEIGHT
+    NOTE's own reading). On the 15:43 record the vote demanded measured blank provenance and
+    found nobody entitled to vote: the waves' sizes are stamped inferred while their DXF net
+    areas are measured, so the five parts the book's own notes said weigh as steel were all
+    excluded and the pass stood down."""
     try:
         from detail_page_geometry import not_cut_from_a_blank as _nc
         if _nc(part):
             return None
     except Exception:                                                 # noqa: BLE001
         pass
-    co = _costed_outline(part)
+    co = _weight_check_reading(part)
     t = _safe_float(part.get("normalized_thickness_mm"))
     stated = _stated_weight_kg_for_part(part)
     own = str(part.get("normalized_material") or "").upper().replace("_", " ")
@@ -3280,16 +3307,25 @@ def fill_unmeasured_blanks_from_the_job(parts: List[Dict[str, Any]],
         v = _model_material_vote(p)
         if v:
             votes.setdefault(v, []).append(str(p.get("part_number")))
-    if len(votes) != 1:
+    unmeasured = [str(p.get("part_number")) for p in by_pn.values()
+                  if _costed_outline(p) is None and not p.get("_blank_provisional")
+                  and _stated_weight_kg_for_part(p)]
+    if len(votes) != 1 or len(next(iter(votes.values()))) < 2:
+        # SAID, NOT SILENT (D-456): on the first replay this pass stood down without a word
+        # and nobody could tell the vote from a crash.
+        if unmeasured:
+            print(f"   [weight] {len(unmeasured)} part(s) have a stated weight and no measured "
+                  f"outline ({', '.join(unmeasured[:6])}), but the pack gave no model-material "
+                  f"reading (votes: "
+                  + (", ".join(f"{m}: {', '.join(w)}" for m, w in votes.items()) or "none")
+                  + ") — their blanks stay as recorded", flush=True)
         return []
     (mat, who), = votes.items()
-    if len(who) < 2:
-        return []
     pmm = {"material": mat, "parts": who}
     # Related geometry: the measured outlines of parts of the same material and gauge.
     groups: Dict[Tuple[str, float], List[Dict[str, Any]]] = {}
     for p in by_pn.values():
-        co = _costed_outline(p)
+        co = _weight_check_reading(p)
         t = _safe_float(p.get("normalized_thickness_mm"))
         if co and t:
             groups.setdefault((str(p.get("normalized_material") or "").upper(), round(t, 2)), []).append(

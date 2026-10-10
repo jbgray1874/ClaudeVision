@@ -1,6 +1,6 @@
 {
   "_reviewed": "The next-run gates from the second review of the 13:23 book (10 Oct 2026), with the pins that already held. Structure and basis, not the workbook's money. docs/briefs/8188-08.md.",
-  "_note": "Codes compare on letters and digits only. Check a replay with tools/replay_saved_job.py output/json/8188-08.json --facts docs/briefs/8188-08.facts.json; check a finished book with tools/check_book_against_brief.py.",
+  "_note": "Codes compare on letters and digits only. Check a replay with tools/replay_saved_job.py output/json/8188-08.json --facts docs/briefs/8188-08.facts.json; check a finished book with tools/check_book_against_brief.py. required_operations proves the goalpost's cut list is sawn and its stated weld charged.",
   "product_root": "8188-08_GA",
   "exactly_one_line": {
     "HEADED HEX DRIVE": 4
@@ -17,15 +17,40 @@
     "8188-08-016": 2
   },
   "provisional_material": {
-    "8188-08-013": {"min_unit_material_gbp": 5.0}
+    "8188-08-013": {
+      "min_unit_material_gbp": 5.0
+    }
   },
   "material_charged": [
-    "8188-29-001", "8188-29-002", "8188-08-008", "8188-08-010", "8188-08-011",
-    "8188-08-013", "8188-08-014", "8188-08-015"
+    "8188-29-001",
+    "8188-29-002",
+    "8188-08-008",
+    "8188-08-010",
+    "8188-08-011",
+    "8188-08-013",
+    "8188-08-014",
+    "8188-08-015"
   ],
-  "commercial_basis": ["PACKAGING", "DELIVERY"],
-  "commercial_breaks": [1, 5, 10, 50],
+  "commercial_basis": [
+    "PACKAGING",
+    "DELIVERY"
+  ],
+  "commercial_breaks": [
+    1,
+    5,
+    10,
+    50
+  ],
   "no_cut_assemblies": true,
   "no_gauge_decision_on_assemblies": true,
-  "forbidden_names_everywhere": ["8188-12-001", "8188-12-GA"]
+  "forbidden_names_everywhere": [
+    "8188-12-001",
+    "8188-12-GA"
+  ],
+  "required_operations": {
+    "8188-29-001": [
+      "saw",
+      "welding"
+    ]
+  }
 }

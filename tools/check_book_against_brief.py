@@ -264,16 +264,24 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         me = pe.get("material_estimate") or {}
         money = _num(me.get("unit_material_cost_gbp"))
         floor = _num((want or {}).get("min_unit_material_gbp")) or 0.0
-        rec = (_wparts.get(_sq(code)) or pe).get("_blank_provisional")
-        measured = (_wparts.get(_sq(code)) or {}).get("geometry_source") or ""
+        _wpart = _wparts.get(_sq(code)) or {}
+        rec = (_wpart or pe).get("_blank_provisional")
+        # A CUT PATH IS NOT AN OUTLINE (D-456): "dxf_cut_length_only" carries "dxf" and the
+        # first replay called 013's unmeasured blank a measured outline. One shared test.
+        try:
+            import blank_credibility as _bc
+            _measured = _bc.blank_is_measured(_wpart)
+        except Exception:                                        # noqa: BLE001
+            _measured = False
         said = isinstance(rec, dict) and "measured_mm" in rec and "inferred_mm" in rec
-        ok = money is not None and money >= floor and (said or "dxf" in str(measured).lower())
+        ok = money is not None and money >= floor and (said or _measured)
         res.add("provisional_material", code, ok,
                 f"material £{money} (floor £{floor:g}); "
                 + (f"basis {rec.get('basis')}, measured {rec.get('measured_mm')}, inferred "
                    f"{rec.get('inferred_mm')}" if said else
-                   ("measured outline" if "dxf" in str(measured).lower() else
-                    "no provisional record and no measured outline")))
+                   ("measured blank" if _measured else
+                    "no provisional record and no measured blank — "
+                    + str(_wpart.get('geometry_source') or 'no geometry source'))))
     if facts.get("commercial_basis"):
         cls = {str(c.get("code") or "").upper(): c for c in (summary.get("commercial_lines") or [])
                if isinstance(c, dict)}
@@ -293,15 +301,21 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
             basis = str(c.get("basis_chosen") or "")
             breaks = {int(k): v for k, v in (c.get("order_gbp_at_breaks") or {}).items()}
             missing = [q for q in want_breaks if q not in breaks]
+            # Weak history IS the justified working basis where the line states why the
+            # counted shipment could not price (the market refused, nothing counted) — the
+            # policy asks for the best-supported basis SAID, not for history never to win.
             hist_ok = ("history" not in basis.lower()) or ("comparable" in basis.lower()
-                                                           and "weak" not in basis.lower())
+                                                           and "weak" not in basis.lower()) \
+                or ("weak" in basis.lower() and "(" in basis
+                    and "recorded no reason" not in basis)
             ok = bool(basis) and not missing and hist_ok
             res.add("commercial_basis", code, ok,
                     (f"basis: {basis or 'NOT NAMED'}; " +
                      ("; ".join(f"{q}: £{float(breaks[q]) / max(q, 1):.2f}/unit" for q in sorted(breaks))
                       or "no breaks held") +
                      (f"; breaks missing {missing}" if missing else "") +
-                     ("" if hist_ok else "; history used without comparable customer and quantity")))
+                     ("" if hist_ok else "; history won with no stated reason why the shipment "
+                                        "basis did not price")))
     if facts.get("no_gauge_decision_on_assemblies"):
         import costed_facts as _cf
         from detail_page_geometry import not_cut_from_a_blank

@@ -26,6 +26,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
 os.environ.setdefault("SDI_OFFLINE", "1")
 
 import commercial_lines as cl                                         # noqa: E402
@@ -203,3 +204,78 @@ def test_a_sections_own_cut_list_is_sawn_per_piece():
     pr2 = e.estimate_process_times(no_list, quantity=1)
     assert "saw" not in (pr2.get("run_times_min_per_unit") or {}), \
         "no cut list stated, no saw invented"
+
+
+# ── the first replay's stand-down (D-456) ────────────────────────────────────────────
+
+def _live_shape(pn, L, W, area, kg):
+    """As the saved record holds a wave: measured DXF net area, size stamped INFERRED (read
+    off a shared sheet) — exactly what refused the vote on the first replay."""
+    p = _measured_acrylic(pn, L, W, area, kg)
+    p["blank_is_inferred"] = True
+    p["geometry_source"] = "dxf_cut_length_only"
+    del p["dxf_augmented"]
+    return p
+
+
+def test_inferred_sizes_with_measured_areas_still_vote_and_fill_the_gap():
+    parts = [_live_shape("014", 2257.4, 199.99, 285684, 6.728),
+             _live_shape("015", 2354.72, 99.99, 106666, 2.512),
+             _live_shape("008", 1143, 98, 111517, 2.626), _unmeasured_013()]
+    pes = [e.estimate_part(p, 1) for p in parts]
+    assert e.fill_unmeasured_blanks_from_the_job(parts, pes, 1) == ["013"]
+    me = pes[3]["material_estimate"]
+    assert abs(me["blank_width_mm"] - 227.4) < 0.5 and me["unit_material_cost_gbp"] > 5.0
+    assert parts[3]["_blank_provisional"]["basis"] == "mass_implied_area"
+
+
+def test_a_blank_this_rule_wrote_cannot_vote_and_a_stand_down_is_said(capsys):
+    allowed = _live_shape("099", 2190.0, 227.0, 497000, 11.7)
+    allowed["_blank_provisional"] = {"basis": "mass_implied_area"}
+    assert e._weight_check_reading(allowed) is None, "feeding the allowance back is circular"
+    parts = [_live_shape("014", 2257.4, 199.99, 285684, 6.728), _unmeasured_013()]
+    pes = [e.estimate_part(p, 1) for p in parts]
+    assert e.fill_unmeasured_blanks_from_the_job(parts, pes, 1) == []
+    out = capsys.readouterr().out
+    assert "no model-material reading" in out and "013" in out, \
+        "one vote is no pack reading, and the stand-down is said, not silent"
+
+
+def test_a_cut_path_only_dxf_is_not_a_measured_blank_on_the_gate():
+    from check_book_against_brief import check
+    summary = {"manufacturing_writeup": {"parts": [
+                   {"part_number": "013", "geometry_source": "dxf_cut_length_only"}]},
+               "estimate_summary": {"part_estimates": [
+                   {"part_number": "013", "material_estimate": {"unit_material_cost_gbp": 1.54}}]}}
+    res = check(summary, {"provisional_material": {"013": {"min_unit_material_gbp": 5}}})
+    (name, item, ok, detail), = [r for r in res.rows if r[0] == "provisional_material"]
+    assert not ok and "measured outline" not in detail and "no provisional record" in detail
+
+
+def test_weak_history_passes_only_with_the_shipments_refusal_stated():
+    from check_book_against_brief import check
+
+    def _summary(basis):
+        return {"manufacturing_writeup": {"parts": []}, "estimate_summary": {"part_estimates": []},
+                "commercial_lines": [{"code": "PACKAGING", "basis_chosen": basis,
+                                      "order_gbp_at_breaks": {1: 10.0, 50: 500.0}}]}
+    facts = {"commercial_basis": ["PACKAGING"], "commercial_breaks": [1, 50]}
+    said = ("SDI Live history only — weak comparability; the counted shipment could not be "
+            "priced (the market answered per order, not per pallet — refused)")
+    unsaid = "SDI Live history only — weak comparability, no shipment could be priced"
+    lost = ("SDI Live history only — weak comparability; the counted shipment could not be "
+            "priced (the shipment rung recorded no reason — investigate)")
+    for basis, want in ((said, True), (unsaid, False), (lost, False)):
+        res = check(_summary(basis), facts)
+        (_, _, ok, _), = [r for r in res.rows if r[0] == "commercial_basis"]
+        assert ok is want, basis
+
+
+def test_every_shipment_refusal_carries_a_reason(monkeypatch):
+    import palletising
+    monkeypatch.setattr(palletising, "plan_shipment", lambda parts, q: {"pallet_count": 2.0})
+    monkeypatch.setattr(cl, "_commercial_researcher", lambda brief: {})
+    order = {"order_quantity": 7, "shipment": {"pallet_count": 2.0},
+             "shippable_parts": [{"part_number": "P"}]}
+    assert cl._counted_shipment_price("PACKAGING", order) is None
+    assert cl.shipment_status("PACKAGING", order), "a silent refusal is how weak history won unexplained"
