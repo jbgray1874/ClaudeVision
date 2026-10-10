@@ -3005,6 +3005,117 @@ def _model_bends_agree(part: Dict[str, Any], count: Any) -> bool:
         return False
 
 
+
+def _measured_outline_kg(part: Dict[str, Any], density: float) -> Optional[float]:
+    """The part's measured cut outline at its gauge in `density`, or None where no outline was
+    measured. The same area reading _blank_weight_check uses."""
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    t = _safe_float(part.get("normalized_thickness_mm"))
+    area = _safe_float(ng.get("blank_area_mm2") or part.get("blank_area_mm2")
+                       or (part.get("dxf_raw_geometry") or {}).get("blank_area_mm2"))
+    L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+    W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+    if not (area and t and L and W) or area > L * W * 1.01:
+        return None
+    return area * t * float(density) * 1e-9
+
+
+def pack_model_material(parts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The material a pack's model printed its weights in, where its measured parts say so
+    (D-453). A part whose measured outline weighs its sheet's stated weight in one of config
+    MODEL_DEFAULT_MATERIALS — and not in its own material — votes for it. Two or more votes for
+    one material and none for another is the pack's reading; anything less is None. 8188-08:
+    five acrylic parts (008, 011, 012, 014, 015) each weigh their sheet's figure in mild steel."""
+    tol = float(getattr(config, "MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT", 8.0)) / 100.0
+    votes: Dict[str, List[str]] = {}
+    for p in parts or ():
+        if not isinstance(p, dict):
+            continue
+        stated = _stated_weight_kg_for_part(p)
+        own = str(p.get("normalized_material") or "").upper().replace("_", " ")
+        own_d = MATERIAL_DENSITY_KG_PER_M3.get(own) or MATERIAL_DENSITY_KG_PER_M3.get(own.replace(" ", "_"))
+        if not (stated and own_d):
+            continue
+        own_kg = _measured_outline_kg(p, own_d)
+        if own_kg is None or abs(own_kg - stated) <= stated * tol:
+            continue
+        for alt in (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL",)):
+            a = str(alt).upper()
+            ad = MATERIAL_DENSITY_KG_PER_M3.get(a) or MATERIAL_DENSITY_KG_PER_M3.get(a.replace(" ", "_"))
+            if a != own and ad and abs(_measured_outline_kg(p, ad) - stated) <= stated * tol:
+                votes.setdefault(a, []).append(str(p.get("part_number") or "?"))
+                break
+    if len(votes) != 1:
+        return None
+    (mat, who), = votes.items()
+    return {"material": mat, "parts": who} if len(who) >= 2 else None
+
+
+def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A provisional blank for a sheet part whose blank nothing measured (D-453).
+
+    8188-08-013 was priced on 2190 x 17 — a cut length with no measured width — at £2.34 while
+    its siblings 014 (2257 x 200) and 015 (2355 x 100) were measured. Its sheet states 11.731 kg;
+    the pack's measured parts show the model printed its weights in mild steel. Read in that
+    material at the stated gauge, the weight is 0.498 m² of plate: on the recorded length, an
+    equivalent rectangle 2190 x 227. That is an inference, not a measurement — a shaped part's
+    own envelope is wider than its equivalent rectangle — so the blank is priced as a WORKING
+    figure, the measured and inferred dimensions are said apart, and the question stays. Only
+    where the recorded blank is lighter than the stated weight, the implied width is wider than
+    the recorded one and no wider than the blank is long, and the pack's model material is
+    established by two or more of its own measured parts."""
+    pmm = part.get("_pack_model_material") if isinstance(part.get("_pack_model_material"), dict) else None
+    if not pmm or part.get("_blank_provisional"):
+        return None
+    try:
+        from detail_page_geometry import not_cut_from_a_blank as _nc
+        if _nc(part):
+            return None
+    except Exception:                                                 # noqa: BLE001
+        pass
+    ng = part.setdefault("normalized_geometry", {}) if isinstance(part.get("normalized_geometry"), dict) else None
+    if ng is None:
+        return None
+    L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+    W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+    t = _safe_float(part.get("normalized_thickness_mm"))
+    stated = _stated_weight_kg_for_part(part)
+    own = str(part.get("normalized_material") or "").upper().replace("_", " ")
+    own_d = MATERIAL_DENSITY_KG_PER_M3.get(own) or MATERIAL_DENSITY_KG_PER_M3.get(own.replace(" ", "_"))
+    alt = str(pmm.get("material") or "").upper()
+    alt_d = MATERIAL_DENSITY_KG_PER_M3.get(alt) or MATERIAL_DENSITY_KG_PER_M3.get(alt.replace(" ", "_"))
+    if not (L and W and t and stated and own_d and alt_d) or _measured_outline_kg(part, own_d) is not None:
+        return None
+    long_, short = (L, W) if L >= W else (W, L)
+    if long_ * short * t * alt_d * 1e-9 >= stated * 0.95:
+        return None                                   # the recorded blank already carries the weight
+    w_impl = stated / (long_ * t * alt_d * 1e-9)
+    if not (short * 1.5 < w_impl <= long_):
+        return None
+    new = (long_, round(w_impl, 1)) if L >= W else (round(w_impl, 1), long_)
+    rec = {"recorded_mm": [L, W], "provisional_mm": list(new), "material_read": alt,
+           "evidence_parts": list(pmm.get("parts") or []), "stated_kg": stated, "gauge_mm": t}
+    part["_blank_provisional"] = rec
+    ng["blank_length_mm"], ng["blank_width_mm"] = new
+    ng["blank_length_mm_source"] = ng["blank_width_mm_source"] = "mass_implied_provisional"
+    part["blank_length_mm"], part["blank_width_mm"] = new
+    why = (f"PROVISIONAL BLANK {new[0]:g} x {new[1]:g} mm — recorded {L:g} x {W:g} was not measured "
+           f"(no cut outline); the {long_:g} mm side is the recorded figure, the {w_impl:.0f} mm side "
+           f"is INFERRED: the sheet's {stated:.3f} kg read in {alt.lower()} — the material this pack's "
+           f"model printed its weights in, shown by {', '.join(rec['evidence_parts'][:6])} — at {t:g} mm "
+           f"is {stated / (t * alt_d * 1e-9) / 1e6:.3f} m² of plate, an equivalent rectangle. A shaped "
+           f"part's own envelope is wider, so this is a working figure, not a measurement")
+    part.setdefault("review_flags", []).append(why)
+    try:
+        from source_precedence import raise_manufacturing_question as _ask
+        _ask(part, f"Blank of {part.get('part_number')}: not measured — priced on a provisional "
+                   f"{new[0]:g} x {new[1]:g} mm inferred from its sheet's weight",
+             why, "confirm the blank from the model or a DXF with the cut outline; the material and "
+                  "the cut both follow it", "estimator._apply_mass_implied_blank")
+    except Exception:                                                 # noqa: BLE001
+        pass
+    return rec
+
 def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
     """The blank at the charged gauge against the sheet's stated weight (D-392), or None.
 
@@ -9032,6 +9143,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         part.setdefault("review_flags", []).append(
             "top-level unit/GA line (…-00-…) treated as assembly parent — material carried "
             "by children, fabrication route suppressed; estimator to verify")
+    # A BLANK NOTHING MEASURED, PRICED ON THE PACK'S OWN EVIDENCE BEFORE THE MATERIAL (D-453).
+    try:
+        _apply_mass_implied_blank(part)
+    except Exception:                                                # noqa: BLE001
+        pass
     material = estimate_material(part)
     # THE BLANK THE MATERIAL WAS COSTED ON, for every later check on this part (D-450).
     try:
@@ -11909,8 +12025,12 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 if _from_live and _unit else
                 (f"AI MARKET FIGURE £{float(_unit):.2f}/unit — an indication from the market "
                  f"lookup, not a quotation; confirm or replace it before quoting"
+                 + (f". Basis: {(_cline or {}).get('basis_chosen')}"
+                    if (_cline or {}).get("basis_chosen") else "")
                  + (f". Shipment: {(_cline or {}).get('shipment_working')}"
                     if (_cline or {}).get("shipment_working") else "")
+                 + (f". {(_cline or {}).get('cross_check')}"
+                    if (_cline or {}).get("cross_check") else "")
                  + (f". Packing method: {(_cline or {}).get('method_status')}"
                     if (_cline or {}).get("method_status") else "")
                  + (f". SDI Live: {(_cline or {}).get('sdi_live_status')}"
