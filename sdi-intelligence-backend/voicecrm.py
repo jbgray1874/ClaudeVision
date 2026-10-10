@@ -144,7 +144,14 @@ def projects(request: Request, user: dict = Depends(auth.require_user)):
                 "detail": ("No Microsoft Graph token for this session. Sign in again, and "
                            "check that a Sites.* scope is in SDI_GRAPH_SCOPES and has been "
                            "consented for this application.")}
+    return records_for(token)
 
+
+def records_for(token: str) -> dict:
+    """The owner's records, read from the tracker with this person's Graph
+    token. Shared by the web app and the connector (voicecrm_connector.py)."""
+    if not CONFIGURED:
+        return {"state": "not_configured", "detail": _status_payload(), "items": []}
     if EXCEL:
         data = EXCEL.rows(token)
         if data.get("state") == "graph_error" and data.get("status") in (403, 404):
@@ -424,28 +431,37 @@ def _spoken_value(value) -> str:
 @router.post("/api/voicecrm/propose")
 def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require_user)):
     """Validate a change and read it back. Nothing is written by this call."""
+    return propose_change(user, lambda: auth.graph_token(request),
+                          body.item_id, body.field, body.new_value)
+
+
+def propose_change(user: dict, get_token, item_id: str, field: str, new_value: str,
+                   source: str = "app") -> dict:
+    """The propose step for the web app and the connector alike. `get_token`
+    gives this person's Graph token; it is only asked for once the change has
+    passed the checks that need no tracker. Writes nothing but the journal."""
     blocked = _write_gate(user)
     if blocked:
         return blocked
 
-    if not _editable(body.field):
-        return {"state": "field_not_editable", "field": body.field, "editable": EDITABLE,
-                "detail": (f"{body.field} can't be changed from here. "
+    if not _editable(field):
+        return {"state": "field_not_editable", "field": field, "editable": EDITABLE,
+                "detail": (f"{field} can't be changed from here. "
                            f"You can change {_editable_label()}.")}
 
-    if _is_money(body.field):
-        amount = _money_value(body.new_value)
+    if _is_money(field):
+        amount = _money_value(new_value)
         if amount is None:
-            return {"state": "invalid_value", "field": body.field,
-                    "detail": (f"'{body.new_value}' isn't a clear amount for {body.field}. "
+            return {"state": "invalid_value", "field": field,
+                    "detail": (f"'{new_value}' isn't a clear amount for {field}. "
                                f"Say it as a number, e.g. fifteen thousand five hundred.")}
-        body.new_value = amount
+        new_value = amount
 
-    token = auth.graph_token(request)
+    token = get_token()
     if not token:
         return {"state": "no_token", "detail": "No Microsoft Graph token for this session."}
 
-    item, err = _fetch_item(token, body.item_id)
+    item, err = _fetch_item(token, item_id)
     if err:
         return err
 
@@ -454,36 +470,36 @@ def propose(body: ProposeIn, request: Request, user: dict = Depends(auth.require
         # The owner check is enforced here, not by the view the records came from.
         return {"state": "not_your_record",
                 "detail": f"That record's {OWNER_FIELD} is not {OWNER}."}
-    if body.field not in fields:
-        return {"state": "field_not_editable", "field": body.field,
-                "detail": f"There is no column called {body.field} in the tracker."}
-    if EXCEL and EXCEL.is_formula(token, item, body.field):
-        return {"state": "field_not_editable", "field": body.field,
-                "detail": (f"{body.field} is calculated by a formula in the sheet, "
+    if field not in fields:
+        return {"state": "field_not_editable", "field": field,
+                "detail": f"There is no column called {field} in the tracker."}
+    if EXCEL and EXCEL.is_formula(token, item, field):
+        return {"state": "field_not_editable", "field": field,
+                "detail": (f"{field} is calculated by a formula in the sheet, "
                            f"so it can't be typed over.")}
 
-    old_value = fields.get(body.field)
-    if str(old_value or "") == body.new_value:
+    old_value = fields.get(field)
+    if str(old_value or "") == new_value:
         return {"state": "no_change",
-                "detail": f"{body.field} is already '{body.new_value}'. Nothing to confirm."}
+                "detail": f"{field} is already '{new_value}'. Nothing to confirm."}
 
     etag = item.get("eTag", "")
     ref = _project_ref(fields)
-    pid = _journal.propose(user=user, item_id=body.item_id, project_ref=ref,
-                           field=body.field, old_value=old_value,
-                           new_value=body.new_value, etag=etag)
+    pid = _journal.propose(user=user, item_id=item_id, project_ref=ref,
+                           field=field, old_value=old_value,
+                           new_value=new_value, etag=etag, source=source)
 
     return {
         "state": "proposed",
         "proposal_id": pid,
         # What the voice agent reads back, verbatim, before taking a yes.
-        "readback": (f"On {ref or 'item ' + body.item_id}, change {body.field} "
-                     f"from '{_spoken_value(old_value) or 'blank'}' to '{_spoken_value(body.new_value)}'. "
+        "readback": (f"On {ref or 'item ' + item_id}, change {field} "
+                     f"from '{_spoken_value(old_value) or 'blank'}' to '{_spoken_value(new_value)}'. "
                      f"Is that right?"),
         # The parts, so the app can read several changes back as one.
-        "item_id": body.item_id, "project_ref": ref, "field": body.field,
-        "old_value": old_value or "", "new_value": body.new_value,
-        "old_spoken": _spoken_value(old_value), "new_spoken": _spoken_value(body.new_value),
+        "item_id": item_id, "project_ref": ref, "field": field,
+        "old_value": old_value or "", "new_value": new_value,
+        "old_spoken": _spoken_value(old_value), "new_spoken": _spoken_value(new_value),
         "expires_in_seconds": journal.PROPOSAL_TTL_SECONDS,
     }
 
@@ -514,41 +530,47 @@ def _only_own_changes(item: dict, entry: dict) -> bool:
 @router.post("/api/voicecrm/confirm")
 def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require_user)):
     """Apply a proposal, once. A repeated confirm returns the first outcome."""
+    return confirm_change(user, lambda: auth.graph_token(request), body.proposal_id, body.confirmed)
+
+
+def confirm_change(user: dict, get_token, proposal_id: str, confirmed: bool) -> dict:
+    """The confirm step for the web app and the connector alike: re-check,
+    write once, journal. `get_token` gives this person's Graph token."""
     blocked = _write_gate(user)
     if blocked:
         return blocked
 
-    entry = _journal.get(body.proposal_id)
+    entry = _journal.get(proposal_id)
     if not entry:
         return {"state": "unknown_proposal", "detail": "No such proposal."}
 
     # Idempotency: the whole point of the journal. A second confirm never writes.
     if entry["state"] != "proposed":
         return {"state": entry["state"], "already_resolved": True,
-                "proposal_id": body.proposal_id, "outcome": entry["outcome"],
+                "proposal_id": proposal_id, "outcome": entry["outcome"],
                 "detail": "This proposal was already resolved; nothing was written again."}
 
-    if not body.confirmed:
-        _journal.finish(body.proposal_id, "failed", "Declined by the user.")
-        return {"state": "declined", "proposal_id": body.proposal_id}
+    if not confirmed:
+        _journal.finish(proposal_id, "failed", "Declined by the user.")
+        return {"state": "declined", "proposal_id": proposal_id}
 
     if entry["user_oid"] and entry["user_oid"] != user.get("oid"):
-        _journal.finish(body.proposal_id, "failed", "Confirmed by a different user.")
+        _journal.finish(proposal_id, "failed", "Confirmed by a different user.")
         return {"state": "wrong_user",
                 "detail": "A proposal can only be confirmed by the person who made it."}
 
-    token = auth.graph_token(request)
+    token = get_token()
     if not token:
         return {"state": "no_token", "detail": "No Microsoft Graph token for this session."}
 
     item, err = _fetch_item(token, entry["item_id"])
     if err:
-        _journal.finish(body.proposal_id, "failed", str(err.get("detail", ""))[:300])
+        _journal.finish(proposal_id, "failed", str(err.get("detail", ""))[:300])
         return err
 
     fields = item.get("fields", {}) or {}
     if not _owner_ok(fields):
-        _journal.finish(body.proposal_id, "failed", "Owner changed since the proposal.")
+        _journal.finish(proposal_id, "failed", "Owner changed since the proposal.")
         return {"state": "not_your_record", "detail": "That record is no longer yours."}
 
     # Someone else edited the record while we were talking about it. Abandon the
@@ -556,7 +578,7 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
     # the same row a moment ago (the earlier parts of one "yes") don't count.
     if (entry["etag"] and item.get("eTag") and item["eTag"] != entry["etag"]
             and not _only_own_changes(item, entry)):
-        _journal.finish(body.proposal_id, "conflict",
+        _journal.finish(proposal_id, "conflict",
                         "The record changed between proposal and confirmation.")
         return {"state": "conflict",
                 "detail": ("Someone changed that record while we were talking. Nothing was "
@@ -568,7 +590,7 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
         # read-to-write window this leaves open.
         err = EXCEL.apply(token, item, entry["field"], entry["new_value"])
         if err:
-            _journal.finish(body.proposal_id, "failed",
+            _journal.finish(proposal_id, "failed",
                             f"{err.get('state')}: {str(err.get('detail', ''))[:300]}")
             return err
     else:
@@ -581,24 +603,24 @@ def confirm(body: ConfirmIn, request: Request, user: dict = Depends(auth.require
                 res = client.patch(url, headers=headers,
                                    json={entry["field"]: entry["new_value"]})
         except httpx.HTTPError as exc:
-            _journal.finish(body.proposal_id, "failed", f"Graph unreachable: {exc}")
+            _journal.finish(proposal_id, "failed", f"Graph unreachable: {exc}")
             return {"state": "unreachable", "detail": f"Could not reach Microsoft Graph: {exc}"}
 
         if res.status_code == 412:
-            _journal.finish(body.proposal_id, "conflict", "Precondition failed on write.")
+            _journal.finish(proposal_id, "conflict", "Precondition failed on write.")
             return {"state": "conflict",
                     "detail": "The record changed as we wrote. Nothing was saved."}
 
         if res.status_code >= 300:
             detail = _graph_detail(res)
-            _journal.finish(body.proposal_id, "failed", f"HTTP {res.status_code}: {detail}")
+            _journal.finish(proposal_id, "failed", f"HTTP {res.status_code}: {detail}")
             # Never report success for a write that did not happen.
             return {"state": "failed", "status": res.status_code, "detail": detail}
 
-    _journal.finish(body.proposal_id, "applied",
+    _journal.finish(proposal_id, "applied",
                     f"{entry['field']}: '{entry['old_value']}' -> '{entry['new_value']}' "
                     f"(approved by {APPROVED_BY})")
-    return {"state": "applied", "proposal_id": body.proposal_id,
+    return {"state": "applied", "proposal_id": proposal_id,
             "project_ref": entry["project_ref"], "field": entry["field"],
             "old_value": entry["old_value"], "new_value": entry["new_value"],
             "old_spoken": _spoken_value(entry["old_value"]),

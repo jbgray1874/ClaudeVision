@@ -1440,7 +1440,8 @@ async function loadActivity(){
     return '<div class="act-row"><div class="act-when">'+esc(when(e.created))+'</div><div class="act-what">'
       +'<b>'+esc(e.field)+'</b> on '+esc(e.project_ref||e.item_id)+': '
       +esc(e.old_spoken||e.old_value||'blank')+' → <b>'+esc(e.new_spoken||e.new_value)+'</b>'
-      +(who?' · '+esc(who):'')+note+'</div>'+badge(label,cls)+'</div>';
+      +(who?' · '+esc(who):'')+(e.source==='connector'?' · via ChatGPT / Claude':'')
+      +note+'</div>'+badge(label,cls)+'</div>';
   }).join('');
 }
 
