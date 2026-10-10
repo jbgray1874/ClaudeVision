@@ -2098,6 +2098,16 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # INDICATIVE_HOUSE is the right bucket and the reason is in its own definition — a
     # configured, reproducible SDI rate, to verify or accept deliberately. Advisory, not
     # blocking: the number is real, and whether this job pays it is a question, not a gap.
+    # SDI LIVE'S OWN COMMERCIAL FIGURE IS NOT A MARKET FIGURE (D-452). 8188-08's 13:23 book
+    # priced packaging and delivery from twelve past M&S quote lines in SDI Live — the row
+    # said "SDI Live figure", and this classifier, finding no branch for it, filed both under
+    # "researched market price (AI/market lookup)" and counted them among the market figures
+    # to replace. A business rate or history is reproducible SDI evidence, to confirm.
+    if "sdi_live_commercial" in tokens or "sdi live history" in tokens \
+            or "commercialrate" in tokens.replace(" ", ""):
+        return {"class": "sdi_live_commercial", "firmness": INDICATIVE_HOUSE, "owner": "estimator",
+                "label": ("SDI Live's own figure — " + (str(ps.get("source_name") or "past quotes")
+                          ) + "; confirm it fits this order before quoting")}
     if "plater_freight" in tokens:
         try:
             import config as _cfg                                    # noqa: PLC0415
