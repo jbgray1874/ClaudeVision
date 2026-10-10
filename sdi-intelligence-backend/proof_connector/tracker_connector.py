@@ -26,6 +26,7 @@ import time
 from datetime import date, timedelta
 
 import uvicorn
+from mcp.server.apps import Apps
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -33,6 +34,8 @@ from pydantic import BaseModel, Field
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, PlainTextResponse
 from starlette.routing import Route
+
+import cards
 
 KEY = os.getenv("PROOF_KEY", "").strip()
 OWNER = "NG"
@@ -181,7 +184,19 @@ Changing things - always in this order, never skipping a step:
 4. Tell them what confirm_changes reports, including anything not saved.
 If they correct something, start again at step 1."""
 
-mcp = MCPServer(name="SDI Tracker (proof)", instructions=INSTRUCTIONS)
+# Each action shows one of three cards in the app (cards.py). The ui:// address
+# is given twice: once for the MCP Apps standard (Claude and others, via
+# Apps), once under ChatGPT's own key. widgetAccessible lets the Read-back
+# card's Yes / No buttons call confirm_changes.
+apps = Apps()
+UI_RECORDS, UI_CHANGE, UI_RECENT = "ui://sdi/records.html", "ui://sdi/change.html", "ui://sdi/recent.html"
+
+
+def ui(uri: str, working: str, done: str) -> dict:
+    return {"openai/outputTemplate": uri, "openai/widgetAccessible": True,
+            "openai/toolInvocation/invoking": working, "openai/toolInvocation/invoked": done}
+
+
 # Marked so the apps know which actions only read (no approval prompt needed)
 # and that the one save is safe to repeat: a second confirm never saves twice.
 READS = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
@@ -196,7 +211,8 @@ class Change(BaseModel):
                                        "to add to text, send the old text plus the new words")
 
 
-@mcp.tool(annotations=READS, description="Look up tracker records. Leave search empty for all of them, or give a client, "
+@apps.tool(resource_uri=UI_RECORDS, meta=ui(UI_RECORDS, "Checking the tracker…", "Checked the tracker"),
+           annotations=READS, description="Look up tracker records. Leave search empty for all of them, or give a client, "
                       "business unit or job word. Each record has its id, its name and every column; "
                       "dates come with a spoken form.")
 def get_records(search: str = "") -> dict:
@@ -217,14 +233,16 @@ def get_records(search: str = "") -> dict:
         out = get_records("")["records"]
         note = "No record matched that word; these are all the records. Match by sound."
     timed("get_records", started, f"search={search!r} n={len(out)}")
-    return {"today": spoken(TODAY.isoformat()), "count": len(out), "records": out, "note": note}
+    return {"today": spoken(TODAY.isoformat()), "today_iso": TODAY.isoformat(), "count": len(out),
+            "records": out, "note": note}
 
 
-@mcp.tool(annotations=READS, description="Prepare one or more changes and get the read-back. SAVES NOTHING. Read the "
+@apps.tool(resource_uri=UI_CHANGE, meta=ui(UI_CHANGE, "Preparing the read-back…", "Read-back ready"),
+           annotations=READS, description="Prepare one or more changes and get the read-back. SAVES NOTHING. Read the "
                       "read_back to the person and wait for their answer before confirm_changes.")
 def propose_changes(changes: list[Change]) -> dict:
     started = time.monotonic()
-    lines, ok, problems = [], [], []
+    lines, ok, problems, items = [], [], [], []
     for c in changes[:8]:
         if c.record_id not in RECORDS:
             problems.append(f"There's no record {c.record_id}.")
@@ -246,6 +264,8 @@ def propose_changes(changes: list[Change]) -> dict:
             continue
         ok.append({"record_id": c.record_id, "field": field, "old": old, "new": value,
                    "version": VERSION[c.record_id]})
+        items.append({"name": name(c.record_id), "field": field,
+                      "old_spoken": spoken(old), "new_spoken": spoken(value)})
         lines.append(f"{name(c.record_id)}: {field} from {spoken(old)} to {spoken(value)}")
     if not ok:
         timed("propose_changes", started, "nothing to propose")
@@ -256,11 +276,12 @@ def propose_changes(changes: list[Change]) -> dict:
                  + ". ".join(lines) + ". Shall I save " + ("it?" if len(ok) == 1 else "them?"))
     JOURNAL.append({"when": time.time(), "proposal": pid, "state": "proposed", "lines": lines})
     timed("propose_changes", started, f"{pid} n={len(ok)}")
-    return {"state": "awaiting_yes", "proposal_id": pid, "read_back": read_back,
+    return {"state": "awaiting_yes", "proposal_id": pid, "read_back": read_back, "items": items,
             "not_included": problems, "saved": False}
 
 
-@mcp.tool(annotations=SAVES, description="Save a proposal ONLY after the person has heard its read_back and answered. "
+@apps.tool(resource_uri=UI_CHANGE, meta=ui(UI_CHANGE, "Saving…", "Done"),
+           annotations=SAVES, description="Save a proposal ONLY after the person has heard its read_back and answered. "
                       "Pass their reply exactly as they said it; only a plain yes saves.")
 def confirm_changes(proposal_id: str, user_reply: str) -> dict:
     started = time.monotonic()
@@ -280,15 +301,20 @@ def confirm_changes(proposal_id: str, user_reply: str) -> dict:
                             "detail": f"Not saved: '{user_reply}' is not a plain yes."}
         else:
             saved, not_saved = [], []
+            # Versions are checked for the whole proposal before anything is
+            # saved, so two changes to one record in the same sentence don't
+            # trip over each other; each record's version moves on once.
+            changed = {c["record_id"] for c in p["changes"] if VERSION[c["record_id"]] != c["version"]}
             for c in p["changes"]:
                 rid = c["record_id"]
-                if VERSION[rid] != c["version"]:
+                if rid in changed:
                     not_saved.append(f"{name(rid)}: {c['field']} not saved, the record changed "
                                      f"since the read-back.")
                     continue
                 RECORDS[rid][c["field"]] = c["new"]
-                VERSION[rid] += 1
                 saved.append(f"{name(rid)}: {c['field']} is now {spoken(c['new'])}")
+            for rid in {c["record_id"] for c in p["changes"]} - changed:
+                VERSION[rid] += 1
             p["outcome"] = {"state": "saved" if saved and not not_saved else "partly_saved" if saved else "conflict",
                             "saved": bool(saved), "saved_lines": saved, "not_saved": not_saved}
         JOURNAL.append({"when": time.time(), "proposal": proposal_id, "state": p["outcome"]["state"],
@@ -297,10 +323,26 @@ def confirm_changes(proposal_id: str, user_reply: str) -> dict:
     return p["outcome"]
 
 
-@mcp.tool(annotations=READS, description="What has been proposed, saved or declined recently, newest first.")
+@apps.tool(resource_uri=UI_RECENT, meta=ui(UI_RECENT, "Checking recent activity…", "Recent activity"),
+           annotations=READS, description="What has been proposed, saved or declined recently, newest first.")
 def recent_changes(limit: int = 10) -> dict:
-    return {"entries": [{**e, "when": time.strftime("%H:%M", time.localtime(e["when"]))}
-                        for e in reversed(JOURNAL[-limit:])]}
+    # One entry per proposal, as it stands now: what was proposed, its latest
+    # outcome, and the reply that decided it. Newest first.
+    latest: dict[str, dict] = {}
+    for e in JOURNAL:
+        cur = latest.setdefault(e["proposal"], {"proposal": e["proposal"], "lines": e["lines"],
+                                                "state": e["state"], "when": e["when"]})
+        if e["state"] != "proposed":
+            cur.update(state=e["state"], when=e["when"], reply=e.get("reply", ""),
+                       saved_lines=e.get("lines", []))
+    entries = sorted(latest.values(), key=lambda e: e["when"], reverse=True)[:limit]
+    return {"entries": [{**e, "when": time.strftime("%H:%M", time.localtime(e["when"]))} for e in entries]}
+
+
+apps.add_html_resource(UI_RECORDS, cards.RECORDS_HTML, title="Records")
+apps.add_html_resource(UI_CHANGE, cards.CHANGE_HTML, title="Read-back")
+apps.add_html_resource(UI_RECENT, cards.RECENT_HTML, title="Recent activity")
+mcp = MCPServer(name="SDI Tracker (proof)", instructions=INSTRUCTIONS, extensions=[apps])
 
 
 # ── A page to watch the proof from a laptop: what was asked, saved, and how fast ─

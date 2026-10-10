@@ -5,6 +5,10 @@ Lets ChatGPT's or Claude's own voice mode talk to a tracker through our rules
 memory only: no SharePoint, Graph, Entra or real data. See the docstring in
 `tracker_connector.py`.
 
+It also shows three cards inside the conversation (`cards.py`): **Records**,
+**Read-back** with Yes / No buttons (which then shows what was saved), and
+**Recent activity**. Tapping Yes calls our server directly, no AI judgement.
+
 ## 1. Put it on Azure (about 10 minutes, laptop, PowerShell)
 
 Needs the Azure CLI (`winget install Microsoft.AzureCLI`, then reopen PowerShell).
@@ -53,8 +57,12 @@ Open the Journal address on a laptop or second phone to watch what happens.
 7. Talk over a long answer. Does it stop and listen?
 8. Ask something off-topic, then go back to the tracker.
 
+9. At a desk, typed: "show me my records", then ask for a change and tap
+   **Yes — save** on the card. Then "show recent activity".
+
 For each, note: did it understand, how long the pause was, did it read back
-before saving, and did it wait for your yes. The real tracker would add about
+before saving, did it wait for your yes, and did the cards appear (in voice
+mode as well as typed chat?). The real tracker would add about
 1–2 s per lookup or save for Microsoft Graph.
 
 ## 4. Remove it
