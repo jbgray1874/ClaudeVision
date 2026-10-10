@@ -421,3 +421,84 @@ def test_the_part_records_outrank_the_stored_commercial_list():
     only_stored = {"commercial_lines": [stale], "manufacturing_writeup": {"parts": []}}
     assert cl.collect_lines(only_stored)[0]["order_gbp"] == 10.06, \
         "with no stub, the stored list still fills the gap"
+
+
+# ── the 19:35 book's review (D-460) ──────────────────────────────────────────────────
+
+def test_a_counted_saw_time_is_exempt_from_the_throughput_floor():
+    goal = {"part_number": "G-1", "description": "GOALPOST", "normalized_material": "MILD STEEL",
+            "quantity": 1, "section_stock": {"a": 25.4, "b": 25.4, "wall_mm": 1.22,
+                                             "cut_lengths_mm": [300.0, 300.0, 1272.0],
+                                             "cut_lengths_mm_source": "drawing_deterministic"}}
+    e.estimate_process_times(goal, quantity=1)
+    assert "saw" in goal.get("_counted_op_times", {}), "the claim travels on the record"
+    assert "cut list" in goal["_counted_op_times"]["saw"]
+    import inspect
+    import wb_populate
+    src = inspect.getsource(wb_populate)
+    assert "_counted_op_times" in src, "the workbook's floor guard reads the claim"
+
+
+def test_the_weight_check_reads_the_packs_material_and_respects_measured_extents():
+    pmm = {"material": "MILD STEEL", "parts": ["A", "B"]}
+    # extents already explain the weight: a NOTE, not a new width in another material
+    settled = {"part_number": "013", "normalized_material": "ACRYLIC",
+               "normalized_thickness_mm": 3.0, "stated_weight_kg": 11.731,
+               "_pack_model_material": pmm,
+               "_blank_provisional": {"basis": "model_extents"},
+               "_costed_blank_mm": [2190.34, 257.37]}
+    note = e._blank_weight_check(settled)
+    assert note and note.startswith("WEIGHT NOTE:"), note
+    assert "inside the" in note and "supports the blank" in note
+    assert "aluminium" not in note.lower(), "no width is proposed in a material nothing supports"
+    # no pack reading: the default materials still answer as before
+    free = {"part_number": "X", "normalized_material": "ACRYLIC", "normalized_thickness_mm": 3.0,
+            "stated_weight_kg": 11.731, "_costed_blank_mm": [2190.34, 17.0]}
+    chk = e._blank_weight_check(free)
+    assert chk and chk.startswith("WEIGHT CHECK:")
+
+
+def test_an_assembly_is_nobodys_related_blank():
+    parts = [_live_shape("014", 2257.4, 199.99, 285684, 6.728),
+             _live_shape("015", 2354.72, 99.99, 106666, 2.512),
+             _live_shape("008", 1143, 98, 111517, 2.626),
+             {"part_number": "8188-08_GA", "description": "ASSY", "normalized_material": "ACRYLIC",
+              "normalized_thickness_mm": 3.0, "stated_weight_kg": 43.6, "is_assembly_parent": True,
+              "normalized_geometry": {"blank_length_mm": 53.0, "blank_width_mm": 20.0}},
+             _unmeasured_013()]
+    pes = [e.estimate_part(p, 1) for p in parts]
+    assert e.fill_unmeasured_blanks_from_the_job(parts, pes, 1) == ["013"]
+    rel = parts[-1].get("_related_measured_blanks") or []
+    assert not any("GA" in str(r.get("part_number")) for r in rel), \
+        "the GA's envelope is not supporting evidence for a part's blank"
+
+
+def test_a_wrong_unit_gets_one_corrective_re_ask(monkeypatch):
+    import palletising
+    monkeypatch.setattr(palletising, "plan_shipment", lambda parts, q: {"pallet_count": 2.0})
+    calls = []
+
+    def _research(brief):
+        calls.append(brief)
+        return ({"price_gbp": 12.0, "unit": "each"} if len(calls) == 1
+                else {"price_gbp": 60.0, "unit": "per_pallet"})
+    monkeypatch.setattr(cl, "_commercial_researcher", _research)
+    order = {"order_quantity": 5, "shipment": {"pallet_count": 2.0},
+             "shippable_parts": [{"part_number": "P"}]}
+    got = cl._counted_shipment_price("DELIVERY", order)
+    assert got and got["order_gbp"] == 120.0
+    assert len(calls) == 2 and "Your last answer was priced per each" in calls[1]["ask"]
+
+    calls.clear()
+    monkeypatch.setattr(cl, "_commercial_researcher",
+                        lambda brief: (calls.append(brief) or {"price_gbp": 12.0, "unit": "each"}))
+    assert cl._counted_shipment_price("DELIVERY", order) is None
+    assert len(calls) == 2 and "twice (once re-asked)" in cl.shipment_status("DELIVERY", order)
+
+
+def test_a_past_quotes_class_word_price_is_flagged_as_history_not_market():
+    import inspect
+    import wb_populate
+    src = inspect.getsource(wb_populate)
+    assert "a past SDI quote's line price (SDI Live history) via" in src
+    assert "historical_quote" in src

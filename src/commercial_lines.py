@@ -758,6 +758,19 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         # figure is still not a pallet rate.
         _said = _unit_word((_r or {}).get("unit"))
         _units_ok = {unit} | ({"parcel", "box"} if unit == "carton" else set())
+        # ONE CORRECTIVE RE-ASK (D-460), the same shape as the vision re-ask (D-415b): the
+        # model answered per each on one run and per pallet on another for the same brief.
+        # A wrong unit gets one more ask that names the fault; a second wrong answer is a
+        # recorded refusal.
+        if _num((_r or {}).get("price_gbp")) and _said not in _units_ok:
+            _r2 = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
+                                          "wanted_unit": unit,
+                                          "ask": (f"Your last answer was priced per {_said or 'unit unstated'}, "
+                                                  f"which cannot be used. Give the cost of exactly ONE "
+                                                  f"{unit.upper()} — {desc}. Set \"unit\" to \"{unit}\".")})
+            _said2 = _unit_word((_r2 or {}).get("unit"))
+            if _num((_r2 or {}).get("price_gbp")) and _said2 in _units_ok:
+                _r, _said = _r2, _said2
         if not _num((_r or {}).get("price_gbp")):
             _SHIPMENT_STATUS[_status_key] = (f"the market gave no per-{unit} figure for this "
                                              f"shipment")
@@ -765,8 +778,8 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
             rate = _r
         else:
             _SHIPMENT_STATUS[_status_key] = (f"the market answered per {_said or 'unstated unit'}, "
-                                             f"not per {unit} — refused, it cannot be multiplied "
-                                             f"by the {unit}s counted")
+                                             f"not per {unit}, twice (once re-asked) — refused, it "
+                                             f"cannot be multiplied by the {unit}s counted")
     except Exception as _exc:                                        # noqa: BLE001
         _SHIPMENT_STATUS[_status_key] = f"the market lookup failed ({type(_exc).__name__})"
         rate = None
