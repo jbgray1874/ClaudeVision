@@ -3230,6 +3230,12 @@ def related_measured_blanks(parts: List[Dict[str, Any]]) -> None:
         for p in members:
             if not _bc.blank_is_measured(p):
                 continue
+            try:
+                from detail_page_geometry import not_cut_from_a_blank as _nc_r
+                if _nc_r(p):
+                    continue             # an assembly's envelope is nobody's related blank
+            except Exception:                                         # noqa: BLE001
+                pass
             ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"), dict) else {}
             L = _safe_float(ng.get("blank_length_mm") or p.get("blank_length_mm"))
             W = _safe_float(ng.get("blank_width_mm") or p.get("blank_width_mm"))
@@ -3352,6 +3358,12 @@ def fill_unmeasured_blanks_from_the_job(parts: List[Dict[str, Any]],
     # Related geometry: the measured outlines of parts of the same material and gauge.
     groups: Dict[Tuple[str, float], List[Dict[str, Any]]] = {}
     for p in by_pn.values():
+        try:
+            from detail_page_geometry import not_cut_from_a_blank as _nc_g
+            if _nc_g(p):
+                continue                 # an assembly's envelope is nobody's related blank
+        except Exception:                                             # noqa: BLE001
+            pass
         co = _weight_check_reading(p)
         t = _safe_float(p.get("normalized_thickness_mm"))
         if co and t:
@@ -3494,13 +3506,31 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         # until the blank is confirmed, and the question carries the implied size.
         if not _measured_area and blank_kg < stated:
             _long, _short = (L, W) if L >= W else (W, L)
-            for _alt in (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL",)):
+            # THE PACK'S OWN READING FIRST (D-460). Where the job's measured parts have
+            # established which material the model printed its weights in, only that material
+            # is read — the 19:35 book proposed "661 mm in aluminium" beside a blank already
+            # settled on mild-steel evidence, an alternative nothing supports.
+            _pmm0 = part.get("_pack_model_material") if isinstance(
+                part.get("_pack_model_material"), dict) else None
+            _alts = ([_pmm0["material"]] if _pmm0 and _pmm0.get("material") else
+                     (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL",)))
+            for _alt in _alts:
                 _alt_u = str(_alt).upper()
                 _ad = (MATERIAL_DENSITY_KG_PER_M3.get(_alt_u)
                        or MATERIAL_DENSITY_KG_PER_M3.get(_alt_u.replace(" ", "_")))
                 if not _ad:
                     continue
                 _w_impl = stated / (_long * t * float(_ad) * 1e-9)
+                # A PROVISIONAL BLANK FROM MEASURED EXTENTS IS NOT RE-QUESTIONED BY THE
+                # WEIGHT IT ALREADY EXPLAINS (D-460): the weight's equivalent rectangle
+                # sitting INSIDE the extents is what a shaped part looks like.
+                if (part.get("_blank_provisional") and _w_impl <= _short * 1.05):
+                    return (f"WEIGHT NOTE: the sheet's {stated:.3f} kg read in {_alt_u.lower()} "
+                            f"at {t:g} mm is an equivalent rectangle {_long:g} x {_w_impl:.0f} mm "
+                            f"— inside the {_long:g} x {_short:g} provisional blank from the "
+                            f"part's measured extents, as a shaped part should be. The weight "
+                            f"supports the blank; nothing to settle beyond the blank question "
+                            f"already raised")
                 if _short < _w_impl <= _long:
                     return (f"WEIGHT CHECK: the {L:g} x {W:g} blank was not measured (no cut "
                             f"outline) and at {t:g} mm weighs {blank_kg:.3f} kg against the "
@@ -7630,6 +7660,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             if not isinstance(x, (dict, list))) if v and v > 0]
         if _cl_pieces:
             part["_saw_cut_list_pieces"] = list(_cl_pieces)
+            # A TIME COUNTED FROM THE PART'S OWN RECORD IS NOT A DERIVATION TO BE FLOORED
+            # (D-460). The workbook's floor guard replaced the 4.5-minute three-cut saw with
+            # the department median (105/hr — 0.57 min) exactly as it once replaced Howard's
+            # stated weld times: it cannot tell a counted time from a garbage derivation
+            # unless the record says so. Same mechanism as a stated time.
+            part.setdefault("_counted_op_times", {})["saw"] = (
+                f"counted from the part's own cut list — {len(_cl_pieces)} piece(s) at "
+                f"{float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut "
+                f"(config SAW_SECONDS_PER_CUT)")
             ops = list(ops) + ["saw"]
             record_operation(part, "saw", str(
                 (part.get("section_stock") or {}).get("cut_lengths_mm_source")

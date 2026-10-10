@@ -2893,8 +2893,12 @@ def canonicalise_part_estimates_for_workbook(
                 "supplier": _sup,
                 "review_flag": True,
                 "review_flags": [
-                    f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
-                    f"class-word line; verify before quoting."
+                    (f"a past SDI quote's line price (SDI Live history) via {_sup} — a per-unit "
+                     f"share at that quote's own quantity; confirm it fits this order"
+                     if "historical_quote" in str(_sup).lower() or "historical_quote" in
+                     str(_sel.get("source") or "").lower() else
+                     f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
+                     f"class-word line; verify before quoting.")
                 ],
             }
             order.append(identity)
@@ -6905,6 +6909,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # whether those are one object or two has already cost this session one fix that
         # found nothing and passed. So the hours are collected from every record that has
         # them, and the claim is checked separately at the point of use.
+        # A TIME COUNTED FROM THE PART'S OWN RECORD (a cut list's pieces at a config
+        # allowance) is the same kind of claim as a stated time for the floor guard's
+        # purposes (D-460): evidence about THIS part, which a corpus median cannot improve.
+        _cot = _sp.get("_counted_op_times")
+        if isinstance(_cot, dict):
+            for _cop, _cwhy in _cot.items():
+                _stated_time_by_pn.setdefault(_spn, str(_cwhy))
+                _stated_ops_by_pn.setdefault(_spn, set()).add(str(_cop).strip().lower())
         _le = _sp.get("labour_estimate")
         if isinstance(_le, dict):
             _rh = _le.get("run_hours_per_unit")
