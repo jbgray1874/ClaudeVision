@@ -2737,6 +2737,22 @@ def canonicalise_part_estimates_for_workbook(
     # missed and this mint wrote an unpriced BOM row for a part the Sheet Steel block was
     # already charging £0.45 — every reader then counted a charged part as a missing
     # price. Identity is compared squashed (alphanumerics only) before minting.
+    # AND TWO LINES ALREADY IN THE POPULATION THAT ARE ONE ROW READ TWO WAYS (D-452).
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold_pop
+        _vals = list(normalised.values())
+        for _drop, _keep in _fold_pop(_vals):
+            _dk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _drop.upper()), None)
+            _kk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _keep.upper()), None)
+            if _dk and _kk and _dk != _kk:
+                normalised.pop(_dk, None)
+                if _dk in order:
+                    order.remove(_dk)
+                aliases[_dk] = _kk
+                print(f"   [wb_populate] '{_drop}' folded onto '{_keep}' — one row read as one "
+                      f"cell; one line, not two.", flush=True)
+    except Exception as _fold_exc:                               # noqa: BLE001
+        print(f"   [wb_populate] one-cell fold not run ({_fold_exc})", flush=True)
     _norm_squash = {re.sub(r"[^A-Z0-9]", "", str(k).upper()): k for k in normalised}
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
@@ -2755,6 +2771,30 @@ def canonicalise_part_estimates_for_workbook(
             print(f"   [wb_populate] '{identity}' not re-minted — its record was folded "
                   f"or quarantined by the identity gate; the graph node describes a "
                   f"removed duplicate, not a missing purchase.", flush=True)
+            continue
+        # A NODE THAT IS A LINE ALREADY ON THE SHEET READ AS ONE CELL IS NOT A PURCHASE
+        # (D-452). 8188-08's insert was charged twice on five books: the vision model listed
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" (no description) among SA03's
+        # children, the graph made a node of it, and this mint priced it a second time at
+        # £0.22 beside the line "FIXING M6X12MM / THREADED INSERT, HEADED HEX DRIVE" at £0.10.
+        # Every earlier fix ran on the part records, before this line exists; the rule is
+        # asked here too, where it is born, and the node is recorded as an alias.
+        try:
+            from part_identity import same_row_read_as_one_cell as _one_cell
+            _host = next((k for k, v in normalised.items()
+                          if _one_cell(identity, node.get("description"),
+                                       v.get("part_number") or k, v.get("description"))), None)
+        except Exception:                                        # noqa: BLE001
+            _host = None
+        if _host:
+            aliases[identity] = _host
+            _hv = normalised.get(_host) or {}
+            _note = (f"{identity} is this row read as one cell — the code and the description "
+                     f"of {_host} joined; one line, not two")
+            if _note not in (_hv.get("review_flags") or []):
+                _hv.setdefault("review_flags", []).append(_note)
+            print(f"   [wb_populate] '{identity}' not minted — it is '{_host}' read as one "
+                  f"cell; one line, not two.", flush=True)
             continue
         _bi_desc = node.get("description") or ""
         _bi_qty = node.get("qty_per_unit") or 1

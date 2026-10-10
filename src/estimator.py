@@ -3078,6 +3078,31 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                         f"as its material and printed that mass. If so, the weight cannot test the "
                         f"gauge either way: confirm the model's material, and the gauge from the "
                         f"model or the drawing office")
+        # A BLANK NOTHING MEASURED IS THE FIRST SUSPECT, NOT THE GAUGE (D-452). 8188-08-013's
+        # DXF gave a cut length only; "2190 x 17" is not a measured width, and the check said
+        # the 3 mm gauge (stated on the sheet, shared by its siblings) "fits 260 mm". Where the
+        # cut outline was not measured, the stated weight is read at the stated gauge in each
+        # model default material for the width it implies on the longer side; a width that is
+        # wider than the recorded one and no wider than the blank is long is said, and the
+        # question is the blank's. The figure is not moved: the line is priced as recorded
+        # until the blank is confirmed, and the question carries the implied size.
+        if not _measured_area and blank_kg < stated:
+            _long, _short = (L, W) if L >= W else (W, L)
+            for _alt in (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL",)):
+                _alt_u = str(_alt).upper()
+                _ad = (MATERIAL_DENSITY_KG_PER_M3.get(_alt_u)
+                       or MATERIAL_DENSITY_KG_PER_M3.get(_alt_u.replace(" ", "_")))
+                if not _ad:
+                    continue
+                _w_impl = stated / (_long * t * float(_ad) * 1e-9)
+                if _short < _w_impl <= _long:
+                    return (f"WEIGHT CHECK: the {L:g} x {W:g} blank was not measured (no cut "
+                            f"outline) and at {t:g} mm weighs {blank_kg:.3f} kg against the "
+                            f"sheet's {stated:.3f} kg. The blank is the first suspect, not the "
+                            f"gauge: read in {_alt_u.lower()} (a model's default material), the "
+                            f"stated weight fits {_long:g} x {_w_impl:.0f} mm at {t:g} mm. "
+                            f"Confirm the blank from the model or the DXF; the line is priced on "
+                            f"{L:g} x {W:g} until then")
         fit_t = stated / (area * float(dens) * 1e-9)
         _what = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
                  if _measured_area else f"the {L:g} x {W:g} blank")
@@ -7993,8 +8018,10 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         try:
             from source_precedence import raise_manufacturing_question as _ask_w  # noqa: PLC0415
             _ask_w(part,
-                   f"Gauge of {part.get('part_number')}: the blank at the charged gauge does "
-                   f"not weigh what its sheet states",
+                   (f"Blank of {part.get('part_number')}: the recorded blank was not measured and "
+                    f"does not weigh what its sheet states" if "blank is the first suspect" in _wc else
+                    f"Gauge of {part.get('part_number')}: the blank at the charged gauge does "
+                    f"not weigh what its sheet states"),
                    _wc,
                    "confirm the gauge from the model or the drawing office; the material "
                    "and the cut rate both ride on it",

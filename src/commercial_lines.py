@@ -666,13 +666,20 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     median = prices[len(prices) // 2] if len(prices) % 2 else \
                         (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2.0
                     jobs = ", ".join(str(r[2] or "?") for r in use[:6])
+                    # A PER-UNIT FIGURE STAYS PER UNIT AT EVERY BREAK (D-452). A past quote's
+                    # line is a per-unit share; written as one order figure it was divided by
+                    # the break, so fifty headers carried £0.20 of packaging each.
+                    _bq = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)}
+                                 | {1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000})
                     result = {"order_gbp": round(median * qty, 2),
+                              "order_gbp_at_breaks": {q: round(median * q, 2) for q in _bq},
                               "source_class": "sdi_history",
                               "source_name": f"SDI Live history: {len(use)} quote line(s), {comparability}",
                               "comparability": comparability,
                               "working": (f"median GBP {median:,.2f} a unit of {len(use)} "
                                           f"{code.lower()} line(s) in SDI Live ({comparability}; "
-                                          f"{jobs}) x {qty} units = the order"),
+                                          f"{jobs}) — a per-unit share on those quotes, held per "
+                                          f"unit at every break"),
                               "rows": [{"description": str(r[0] or ""), "unit_price_gbp": float(r[1]),
                                         "drawing_number": str(r[2] or ""), "quote_date": str(r[3] or ""),
                                         "customer": str(r[4] or "")} for r in use]}
@@ -690,7 +697,6 @@ def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
     return _LIVE_RATE_STATUS.get(key, "")
 
 
-_SHIPMENT_RATE_CACHE: Dict[str, Any] = {}
 _BREAKS_DEFAULT = (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
 
 
@@ -715,20 +721,22 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
     else:
         desc = ("One double-wall carton with protective packing, up to 25 kg, per carton" if code == "PACKAGING"
                 else "Next-day courier, one parcel up to 25 kg, UK mainland, per parcel")
-    key = f"{code}|{desc}"
-    if key not in _SHIPMENT_RATE_CACHE:
+    # ASKED ONCE PER LINE, NOT HELD IN THIS MODULE: the runner is a long-lived process and a
+    # rate kept here would outlive its job. Reproducibility is the market cache's business.
+    rate = None
+    try:
+        _r = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
+                                     "wanted_unit": unit,
+                                     "ask": f"Current UK trade cost PER {unit.upper()} for: {desc}. "
+                                            f"Give the carrier or supplier and the date."})
+        # AN ANSWER IN THE UNIT ASKED, OR NONE (D-452): a figure quoted per order is not a
+        # per-pallet rate, and multiplying it by the pallets would charge the order N times.
+        _said = str((_r or {}).get("unit") or "").strip().lower()
+        _units_ok = {unit, unit + "s", "per " + unit, "parcel" if unit == "carton" else unit}
+        if _num((_r or {}).get("price_gbp")) and _said in _units_ok:
+            rate = _r
+    except Exception:                                                # noqa: BLE001
         rate = None
-        try:
-            _r = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
-                                         "wanted_unit": unit,
-                                         "ask": f"Current UK trade cost PER {unit.upper()} for: {desc}. "
-                                                f"Give the carrier or supplier and the date."})
-            if _num((_r or {}).get("price_gbp")):
-                rate = _r
-        except Exception:                                            # noqa: BLE001
-            rate = None
-        _SHIPMENT_RATE_CACHE[key] = rate
-    rate = _SHIPMENT_RATE_CACHE[key]
     if not rate:
         return None
     unit_gbp = float(rate["price_gbp"])

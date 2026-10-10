@@ -158,7 +158,6 @@ def test_the_counted_shipment_is_priced_at_a_researched_per_pallet_rate_at_every
         asked.append(brief)
         return {"price_gbp": 60.0, "unit": "pallet", "source": "a UK pallet network", "price_date": "2026-10-10"}
     monkeypatch.setattr(cl, "_commercial_researcher", _research)
-    cl._SHIPMENT_RATE_CACHE.clear()
     parts = [_panel()]
     order = cl.describe_order(parts, 1)
     got = cl._counted_shipment_price("DELIVERY", order)
