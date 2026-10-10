@@ -119,8 +119,13 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # 446 — and 2026 mm is the install width, not a part anybody wraps. Both the
         # packaging and the delivery indication were asked against that phantom, and they are
         # the two largest bought-in lines on the job.
+        try:
+            from part_code_conventions import carries_assembly_role as _role
+            _role_coded = _role(part.get("part_number"))
+        except Exception:                                            # noqa: BLE001
+            _role_coded = False
         if part.get("is_assembly_parent") or (part.get("route_context") or {}).get(
-                "is_assembly_parent") or part.get("is_sub_assembly"):
+                "is_assembly_parent") or part.get("is_sub_assembly") or _role_coded:
             skipped += 1
             _leave_out(part, "an assembly, weighed through its children")
             continue
@@ -134,6 +139,10 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
                 L, W = (_num(v) for v in _fb(part))
             except Exception:                                        # noqa: BLE001
                 pass
+        if not (L and W):
+            # THE BLANK THE MATERIAL WAS COSTED ON (D-451): a costed record keeps it here.
+            _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+            L, W = _num(_me.get("blank_length_mm")), _num(_me.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
@@ -240,7 +249,7 @@ def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
                        "description": brief.get("description"),
                        "part_code": brief.get("code"),
                        "quantity": _oq,
-                       "wanted_unit": "order"},
+                       "wanted_unit": str(brief.get("wanted_unit") or "order")},
                       enable_web_search=True, enable_llm_estimate=True) or {}
     except Exception:                                            # noqa: BLE001
         return {}
@@ -681,6 +690,77 @@ def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
     return _LIVE_RATE_STATUS.get(key, "")
 
 
+_SHIPMENT_RATE_CACHE: Dict[str, Any] = {}
+_BREAKS_DEFAULT = (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
+
+
+def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """{order_gbp, order_gbp_at_breaks, working, source_name, evidence} — the counted shipment
+    priced at a researched per-pallet (or per-carton) rate, or None where nothing was counted
+    or the market gave no evidenced unit rate (D-451)."""
+    plan = order.get("shipment") or {}
+    pallets, cartons = _num(plan.get("pallet_count")), _num(plan.get("carton_count"))
+    if not (pallets or cartons):
+        return None
+    qty = max(1, int(_num(order.get("order_quantity")) or 1))
+    unit = "carton" if (cartons and not pallets) or (cartons and shipment_shape(order) == "parcel") else "pallet"
+    big = plan.get("largest_blank_mm") or order.get("largest_part_mm") or []
+    oversize = "blank_exceeds_pallet" in (plan.get("flags") or [])
+    size = (f"goods up to {float(big[0]):.0f} x {float(big[1]):.0f} mm" if len(big) == 2 else "display goods")
+    per_kg = (_num(plan.get("order_weight_kg")) or _num(order.get("order_weight_kg")) or 0.0) / max(1.0, (pallets or cartons or 1.0))
+    if unit == "pallet":
+        kind = "an oversize (long) pallet or crate" if oversize else "a standard UK pallet (1200 x 1000)"
+        desc = (f"Protective wrapping and {kind} for {size}, per pallet" if code == "PACKAGING" else
+                f"Palletised haulage of {kind}, about {per_kg:.0f} kg, {size}, one UK mainland delivery, per pallet")
+    else:
+        desc = ("One double-wall carton with protective packing, up to 25 kg, per carton" if code == "PACKAGING"
+                else "Next-day courier, one parcel up to 25 kg, UK mainland, per parcel")
+    key = f"{code}|{desc}"
+    if key not in _SHIPMENT_RATE_CACHE:
+        rate = None
+        try:
+            _r = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
+                                         "wanted_unit": unit,
+                                         "ask": f"Current UK trade cost PER {unit.upper()} for: {desc}. "
+                                                f"Give the carrier or supplier and the date."})
+            if _num((_r or {}).get("price_gbp")):
+                rate = _r
+        except Exception:                                            # noqa: BLE001
+            rate = None
+        _SHIPMENT_RATE_CACHE[key] = rate
+    rate = _SHIPMENT_RATE_CACHE[key]
+    if not rate:
+        return None
+    unit_gbp = float(rate["price_gbp"])
+    src = str(rate.get("source") or rate.get("supplier_name") or "market research")
+
+    def _count(q: int) -> Optional[float]:
+        if q == qty:
+            p = plan
+        else:
+            try:
+                import palletising
+                p = palletising.plan_shipment(order.get("shippable_parts") or [], q) or {}
+            except Exception:                                        # noqa: BLE001
+                return None
+        n = _num(p.get("pallet_count" if unit == "pallet" else "carton_count"))
+        return n
+    n_now = _count(qty) or 0.0
+    at = {}
+    for q in sorted(set(_BREAKS_DEFAULT) | {qty}):
+        n = _count(q)
+        if n:
+            at[q] = round(unit_gbp * n, 2)
+    why_n = ("a weight-only lower bound — the longest part exceeds the pallet footprint"
+             if oversize else "counted from the measured blanks")
+    return {"order_gbp": round(unit_gbp * n_now, 2), "order_gbp_at_breaks": at,
+            "source_name": f"researched per-{unit} rate ({src}) x the counted shipment",
+            "evidence": rate.get("evidence") or {"source": src, "date": rate.get("price_date")},
+            "working": (f"GBP {unit_gbp:,.2f} per {unit} (researched: {src}) x {n_now:g} "
+                        f"{unit}{'s' if n_now != 1 else ''} for {qty} off ({why_n}) = GBP "
+                        f"{unit_gbp * n_now:,.2f} the order; re-counted at each break")}
+
+
 def _line(code: str, order: Dict[str, Any], description: str,
           held_key: str) -> Dict[str, Any]:
     qty = order.get("order_quantity") or 1
@@ -754,6 +834,20 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["history_rows"] = _live.get("rows")
         if _live.get("order_gbp_at_breaks"):
             out["order_gbp_at_breaks"] = _live["order_gbp_at_breaks"]   # counted at every break
+    elif _counted_shipment_price(code, order) is not None:
+        # THE COUNTED SHIPMENT AT A RESEARCHED UNIT RATE (D-451). With no rate of the
+        # business's own, the market is asked what it can answer with evidence — the cost of
+        # ONE pallet (or carton) of this size — and the engine multiplies by the pallets it
+        # counted, re-counted at every break. 8188-08's £10 "for the whole order" was the
+        # market guessing a shipment it was never shown; 50 headers now cost 50 headers'
+        # pallets, and the line shows the arithmetic.
+        _cs = _counted_shipment_price(code, order)
+        _order_gbp, _src = _cs["order_gbp"], {
+            "source_class": "llm_indicative", "reproducible": False, "indicative": True,
+            "source_name": _cs["source_name"], "evidence": _cs.get("evidence")}
+        out["shipment_working"] = _cs["working"]
+        out["order_gbp_at_breaks"] = _cs["order_gbp_at_breaks"]
+        out["sdi_live_status"] = sdi_live_status(code, order)
     else:
         # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────
         #

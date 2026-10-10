@@ -676,6 +676,13 @@ BOUGHT_IN_STOCK_BY_LENGTH_WORDS = ("EXTRUSION", "PROFILE", "TUBE", "BAR", "ROD",
 CUT_LENGTH_WORDS = ("LENGTH", "LGTH", "LG", "LONG", "L")
 UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LENGTH")
 
+# THE SHEET'S WEIGHT IS THE MODEL'S MASS (D-451, estimator._blank_weight_check). A SolidWorks
+# part with no material assigned weighs as the template's default; the title block prints that
+# mass. Where the same blank in one of these weighs the stated weight within the tolerance, the
+# weight is read as the model's material — a note, not a gauge question.
+MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")
+MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT = 8.0
+
 # A PURCHASED LINE'S WORDS NAME ITS MATERIAL (D-445, size_reading): the word on the line ->
 # the MATERIAL_DENSITY_KG_PER_M3 key, so a reading of its size can be weighed against the
 # heaviest thing the pack states. Only used to refute a reading, never to price one.

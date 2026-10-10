@@ -4931,6 +4931,15 @@ def _finalize_scan_summary(
     except Exception as _wire_exc:                                  # noqa: BLE001
         print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
               flush=True)
+    # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold
+        _folded = _fold(summary["manufacturing_writeup"]["parts"])
+        if _folded:
+            print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
+                  f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
+    except Exception as _fold_exc:                                  # noqa: BLE001
+        print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
     # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
     try:
         from size_reading import apply_size_readings as _size_readings

@@ -2854,17 +2854,51 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
     if not missing:
         return []
 
-    _named = ", ".join(f"{m['part_number']}"
-                       + (f" ({m['description']})" if m["description"] else "")
-                       for m in missing[:6])
-    _more = f" and {len(missing) - 6} more" if len(missing) > 6 else ""
-    return [_violation(
-        "bom_names_a_drawing_the_pack_does_not_contain", BLOCKING,
-        f"{len(missing)} bill-of-materials line(s) name a drawing that is not in this pack: "
-        f"{_named}{_more}. Nothing read those parts, so nothing costed them -- and the "
-        f"total still reads as a finished estimate. This is an incomplete pack, not a cheap "
-        f"job: ask for the missing detail drawings before quoting.",
-        missing=missing, count=len(missing))]
+    # A LINE THAT CARRIES MONEY WAS COSTED (D-451). 8188-08's wire frame (£0.95, its gauge
+    # and outline read off the sheet that draws it) and mesh panel (£10.40, a catalogue row)
+    # were both on the sheet while this said "nothing costed them". Each missing drawing is
+    # held against the costed records: a priced line is said as priced without a drawing of
+    # its own; only lines nothing priced keep the blocking wording.
+    _es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    _money: Dict[str, float] = {}
+    for _lst in (_es.get("canonical_part_estimates"), _es.get("part_estimates")):
+        for _rec in (_lst or []):
+            if not isinstance(_rec, dict) or not _rec.get("part_number"):
+                continue
+            _me = _rec.get("material_estimate") if isinstance(_rec.get("material_estimate"), dict) else {}
+            _cb = _rec.get("cost_breakdown") if isinstance(_rec.get("cost_breakdown"), dict) else {}
+            for _v in (_me.get("unit_material_cost_gbp"), _cb.get("total"), _cb.get("per_part")):
+                try:
+                    if _v is not None and float(_v) > 0:
+                        _money.setdefault(_bare(_rec["part_number"]), float(_v))
+                        break
+                except (TypeError, ValueError):
+                    continue
+    unpriced = [m for m in missing if _bare(m["part_number"]) not in _money]
+    priced = [m for m in missing if _bare(m["part_number"]) in _money]
+
+    def _names(ms: List[Dict[str, Any]]) -> str:
+        return (", ".join(f"{m['part_number']}" + (f" ({m['description']})" if m["description"] else "")
+                          for m in ms[:6]) + (f" and {len(ms) - 6} more" if len(ms) > 6 else ""))
+
+    out: List[Dict[str, Any]] = []
+    if unpriced:
+        out.append(_violation(
+            "bom_names_a_drawing_the_pack_does_not_contain", BLOCKING,
+            f"{len(unpriced)} bill-of-materials line(s) name a drawing that is not in this pack "
+            f"and carry no price: {_names(unpriced)}. Nothing read those parts, so nothing costed "
+            f"them -- and the total still reads as a finished estimate. This is an incomplete "
+            f"pack, not a cheap job: ask for the missing detail drawings before quoting.",
+            missing=missing, unpriced=unpriced, priced_without_drawing=priced, count=len(unpriced)))
+    if priced:
+        out.append(_violation(
+            "bom_names_a_drawing_the_pack_does_not_contain", WARNING,
+            f"{len(priced)} bill-of-materials line(s) name a drawing that is not in this pack and "
+            f"are priced without one: {_names(priced)} — from the sheet that draws them, a "
+            f"catalogue or the market, as each line's basis says. Confirm the size and the figure "
+            f"against the detail drawing when it arrives.",
+            missing=missing if not unpriced else [], priced_without_drawing=priced, count=len(priced)))
+    return out
 
 
 def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict[str, Any]]:
