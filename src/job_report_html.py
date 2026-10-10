@@ -1695,6 +1695,24 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
                f'<td>Nothing read these, so nothing costed them. The estimate is priced from '
                f'what was supplied and is <b>not</b> a price for the whole product — ask for '
                f'the detail drawings before quoting the complete job.</td></tr>')
+    # A LINE THAT IS CHARGED IS NOT "NOTHING COSTED" (D-450): the wire frame priced off the
+    # sheet that draws it, the mesh from a catalogue — said as what they are, with the basis.
+    try:
+        from costed_facts import priced_without_a_drawing as _pwd
+        _priced_undrawn = _pwd(summary)
+    except Exception:                                            # noqa: BLE001
+        _priced_undrawn = []
+    if _priced_undrawn:
+        _cells = "; ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            + f" — {m['basis']}" + (f", £{m['gbp']:,.2f}" if m.get("gbp") else "")
+            for m in _priced_undrawn[:6])
+        wk += (f'<tr><td><b>Priced without a drawing of their own</b></td>'
+               f'<td>{_esc(_cells)}</td>'
+               f'<td>The BOM names a drawing the pack does not contain, and the line is still '
+               f'charged — from the sheet that draws it, a catalogue or the market, as the basis '
+               f'says. Confirm the size and the figure against the detail drawing when it '
+               f'arrives.</td></tr>')
     if dq.get("parts_without_dxf"):
         parts = dq["parts_without_dxf"]
         n = len(parts)

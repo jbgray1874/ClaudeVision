@@ -3016,8 +3016,13 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
     and the question is raised. No figure moves."""
     try:
         ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
-        L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
-        W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+        # THE BLANK THE MONEY CAME FROM (D-450). 8188-08-011 was checked as a 30 x 6 blank —
+        # a size read off the page — while its material was costed on the 157 x 745 DXF flat;
+        # the check contradicted the sheet beside it. estimate_part stamps the costed blank
+        # before the process pass, and that is what is weighed.
+        _cb = part.get("_costed_blank_mm") if isinstance(part.get("_costed_blank_mm"), (list, tuple)) else None
+        L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+        W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
         t = _safe_float(part.get("normalized_thickness_mm"))
         stated = _stated_weight_kg_for_part(part)
         if not (L and W and t and stated) or L <= 0 or W <= 0 or t <= 0 or stated <= 0:
@@ -5733,7 +5738,8 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             _ext = _unit * quantity
             _mass = _wl / 1000.0 / _mpt * 1000.0
         part.setdefault("review_flags", []).append(
-            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at £{_rate_t:.0f}/t"
+            f"{part.get('part_number')}: wire priced Ø{_wg:g} x {_wl:g}mm at the config rate "
+            f"£{_rate_t:.0f}/t (the sheet's own Wire Cost Per Tonne cell recalculates the row)"
             + (" — [AI ESTIMATE - INDICATIVE, NOT A QUOTE]; developed length ASSUMED, overwrite "
                "when a schedule / CL callout or Tim gives it (a PDF outline is not a length)."
                if _length_assumed else
@@ -8964,6 +8970,13 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             "top-level unit/GA line (…-00-…) treated as assembly parent — material carried "
             "by children, fabrication route suppressed; estimator to verify")
     material = estimate_material(part)
+    # THE BLANK THE MATERIAL WAS COSTED ON, for every later check on this part (D-450).
+    try:
+        _mbl, _mbw = _safe_float(material.get("blank_length_mm")), _safe_float(material.get("blank_width_mm"))
+        if _mbl and _mbw and _mbl > 0 and _mbw > 0:
+            part["_costed_blank_mm"] = [_mbl, _mbw]
+    except Exception:                                                # noqa: BLE001
+        pass
     material = _price_declared_material_layers(part, material)
     if debug:
         print(f"[DEBUG] estimate_part material done {part_number}")
