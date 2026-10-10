@@ -73,8 +73,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--find", metavar="NAME", help="show matching records, write nothing")
-    ap.add_argument("--sign-in", metavar="NAME")
-    ap.add_argument("--sign-out", metavar="NAME")
+    # One write per run. Both together used to do the sign-in and silently
+    # ignore the sign-out.
+    write = ap.add_mutually_exclusive_group()
+    write.add_argument("--sign-in", metavar="NAME")
+    write.add_argument("--sign-out", metavar="NAME")
     ap.add_argument("--confirm", action="store_true",
                     help="required for any write - this is a live reception system")
     args = ap.parse_args()

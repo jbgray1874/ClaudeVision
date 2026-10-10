@@ -634,6 +634,7 @@ class ExplodingSession(StubSession):
         self.message = message
 
     def request(self, *a, **kw):
+        self.calls.append(kw)
         raise requests.exceptions.SSLError(self.message)
 
 
@@ -658,6 +659,7 @@ def test_a_tls_failure_is_not_retried_three_times():
     with pytest.raises(api.InVentryAPIError) as exc:
         client.check_auth()
     assert "INVENTRY_API_CA_BUNDLE" in str(exc.value)
+    assert len(session.calls) == 1
 
 
 def test_skipping_the_hostname_check_without_a_pin_is_called_out():
@@ -693,3 +695,30 @@ def test_a_real_secret_that_merely_contains_brackets_is_not_rejected():
                                   partner_secret="ab<cd>ef")
     client.check_auth()
     assert session.calls[0]["headers"]["partnersecret"] == "ab<cd>ef"
+
+
+def test_one_bad_record_does_not_strip_the_marker_from_everyone_else():
+    """A 400 that is NOT about ActionLocation - a malformed PersonnelID, say -
+    fails the same way without the field. Concluding the field was at fault
+    would drop the marker for every remaining sign-in in the run, and blame the
+    wrong thing for it."""
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid PersonnelID", payload=None),
+        StubResponse(status_code=400, text="Invalid PersonnelID", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("BAD-ID")
+
+    client.sign_in("INV-2")
+    assert client.action_location_dropped is False
+    assert "ActionLocation" in session.calls[2]["data"]
+    assert not any("ActionLocation" in w for w in client.warnings)
+
+
+def test_skipping_the_hostname_check_against_the_public_ca_store_is_called_out():
+    """Name check off is only sound with a pinned certificate. Against the
+    system store it accepts any publicly-issued certificate for any domain."""
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             verify=True, check_hostname=False, limiter=NoWaitLimiter())
+    assert any("any publicly-issued certificate" in w for w in client.warnings)

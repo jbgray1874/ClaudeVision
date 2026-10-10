@@ -25,16 +25,22 @@ function Head($t) { Write-Host "`n== $t" -ForegroundColor Cyan }
 
 # Task Scheduler's own result codes, which are not error codes in the usual
 # sense - 0x41301 in particular means "running", not "broken".
+#
+# Keys are STRINGS on purpose. PowerShell parses small literals (0, 1, 267009)
+# as Int32 and large ones (2147942402) as Int64, while LastTaskResult is looked
+# up as Int64 - and in .NET an Int64 0 is not equal to an Int32 0. Numeric keys
+# therefore silently miss exactly the codes you see most: ok, aborted, partial,
+# running. Comparing as text has no such trap.
 $codes = @{
-    0          = "ok"
-    1          = "aborted by the script - a guard tripped or a system was unreachable"
-    2          = "ran, but something was suppressed or partially failed"
-    267009     = "currently running (0x41301)"
-    267011     = "has never run (0x41303)"
-    267014     = "last run was terminated by the user (0x41306)"
-    2147942401 = "the program could not be found (0x80070002-ish) - check the interpreter path"
-    2147943712 = "logon failure / the account cannot run this task (0x8007052E)"
-    2147750687 = "an instance was already running and IgnoreNew skipped this one (0x800710E0)"
+    "0"          = "ok"
+    "1"          = "aborted by the script - a guard tripped or a system was unreachable"
+    "2"          = "ran, but something was suppressed or partially failed"
+    "267009"     = "currently running (0x41301)"
+    "267011"     = "has never run (0x41303)"
+    "267014"     = "last run was terminated by the user (0x41306)"
+    "2147942402" = "the program could not be found (0x80070002) - check the interpreter path"
+    "2147943726" = "logon failure - the account cannot run this task (0x8007052E)"
+    "2147750687" = "an instance was already running, so this one was skipped (0x8004131F)"
 }
 
 Head "Task"
@@ -120,7 +126,7 @@ if ($rep.Interval) {
 Head "Last run"
 $info = Get-ScheduledTaskInfo -TaskName $TaskName
 $code = [int64]$info.LastTaskResult
-$meaning = if ($codes.ContainsKey($code)) { $codes[$code] } else { "unmapped code" }
+$meaning = if ($codes.ContainsKey("$code")) { $codes["$code"] } else { "unmapped code" }
 Write-Host "   Last run : $($info.LastRunTime)"
 Write-Host "   Result   : $code  ($meaning)  [0x$('{0:X}' -f $code)]"
 Write-Host "   Next run : $($info.NextRunTime)"

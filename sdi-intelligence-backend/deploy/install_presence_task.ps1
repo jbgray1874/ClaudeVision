@@ -75,6 +75,30 @@ if (-not $Python) {
 }
 Write-Host "Interpreter: $Python"
 
+# Can that interpreter import what the job needs AS THE TASK WILL RUN IT?
+# A package installed with a plain "pip install" by a non-admin user lands in
+# that user's AppData site-packages. It imports fine when you test by hand and
+# is invisible to SYSTEM, so every scheduled cycle dies on "import requests".
+# -s tells Python to ignore the user site-packages: the same view SYSTEM gets,
+# reproduced while you are still logged in as yourself.
+& $Python -s -c "import requests, dotenv" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw @"
+$Python cannot import requests and python-dotenv without your personal
+site-packages - so it will fail every cycle when the task runs as SYSTEM.
+(They are probably installed under C:\Users\<you>\AppData\Roaming\Python.)
+
+The clean fix is a virtual environment inside the checkout, which this script
+then finds and uses automatically:
+
+  cd $BackendDir
+  python -m venv .venv
+  .venv\Scripts\python.exe -m pip install requests python-dotenv
+
+Then re-run this installer.
+"@
+}
+
 $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Python `"$Python`""
 if ($Apply) {
     Write-Warning "LIVE MODE: this task will sign staff in and out on the reception system."
@@ -88,21 +112,23 @@ $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arguments
 # ── Trigger ──────────────────────────────────────────────────────────────
 # A -Once trigger with -RepetitionInterval but no -RepetitionDuration is the
 # classic way to register a task that runs exactly once and then sits there
-# looking healthy: the repetition has no window to repeat within. Ask for an
-# indefinite duration, and fall back to ten years on the PowerShell builds that
-# reject [TimeSpan]::MaxValue.
+# looking healthy on older Windows: the repetition has no window to repeat
+# within. So a duration is always given.
+#
+# NOT [TimeSpan]::MaxValue, which an earlier version of this script used.
+# New-ScheduledTaskTrigger accepts it, and then on Windows 10 / Server 2016 and
+# later Register-ScheduledTask rejects it - "The task XML contains a value which
+# is incorrectly formatted or out of range ... Duration:P99999999DT23H59M59S".
+# The failure surfaces at registration, after the trigger was built, so a
+# try/catch around the trigger never sees it and the install simply stops.
+# Ten years is valid on every version and, for a five-minute job, indefinite.
+#
 # The start boundary is a minute out rather than "now", so the first fire is a
 # scheduled one instead of a missed one that -StartWhenAvailable has to recover.
 $interval = New-TimeSpan -Minutes $IntervalMinutes
 $start = (Get-Date).AddMinutes(1)
-try {
-    $trigger = New-ScheduledTaskTrigger -Once -At $start `
-        -RepetitionInterval $interval -RepetitionDuration ([TimeSpan]::MaxValue)
-} catch {
-    Write-Host "Indefinite repetition rejected by this PowerShell build; using 10 years." -ForegroundColor Yellow
-    $trigger = New-ScheduledTaskTrigger -Once -At $start `
-        -RepetitionInterval $interval -RepetitionDuration (New-TimeSpan -Days 3650)
-}
+$trigger = New-ScheduledTaskTrigger -Once -At $start `
+    -RepetitionInterval $interval -RepetitionDuration (New-TimeSpan -Days 3650)
 
 $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `

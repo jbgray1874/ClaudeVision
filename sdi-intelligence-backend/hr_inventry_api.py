@@ -192,8 +192,19 @@ class InVentryAPI:
                     "INVENTRY_API_CHECK_HOSTNAME is off and no certificate is pinned, so "
                     "nothing about the server is being verified. Set INVENTRY_API_CA_BUNDLE."
                 )
-            elif hasattr(self.session, "mount"):
-                self.session.mount("https://", PinnedCertAdapter())
+            else:
+                if self.verify is True:
+                    # Verifying against the public CA store without checking the
+                    # name accepts ANY publicly-issued certificate for ANY domain.
+                    # Turning the name check off is only sound with a pin.
+                    self.warnings.append(
+                        "INVENTRY_API_CHECK_HOSTNAME is off but no certificate is pinned: "
+                        "the system CA store is being used, so any publicly-issued "
+                        "certificate for any name would be accepted. Set "
+                        "INVENTRY_API_CA_BUNDLE to InVentry's exported certificate."
+                    )
+                if hasattr(self.session, "mount"):
+                    self.session.mount("https://", PinnedCertAdapter())
 
     # ── plumbing ─────────────────────────────────────────────────────────
 
@@ -383,27 +394,36 @@ class InVentryAPI:
             "ActionDateTime": format_datetime(when) if when else "",
         }
 
+        path = cfg.INVENTRY_PATH_PERSONNEL_ACTION
         if wanted and not self.action_location_dropped:
             try:
-                return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION,
-                                 dict(body, ActionLocation=wanted))
+                return self.post(path, dict(body, ActionLocation=wanted))
             except InVentryAPIError as exc:
                 # Only when InVentry refused the request itself. A 401 or a
                 # timeout would come back exactly the same way without the
                 # field, and retrying would just write nothing twice as slowly.
                 if not rejected_the_request(exc):
                     raise
-                self.action_location_dropped = True
-                self.warnings.append(
-                    f"InVentry rejected AddPersonnelAction carrying "
-                    f"ActionLocation={wanted!r} ({exc}). Retried without it, and it is "
-                    f"omitted for the rest of this run. Sign-ins still work. Automatic "
-                    f"sign-out cannot be enabled, because it depends on recognising our "
-                    f"own marker in LastEventLocation - ask InVentry whether "
-                    f"ActionLocation accepts free text."
-                )
+                refusal = exc
 
-        return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION, body)
+            # Without the field. Only if THIS succeeds was the field the
+            # problem. If it fails too, the request was bad for another reason
+            # - one malformed PersonnelID, say - and that error propagates with
+            # the marker left on for everyone else. Concluding otherwise would
+            # let a single bad record strip the marker from every remaining
+            # sign-in in the run, and blame the wrong thing for it.
+            result = self.post(path, body)
+            self.action_location_dropped = True
+            self.warnings.append(
+                f"InVentry rejected AddPersonnelAction carrying "
+                f"ActionLocation={wanted!r} ({refusal}), and accepted the same request "
+                f"without it. It is omitted for the rest of this run. Sign-ins still work. "
+                f"Automatic sign-out cannot be enabled, because it depends on recognising "
+                f"our own marker in LastEventLocation."
+            )
+            return result
+
+        return self.post(path, body)
 
     def sign_in(self, inventry_id, when=None, location=None, reason=""):
         return self.add_action(inventry_id, cfg.INVENTRY_EVENT_TYPE_IN,
