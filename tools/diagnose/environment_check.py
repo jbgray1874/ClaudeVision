@@ -327,13 +327,58 @@ def probe_pricing_rungs(problems: List[str]) -> None:
                         "the runner's venv python.")
 
 
+def probe_one_real_pricing_request(problems: List[str]) -> None:
+    """One request through the engine's own ladder (D-457): end-to-end proof, not connectivity.
+
+    Asks the exact question the shipment rung asks — a per-pallet haulage rate — and reports
+    whether anything answered, who, at what price, and IN WHAT UNIT, because the unit is what
+    the engine accepts or refuses. One paid call at most."""
+    print()
+    try:
+        from web_ai_price_lookup import lookup_web_ai_price
+        found = lookup_web_ai_price(
+            {"material": "Delivery", "part_code": "DELIVERY",
+             "description": ("Palletised haulage of a standard UK pallet (1200 x 1000), "
+                             "about 150 kg, display goods, one UK mainland delivery, per pallet"),
+             "quantity": 1, "wanted_unit": "pallet",
+             "ask": "Current UK trade cost PER PALLET. Give the carrier or supplier and the date."},
+            enable_web_search=True, enable_llm_estimate=True) or {}
+    except Exception as exc:                                     # noqa: BLE001
+        print(f"Real pricing request         : FAILED before asking — {type(exc).__name__}: "
+              f"{str(exc)[:100]}")
+        problems.append("the pricing ladder itself raised before any provider was asked — "
+                        "the engine cannot research prices from this machine")
+        return
+    if not found.get("found") or not found.get("price_gbp"):
+        print(f"Real pricing request         : NO ANSWER — {str(found.get('error') or 'no provider returned a price')[:120]}")
+        problems.append("no pricing provider completed a real request: a run on this machine "
+                        "prices research-dependent lines from history or leaves them, and "
+                        "the line must say so")
+        return
+    unit = str(found.get("unit") or "?")
+    src = str(found.get("source_type") or "?") + (f"/{found.get('llm_provider')}"
+                                                  if found.get("llm_provider") else "")
+    print(f"Real pricing request         : ANSWERED — GBP {float(found['price_gbp']):,.2f} "
+          f"per {unit} from {src}")
+    norm = unit.strip().lower().replace("_", " ").removeprefix("per ").rstrip("s")
+    if norm != "pallet":
+        problems.append(f"the provider answered per {unit!r}, not per pallet — the engine "
+                        f"would REFUSE this answer, so the rung is reachable but not yet "
+                        f"usable for the shipment basis")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--db", action="store_true",
                     help="also try to reach SDILive (slow when it is going to fail)")
     ap.add_argument("--rungs", action="store_true",
-                    help="also probe each PRICING RUNG the engine falls through — SDI Live, "
-                         "SerpAPI, xAI, Anthropic — and say REACHED / REFUSED / NOT CONFIGURED")
+                    help="CONNECTIVITY of each pricing rung — SDI Live, SerpAPI, xAI, "
+                         "Anthropic — REACHED / REFUSED / NOT CONFIGURED. Credentials and "
+                         "reachability only; it proves no completed pricing request")
+    ap.add_argument("--rungs-live", action="store_true",
+                    help="ONE REAL pricing request through the engine's own ladder (a per-"
+                         "pallet haulage ask): proves the selected model completes, has "
+                         "quota, and answers in the unit asked. Spends one paid call")
     args = ap.parse_args()
 
     problems: list = []
@@ -446,8 +491,13 @@ def main() -> int:
     # place. Each probe is an auth/metadata call, not a paid query, so this is safe any time.
     if args.rungs:
         probe_pricing_rungs(problems)
+        print("  (connectivity only — a reachable endpoint proves credentials, not a "
+              "completed pricing request; pass --rungs-live for one real ask)")
     else:
-        print("Pricing rungs (web/LLM)      : not tested (pass --rungs)")
+        print("Pricing rungs (web/LLM)      : not tested (pass --rungs for connectivity, "
+              "--rungs-live for one real request)")
+    if args.rungs_live:
+        probe_one_real_pricing_request(problems)
 
     report_backend_readiness(problems, notes, args.db)
 

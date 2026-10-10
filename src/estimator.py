@@ -3089,31 +3089,51 @@ def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
     8188-08-013 was priced on 2190 x 17 — a cut length with no measured width — at £2.34 while
     parts of the same material and gauge were measured at 100-200 mm wide."""
+    def _decline(reason: str) -> None:
+        # SAID, NEVER SILENT (D-457): on the venv replay this function declined 013 without a
+        # word and three people spent an evening on which branch. The reason travels on the
+        # record, the fill pass prints it, and the replay shows it.
+        part["_allowance_declined"] = reason
+
     if part.get("_blank_provisional"):
         return None
     try:
         from detail_page_geometry import not_cut_from_a_blank as _nc
         if _nc(part):
+            _decline("an assembly or bought-in line — no blank of its own")
             return None
     except Exception:                                                 # noqa: BLE001
         pass
     ng = part.setdefault("normalized_geometry", {}) if isinstance(part.get("normalized_geometry"), dict) else None
     if ng is None:
+        _decline("the record holds no geometry dict at all")
         return None
-    L = _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
-    W = _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
+    # THE SAME READING THE WEIGHT CHECK USES (D-457): the costed blank first. estimate_material
+    # can REJECT and CLEAR a recorded blank (2190 x 17 is not plausibly a sheet part), leaving
+    # ng empty while _costed_blank_mm still names what the money used — reading only ng made
+    # this function blind on exactly the parts it exists for.
+    _cb = part.get("_costed_blank_mm") if isinstance(part.get("_costed_blank_mm"), (list, tuple)) else None
+    L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
+    W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
     t = _safe_float(part.get("normalized_thickness_mm"))
     stated = _stated_weight_kg_for_part(part)
     own = str(part.get("normalized_material") or "").upper().replace("_", " ")
     own_d = MATERIAL_DENSITY_KG_PER_M3.get(own) or MATERIAL_DENSITY_KG_PER_M3.get(own.replace(" ", "_"))
-    if not (L and W and t and stated and own_d) or _measured_outline_kg(part, own_d) is not None:
-        return None                                   # (1) an outline was measured, or no basis
+    if _measured_outline_kg(part, own_d) is not None:
+        _decline("its outline was measured — the blank is known")
+        return None                                                 # (1)
+    if not (L and W and t and stated and own_d):
+        _decline("missing " + ", ".join(w for w, v in (("recorded length", L), ("recorded width", W),
+                 ("gauge", t), ("stated weight", stated), ("density for its material", own_d))
+                 if not v))
+        return None
     long_, short = (L, W) if L >= W else (W, L)
     # A MEASURED OUTLINE ANYWHERE ON THE RECORD IS A MEASUREMENT (D-455). 8188-08-011 carries a
     # DXF net area (117,027 mm² inside 157.11 x 745.16) beside a stale page read of 30 x 6; read
     # against the stale figure it looked unmeasured and the report called its own flat
     # "provisional model extents". A part whose flat pattern measured an outline is left alone.
     if part.get("dxf_measured_outline") or part.get("dxf_augmented") or _costed_outline(part):
+        _decline("its flat pattern measured an outline — the blank is known")
         return None
     pmm = part.get("_pack_model_material") if isinstance(part.get("_pack_model_material"), dict) else None
     alt = str((pmm or {}).get("material") or "").upper()
@@ -3140,12 +3160,18 @@ def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                     f"extents {new_ext[0]:g} x {new_ext[1]:g} mm")
     else:
         if not (pmm and alt_d):
+            _decline("the pack gave no model-material reading, and the part has no measured "
+                     "model extents")
             return None
         if long_ * short * t * alt_d * 1e-9 >= stated * 0.95:
-            return None                               # the recorded blank already carries the weight
+            _decline(f"the recorded blank already carries the stated weight in {alt.lower()}")
+            return None
         area_m2 = stated / (t * alt_d * 1e-9) / 1e6
         w_impl = stated / (long_ * t * alt_d * 1e-9)
         if not (short * 1.5 < w_impl <= long_):
+            _decline(f"the weight-implied width ({w_impl:.0f} mm) is not between 1.5 x the "
+                     f"recorded width and the recorded length — the reading does not fit "
+                     f"this part")
             return None
         tol = float(getattr(config, "MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT", 8.0)) / 100.0
         new_ext = (long_, round(w_impl, 1)) if L >= W else (round(w_impl, 1), long_)
@@ -3168,6 +3194,7 @@ def _apply_mass_implied_blank(part: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         question = (f"Blank of {part.get('part_number')}: not measured — material priced as an "
                     f"area allowance of {area_m2:.3f} m² ({new_ext[0]:g} x {new_ext[1]:g} mm "
                     f"equivalent rectangle) inferred from its sheet's weight")
+    part.pop("_allowance_declined", None)
     part["_blank_provisional"] = rec
     part["blank_is_inferred"] = True
     part["blank_inferred_reason"] = why
@@ -3332,10 +3359,16 @@ def fill_unmeasured_blanks_from_the_job(parts: List[Dict[str, Any]],
                 {"part_number": p.get("part_number"), "long_mm": max(co[0], co[1]),
                  "short_mm": min(co[0], co[1])})
     redone: List[str] = []
+    voters = {str(w).strip().upper() for w in who}
     for i, pe in enumerate(list(part_estimates)):
         pn = str((pe or {}).get("part_number") or "").strip().upper()
         part = by_pn.get(pn)
         if part is None or part.get("_blank_provisional") or _costed_outline(part) is not None:
+            continue
+        if pn in voters:
+            # Its weight is already explained — that IS the vote; a decline estimate_part
+            # stamped before the pack reading existed is stale and goes.
+            part.pop("_allowance_declined", None)
             continue
         if not _stated_weight_kg_for_part(part):
             continue
@@ -3355,6 +3388,10 @@ def fill_unmeasured_blanks_from_the_job(parts: List[Dict[str, Any]],
             if not (isinstance(q, dict) and str(q.get("issue") or "").startswith(
                 (f"Gauge of {_pn0}", f"Blank of {_pn0}")))]
         if _apply_mass_implied_blank(trial) is None:
+            part["_allowance_declined"] = str(trial.get("_allowance_declined")
+                                              or "declined without a recorded reason")
+            print(f"   [weight] {part.get('part_number')}: allowance declined — "
+                  f"{part['_allowance_declined']}", flush=True)
             continue
         try:
             new_pe = estimate_part(trial, job_quantity=job_quantity)
@@ -12120,7 +12157,23 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             ("DELIVERY", "Delivery (per-unit share of order haulage — estimator to price)"),
         )):
             if _code in _existing_now:
-                continue
+                # A SAVED STUB IS NOT A PRICE (D-457). The replay of the 15:43 record kept the
+                # saved PACKAGING/DELIVERY stubs — their D-453 basis text verbatim, no reason,
+                # and the shipment rung (xAI included) never asked — because this guard skipped
+                # any code already present. The stub's identity stays; its basis, figure and
+                # flags are REBUILT every costing run, exactly as every part is re-costed. An
+                # estimator's exclusion stands.
+                _old = next((p for p in parts if str(p.get("part_number") or "").strip().upper() == _code
+                             and not p.get("_commercial_excluded")), None)
+                if _old is not None:
+                    for _k in ("commercial_line", "review_flags", "cost_source", "basis_chosen"):
+                        _old.pop(_k, None)
+                    parts.remove(_old)
+                    _existing_now.discard(_code)
+                    print(f"   [commercial] {_code}: saved stub discarded — the basis is "
+                          f"re-chosen on this run's own shipment and rates", flush=True)
+                else:
+                    continue
             # AN ESTIMATOR'S "NOT REQUIRED" IS AN ANSWER, NOT A GAP. Tony: "Delivery is
             # not required" — and the line still went out as "estimator to price", an
             # open question on every run of a job whose answer was already given. An

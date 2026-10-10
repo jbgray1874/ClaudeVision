@@ -175,6 +175,12 @@ def _print_evidence(summary: Dict[str, Any]) -> None:
               + f"; material £{me.get('unit_material_cost_gbp')}")
     if not seen:
         print("  none")
+    declined = [(p.get("part_number"), p.get("_allowance_declined")) for p in parts
+                if isinstance(p, dict) and p.get("_allowance_declined")]
+    if declined:
+        print("\nALLOWANCE DECLINED — each candidate's own reason")
+        for pn, why in declined:
+            print(f"  {pn}: {why}")
     print("\nCOMMERCIAL LINES — the basis chosen and the unit at every break")
     try:
         import pyodbc                                            # noqa: F401
@@ -188,8 +194,15 @@ def _print_evidence(summary: Dict[str, Any]) -> None:
         breaks = cl.get("order_gbp_at_breaks") or {}
         per_unit = ", ".join(f"{q}: £{float(v) / max(int(q), 1):.2f}/unit (£{float(v):.2f} order)"
                              for q, v in sorted(breaks.items(), key=lambda kv: int(kv[0])))
-        print(f"  {cl.get('code')}: {cl.get('basis_chosen') or 'basis not named'}; "
+        klass = ("RESEARCHED SHIPMENT" if cl.get("shipment_working") else
+                 "JUSTIFIED FALLBACK" if cl.get("shipment_refusal")
+                 and "recorded no reason" not in str(cl.get("shipment_refusal"))
+                 else "FALLBACK — REASON NOT RECORDED" if "weak" in str(cl.get("basis_chosen") or "").lower()
+                 else "HOUSE/HISTORY BASIS")
+        print(f"  {cl.get('code')} [{klass}]: {cl.get('basis_chosen') or 'basis not named'}; "
               f"order £{cl.get('order_gbp')}" + (f"; {per_unit}" if per_unit else "; no breaks held"))
+        if cl.get("shipment_refusal"):
+            print(f"      shipment_refusal: {cl['shipment_refusal']}")
         for key in ("shipment_working", "history_working", "cross_check"):
             if cl.get(key):
                 print(f"      {key}: {str(cl[key])[:300]}")
@@ -246,6 +259,8 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     except Exception as exc:                                         # noqa: BLE001
         print(f"\nreport NOT built ({type(exc).__name__}: {exc})")
     print(f"record: {out_json}")
+    print("note: the final workbook charge (the sheet's nest and formulas) is verified only "
+          "on the book — a passing replay is the ticket to run it, not a substitute for it")
 
     if a.facts:
         from check_book_against_brief import check

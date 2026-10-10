@@ -279,3 +279,127 @@ def test_every_shipment_refusal_carries_a_reason(monkeypatch):
              "shippable_parts": [{"part_number": "P"}]}
     assert cl._counted_shipment_price("PACKAGING", order) is None
     assert cl.shipment_status("PACKAGING", order), "a silent refusal is how weak history won unexplained"
+
+
+# ── the review of D-456 (D-457): structured evidence, not wording ────────────────────
+
+def test_the_gate_reads_the_structured_refusal_not_the_prose():
+    from check_book_against_brief import check
+
+    def _summary(extra):
+        line = {"code": "PACKAGING", "basis_chosen": "SDI Live history only — weak comparability",
+                "order_gbp_at_breaks": {1: 10.0, 50: 500.0}}
+        line.update(extra)
+        return {"manufacturing_writeup": {"parts": []}, "estimate_summary": {"part_estimates": []},
+                "commercial_lines": [line]}
+    facts = {"commercial_basis": ["PACKAGING"], "commercial_breaks": [1, 50]}
+    cases = [({"shipment_refusal": "the market answered per order, not per pallet — refused"},
+              True, "justified fallback"),
+             ({"shipment_refusal": "the shipment rung recorded no reason — investigate"},
+              False, "unjustified"),
+             ({}, False, "unjustified")]
+    for extra, want_ok, want_class in cases:
+        res = check(_summary(extra), facts)
+        (_, _, ok, detail), = [r for r in res.rows if r[0] == "commercial_basis"]
+        assert ok is want_ok and want_class in detail, (extra, detail)
+
+
+def test_the_weak_history_line_carries_the_refusal_as_a_field(monkeypatch):
+    monkeypatch.setattr(cl, "_sdi_live_rate", lambda code, order: {
+        "order_gbp": 50.0, "source_class": "sdi_history", "source_name": "SDI Live history",
+        "comparability": "same customer, quantity not held", "working": "median GBP 10.00"})
+    monkeypatch.setattr(cl, "_counted_shipment_price", lambda code, order: None)
+    cl._SHIPMENT_STATUS["DELIVERY|3"] = "the market gave no evidenced per-pallet rate"
+    ch = cl._choose_commercial_basis("DELIVERY", {"order_quantity": 3})
+    assert ch["shipment_refusal"] == "the market gave no evidenced per-pallet rate"
+
+
+def test_the_saws_time_is_proven_not_only_its_name():
+    from check_book_against_brief import check
+    goal = {"part_number": "8188-29-001", "description": "GOALPOST", "quantity": 1,
+            "normalized_material": "MILD STEEL", "textual_operations": ["welding"],
+            "section_stock": {"a": 25.4, "b": 25.4, "wall_mm": 1.22,
+                              "cut_lengths_mm": [300.0, 300.0, 1272.0],
+                              "cut_lengths_mm_source": "drawing_deterministic"}}
+    pe = e.estimate_part(goal, 1)
+    summary = {"manufacturing_writeup": {"parts": [goal]},
+               "estimate_summary": {"part_estimates": [pe]}}
+    res = check(summary, {"operation_times": {"8188-29-001": {"saw": {"min_run_min": 4.0,
+                                                                     "min_setup_min": 5.0}}}})
+    (_, item, ok, detail), = [r for r in res.rows if r[0] == "operation_time"]
+    assert ok and "run 4.5" in detail and "proven only on the book" in detail
+    res2 = check(summary, {"operation_times": {"8188-29-001": {"saw": {"min_run_min": 99.0}}}})
+    (_, _, ok2, _), = [r for r in res2.rows if r[0] == "operation_time"]
+    assert not ok2, "a floor the time does not reach fails"
+
+
+# ── the venv replay (D-457): a cleared blank, a kept stub, a silent decline ──────────
+
+def test_a_blank_the_costing_rejected_and_cleared_still_takes_its_allowance():
+    """estimate_material can refuse 2190 x 17 as implausible and CLEAR ng; _costed_blank_mm
+    still names what the money used, and the allowance reads it as the weight check does."""
+    parts = [_live_shape("014", 2257.4, 199.99, 285684, 6.728),
+             _live_shape("015", 2354.72, 99.99, 106666, 2.512),
+             _live_shape("008", 1143, 98, 111517, 2.626),
+             {"part_number": "013", "description": "WAVE LAYER 3", "normalized_material": "ACRYLIC",
+              "normalized_thickness_mm": 3.0, "quantity": 1, "stated_weight_kg": 11.731,
+              "geometry_source": "dxf_cut_length_only", "_costed_blank_mm": [2190.34, 17.0],
+              "normalized_geometry": {}}]
+    pes = [e.estimate_part(p, 1) for p in parts]
+    assert e.fill_unmeasured_blanks_from_the_job(parts, pes, 1) == ["013"]
+    me = pes[3]["material_estimate"]
+    assert abs(me["blank_width_mm"] - 227.4) < 0.5 and me["unit_material_cost_gbp"] > 5.0
+    assert parts[3].get("_allowance_declined") is None
+    assert not any(p.get("_allowance_declined") for p in parts[:3]), \
+        "a part that voted is not a candidate, and any stale decline on it is cleared"
+
+
+def test_every_allowance_decline_is_recorded_with_its_reason():
+    part = {"part_number": "X", "description": "STRIP", "normalized_material": "ACRYLIC",
+            "normalized_thickness_mm": 3.0, "stated_weight_kg": 0.05,
+            "_pack_model_material": {"material": "MILD STEEL", "parts": ["A", "B"]},
+            "normalized_geometry": {"blank_length_mm": 500.0, "blank_width_mm": 20.0}}
+    assert e._apply_mass_implied_blank(part) is None
+    assert "already carries the stated weight" in part["_allowance_declined"]
+    gone = {"part_number": "Y", "normalized_material": "ACRYLIC", "normalized_thickness_mm": 3.0,
+            "_pack_model_material": {"material": "MILD STEEL", "parts": ["A", "B"]},
+            "normalized_geometry": {}}
+    assert e._apply_mass_implied_blank(gone) is None
+    assert "missing" in gone["_allowance_declined"]
+
+
+def test_a_saved_commercial_stub_is_rebuilt_not_kept(monkeypatch):
+    stale = {"part_number": "PACKAGING", "description": "Packaging (box / pallet — per-unit "
+             "share, SDI Live figure — confirm)", "quantity": 1, "page_roles": ["bought_in"],
+             "source": "commercial_placeholder", "_commercial_placeholder": True,
+             "unit_cost_gbp": 10.0,
+             "commercial_line": {"code": "PACKAGING", "basis_chosen":
+                                 "SDI Live history only — weak comparability, no shipment could be priced"}}
+    parts = [{"part_number": "P-1", "description": "PANEL", "quantity": 1,
+              "normalized_material": "MILD STEEL", "normalized_thickness_mm": 3.0,
+              "geometry_source": "dxf_flat_pattern",
+              "normalized_geometry": {"blank_length_mm": 500.0, "blank_width_mm": 300.0,
+                                      "blank_area_mm2": 150000.0}}, stale]
+    e.estimate_document(parts, summary={"pages": []})
+    rebuilt = [p for p in parts if str(p.get("part_number")) == "PACKAGING"]
+    assert len(rebuilt) == 1 and rebuilt[0] is not stale, \
+        "the saved stub is discarded and the basis re-chosen on this run"
+    cl_line = rebuilt[0].get("commercial_line") or {}
+    stale_basis = "SDI Live history only — weak comparability, no shipment could be priced"
+    assert cl_line.get("basis_chosen") != stale_basis or \
+        cl_line.get("shipment_refusal") is not None or cl_line.get("sdi_live_status"), \
+        "the rebuilt line carries this run's own evidence, not the saved words"
+
+
+def test_an_excluded_commercial_line_survives_the_rebuild():
+    stale = {"part_number": "DELIVERY", "description": "NOT REQUIRED", "quantity": 1,
+             "_commercial_excluded": True, "source": "commercial_placeholder",
+             "unit_cost_gbp": 0.0}
+    parts = [{"part_number": "P-1", "description": "PANEL", "quantity": 1,
+              "normalized_material": "MILD STEEL", "normalized_thickness_mm": 3.0,
+              "geometry_source": "dxf_flat_pattern",
+              "normalized_geometry": {"blank_length_mm": 500.0, "blank_width_mm": 300.0,
+                                      "blank_area_mm2": 150000.0}}, stale]
+    e.estimate_document(parts, summary={"pages": []})
+    kept = [p for p in parts if str(p.get("part_number")) == "DELIVERY"]
+    assert any(p is stale for p in kept), "the estimator's NOT REQUIRED stands"
