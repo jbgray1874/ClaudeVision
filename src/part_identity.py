@@ -18,58 +18,29 @@ __all__ = [
     "parts_list_row_role",
 ]
 
-# DXF filename / legacy drawing numbers -> BOM detail part
-DXF_TO_BOM_ALIASES: Dict[str, str] = {
-    "1148": "1448-02",
-    "1453-01C": "1453-GA-C",
-    "1453": "1453-GA-C",
-}
+# NO JOB'S CODES LIVE HERE (D-454). This module once carried 1282's tables — DXF file names
+# mapped to its BOM codes, its GA codes mapped to their preferred details, its loom wordings,
+# and regexes that rewrote its kick-plate, wall-bay and header rows by literal code. They ran on
+# every job's text and every DXF lookup. Identity is decided by evidence the pack carries — the
+# code's own shape, the BOM hierarchy, the title block and the DXF's stated size — and a job's
+# own reading belongs in that job's answers or regression tests, never in a table here.
+DXF_TO_BOM_ALIASES: Dict[str, str] = {}
+GA_TO_DETAIL_PREFERENCE: Dict[str, str] = {}
+CATALOGUE_DESC_ALIASES: Dict[str, List[str]] = {}
 
-# Assembly / GA codes -> preferred fab detail when only one child exists in scope
-GA_TO_DETAIL_PREFERENCE: Dict[str, str] = {
-    "1450": "1450-01C",
-    "1450-GA": "1450-01C",
-    "1453": "1453-01C",
-    "1453-GA": "1453-01C",
-    "1453-GA-C": "1453-01C",
-    "1453-GAC": "1453-01C",
-}
-
-# Catalogue tokens: extra description phrases tried against the parts DB / price book
-CATALOGUE_DESC_ALIASES: Dict[str, List[str]] = {
-    "ELECTRICS": [
-        "ELECTRICS 50CM LOOM LIGHTING ELECTRICS",
-        "50CM LOOM LIGHTING ELECTRICS",
-        "LOOM LIGHTING ELECTRICS",
-        "50CM LOOM",
-    ],
-}
-
-_SPLIT_KICK_RE = re.compile(
-    r"(\d+)\s+1453-GA-\s+([A-Z])\s+(500mm\s+KICK\s+PLATE\s+ASSEMBLY)\s+(\d+)\b",
-    re.IGNORECASE,
-)
-_GA_WALL_RE = re.compile(
-    r"(\d+)\s+(3886-GA-)\s+WALL\s+(BAY\s+BUDGET\s+LOWER\s+LEG)\s+(\d+)\b",
-    re.IGNORECASE,
-)
-_HEADER_GA_RE = re.compile(
-    r"(\d+)\s+(1455-C-)\s+GA\s+(500mm\s+MILWAUKEE\s+HEADER)\s+(\d+)\b",
-    re.IGNORECASE,
-)
-_KICK_ROW_RE = re.compile(
-    r"(\d+)\s+(1453-GA-C?)\s+(500mm\s+KICK\s+PLATE\s+ASSEMBLY)\s+(\d+)\b",
-    re.IGNORECASE,
-)
+# A drawing number whose role token was split from it by the layout: "NNNN-GA- C" is one code,
+# "NNNN-C- GA" is one code, and a dash left hanging before a description word is not part of
+# the code. Shapes, not codes.
+_SPLIT_ROLE_LETTER_RE = re.compile(r"\b(\d{4,6}(?:-[A-Z0-9]+)*-GA)-\s+([A-Z])\b(?=\s)")
+_SPLIT_ROLE_TOKEN_RE = re.compile(r"\b(\d{4,6}(?:-[A-Z0-9]+)*)-\s+GA\b")
+_HANGING_DASH_RE = re.compile(r"\b(\d{4,6}(?:-[A-Z0-9]+)*-GA)-\s+(?=[A-Z]{2,}\b)")
 
 
 def split_catalogue_token(code: str) -> str:
-    """ELECTRICS50CM -> ELECTRICS (BOM tokens glued to size suffixes)."""
-    c = str(code or "").strip().upper().replace(" ", "")
-    m = re.match(r"^(ELECTRICS)(50CM|100CM|1M)(.*)$", c, re.IGNORECASE)
-    if m:
-        return m.group(1).upper()
-    return c
+    """A code with its spaces removed (D-454: no family is special-cased). A size glued to a
+    catalogue word — "LOOM50CM" — is part of what was bought, so it stays in the identity:
+    collapsing it would make every length of an item one line."""
+    return str(code or "").strip().upper().replace(" ", "")
 
 
 def normalize_part_code(raw: Any) -> str:
@@ -80,11 +51,11 @@ def normalize_part_code(raw: Any) -> str:
     s = re.sub(r"\s*-\s*", "-", s)
     s = re.sub(r"\s+", " ", s).strip()
     # "1450 - GA" / "1450 GA" -> 1450-GA
-    m = re.match(r"^(\d{4})\s+(?:-\s*)?GA([A-Z]?)$", s, re.IGNORECASE)
+    m = re.match(r"^(\d{4,6})\s+(?:-\s*)?GA([A-Z]?)$", s, re.IGNORECASE)
     if m:
         suffix = m.group(2).upper()
         return f"{m.group(1)}-GA{suffix}" if suffix else f"{m.group(1)}-GA"
-    m = re.match(r"^(\d{4}-[A-Z0-9]+)\s+GA([A-Z]?)$", s, re.IGNORECASE)
+    m = re.match(r"^(\d{4,6}-[A-Z0-9]+)\s+GA([A-Z]?)$", s, re.IGNORECASE)
     if m:
         suffix = m.group(2).upper()
         base = m.group(1).upper()
@@ -862,69 +833,44 @@ def resolve_estimate_code(
     description: str,
     available: Iterable[str],
 ) -> Optional[str]:
-    """Map a BOM / GA code to a per-part estimate key when labels differ."""
+    """Map a BOM / GA code to a per-part estimate key when labels differ.
+
+    Evidence only (D-454): the same code; or an assembly code whose stem has exactly one
+    non-assembly child in scope. No job's codes or product words are consulted — the 1282
+    tables and its kick-plate / peg-panel description fallbacks were removed."""
     norm = normalize_part_code(code)
     if not norm:
         return None
     avail = {normalize_part_code(c): c for c in available if c}
     if norm in avail:
         return avail[norm]
-
-    pref = GA_TO_DETAIL_PREFERENCE.get(norm)
-    if pref:
-        pn = normalize_part_code(pref)
-        if pn in avail:
-            return avail[pn]
-
-    # 1450-GA style: numeric prefix + detail suffix in scope
-    prefix_m = re.match(r"^(\d{4})(?:-GA.*)?$", norm)
-    if prefix_m:
-        prefix = prefix_m.group(1)
-        children = [
-            avail[k]
-            for k in avail
-            if k.startswith(prefix + "-") and not k.endswith("-GA") and "-GA" not in k[5:]
-        ]
+    try:
+        from part_code_conventions import carries_assembly_role as _is_asm
+    except Exception:                                            # noqa: BLE001
+        _is_asm = None
+    stem = re.sub(r"(?:[-_ ]?C?GA[A-Z]?(?:-[A-Z])?)$", "", norm)
+    if stem and stem != norm and re.match(r"^\d{4,6}", stem):
+        children = [avail[k] for k in avail
+                    if k.startswith(stem + "-") and k != norm
+                    and not (_is_asm(k) if _is_asm else k.endswith("GA"))]
         if len(children) == 1:
             return children[0]
-
-    # Kick / peg families by description when GA code missing
-    desc_u = str(description or "").upper()
-    if "KICK" in desc_u and "PLATE" in desc_u:
-        for key in ("1453-01C", "1453-GA-C", "1453-GA"):
-            pn = normalize_part_code(key)
-            if pn in avail:
-                return avail[pn]
-    if "PEG PANEL" in desc_u and "HALF" not in desc_u:
-        if "1449-01C" in avail.values() or normalize_part_code("1449-01C") in avail:
-            return avail.get(normalize_part_code("1449-01C"))
-    if "HALF" in desc_u and "PEG" in desc_u:
-        pn = normalize_part_code("2621-01C")
-        if pn in avail:
-            return avail[pn]
-
+    elif re.fullmatch(r"\d{4,6}", norm):
+        children = [avail[k] for k in avail
+                    if k.startswith(norm + "-") and not (_is_asm(k) if _is_asm else k.endswith("GA"))]
+        if len(children) == 1:
+            return children[0]
     return None
 
 
 def preprocess_bom_text(text: str) -> str:
-    """Repair common OCR/layout splits before BOM regex extraction."""
+    """Repair layout splits before BOM regex extraction — by shape, never by code (D-454)."""
     if not text:
         return text
     t = re.sub(r"\s+", " ", str(text))
-
-    t = _SPLIT_KICK_RE.sub(r"\1 1453-GA-\2 \3 \4", t)
-    t = _GA_WALL_RE.sub(r"\1 3886-GA WALL \3 \4", t)
-    t = _HEADER_GA_RE.sub(r"\1 1455-C-GA \3 \4", t)
-
-    # "1453-GA- 4 500mm..." — digit is item no, not revision letter
-    t = re.sub(
-        r"\b1453-GA-\s+(\d+)\s+(500mm\s+KICK\s+PLATE\s+ASSEMBLY)\s+(\d+)\b",
-        r"\1 1453-GA-C \2 \3",
-        t,
-        flags=re.IGNORECASE,
-    )
-    t = re.sub(r"\bELECTRICS\s*50\s*CM\b", "ELECTRICS 50CM", t, flags=re.IGNORECASE)
-    t = re.sub(r"\bELECTRICS50CM\b", "ELECTRICS 50CM", t, flags=re.IGNORECASE)
+    t = _SPLIT_ROLE_LETTER_RE.sub(r"\1-\2", t)
+    t = _SPLIT_ROLE_TOKEN_RE.sub(r"\1-GA", t)
+    t = _HANGING_DASH_RE.sub(r"\1 ", t)
     return t
 
 
@@ -933,40 +879,14 @@ def normalize_bom_row(row: Dict[str, Any]) -> Dict[str, Any]:
     pn = normalize_part_code(row.get("part_number"))
     if pn:
         out["part_number"] = pn
-    desc = str(row.get("description") or "").strip()
-    if pn == "3886-GA" and desc.upper().startswith("WALL"):
-        out["description"] = desc[4:].strip() or "WALL BAY BUDGET LOWER LEG"
     return out
 
 
 def inject_missing_bay_rows(rows: List[Dict[str, Any]], summary: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Add top-level bay lines that layout/OCR dropped (e.g. split kick plate row)."""
-    out = [normalize_bom_row(r) for r in rows]
-    codes = {normalize_part_code(_row_code(r)) for r in out}
-
-    blob_parts: List[str] = []
-    for page in summary.get("pages") or []:
-        blob_parts.append(page.get("normalized_text") or "")
-        blob_parts.append(page.get("pdfplumber_text") or "")
-    blob = preprocess_bom_text(" ".join(blob_parts))
-
-    for m in _KICK_ROW_RE.finditer(blob):
-        item, pn, desc, qty = m.groups()
-        code = normalize_part_code(pn)
-        if not code or code in codes:
-            continue
-        out.append(
-            {
-                "item_number": item,
-                "part_number": code if code.startswith("1453") else "1453-GA-C",
-                "description": desc.strip(),
-                "quantity": int(qty),
-                "source": "bay_bom_stitch",
-            }
-        )
-        codes.add(normalize_part_code("1453-GA-C"))
-
-    return out
+    """The rows, normalised. It once minted 1282's kick-plate row by literal code from page
+    text (D-454); a row the table reader missed is now recovered by the shared readers, which
+    take the code the page prints rather than one written here."""
+    return [normalize_bom_row(r) for r in rows]
 
 
 def _row_code(row: Dict[str, Any]) -> str:
@@ -989,37 +909,27 @@ def catalogue_search_descriptions(code: str, desc: str) -> List[str]:
 
 
 def score_dxf_candidate(part: Dict[str, Any], path: Any, *, cut_length_mm: float = 0.0) -> float:
-    """Prefer credible peg/spigot flats when several DXFs share a numeric family."""
+    """Prefer the DXF whose file name carries the part's own evidence (D-454).
+
+    Shape and evidence only: a size the part's description states that the file name also
+    states (+3 each), a size the file name states that contradicts the description's sizes
+    (-2 each), and the part's own drawing number in the file name (+2). No job's codes,
+    product words or dimensions are consulted — the 1282 peg / spigot / kick / base-plate rules
+    and their 650-vs-500 preference were removed."""
     from pathlib import Path
 
-    p = Path(path)
-    name = p.name.upper()
+    name = Path(path).stem.upper()
     pn = normalize_part_code(part.get("part_number") or "")
     score = 0.0
-    if "PEG" in name and "1449" in pn:
-        score += 3.0
-        if "50CM" in name or "500" in name:
-            score += 2.0
-        if cut_length_mm >= 2500:
-            score += 2.0
-        elif cut_length_mm < 1800:
-            score -= 2.0
-    if "SPIGOT" in name and pn == "1448-02":
-        score += 4.0
-    if "1148" in name and pn == "1448-02":
-        score += 4.0
-    if "KICK" in name and "1453" in pn:
-        score += 4.0
-    if "1450" in pn and ("BASE" in name or "PLATE" in name):
+    sizes = lambda text: set(re.findall(r"(?<![\d.])(\d{2,5})(?:\s*(?:MM|CM))?(?![\d.])", text))  # noqa: E731
+    desc_sizes = sizes(str(part.get("description") or "").upper())
+    pn_digits = set(re.findall(r"\d+", pn))
+    name_sizes = {v for v in sizes(name) if v not in pn_digits}
+    if desc_sizes and name_sizes:
+        score += 3.0 * len(desc_sizes & name_sizes)
+        score -= 2.0 * len(name_sizes - desc_sizes)
+    if pn and re.sub(r"[^A-Z0-9]", "", pn) in re.sub(r"[^A-Z0-9]", "", name):
         score += 2.0
-        desc_digits = "".join(c for c in str(part.get("description") or "") if c.isdigit())
-        prefer_650 = "650" in desc_digits
-        if "650" in name:
-            score += 4.0 if prefer_650 else -4.0
-        if "500" in name or "50CM" in name:
-            score += -1.0 if prefer_650 else 3.0
-        if "REV" in name and "500" not in name and "650" not in name:
-            score -= 0.5
     return score
 
 
@@ -1045,12 +955,68 @@ def same_row_read_as_one_cell(code_a: Any, desc_a: Any, code_b: Any, desc_b: Any
 
 
 
+def bom_parents_of(record: Any) -> Set[str]:
+    """Every parent a record says it was listed under — its BOM parent, each stated BOM
+    occurrence and each graph parent — squashed to alphanumerics (D-454)."""
+    out: Set[str] = set()
+    if not isinstance(record, dict):
+        return out
+
+    def _take(value: Any) -> None:
+        sq = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+        if sq:
+            out.add(sq)
+
+    _take(record.get("bom_parent"))
+    for e in record.get("bom_parents") or []:
+        _take(e.get("parent") if isinstance(e, dict) else e)
+    for e in record.get("parents") or []:
+        _take(e.get("parent") if isinstance(e, dict) else e)
+    return out
+
+
+def same_bom_occurrence(a: Any, b: Any) -> bool:
+    """Two readings are ONE occurrence on a parts list only if nothing says otherwise (D-454).
+
+    Spelling and quantity alone are not enough: four inserts under one sub-assembly and four
+    under another are eight inserts. Where both readings name the parents they were listed
+    under and they share none — a parent's code may be held as a file name, so one squashed
+    name containing the other counts as shared — they are different occurrences and are not
+    merged. Where either names none, nothing contradicts one occurrence."""
+    pa, pb = bom_parents_of(a), bom_parents_of(b)
+    if not pa or not pb:
+        return True
+    return any(x == y or (min(len(x), len(y)) >= 4 and (x in y or y in x)) for x in pa for y in pb)
+
+
+def _union_bom_parents(keep: Dict[str, Any], drop: Dict[str, Any]) -> None:
+    """Every stated occurrence the dropped reading carried is kept on the record (D-454)."""
+    lst = keep.get("bom_parents")
+    if not isinstance(lst, list):
+        lst = []
+    seen = {re.sub(r"[^A-Z0-9]", "", str(e.get("parent") if isinstance(e, dict) else e).upper())
+            for e in lst}
+    extra = list(drop.get("bom_parents") or [])
+    if drop.get("bom_parent"):
+        extra.append({"parent": drop.get("bom_parent"), "qty": drop.get("quantity")})
+    for e in extra:
+        name = e.get("parent") if isinstance(e, dict) else e
+        sq = re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+        if sq and sq not in seen:
+            lst.append(e if isinstance(e, dict) else {"parent": name, "qty": drop.get("quantity")})
+            seen.add(sq)
+    if lst:
+        keep["bom_parents"] = lst
+
+
 def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
     """Fold every record that is another's row read as one cell onto that record, in place
     (D-451). The coded spelling survives (the shorter squashed code, the one a catalogue
     holds); its quantity, its price chain and its parents stand; the folded identity is kept
     on it as a raw alias and said in a flag. Two records whose stated quantities disagree are
-    two lines, and are left alone. Returns [(folded, kept)]."""
+    two lines, and are left alone; so are two listed under different parents (D-454) — the
+    same item in two places is two occurrences. Every parent the folded reading named is kept
+    on the record. Returns [(folded, kept)]."""
     if not isinstance(parts, list):
         return []
 
@@ -1083,6 +1049,8 @@ def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
             qa, qb = _qty(a), _qty(b)
             if qa and qb and abs(qa - qb) > 1e-9:
                 continue
+            if not same_bom_occurrence(a, b):
+                continue                       # listed under different parents: two occurrences
             hit = b
             break
         if hit is None:
@@ -1092,6 +1060,7 @@ def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
         for k, v in drop.items():
             if keep.get(k) in (None, "", [], {}) and v not in (None, "", [], {}) and k != "part_number":
                 keep[k] = v
+        _union_bom_parents(keep, drop)
         aliases = keep.setdefault("raw_aliases", [])
         if isinstance(aliases, list) and drop["part_number"] not in aliases:
             aliases.append(drop["part_number"])

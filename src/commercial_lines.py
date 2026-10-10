@@ -599,7 +599,8 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
                     t_now, said, missing = _total(qty)
                     if t_now > 0:
-                        breaks = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)})
+                        breaks = sorted({1, qty} | set(_BREAKS_DEFAULT)
+                                        | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)})
                         result = {"order_gbp": round(t_now, 2), "source_class": "sdi_commercial_rate",
                                   "source_name": "AIEstimating.CommercialRate x the counted shipment",
                                   "working": (" + ".join(said) + f" = GBP {t_now:,.2f} the order"
@@ -671,7 +672,7 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     # line is a per-unit share; written as one order figure it was divided by
                     # the break, so fifty headers carried £0.20 of packaging each.
                     _bq = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)}
-                                 | {1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000})
+                                 | set(_BREAKS_DEFAULT))
                     result = {"order_gbp": round(median * qty, 2),
                               "order_gbp_at_breaks": {q: round(median * q, 2) for q in _bq},
                               "source_class": "sdi_history",

@@ -170,6 +170,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             _p["bom_parent"] = _bp
 
     from part_identity import same_row_read_as_one_cell as _one_cell    # D-443
+    from part_identity import same_bom_occurrence as _same_occ           # D-454
     _added = _updated = 0
     for _r in rows:
         if not _is_fastener_row(_r):
@@ -196,7 +197,8 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             if _cm is None:
                 for _p in _parts_recon:
                     if _one_cell(_code, _desc if _desc != _code else "",
-                                 _p.get("part_number"), _p.get("description")):
+                                 _p.get("part_number"), _p.get("description")) \
+                            and _same_occ(_r, _p):
                         _cm = _p
                         print(f"   [recon-row] ONE-CELL '{_code}' is {_p_code(_p)} read as one "
                               f"cell — one line, not two", flush=True)
@@ -503,8 +505,6 @@ def _score_primary_job_pdf(pdf_path: Path, summary: Dict[str, Any]) -> int:
         score += 20
     if re.search(r"\b\d{4}\b", name):
         score += 5
-    if "WALL BAY" in name or "STANDARD" in name:
-        score += 3
     bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
     score += min(len(bom_rows), 30)
     score += min(int(summary.get("page_count") or 0), 10)
@@ -2369,6 +2369,82 @@ def _answers_file_for_order_qty(job_folder: Any, pdf_path: Any):
           f"nor the folder — not consulted for the order quantity; the name-matched "
           f"pass later picks it up for the job it actually names.", flush=True)
     return None
+
+
+def pre_costing_passes(summary: Dict[str, Any]) -> None:
+    """The readings that must land on the part records before estimate_document prices them,
+    in order (D-433, D-437, D-453, D-454, D-451, D-445, D-440). One function, called by the run
+    and by tools/replay_saved_job.py, so a replay exercises exactly what a run does."""
+    if not isinstance(summary, dict) or not isinstance(summary.get("manufacturing_writeup"), dict):
+        return
+    # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
+    # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
+    # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as
+    # 3 mm mild steel. A material that arrives after the price is a note, not a material.
+    _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
+                                     summary.get("pages") or [])
+    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
+    # costing reaches for a default gauge and an assumed length.
+    try:
+        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
+        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
+                                 summary.get("pages") or [])
+        if _n_wire:
+            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
+                  f"that draws them", flush=True)
+    except Exception as _wire_exc:                                  # noqa: BLE001
+        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
+    # THE MATERIAL THE PACK'S MODEL PRINTED ITS WEIGHTS IN, where its measured parts say so (D-453),
+    # and the measured blanks of related parts (same material and gauge) beside each (D-454).
+    try:
+        from estimator import related_measured_blanks as _rmb
+        _rmb(summary["manufacturing_writeup"]["parts"])
+    except Exception as _rmb_exc:                                   # noqa: BLE001
+        print(f"   [weight] related blanks not read ({type(_rmb_exc).__name__}: {_rmb_exc})", flush=True)
+    try:
+        from estimator import pack_model_material as _pmm
+        _pm = _pmm(summary["manufacturing_writeup"]["parts"])
+        if _pm:
+            summary["pack_model_material"] = _pm
+            for _p in summary["manufacturing_writeup"]["parts"]:
+                if isinstance(_p, dict):
+                    _p["_pack_model_material"] = _pm
+            print(f"   [weight] the pack's model printed its weights in {_pm['material'].lower()} "
+                  f"({', '.join(_pm['parts'][:6])})", flush=True)
+    except Exception as _pm_exc:                                    # noqa: BLE001
+        print(f"   [weight] pack model material not read ({type(_pm_exc).__name__}: {_pm_exc})",
+              flush=True)
+    # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold
+        _folded = _fold(summary["manufacturing_writeup"]["parts"])
+        if _folded:
+            print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
+                  f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
+    except Exception as _fold_exc:                                  # noqa: BLE001
+        print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
+    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
+    try:
+        from size_reading import apply_size_readings as _size_readings
+        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
+        if _n_sz:
+            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
+                  f"priced at that reading, still to confirm", flush=True)
+    except Exception as _sz_exc:                                    # noqa: BLE001
+        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
+              flush=True)
+    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
+    try:
+        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
+        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
+                                  summary.get("pages") or [])
+        if _n_cut:
+            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
+                  f"sheet that draws them", flush=True)
+    except Exception as _cut_exc:                                   # noqa: BLE001
+        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
+              flush=True)
 
 
 def _finalize_scan_summary(
@@ -4913,68 +4989,8 @@ def _finalize_scan_summary(
                                        or "the concept read produced no part")))
         print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
               "Take the chosen design off from its own model, or have Design detail it.", flush=True)
-    # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
-    # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
-    # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as
-    # 3 mm mild steel. A material that arrives after the price is a note, not a material.
-    _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
-                                     summary.get("pages") or [])
-    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
-    # costing reaches for a default gauge and an assumed length.
-    try:
-        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
-        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
-                                 summary.get("pages") or [])
-        if _n_wire:
-            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
-                  f"that draws them", flush=True)
-    except Exception as _wire_exc:                                  # noqa: BLE001
-        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
-              flush=True)
-    # THE MATERIAL THE PACK'S MODEL PRINTED ITS WEIGHTS IN, where its measured parts say so (D-453).
-    try:
-        from estimator import pack_model_material as _pmm
-        _pm = _pmm(summary["manufacturing_writeup"]["parts"])
-        if _pm:
-            summary["pack_model_material"] = _pm
-            for _p in summary["manufacturing_writeup"]["parts"]:
-                if isinstance(_p, dict):
-                    _p["_pack_model_material"] = _pm
-            print(f"   [weight] the pack's model printed its weights in {_pm['material'].lower()} "
-                  f"({', '.join(_pm['parts'][:6])})", flush=True)
-    except Exception as _pm_exc:                                    # noqa: BLE001
-        print(f"   [weight] pack model material not read ({type(_pm_exc).__name__}: {_pm_exc})",
-              flush=True)
-    # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
-    try:
-        from part_identity import fold_one_cell_duplicates as _fold
-        _folded = _fold(summary["manufacturing_writeup"]["parts"])
-        if _folded:
-            print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
-                  f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
-    except Exception as _fold_exc:                                  # noqa: BLE001
-        print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
-    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
-    try:
-        from size_reading import apply_size_readings as _size_readings
-        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
-        if _n_sz:
-            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
-                  f"priced at that reading, still to confirm", flush=True)
-    except Exception as _sz_exc:                                    # noqa: BLE001
-        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
-              flush=True)
-    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
-    try:
-        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
-        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
-                                  summary.get("pages") or [])
-        if _n_cut:
-            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
-                  f"sheet that draws them", flush=True)
-    except Exception as _cut_exc:                                   # noqa: BLE001
-        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
-              flush=True)
+    # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
+    pre_costing_passes(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 

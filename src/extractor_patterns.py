@@ -598,7 +598,9 @@ def _extract_revision_from_context(text: str, part_numbers: List[str]) -> List[s
         pattern = re.escape(normalize_text(part_number)) + r"\s+([A-Z0-9]{1,4})\b"
         for value in _findall_unique(pattern, normalized, flags=re.IGNORECASE):
             cleaned = normalize_text(value).upper()
-            if cleaned in {"TTI", "A3"}:
+            # A sheet size is not a revision (D-454: no customer's initials listed here; a
+            # three-letter token fails the revision shape below anyway).
+            if re.fullmatch(r"A[0-4]", cleaned):
                 continue
             if re.fullmatch(r"\d{1,3}|[A-Z]\d{0,2}", cleaned):
                 revisions.append(cleaned)

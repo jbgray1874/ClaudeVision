@@ -300,16 +300,10 @@ EDGE_DISTANCE_PATTERN = r"\b(\d+(?:\.\d+)?)\s*(?:MM|mm)\s+EDGE\b"
 
 QTY_TABLE_ROW_PATTERN = r"(\d+)\s+([A-Z0-9_]+(?:-[A-Z0-9_]+|\s-\s[A-Z0-9_]+){1,4})-?\s+(.+?)\s+(\d+)"
 
-# --- Punch cycle-time calibration (TruPunch 1000 setup-plan data) ---------------
-# Peg-family panels are PUNCHED (cluster + tooth + perimeter), not lasered, and the
-# DXF/PDF under-reads their perforation so the hole-count model collapses to ~0.
-# Anchor on measured 1m machine times; scale to 500mm x0.65 (per Tim: peg 1.38->0.90).
-# Surfaced on the estimate basis page; override here if a 500mm setup plan is supplied.
-PUNCH_CYCLE_TIME_MIN = {
-    "PEG_PANEL":  {"1000mm": 1.38, "500mm": 0.90},
-    "HALF_PEG":   {"1000mm": 0.86, "500mm": 0.72},  # 500mm bumped to measured TruPunch time (2621 setup plan)
-    "BASE_PLATE": {"1000mm": 0.62, "500mm": 0.40},
-}
+# --- Punch cycle-time calibration: REMOVED (D-454) ---------------------------------
+# One product family's measured TruPunch times (peg panels, half pegs, base plates at 500 /
+# 1000 mm) were applied to any part whose description carried those words. A measured cycle is
+# that part's estimator-confirmed time, recorded against that job; the punch model prices the rest.
 
 # --- Packaging (ad-hoc; compute when we can, else UNPRICED flagged line) ---------
 # Rule (per SDI): if a unit fits a UK 1200x1000 pallet/box and the sizes are known,

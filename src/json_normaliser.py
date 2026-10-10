@@ -502,7 +502,9 @@ def normalise_material_for_part(part: Dict[str, Any]) -> Optional[str]:
     _raw_mat_upper = (raw or "").upper()
     if normalise_material(_raw_mat_upper) == "BOUGHT_IN":
         return "BOUGHT_IN"
-    if any(k in blob for k in ("SUPPLIED BY M&S", "SUPPLIED BY MARKS", "FOR SIZE REFERENCE ONLY", "SUPPLIED BY CLIENT")):
+    # SUPPLIED BY <any party> — no customer is named here (D-454); third_party_supply reads
+    # who the party is.
+    if re.search(r"\bSUPPLIED\s+BY\s+(?!SDI\b)\S", blob) or "FOR SIZE REFERENCE ONLY" in blob:
         return "BOUGHT_IN"
     if "PAPER" in blob and "PRINTED" in blob:
         return "BOUGHT_IN"
@@ -655,7 +657,7 @@ def infer_operations(text: str) -> List[str]:
     return ops
 
 
-# Boilerplate blocks that appear on every M&S/SDI drawing page border.
+# Boilerplate blocks that appear on a drawing page border, whoever owns the drawing.
 # These must be stripped before operation inference so spec text doesn't
 # bleed into per-part operations (e.g. "WELD SPECIFICATION" → welding).
 _BOILERPLATE_RE = re.compile(
@@ -663,7 +665,7 @@ _BOILERPLATE_RE = re.compile(
     r"|FINISH\s+SPECIFICATIONS?[:\s].*"
     r"|CHINA\s+MATERIAL\s+SPECIFICATIONS?[:\s].*"
     r"|GENERAL\s+TOLERANCES?[:\s].*"
-    r"|COPYRIGHT\s+M&S.*"
+    r"|COPYRIGHT\b.*"
     r"|THIS\s+DRAWING\s+IS\s+THE\s+PROPERTY.*"
     r"|DO\s+NOT\s+SCALE\s+FROM\s+DRAWING.*"
     r"|ALL\s+DIMENSIONS\s+ARE\s+IN\s+MM.*"
