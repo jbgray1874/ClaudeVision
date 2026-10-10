@@ -403,3 +403,21 @@ def test_an_excluded_commercial_line_survives_the_rebuild():
     e.estimate_document(parts, summary={"pages": []})
     kept = [p for p in parts if str(p.get("part_number")) == "DELIVERY"]
     assert any(p is stale for p in kept), "the estimator's NOT REQUIRED stands"
+
+
+# ── the venv replay, second pass (D-459): the stored list shadowed the chosen basis ──
+
+def test_the_part_records_outrank_the_stored_commercial_list():
+    fresh = {"code": "DELIVERY", "basis_chosen": "the counted shipment at a researched unit rate",
+             "order_gbp": 175.0}
+    stale = {"code": "DELIVERY", "basis_chosen": "SDI Live history only — weak comparability, "
+             "no shipment could be priced", "order_gbp": 10.06}
+    summary = {"commercial_lines": [stale],
+               "manufacturing_writeup": {"parts": [
+                   {"part_number": "DELIVERY", "commercial_line": fresh}]}}
+    got = {c["code"]: c for c in cl.collect_lines(summary)}
+    assert got["DELIVERY"]["order_gbp"] == 175.0, \
+        "the stub just rebuilt is the authority; the stored list is its cache"
+    only_stored = {"commercial_lines": [stale], "manufacturing_writeup": {"parts": []}}
+    assert cl.collect_lines(only_stored)[0]["order_gbp"] == 10.06, \
+        "with no stub, the stored list still fills the gap"

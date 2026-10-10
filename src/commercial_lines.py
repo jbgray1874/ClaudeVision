@@ -1144,11 +1144,16 @@ def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
                 seen.add(cl["code"])
                 out.append(cl)
 
-    # anything already on the summary wins; the part records fill the gaps
+    # THE PART RECORDS ARE THE AUTHORITY; the stored list fills gaps (D-459). It was the
+    # other way round, and a record saved with summary["commercial_lines"] shadowed every
+    # freshly chosen line forever: the venv replay rebuilt DELIVERY on a researched
+    # GBP 175/pallet and the reader still served the saved stub's weak history. The stored
+    # key is a cache of the stubs, not evidence of its own.
+    _scan(((summary or {}).get("manufacturing_writeup") or {}).get("parts"))
+    _scan((summary or {}).get("parts"))
+    _scan(((summary or {}).get("estimate_summary") or {}).get("part_estimates"))
     for cl in ((summary or {}).get("commercial_lines") or []):
         if isinstance(cl, dict) and cl.get("code") and cl["code"] not in seen:
             seen.add(cl["code"])
             out.append(cl)
-    _scan((summary or {}).get("parts"))
-    _scan(((summary or {}).get("estimate_summary") or {}).get("part_estimates"))
     return out

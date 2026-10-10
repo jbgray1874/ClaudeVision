@@ -130,6 +130,9 @@ def replay(summary: Dict[str, Any], log=print) -> Dict[str, Any]:
         log(f"[replay] workbook line list NOT built ({type(exc).__name__}: {exc})")
     try:
         from commercial_lines import collect_lines
+        # The saved run's own collected list is a cache of its stubs — stale here by
+        # definition, since the stubs were just rebuilt (D-459).
+        summary.pop("commercial_lines", None)
         summary["commercial_lines"] = collect_lines(summary)
     except Exception as exc:                                         # noqa: BLE001
         log(f"[replay] commercial lines not collected ({type(exc).__name__}: {exc})")
@@ -137,14 +140,20 @@ def replay(summary: Dict[str, Any], log=print) -> Dict[str, Any]:
     return summary
 
 
-def _print_changes(before: List[Dict[str, Any]], after: List[Dict[str, Any]]) -> None:
+def _print_changes(before: List[Dict[str, Any]], after: List[Dict[str, Any]],
+                   after_summary: Dict[str, Any]) -> None:
     b = {_sq(l.get("part_number")): l for l in before}
     a = {_sq(l.get("part_number")): l for l in after}
     print("\nLINES — the saved record against the replay (engine unit £, not the workbook's)")
     for k in sorted(set(b) | set(a)):
         lb, la = b.get(k), a.get(k)
         if lb and not la:
-            print(f"  REMOVED  {lb.get('part_number')}  (£{_line_money(lb)})")
+            still = any(_sq(p.get("part_number")) == k for p in
+                        ((after_summary.get("estimate_summary") or {}).get("canonical_part_estimates")
+                         or (after_summary.get("estimate_summary") or {}).get("part_estimates") or []))
+            print(f"  REMOVED  {lb.get('part_number')}  (£{_line_money(lb)})"
+                  + ("  — identity still on the replay; the removed money was the BOOK'S own "
+                     "read-back row, which a replay runs no Excel to rebuild" if still else ""))
         elif la and not lb:
             print(f"  ADDED    {la.get('part_number')} x{la.get('qty_per_unit')}  £{_line_money(la)}")
         else:
@@ -245,7 +254,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     before_lines = _lines(copy.deepcopy(saved))
     summary = replay(copy.deepcopy(saved))
     after_lines = _lines(summary)
-    _print_changes(before_lines, after_lines)
+    _print_changes(before_lines, after_lines, summary)
     _print_evidence(summary)
 
     a.out.mkdir(parents=True, exist_ok=True)
