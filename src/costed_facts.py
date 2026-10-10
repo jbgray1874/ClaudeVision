@@ -1820,6 +1820,15 @@ def thickness_conflict(part: Mapping[str, Any],
     not an arbitration the engine is entitled to."""
     if not isinstance(part, Mapping):
         return None
+    # AN ASSEMBLY IS NOT NESTED AND CUT (D-453). 8188-08_GA, the product root, carried two
+    # gauges from its sheet's text and was told it was "nested and cut at 3 mm"; a gauge on
+    # an assembly record prices nothing, so there is no decision to put to anybody.
+    try:
+        from detail_page_geometry import not_cut_from_a_blank as _nc
+        if _nc(dict(part)):
+            return None
+    except Exception:                                            # noqa: BLE001
+        pass
     kept = _num(part.get("normalized_thickness_mm"))
     if not kept or not (0.2 <= kept <= 50):
         return None

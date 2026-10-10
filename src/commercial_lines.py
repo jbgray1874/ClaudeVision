@@ -521,9 +521,10 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
     median of the most recent config COMMERCIAL_HISTORY_MAX_ROWS lines, per unit, times the
     order quantity — with the quotes it came from named on the line. Offline, or with no DB,
     None: the market rung follows as before. Memoised per code and customer for the run."""
+    # NOT CACHED ACROSS CALLS (D-453): the runner is a long-lived process and a CommercialRate
+    # figure is multiplied by THIS job's counted shipment — a cached answer would carry another
+    # job's pallets. The queries are cheap; the status is kept for the line's note only.
     key = f"{code}|{order.get('customer') or ''}|{order.get('order_quantity') or 1}"
-    if key in _LIVE_RATE_CACHE:
-        return _LIVE_RATE_CACHE[key]
     result: Optional[Dict[str, Any]] = None
     conn = None
     status = "SDI_OFFLINE: SDI Live not asked"
@@ -687,7 +688,6 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
             result = None
             status = f"SDI Live query failed ({type(_exc).__name__}: {str(_exc)[:80]})"
     _LIVE_RATE_STATUS[key] = (f"{result['source_name']}" if result else status)
-    _LIVE_RATE_CACHE[key] = result
     return result
 
 
@@ -772,6 +772,46 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
                         f"{unit_gbp * n_now:,.2f} the order; re-counted at each break")}
 
 
+def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """{basis, order_gbp, order_gbp_at_breaks, price_source, shipment_working, history_working,
+    cross_check} — the best-supported commercial basis, or None where nothing answered (D-453)."""
+    live = _sdi_live_rate(code, order)
+    out: Optional[Dict[str, Any]] = None
+    if live and live.get("source_class") == "sdi_commercial_rate":
+        out = {"basis": "SDI Live rate x the counted shipment", "order_gbp": live["order_gbp"],
+               "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+               "price_source": {"source_class": "sdi_commercial_rate", "reproducible": True,
+                                "indicative": True, "source_name": live["source_name"]},
+               "history_working": live.get("working")}
+    else:
+        comparable = bool(live) and "same customer" in str(live.get("comparability") or "") \
+            and "quantity within" in str(live.get("comparability") or "")
+        cs = None if comparable else _counted_shipment_price(code, order)
+        hist_said = ((f"SDI Live history for comparison: {live.get('working')}") if live else "")
+        if live and comparable:
+            out = {"basis": "SDI Live history, comparable on customer and quantity",
+                   "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+                   "price_source": {"source_class": "sdi_history", "reproducible": True,
+                                    "indicative": True, "source_name": live["source_name"]},
+                   "history_working": live.get("working"), "history_rows": live.get("rows")}
+        elif cs:
+            out = {"basis": "the counted shipment at a researched unit rate",
+                   "order_gbp": cs["order_gbp"], "order_gbp_at_breaks": cs["order_gbp_at_breaks"],
+                   "price_source": {"source_class": "llm_indicative", "reproducible": False,
+                                    "indicative": True, "source_name": cs["source_name"],
+                                    "evidence": cs.get("evidence")},
+                   "shipment_working": cs["working"],
+                   "cross_check": (hist_said + " — not comparable (no quantity, size or shipment "
+                                   "on those quotes), so the shipment basis is used") if live else ""}
+        elif live:
+            out = {"basis": "SDI Live history only — weak comparability, no shipment could be priced",
+                   "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+                   "price_source": {"source_class": "sdi_history", "reproducible": True,
+                                    "indicative": True, "source_name": live["source_name"]},
+                   "history_working": live.get("working"), "history_rows": live.get("rows")}
+    return out
+
+
 def _line(code: str, order: Dict[str, Any], description: str,
           held_key: str) -> Dict[str, Any]:
     qty = order.get("order_quantity") or 1
@@ -831,33 +871,21 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["method_source"] = _method.get("method_source")
         if _method.get("inferred_step_note"):
             out["inferred_step"] = True
-    elif _sdi_live_rate(code, order) is not None:
-        # SDI LIVE'S OWN FIGURE BEFORE THE MARKET (D-448): a rate the business has entered in
-        # AIEstimating.CommercialRate, else what past quotes charged for this line — the same
-        # customer first, then anyone — as a median of recent lines with the jobs named. A
-        # figure the business has already stood behind beats a researched one, and it is the
-        # same every run.
-        _live = _sdi_live_rate(code, order)
-        _order_gbp, _src = _live["order_gbp"], {
-            "source_class": _live["source_class"], "reproducible": True, "indicative": True,
-            "source_name": _live["source_name"]}
-        out["history_working"] = _live.get("working")
-        out["history_rows"] = _live.get("rows")
-        if _live.get("order_gbp_at_breaks"):
-            out["order_gbp_at_breaks"] = _live["order_gbp_at_breaks"]   # counted at every break
-    elif _counted_shipment_price(code, order) is not None:
-        # THE COUNTED SHIPMENT AT A RESEARCHED UNIT RATE (D-451). With no rate of the
-        # business's own, the market is asked what it can answer with evidence — the cost of
-        # ONE pallet (or carton) of this size — and the engine multiplies by the pallets it
-        # counted, re-counted at every break. 8188-08's £10 "for the whole order" was the
-        # market guessing a shipment it was never shown; 50 headers now cost 50 headers'
-        # pallets, and the line shows the arithmetic.
-        _cs = _counted_shipment_price(code, order)
-        _order_gbp, _src = _cs["order_gbp"], {
-            "source_class": "llm_indicative", "reproducible": False, "indicative": True,
-            "source_name": _cs["source_name"], "evidence": _cs.get("evidence")}
-        out["shipment_working"] = _cs["working"]
-        out["order_gbp_at_breaks"] = _cs["order_gbp_at_breaks"]
+    elif (_ch := _choose_commercial_basis(code, order)) is not None:
+        # THE BEST-SUPPORTED BASIS, CHOSEN AND SAID (D-453). The business's own rate on the
+        # counted shipment first; then SDI history where it is comparable (same customer AND
+        # the same quantity band); then the counted shipment at a researched unit rate, with
+        # weaker history shown beside it as a cross-check; then weak history alone. 8188-08's
+        # £10.00 / £10.06 were per-unit shares at unknown quantities on twelve past M&S quotes
+        # — evidence of what M&S jobs carried, not of what this shipment costs.
+        _order_gbp, _src = _ch["order_gbp"], _ch["price_source"]
+        out["basis_chosen"] = _ch["basis"]
+        out["shipment_working"] = _ch.get("shipment_working")
+        out["history_working"] = _ch.get("history_working")
+        out["history_rows"] = _ch.get("history_rows")
+        out["cross_check"] = _ch.get("cross_check")
+        if _ch.get("order_gbp_at_breaks"):
+            out["order_gbp_at_breaks"] = _ch["order_gbp_at_breaks"]
         out["sdi_live_status"] = sdi_live_status(code, order)
     else:
         # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────

@@ -4931,6 +4931,20 @@ def _finalize_scan_summary(
     except Exception as _wire_exc:                                  # noqa: BLE001
         print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
               flush=True)
+    # THE MATERIAL THE PACK'S MODEL PRINTED ITS WEIGHTS IN, where its measured parts say so (D-453).
+    try:
+        from estimator import pack_model_material as _pmm
+        _pm = _pmm(summary["manufacturing_writeup"]["parts"])
+        if _pm:
+            summary["pack_model_material"] = _pm
+            for _p in summary["manufacturing_writeup"]["parts"]:
+                if isinstance(_p, dict):
+                    _p["_pack_model_material"] = _pm
+            print(f"   [weight] the pack's model printed its weights in {_pm['material'].lower()} "
+                  f"({', '.join(_pm['parts'][:6])})", flush=True)
+    except Exception as _pm_exc:                                    # noqa: BLE001
+        print(f"   [weight] pack model material not read ({type(_pm_exc).__name__}: {_pm_exc})",
+              flush=True)
     # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
     try:
         from part_identity import fold_one_cell_duplicates as _fold
