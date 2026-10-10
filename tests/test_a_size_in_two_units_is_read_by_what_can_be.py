@@ -135,3 +135,20 @@ def test_the_mark_the_line_and_the_question_say_what_was_read_and_still_block():
 def test_without_an_inference_the_note_reads_as_d432_wrote_it():
     assert wp.unresolved_reading_note({"_price_unresolved": {"units": ["m", "mm"]}}) == \
         "UNRESOLVED READING (m and mm in one size): priced as printed, a working figure — customer quote blocked until confirmed"
+
+
+def test_a_flexible_or_bonded_magnetic_product_is_not_weighed_as_a_sintered_magnet():
+    """Ferrite is the lightest common SINTERED grade; flexible and bonded magnetic products are
+    lighter still and are weighed as none of these — the pack's weight then decides nothing."""
+    tape = dict(_magnet(), description="50mm x 10mm x 2m FLEXIBLE MAGNETIC TAPE")
+    summary = {"pages": [{"page_number": "1", "pypdf_text": "WEIGHT: 43631.32g"}]}
+    assert sr.density_for_purchased(tape["description"]) is None
+    assert sr.apply_size_readings([tape, _made(2608.0)], summary) == 0
+
+
+def test_the_inference_says_it_is_inferred_and_what_it_rests_on():
+    mag = _magnet()
+    summary = {"pages": [{"page_number": "1", "pypdf_text": "WEIGHT: 43631.32g"}]}
+    sr.apply_size_readings([mag, _made(2608.0)], summary)
+    flag = " ".join(str(f) for f in mag["review_flags"])
+    assert "inferred, not confirmed" in flag and "density" in flag

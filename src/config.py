@@ -679,7 +679,7 @@ UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LE
 # A PURCHASED LINE'S WORDS NAME ITS MATERIAL (D-445, size_reading): the word on the line ->
 # the MATERIAL_DENSITY_KG_PER_M3 key, so a reading of its size can be weighed against the
 # heaviest thing the pack states. Only used to refute a reading, never to price one.
-PURCHASED_MATERIAL_WORDS = {"MAGNET": "MAGNET", "MAGNETS": "MAGNET", "MAGNETIC": "MAGNET",
+PURCHASED_MATERIAL_WORDS = {"MAGNET": "MAGNET", "MAGNETS": "MAGNET",
                             "NEODYMIUM": "NEODYMIUM", "FERRITE": "FERRITE",
                             "STEEL": "MILD STEEL", "STAINLESS": "STAINLESS STEEL",
                             "ALUMINIUM": "ALUMINIUM", "ALUMINUM": "ALUMINIUM", "BRASS": "BRASS",
@@ -2023,8 +2023,10 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "PERSPEX": 1190,
     "POLYCARBONATE": 1200,
     # PURCHASED MAGNETS (D-445, size_reading): used only to refute a reading of a size printed
-    # in two units — "could fourteen of these weigh more than the product?" — so the family's
-    # LIGHTEST common grade is the figure: ferrite. NdFeB is 7,400-7,600.
+    # in two units — "could fourteen of these weigh more than the product?" — so the LIGHTEST
+    # of the common SINTERED grades is the figure: ferrite. NdFeB is 7,400-7,600. Bonded and
+    # flexible magnetic products are lighter still (about 3,500-3,800) and are not this entry;
+    # a line whose words say FLEXIBLE or MAGNETIC TAPE is weighed as none of these.
     "MAGNET": 4900,
     "FERRITE": 4900,
     "NEODYMIUM": 7500,

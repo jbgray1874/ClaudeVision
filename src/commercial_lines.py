@@ -562,17 +562,49 @@ def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     cust = str(order.get("customer") or "").upper()
                     own = [r for r in rows if str(r[4] or "").upper() == cust] if cust else []
                     use = own or rows
+                    # COMPARABLE, OR SAID NOT TO BE. A past quote's packaging is evidence for this
+                    # one where the order is alike; the header holds no size, weight or pallet
+                    # count, so the quantity is the one axis available — kept to the same band
+                    # (half to double) where any row sits in it, and the comparability is written
+                    # on the line either way. Order-level cost is what is recorded: the per-unit
+                    # median x this order's quantity, so the breaks re-divide a counted order
+                    # rather than inherit one unit's share.
+                    comparability = ("same customer" if own else "any customer")
+                    try:
+                        cur.execute("SELECT TOP 1 quantity FROM dbo.historical_quote_header")
+                        has_qty = True
+                    except Exception:                                # noqa: BLE001
+                        has_qty = False
+                    if has_qty:
+                        try:
+                            ids = tuple(str(r[2] or "") for r in use)
+                            cur.execute(
+                                "SELECT drawing_number, quantity FROM dbo.historical_quote_header "
+                                f"WHERE drawing_number IN ({','.join('?' * len(ids))})", *ids)
+                            qmap = {str(a): _num(b) for a, b in (cur.fetchall() or [])}
+                            band = [r for r in use if qmap.get(str(r[2] or ""))
+                                    and qty / 2.0 <= qmap[str(r[2] or "")] <= qty * 2.0]
+                            if band:
+                                use = band
+                                comparability += f", quantity within half to double of {qty}"
+                            else:
+                                comparability += f", NO row within half to double of {qty} off — weak comparability"
+                        except Exception:                            # noqa: BLE001
+                            comparability += ", quantity not compared"
+                    else:
+                        comparability += ", quantity not held on the history header"
+                    comparability += "; size, weight, packing method and destination not held — confirm"
                     prices = sorted(float(r[1]) for r in use)
                     median = prices[len(prices) // 2] if len(prices) % 2 else \
                         (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2.0
                     jobs = ", ".join(str(r[2] or "?") for r in use[:6])
                     result = {"order_gbp": round(median * qty, 2),
                               "source_class": "sdi_history",
-                              "source_name": f"SDI Live history: {len(use)} {'own' if own else 'any-customer'} quote line(s)",
+                              "source_name": f"SDI Live history: {len(use)} quote line(s), {comparability}",
+                              "comparability": comparability,
                               "working": (f"median GBP {median:,.2f} a unit of {len(use)} "
-                                          f"{code.lower()} line(s) in SDI Live"
-                                          + (f" for {order.get('customer')}" if own else " (any customer)")
-                                          + f" ({jobs}) x {qty} units"),
+                                          f"{code.lower()} line(s) in SDI Live ({comparability}; "
+                                          f"{jobs}) x {qty} units = the order"),
                               "rows": [{"description": str(r[0] or ""), "unit_price_gbp": float(r[1]),
                                         "drawing_number": str(r[2] or ""), "quote_date": str(r[3] or ""),
                                         "customer": str(r[4] or "")} for r in use]}

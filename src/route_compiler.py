@@ -6530,7 +6530,8 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
                 dd.reason = ((f"{dd.reason}; " if dd.reason else "")
                              + f"{words} is charged once, on {_tid}, whose evidence for it is the "
                                f"stronger ({d.source}); this member's ({dd.source}) is the weaker reading "
-                               f"of the same work")
+                               f"of the same work — if it is a separate stage (before as well as "
+                               f"after assembly), both are real and this row should be put back")
                 dd.field_provenance["status"] = "operation_charged_at_one_level"
                 withheld.append(k)
                 if issues is not None:
@@ -6543,7 +6544,9 @@ def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, 
                     + f"{words} is charged once, on the member(s) that carry it ({kept}); "
                     + (f"this assembly's evidence ({d.source}) is the weaker reading of the same work"
                        if parent_s < child_s else
-                       f"the evidence is equal on both and the work is on the members"))
+                       f"the evidence is equal on both — PROVISIONAL: read as one event, done on "
+                       f"the members; if the shop does this both before and after assembly, both "
+                       f"are real and this row should be put back"))
         d.field_provenance["status"] = "operation_charged_at_one_level"
         withheld.append(_tid)
         if issues is not None:

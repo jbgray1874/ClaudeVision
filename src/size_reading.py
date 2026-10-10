@@ -33,7 +33,7 @@ from extractor_patterns import size_mixing_units
 _UNIT_MM = {"MM": 1.0, "CM": 10.0, "M": 1000.0}
 _FIG = re.compile(r"(\d+(?:\.\d+)?)\s*(MM|CM|M)\b", re.I)
 _WEIGHT = re.compile(r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9][0-9.,]*)\s*(KG|G)\b", re.I)
-_DEFAULT_WORDS = {"MAGNET": "MAGNET", "MAGNETIC": "MAGNET", "NEODYMIUM": "NEODYMIUM",
+_DEFAULT_WORDS = {"MAGNET": "MAGNET", "NEODYMIUM": "NEODYMIUM",
                   "FERRITE": "FERRITE", "STEEL": "MILD STEEL", "STAINLESS": "STAINLESS STEEL",
                   "ALUMINIUM": "ALUMINIUM", "ALUMINUM": "ALUMINIUM", "BRASS": "BRASS",
                   "ACRYLIC": "ACRYLIC", "PERSPEX": "ACRYLIC", "MDF": "MDF", "PLYWOOD": "PLYWOOD"}
@@ -133,6 +133,8 @@ def density_for_purchased(description: Any) -> Optional[Dict[str, Any]]:
     words = getattr(config, "PURCHASED_MATERIAL_WORDS", None) or _DEFAULT_WORDS
     dens = getattr(config, "MATERIAL_DENSITY_KG_PER_M3", {}) or {}
     text = " " + " ".join(re.sub(r"[^A-Z0-9]+", " ", str(description or "").upper()).split()) + " "
+    if re.search(r"\b(FLEXIBLE|FLEXI|BONDED MAGNET|MAGNETIC TAPE|MAG TAPE|RUBBER MAGNET)\b", text):
+        return None                       # a bonded or flexible magnetic product: another density
     found = {str(words[w]).upper() for w in words if f" {str(w).upper()} " in text}
     found = {m for m in found if _num(dens.get(m)) or _num(dens.get(m.replace(" ", "_")))}
     if len(found) != 1:
@@ -185,8 +187,9 @@ def resolve_mixed_size(part: Dict[str, Any], yardstick: Dict[str, Any]) -> Optio
     if mix["text"] in desc:
         part["price_chain_description"] = desc.replace(mix["text"], chosen["text"])
     part.setdefault("review_flags", []).append(
-        f"size read as {chosen['text']} ({chosen['label']}): {why} — priced at that reading as "
-        f"a working figure; confirm")
+        f"size read as {chosen['text']} ({chosen['label']}) — inferred, not confirmed: {why}; "
+        f"the inference rests on the stated weight, the printed quantity and the material's "
+        f"density — priced at that reading as a working figure; confirm")
     return inferred
 
 
