@@ -112,7 +112,8 @@ def test_a_sheet_weight_in_the_models_default_material_is_said_as_that_not_a_gau
             "blank_area_mm2": 117027.0, "stated_weight_kg": 9.187}
     note = estimator._blank_weight_check(part)
     assert note and note.startswith("WEIGHT NOTE:"), note
-    assert "mild steel" in note and "gauge is not in question" in note
+    assert "mild steel" in note and "suggests the model carries mild steel" in note
+    assert "cannot test the gauge" in note, "a density match suggests a model error; it does not prove the gauge"
     estimator.estimate_process_times(part, quantity=1)
     assert not any("Gauge of T-011" in str(q.get("issue")) for q in part.get("manufacturing_questions") or [])
 
@@ -192,3 +193,12 @@ def test_a_missing_drawing_whose_line_is_priced_is_a_warning_said_as_priced():
         assert "8188-08-004" not in sev[invariants.BLOCKING]["message"]
     if invariants.WARNING in sev:
         assert "priced without one" in sev[invariants.WARNING]["message"]
+
+
+def test_a_role_token_yields_to_a_measured_flat_or_an_explicit_classification():
+    from detail_page_geometry import not_cut_from_a_blank
+    ga = {"part_number": "X-01_GA", "description": "FRAME"}
+    assert not_cut_from_a_blank(ga)
+    assert not not_cut_from_a_blank(dict(ga, is_assembly_parent=False))
+    measured = dict(ga, dxf_augmented=True, blank_length_mm=400.0, blank_width_mm=300.0)
+    assert not not_cut_from_a_blank(measured), "a DXF flat says this GA-coded record is a cut part"

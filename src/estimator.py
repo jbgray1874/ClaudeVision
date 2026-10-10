@@ -3074,9 +3074,10 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                           if _measured_area else f"the {L:g} x {W:g} blank")
                 return (f"WEIGHT NOTE: the sheet's {stated:.3f} kg is {_what0} at {t:g} mm in "
                         f"{_alt_u.lower()} ({_alt_kg:.3f} kg), not in {mat.lower()} "
-                        f"({blank_kg:.3f} kg) — the model carries {_alt_u.lower()} as its "
-                        f"material, so its printed mass is that material's. The gauge is not in "
-                        f"question; set the model's material to read its weight")
+                        f"({blank_kg:.3f} kg) — which suggests the model carries {_alt_u.lower()} "
+                        f"as its material and printed that mass. If so, the weight cannot test the "
+                        f"gauge either way: confirm the model's material, and the gauge from the "
+                        f"model or the drawing office")
         fit_t = stated / (area * float(dens) * 1e-9)
         _what = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
                  if _measured_area else f"the {L:g} x {W:g} blank")

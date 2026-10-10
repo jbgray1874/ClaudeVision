@@ -681,6 +681,8 @@ UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LE
 # mass. Where the same blank in one of these weighs the stated weight within the tolerance, the
 # weight is read as the model's material — a note, not a gauge question.
 MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")
+# AN ASSUMPTION TO VALIDATE ACROSS PACKS, not a measured figure: set from one pack (8188-08's
+# four acrylic parts fit steel within 1%), wide enough for a printed weight's rounding.
 MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT = 8.0
 
 # A PURCHASED LINE'S WORDS NAME ITS MATERIAL (D-445, size_reading): the word on the line ->

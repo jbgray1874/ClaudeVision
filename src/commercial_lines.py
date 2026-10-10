@@ -751,8 +751,11 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         n = _count(q)
         if n:
             at[q] = round(unit_gbp * n, 2)
-    why_n = ("a weight-only lower bound — the longest part exceeds the pallet footprint"
-             if oversize else "counted from the measured blanks")
+    why_n = ("a WORKING count, a weight-only lower bound: the longest part exceeds the pallet "
+             "footprint, so stacking, protection and the crate are not modelled — confirm the "
+             "pallets with the packer" if oversize else
+             "a WORKING count from the measured blanks' footprint and weight at the configured "
+             "packing factor, not a packing plan — confirm the pallets with the packer")
     return {"order_gbp": round(unit_gbp * n_now, 2), "order_gbp_at_breaks": at,
             "source_name": f"researched per-{unit} rate ({src}) x the counted shipment",
             "evidence": rate.get("evidence") or {"source": src, "date": rate.get("price_date")},

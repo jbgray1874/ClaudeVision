@@ -110,11 +110,16 @@ def not_cut_from_a_blank(part: Mapping[str, Any]) -> bool:
             or part.get("supplied_by_third_party")
             or str(part.get("costing_basis") or "") == "supplied_by_third_party"):
         return True
-    # A RECORD WHOSE CODE NAMES AN ASSEMBLY DRAWING IS ONE (D-451): the product root
-    # 8188-08_GA carried no assembly flag and was checked as a 53 x 20 sheet blank.
+    # A CODE NAMING AN ASSEMBLY DRAWING IS EVIDENCE THE RECORD IS ONE (D-451) — not proof. The
+    # product root 8188-08_GA carried no assembly flag and was checked as a 53 x 20 sheet
+    # blank. The role token is taken as an assembly only where nothing says otherwise: an
+    # explicit classification as a part (is_assembly_parent set False) or a flat a DXF, a
+    # model or a measured mirror supplied wins over the name.
     try:
         from part_code_conventions import carries_assembly_role
-        if carries_assembly_role(part.get("part_number")):
+        if (carries_assembly_role(part.get("part_number"))
+                and part.get("is_assembly_parent") is not False
+                and not has_measured_flat(part)):
             return True
     except Exception:                                            # noqa: BLE001
         pass
