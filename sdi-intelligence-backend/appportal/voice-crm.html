@@ -578,12 +578,11 @@ function unlockAudio(e){
       else{ AUD_OK=true; AUD_TRYING=false; }
     }catch(err){ AUD_TRYING=false; }
   }
-  if(USE_SERVER_EARS()){
-    try{
-      if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
-      if(ACTX.state!=='running') ACTX.resume().catch(()=>{});
-    }catch(e){}
-  }
+  // The recorder (iPhone) and the listening tones both need sound allowed.
+  try{
+    if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
+    if(ACTX.state!=='running') ACTX.resume().catch(()=>{});
+  }catch(err){}
 }
 const unlockTTS=unlockAudio;   // older name, still used by the briefing
 ['touchend','click','keydown'].forEach(ev=>document.addEventListener(ev,unlockAudio,{capture:true,passive:true}));
@@ -619,11 +618,11 @@ async function keepAwake(on){
   }catch(e){}
 }
 
-// Drive mode tones, so a driver knows without looking: two rising notes when
-// the app starts listening, one low note when it has heard and is working.
-// Played only once the phone has allowed sound (the tap that started Drive mode).
+// Listening tones, so you know without looking: two rising notes when the
+// app starts listening, one low note when it has heard you and is working.
+// Voice conversations only (typed turns never listen), on the normal screen
+// and in Drive mode. Played only once the phone has allowed sound (a tap).
 function tone(kind){
-  if(!DRIVE) return;
   try{
     if(!ACTX) ACTX=new (window.AudioContext||window.webkitAudioContext)();
     if(ACTX.state!=='running') return;
@@ -1071,8 +1070,8 @@ async function startRecording(mode){
     chunks.push(new Float32Array(d));
     let sq=0; for(let i=0;i<d.length;i++) sq+=d[i]*d[i];
     const rms=Math.sqrt(sq/d.length), now=performance.now();
-    // The room's own noise, measured once the listening tone (Drive mode) has played.
-    const calm=DRIVE?250:0;
+    // The room's own noise, measured once the listening tone has played.
+    const calm=250;
     if(now-t0<calm) return;
     if(now-t0<calm+400){ noise=Math.max(noise,rms); return; }
     const loud=rms>Math.max(0.012,noise*2.5);
