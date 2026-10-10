@@ -176,6 +176,11 @@ def _print_evidence(summary: Dict[str, Any]) -> None:
     if not seen:
         print("  none")
     print("\nCOMMERCIAL LINES — the basis chosen and the unit at every break")
+    try:
+        import pyodbc                                            # noqa: F401
+    except Exception:                                            # noqa: BLE001
+        print("  (SDI Live unreachable in this python — figures below that cite SDI Live "
+              "history are the saved record's, not a fresh lookup)")
     lines = summary.get("commercial_lines") or []
     for cl in lines:
         if not isinstance(cl, dict):
@@ -206,6 +211,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     a = ap.parse_args(list(argv) if argv is not None else None)
     if a.offline:
         os.environ["SDI_OFFLINE"] = "1"
+    # THE ENVIRONMENT IS PART OF THE RESULT (D-456). The first replay ran on a python without
+    # pyodbc: SDI Live was unreachable, so every history figure it printed was the SAVED
+    # record's, and nothing said so. The runner's interpreter is .venv\Scripts\python.exe.
+    print(f"interpreter: {sys.executable}")
+    env_caveats: List[str] = []
+    try:
+        import pyodbc                                            # noqa: F401
+    except Exception:                                            # noqa: BLE001
+        env_caveats.append(
+            "pyodbc is MISSING in this python: SDI Live cannot be re-queried, so any history "
+            "or catalogue figure shown is the SAVED record's, carried, not fresh. Run the "
+            "replay with the runner's interpreter (.venv\\Scripts\\python.exe) for live rungs.")
+    if a.offline:
+        env_caveats.append("--offline: SDI Live and the market researcher were not asked by design.")
+    for _c in env_caveats:
+        print(f"ENVIRONMENT: {_c}")
     saved = json.loads(a.summary.read_text(encoding="utf-8"))
     job = str(saved.get("job_number") or saved.get("job_folder_name") or a.summary.stem)
     before_lines = _lines(copy.deepcopy(saved))

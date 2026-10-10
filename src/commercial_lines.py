@@ -771,8 +771,15 @@ def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[s
         _SHIPMENT_STATUS[_status_key] = f"the market lookup failed ({type(_exc).__name__})"
         rate = None
     if not rate:
+        _SHIPMENT_STATUS.setdefault(_status_key, f"the market gave no evidenced per-{unit} rate")
+        print(f"   [commercial] {code}: shipment rung counted "
+              f"{(pallets or cartons):g} {unit}(s) but did not price — "
+              f"{_SHIPMENT_STATUS[_status_key]}", flush=True)
         return None
     unit_gbp = float(rate["price_gbp"])
+    print(f"   [commercial] {code}: shipment rung priced {(pallets or cartons):g} {unit}(s) at "
+          f"GBP {unit_gbp:,.2f} per {unit} ({rate.get('source') or rate.get('supplier_name')})",
+          flush=True)
     src = str(rate.get("source") or rate.get("supplier_name") or "market research")
 
     def _count(q: int) -> Optional[float]:
@@ -821,7 +828,8 @@ def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[
             and "quantity within" in str(live.get("comparability") or "")
         cs = None if comparable else _counted_shipment_price(code, order)
         hist_said = ((f"SDI Live history for comparison: {live.get('working')}") if live else "")
-        _ship_why = "" if cs else shipment_status(code, order)
+        _ship_why = "" if cs else (shipment_status(code, order)
+                                   or "the shipment rung recorded no reason — investigate")
         if live and comparable:
             out = {"basis": "SDI Live history, comparable on customer and quantity",
                    "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
