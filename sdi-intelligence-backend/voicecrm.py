@@ -697,6 +697,31 @@ INTERPRET_MODEL = _opt("SDI_VOICECRM_MODEL", "claude-opus-5-5")
 # questions ("what's at risk?") get thinner. Every write is still checked by
 # this code and confirmed by the person, whatever the setting.
 INTERPRET_EFFORT = _opt("SDI_VOICECRM_EFFORT", "low").lower()
+# Model tiering. Most spoken requests are questions ("what's due this
+# week?"), and a faster model answers those well. A sentence that sounds like
+# a question goes to FAST_MODEL first; if its reply is anything but an answer
+# (a change, a question back, a reply that fails its checks) it is dropped
+# and INTERPRET_MODEL does the request, so every proposed change is still
+# worked out by the stronger model. The reply starts with "action", so a
+# change is spotted within its first few words. Statements ("Lisbon's
+# ordered") go straight to INTERPRET_MODEL. Blank = one model for everything.
+FAST_MODEL = _opt("SDI_VOICECRM_FAST_MODEL", "claude-sonnet-5-5")
+FAST_EFFORT = _opt("SDI_VOICECRM_FAST_EFFORT", "low").lower()
+
+_QUESTION_START = re.compile(
+    r"(what|whats|which|how|hows|when|whens|who|whos|whose|where|wheres|why|"
+    r"is|are|was|were|do|does|did|has|have|had|can|could|will|would|should|"
+    r"tell|read|give|list|show|any|anything|summarise|summarize|remind)\b")
+_FILLER = re.compile(r"((and|so|ok|okay|right|um|erm|er|uh|hey|also|then|now|well|just)\b\W*)+")
+
+
+def _looks_like_question(transcript: str) -> bool:
+    """Whether a spoken sentence reads as a question, so the fast model may
+    answer it. Anything else - a statement of what changed, the answer to a
+    question the app asked - goes to the full model."""
+    text = re.sub(r"['’]", "", transcript.strip().lower())
+    text = _FILLER.sub("", text, count=1) if _FILLER.match(text) else text
+    return text.endswith("?") or bool(_QUESTION_START.match(text))
 
 
 def _interpret_ready() -> bool:
@@ -873,7 +898,8 @@ def _interpret_prepare(body: InterpretIn):
 
 
 def _interpret_result(text: str, stop_reason, cached, body: InterpretIn, user: dict,
-                      started: float, streamed: bool = False, first_say=None) -> dict:
+                      started: float, streamed: bool = False, first_say=None,
+                      model: str = "", effort: str = "", route: str = "full") -> dict:
     """The model's reply checked and turned into update / read / clarify."""
     transcript = body.transcript.strip()
     if stop_reason == "max_tokens":
@@ -902,7 +928,8 @@ def _interpret_result(text: str, stop_reason, cached, body: InterpretIn, user: d
     print(f"[voicecrm.interpret] user={user.get('email','')} records={len(body.projects)} "
           f"heard={transcript[:120]!r} action={action} "
           f"changes={[(c.get('item_id'), c.get('field')) for c in raw_changes if isinstance(c, dict)]!r} "
-          f"say={say[:120]!r} effort={INTERPRET_EFFORT} secs={time.monotonic() - started:.1f} "
+          f"say={say[:120]!r} model={model or INTERPRET_MODEL} route={route} "
+          f"effort={effort or INTERPRET_EFFORT} secs={time.monotonic() - started:.1f} "
           f"cached={cached or 0}{' streamed' if streamed else ''}"
           f"{f' first_say={first_say:.1f}' if first_say is not None else ''}",
           flush=True)
@@ -944,19 +971,10 @@ def _interpret_result(text: str, stop_reason, cached, body: InterpretIn, user: d
 @router.post("/api/voicecrm/interpret")
 def interpret(body: InterpretIn, request: Request, user: dict = Depends(auth.require_user)):
     """Parse a transcript into update/read/clarify. Writes nothing."""
-    params, early = _interpret_prepare(body)
-    if early:
-        return early
-    import anthropic
-    started = time.monotonic()
-    try:
-        resp = anthropic.Anthropic().messages.create(**params)
-    except anthropic.APIError as exc:
-        return {"state": "interpret_failed",
-                "detail": f"The language model refused the request: {exc}"[:400]}
-    text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
-    cached = getattr(getattr(resp, "usage", None), "cache_read_input_tokens", 0)
-    return _interpret_result(text, resp.stop_reason, cached, body, user, started)
+    for kind, value in _interpret_events(body, user):
+        if kind == "result":
+            value.pop("say_streamed", None)      # nothing was spoken early here
+            return value
 
 
 class _SayScanner:
@@ -1039,41 +1057,88 @@ def interpret_stream(body: InterpretIn, request: Request, user: dict = Depends(a
     for each sentence of an answer as soon as it is written, then
     {"type": "result", ...the /interpret reply...}. Lets the phone start
     speaking the first sentence while the rest is still being written."""
-    params, early = _interpret_prepare(body)
-
     def lines():
-        if early:
-            yield json.dumps({"type": "result", **early}) + "\n"
-            return
-        import anthropic
-        started = time.monotonic()
+        for kind, value in _interpret_events(body, user):
+            if kind == "say":
+                yield json.dumps({"type": "say", "text": value}) + "\n"
+            else:
+                yield json.dumps({"type": "result", **value}) + "\n"
+
+    return StreamingResponse(lines(), media_type="application/x-ndjson",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+def _is_answer(text: str, stop_reason) -> bool:
+    """Whether a fast-model reply is a complete, readable answer to keep."""
+    if stop_reason == "max_tokens":
+        return False
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").removeprefix("json").strip()
+    try:
+        parsed = json.loads(text)
+    except (ValueError, json.JSONDecodeError):
+        return False
+    return isinstance(parsed, dict) and parsed.get("action") == "read" and bool(parsed.get("say"))
+
+
+def _interpret_events(body: InterpretIn, user: dict):
+    """("say", sentence) for each sentence of an answer as soon as it is
+    written, then ("result", the /interpret reply). Tries FAST_MODEL first for
+    a question (see FAST_MODEL above); everything else, and anything the fast
+    model doesn't answer outright, goes to INTERPRET_MODEL."""
+    params, early = _interpret_prepare(body)
+    if early:
+        yield "result", early
+        return
+    import anthropic
+    started = time.monotonic()
+    client = anthropic.Anthropic()
+    tiers = [(INTERPRET_MODEL, INTERPRET_EFFORT, "full")]
+    if FAST_MODEL and FAST_MODEL != INTERPRET_MODEL and _looks_like_question(body.transcript):
+        tiers.insert(0, (FAST_MODEL, FAST_EFFORT, "fast"))
+    route = "full"
+    for model, effort, tier in tiers:
+        last = tier == "full"
         scanner = _SayScanner()
-        parts, said, first_say = [], [], None
+        parts, said, first_say, handed_over = [], [], None, False
         try:
-            with anthropic.Anthropic().messages.stream(**params) as stream:
+            with client.messages.stream(**{**params, "model": model,
+                                           "output_config": {"effort": effort}}) as stream:
                 for text in stream.text_stream:
                     parts.append(text)
-                    for sentence in scanner.feed(text):
+                    sentences = scanner.feed(text)
+                    if not last and scanner.action not in (None, "read"):
+                        handed_over = True        # a change or a question back
+                        break
+                    for sentence in sentences:
                         if not said:
                             first_say = time.monotonic() - started
                         said.append(sentence)
-                        yield json.dumps({"type": "say", "text": sentence}) + "\n"
-                final = stream.get_final_message()
+                        yield "say", sentence
+                final = None if handed_over else stream.get_final_message()
         except anthropic.APIError as exc:
-            yield json.dumps({"type": "result", "state": "interpret_failed",
-                              "detail": f"The language model refused the request: {exc}"[:400]}) + "\n"
-            return
+            if last or said:
+                yield "result", {"state": "interpret_failed",
+                                 "detail": f"The language model refused the request: {exc}"[:400]}
+                return
+            handed_over = True                    # fast model unavailable: use the full one
+        text = "".join(parts)
+        if not last and not handed_over and not said and not _is_answer(text, final.stop_reason):
+            handed_over = True                    # it didn't answer cleanly: start again
+        if handed_over:
+            route = f"full-after-fast({time.monotonic() - started:.1f}s)"
+            continue
         cached = getattr(getattr(final, "usage", None), "cache_read_input_tokens", 0)
-        result = _interpret_result("".join(parts), final.stop_reason, cached, body, user,
-                                   started, streamed=True, first_say=first_say)
+        result = _interpret_result(text, final.stop_reason, cached, body, user, started,
+                                   streamed=True, first_say=first_say, model=model,
+                                   effort=effort, route=tier if tier == "fast" else route)
         # Whether what was already spoken is the whole answer; if not (a
         # reply that failed its checks, say), the page speaks the result too.
         norm = lambda t: " ".join(str(t or "").split())
         result["say_streamed"] = bool(said) and norm(" ".join(said)) == norm(result.get("say"))
-        yield json.dumps({"type": "result", **result}) + "\n"
-
-    return StreamingResponse(lines(), media_type="application/x-ndjson",
-                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        yield "result", result
+        return
 
 
 # ═══════════════════════════════════════════════════════════════════════════

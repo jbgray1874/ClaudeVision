@@ -389,7 +389,13 @@ not). Turning a sentence into a structured instruction happens server-side at
 ```ini
 ANTHROPIC_API_KEY=...            # already set for the estimating engine
 # optional: SDI_VOICECRM_MODEL=claude-opus-5-5
+# optional: SDI_VOICECRM_FAST_MODEL=claude-sonnet-5-5   (blank = Opus for everything)
 ```
+
+Questions ("what's due this week?") are tried on the faster model first; if
+its reply is anything but an answer, the full model takes the request, so
+every proposed change is worked out by Opus. Each request's log line shows
+`model=` and `route=` (`fast`, `full`, or `full-after-fast(1.2s)`).
 
 The model only ever *proposes*: the server discards any record id or field it
 was not given, and an `update` still has to pass the whole propose/confirm
