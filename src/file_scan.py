@@ -169,6 +169,7 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         if not _p.get("bom_parent"):
             _p["bom_parent"] = _bp
 
+    from part_identity import same_row_read_as_one_cell as _one_cell    # D-443
     _added = _updated = 0
     for _r in rows:
         if not _is_fastener_row(_r):
@@ -180,12 +181,26 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             _qty = 1
 
         # 1) CODE match -> update qty, no add
+        # A WRAPPED CELL IS ONE ROW HERE TOO (D-443). D-435 taught the route compiler that an
+        # identity spelled as another's code and description joined is the same row read as
+        # one cell; this reconcile minted its own record first — the table reader's whole-cell
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" found no record of that code and
+        # was appended beside "FIXING M6x12mm", four inserts charged as eight (19:32 book).
+        # One predicate, shared, so the two passes cannot disagree.
         _cm = None
         if _code:
             for _p in _parts_recon:
                 if _p_code(_p) == _code.upper():
                     _cm = _p
                     break
+            if _cm is None:
+                for _p in _parts_recon:
+                    if _one_cell(_code, _desc if _desc != _code else "",
+                                 _p.get("part_number"), _p.get("description")):
+                        _cm = _p
+                        print(f"   [recon-row] ONE-CELL '{_code}' is {_p_code(_p)} read as one "
+                              f"cell — one line, not two", flush=True)
+                        break
         if _cm is not None:
             # A quantity read from the PDF BOM table — rank 60. It must not displace the
             # assembly BOM the shop builds from, and the flag is gated on the write landing
@@ -324,6 +339,12 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             _w = tuple(_aw(_o.get("description")))
             _rec = _minted.get(_w)
             _already = _same_article_held(_w)
+            if _already is None:                                  # the row read as one cell (D-443)
+                _already = next((_p for _p in _parts_recon if isinstance(_p, dict)
+                                 and _one_cell(_o.get("part_number"), _o.get("description"),
+                                               _p.get("part_number"), _p.get("description"))
+                                 and _p_code(_p) != str(_o.get("part_number") or "").strip().upper()),
+                                None)
             if _rec is None or _already is not None:
                 # Held already — by identity (the minter skipped it) or by article. This
                 # table's occurrence is still a fact about the record.
@@ -4909,6 +4930,16 @@ def _finalize_scan_summary(
                   f"that draws them", flush=True)
     except Exception as _wire_exc:                                  # noqa: BLE001
         print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
+    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
+    try:
+        from size_reading import apply_size_readings as _size_readings
+        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
+        if _n_sz:
+            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
+                  f"priced at that reading, still to confirm", flush=True)
+    except Exception as _sz_exc:                                    # noqa: BLE001
+        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
               flush=True)
     # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
     try:

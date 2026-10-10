@@ -166,8 +166,8 @@ def test_the_estimator_asks_for_these_lines_rather_than_zeroing_them():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
                encoding="utf-8").read()
     assert "import commercial_lines as _cl" in src
-    assert "_cl.packaging_line(parts, _oq)" in src
-    assert "_cl.delivery_line(parts, _oq)" in src
+    assert "_cl.packaging_line(parts, _oq, customer=_cust)" in src   # the customer travels with the order (D-448)
+    assert "_cl.delivery_line(parts, _oq, customer=_cust)" in src
     # And the quantity is read through the one helper that knows where file_scan wrote it.
     assert "_oq = _commercial_order_quantity(summary)" in src
 

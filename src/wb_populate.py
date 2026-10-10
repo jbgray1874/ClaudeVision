@@ -935,8 +935,11 @@ def unresolved_reading_note(pe: Dict[str, Any]) -> str:
     if not isinstance(mark, dict):
         return ""
     units = " and ".join(str(u) for u in (mark.get("units") or []))
+    inferred = str(mark.get("inferred_text") or "").strip()
     return ("UNRESOLVED READING" + (f" ({units} in one size)" if units else "")
-            + ": priced as printed, a working figure — customer quote blocked until confirmed")
+            + (f": read as {inferred}, priced at that reading, a working figure" if inferred
+               else ": priced as printed, a working figure")
+            + " — customer quote blocked until confirmed")
 
 
 def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,

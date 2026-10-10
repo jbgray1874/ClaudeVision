@@ -1021,3 +1021,24 @@ def score_dxf_candidate(part: Dict[str, Any], path: Any, *, cut_length_mm: float
         if "REV" in name and "500" not in name and "650" not in name:
             score -= 0.5
     return score
+
+
+def same_row_read_as_one_cell(code_a: Any, desc_a: Any, code_b: Any, desc_b: Any) -> bool:
+    """Two identities that are ONE parts-list row read two ways (D-435, D-443).
+
+    A wrapped code cell ("FIXING M6x12mm" over "THREADED INSERT, HEADED HEX DRIVE") is read by
+    one reader as code + description and by another as the whole cell for a code. An identity
+    whose squashed spelling is EXACTLY another's code and description joined is that row read
+    as one cell — a structural identity, not a near match. Either side may be the whole-cell
+    reading. A trailing separator left on a code ("KINGDOM:") is not a second code.
+    """
+    def _sq(value: Any) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+    ca, cb = _sq(code_a), _sq(code_b)
+    if not ca or not cb:
+        return False
+    if ca == cb:
+        return True
+    ja, jb = _sq(str(code_a or "") + " " + str(desc_a or "")), _sq(str(code_b or "") + " " + str(desc_b or ""))
+    return (len(cb) >= 10 and cb == ja and ja != ca) or (len(ca) >= 10 and ca == jb and jb != cb)

@@ -1189,6 +1189,27 @@ def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str,
     found: Dict[str, str] = {}
     holders = [summary, summary.get("estimate_summary") or {},
                summary.get("manufacturing_writeup") or {}]
+    # ONLY A LINE CARRYING MONEY BLOCKS THE QUOTE (D-444). 8188-08's 19:32 book reported
+    # "2 line(s) are priced on a reading nobody has confirmed: KINGDOM; KINGDOM:" — the second
+    # a record of the same row read with its separator, set aside with the stopper and
+    # carrying nothing on the sheet. The check guards the figure in the unit, so a record
+    # with no figure, or one the product does not reach, is not counted.
+    _aside = {" ".join(str((e or {}).get("part_number") if isinstance(e, dict) else e or "").upper().split())
+              for e in (summary.get("set_aside_outside_product") or [])}   # by its own spelling
+
+    def _carries_money(p: Dict[str, Any]) -> bool:
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        cb = p.get("cost_breakdown") if isinstance(p.get("cost_breakdown"), dict) else {}
+        for v in (me.get("unit_material_cost_gbp"), me.get("extended_material_cost_gbp"),
+                  cb.get("total"), cb.get("per_part"), cb.get("system_cost"),
+                  p.get("unit_total_gbp"), p.get("total_unit_cost_gbp")):
+            try:
+                if v is not None and float(v) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
     for holder in holders:
         if not isinstance(holder, dict):
             continue
@@ -1197,7 +1218,10 @@ def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str,
                 if not isinstance(p, dict) or not isinstance(p.get("_price_unresolved"), dict):
                     continue
                 pn = str(p.get("part_number") or "").strip()
-                if pn and pn.upper() not in {k.upper() for k in found}:
+                sq = re.sub(r"[^A-Z0-9]", "", pn.upper())
+                if not pn or " ".join(pn.upper().split()) in _aside or not _carries_money(p):
+                    continue
+                if sq not in {re.sub(r"[^A-Z0-9]", "", k.upper()) for k in found}:
                     found[pn] = str(p["_price_unresolved"].get("reason") or "an unconfirmed reading")
     if not found:
         return []

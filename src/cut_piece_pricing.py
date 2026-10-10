@@ -103,7 +103,18 @@ def unit_of_sale(selected: Dict[str, Any]) -> Dict[str, Any]:
         m = re.search(r"\buom=([^|\]]+)", prov) or re.search(r"\bper\s+([A-Za-z0-9.]+)", prov)
         said = m.group(1).strip() if m else ""
     up = " ".join(said.upper().replace("_", " ").split())
-    out: Dict[str, Any] = {"kind": "unknown", "stock_length_mm": None, "said": said}
+    out: Dict[str, Any] = {"kind": "unknown", "stock_length_mm": None, "said": said,
+                           "item_priced": str(sel.get("item_priced") or meta.get("item_priced")
+                                              or "").strip()}
+    # THE PIECE ITSELF, ALREADY PRICED (D-442). A researched figure says what it priced
+    # ("100 mm length of EXTRUSION 92 profile, one piece"); read as a stock length it was
+    # divided by 3,000 and twenty-four pieces came to £1.50 — the other wrong answer. A
+    # candidate that names a piece, or the piece's own length, is per piece.
+    ip = " ".join(out["item_priced"].upper().split())
+    if ip and (re.search(r"\b(ONE|1|A|PER|EACH|SINGLE)\s+(PIECE|PCE|PC|OFF|LENGTH CUT|CUT PIECE)\b", ip)
+               or re.search(r"\bPER\s+(PIECE|PCE|PC|ITEM|UNIT)\b", ip)):
+        out["kind"] = "per_piece"
+        return out
     if not up:
         return out
     per_m = {str(u).upper() for u in _cfg("SECTION_PER_METRE_UOMS", _DEFAULT_PER_M)}
@@ -154,13 +165,34 @@ def price_as_cut_piece(description: Any, selected: Dict[str, Any], unit_price_gb
     uos = unit_of_sale(selected)
     kind, stock = uos["kind"], uos["stock_length_mm"]
     sel = selected if isinstance(selected, dict) else {}
-    if not stock:
-        stock = stock_length_in_words(" ".join(str(sel.get(k) or "") for k in
-                                               ("item_priced", "provenance", "description")))
+    meta = sel.get("metadata") if isinstance(sel.get("metadata"), dict) else {}
+    named = " ".join(str(x or "") for x in (uos["item_priced"], sel.get("provenance"),
+                                             meta.get("provenance"), sel.get("description")))
     total_mm = piece * qty * order
     out: Dict[str, Any] = {"cut_length_mm": piece, "unit_of_sale": kind, "said": uos["said"],
                            "stock_length_mm": None, "lengths_bought": None, "question": None,
                            "waste_factor_pct": waste_pct}
+    # A CANDIDATE THAT PRICED THIS VERY LENGTH PRICED THE PIECE (D-442): "100 mm length of
+    # EXTRUSION 92" against a line that states LENGTH =100mm is the piece, whatever else it
+    # says; a stock length is a figure of its own, read below only when it is not the piece.
+    _named_lengths = {_mm(m.group(1), m.group(2))
+                      for m in re.finditer(r"(?<![\dA-Z.])(\d+(?:\.\d+)?)\s*(MM|M|MTR)(?![A-Z])",
+                                           named.upper())}
+    if kind != "per_piece" and uos["item_priced"] and any(abs(v - piece) <= 1.0
+                                                           for v in _named_lengths):
+        kind = "per_piece"
+    if kind == "per_piece":
+        out["unit_of_sale"] = "per_piece"
+        out["unit_gbp"] = round(price, 4)
+        out["basis"] = (f"the price found is for the {piece:g} mm piece itself"
+                        + (f" ('{uos['item_priced']}')" if uos["item_priced"] else "")
+                        + f" — taken as it is, {qty} off a unit")
+        return out
+    if not stock:
+        stock = stock_length_in_words(" ".join(
+            str(v) for v in sorted(_named_lengths) if abs(v - piece) > 1.0) + " MM ")
+        if stock is None:
+            stock = stock_length_in_words(named) if not _named_lengths else None
     if kind == "per_metre":
         out["unit_gbp"] = round(price * piece / 1000.0 * waste, 4)
         out["basis"] = (f"{piece:g} mm cut from stock sold by the metre at GBP {price:.2f}/m, "

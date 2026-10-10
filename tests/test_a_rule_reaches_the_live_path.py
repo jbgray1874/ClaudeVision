@@ -49,9 +49,16 @@ def test_a_line_added_after_costing_keeps_its_question_and_its_mark():
     assert any("mixes m and mm" in i for i in issues), issues
 
 
-def test_the_report_and_the_quote_gate_see_it():
+def test_the_report_and_the_quote_gate_see_it(monkeypatch):
+    # Priced, as the live run prices it (a market figure): the quote gate guards a FIGURE in
+    # the unit (D-444), and a line nothing priced is blocked by the missing-price checks instead.
+    monkeypatch.setattr(estimator, "_resolve_part_system_cost", lambda part: {
+        "result": {"selected": {"source": "web", "price": 48.5}},
+        "applied_unit_cost": 48.5, "matched_part_code": "KINGDOM"})
     summary = _late_magnet_summary()
     estimator.cost_uncosted_bought_in_records(summary)
+    assert float(summary["estimate_summary"]["part_estimates"][0]["material_estimate"]
+                 ["unit_material_cost_gbp"]) == 48.5
     jp = cf.job_parts(summary)
     assert any("mixes m and mm" in q["issue"] for q in jp[0].get("manufacturing_questions") or [])
     codes = [v["code"] for v in invariants.check_an_unresolved_reading_blocks_the_quote(summary)]
