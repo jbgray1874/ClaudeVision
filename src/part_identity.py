@@ -1042,3 +1042,64 @@ def same_row_read_as_one_cell(code_a: Any, desc_a: Any, code_b: Any, desc_b: Any
         return True
     ja, jb = _sq(str(code_a or "") + " " + str(desc_a or "")), _sq(str(code_b or "") + " " + str(desc_b or ""))
     return (len(cb) >= 10 and cb == ja and ja != ca) or (len(ca) >= 10 and ca == jb and jb != cb)
+
+
+
+def fold_one_cell_duplicates(parts: Any) -> List[Tuple[str, str]]:
+    """Fold every record that is another's row read as one cell onto that record, in place
+    (D-451). The coded spelling survives (the shorter squashed code, the one a catalogue
+    holds); its quantity, its price chain and its parents stand; the folded identity is kept
+    on it as a raw alias and said in a flag. Two records whose stated quantities disagree are
+    two lines, and are left alone. Returns [(folded, kept)]."""
+    if not isinstance(parts, list):
+        return []
+
+    def _sq(value: Any) -> str:
+        return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+    def _qty(p: Any) -> Optional[float]:
+        try:
+            v = float(p.get("quantity"))
+            return v if v > 0 else None
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    folded: List[Tuple[str, str]] = []
+    i = 0
+    while i < len(parts):
+        a = parts[i]
+        if not isinstance(a, dict) or not a.get("part_number"):
+            i += 1
+            continue
+        hit = None
+        for b in parts:
+            if b is a or not isinstance(b, dict) or not b.get("part_number"):
+                continue
+            if _sq(a["part_number"]) == _sq(b["part_number"]):
+                continue
+            if not same_row_read_as_one_cell(a["part_number"], a.get("description"),
+                                             b["part_number"], b.get("description")):
+                continue
+            qa, qb = _qty(a), _qty(b)
+            if qa and qb and abs(qa - qb) > 1e-9:
+                continue
+            hit = b
+            break
+        if hit is None:
+            i += 1
+            continue
+        keep, drop = (a, hit) if len(_sq(a["part_number"])) <= len(_sq(hit["part_number"])) else (hit, a)
+        for k, v in drop.items():
+            if keep.get(k) in (None, "", [], {}) and v not in (None, "", [], {}) and k != "part_number":
+                keep[k] = v
+        aliases = keep.setdefault("raw_aliases", [])
+        if isinstance(aliases, list) and drop["part_number"] not in aliases:
+            aliases.append(drop["part_number"])
+        note = (f"{drop['part_number']} is this row read as one cell — the code and the "
+                f"description of {keep['part_number']} joined; one line, not two")
+        if note not in (keep.get("review_flags") or []):
+            keep.setdefault("review_flags", []).append(note)
+        folded.append((str(drop["part_number"]), str(keep["part_number"])))
+        parts.remove(drop)
+        i = 0
+    return folded

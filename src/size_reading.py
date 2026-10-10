@@ -74,10 +74,22 @@ def measured_job_yardstick_mm(parts: Sequence[Dict[str, Any]]) -> Optional[float
     for p in parts or ():
         if not isinstance(p, dict) or _bought(p):
             continue
-        cands: List[Any] = [p.get("overall_length_mm"), p.get("overall_width_mm"),
-                            p.get("blank_length_mm"), p.get("blank_width_mm")]
+        # A SIZE NOTHING MEASURED IS NO YARDSTICK (D-451). The wire frame's 500 x 400 is a
+        # fallback envelope (normalized_geometry `_inferred`, source geometry_inference); read
+        # as "the largest size anything made on the job measures" it refused a 2 m magnet
+        # against 500 mm on a job whose waves are 2.4 m long.
+        _flags = " ".join(str(f) for f in (p.get("review_flags") or [])).lower()
+        _envelope = "fallback envelope" in _flags or bool(p.get("blank_rejected_reason"))
+        cands: List[Any] = [] if _envelope else [p.get("overall_length_mm"), p.get("overall_width_mm"),
+                                                 p.get("blank_length_mm"), p.get("blank_width_mm")]
         ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"), dict) else {}
-        cands += [ng.get("blank_length_mm"), ng.get("blank_width_mm")]
+        if not (ng.get("_inferred") or str(ng.get("blank_length_mm_source") or "") in
+                ("geometry_inference", "fallback", "fallback_envelope") or _envelope):
+            cands += [ng.get("blank_length_mm"), ng.get("blank_width_mm")]
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        cands += [me.get("blank_length_mm"), me.get("blank_width_mm"),
+                  (me.get("stock_estimate") or {}).get("section_length_mm")
+                  if isinstance(me.get("stock_estimate"), dict) else None]
         ss = p.get("section_stock") if isinstance(p.get("section_stock"), dict) else {}
         cands += [ss.get("length_mm")]
         cuts = [c for c in (_num(x) for x in (ss.get("cut_lengths_mm") or [])) if c]
@@ -143,22 +155,33 @@ def density_for_purchased(description: Any) -> Optional[Dict[str, Any]]:
     return {"material": m, "kg_per_m3": float(dens.get(m) or dens.get(m.replace(" ", "_")))}
 
 
-def _impossible(reading: Dict[str, Any], yard: Dict[str, Any], qty: int,
-                density: Optional[Dict[str, Any]]) -> str:
-    """Why a reading cannot be, or '' where nothing refutes it."""
+def _refutations(reading: Dict[str, Any], yard: Dict[str, Any], qty: int,
+                 density: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Every reason a reading cannot be, each with what it rests on (D-451); [] where nothing
+    refutes it."""
+    out: List[Dict[str, str]] = []
     figs = reading["figures_mm"]
     limit = _num(yard.get("mm"))
     if limit and max(figs) > limit:
-        return (f"{reading['text']} would be {max(figs):,.0f} mm long against {limit:,.0f} mm, "
-                f"{yard.get('basis')}")
+        out.append({"why": (f"{reading['text']} would be {max(figs):,.0f} mm long against "
+                            f"{limit:,.0f} mm, {yard.get('basis')}"),
+                    "rests_on": yard.get("basis") or "the job's largest size"})
     kg_limit = _num(yard.get("kg"))
     if kg_limit and density and len(figs) == 3:
         m3 = (figs[0] / 1000.0) * (figs[1] / 1000.0) * (figs[2] / 1000.0)
         kg = m3 * density["kg_per_m3"] * max(1, qty)
         if kg > kg_limit:
-            return (f"{reading['text']} x {qty} would weigh about {kg:,.1f} kg as "
-                    f"{density['material'].lower()} against {kg_limit:,.1f} kg, {yard.get('kg_basis')}")
-    return ""
+            out.append({"why": (f"{reading['text']} x {qty} would weigh about {kg:,.1f} kg as "
+                                f"{density['material'].lower()} against {kg_limit:,.1f} kg, "
+                                f"{yard.get('kg_basis')}"),
+                        "rests_on": (f"that stated weight, the printed quantity and the "
+                                     f"{density['material'].lower()} density")})
+    return out
+
+
+def _impossible(reading: Dict[str, Any], yard: Dict[str, Any], qty: int,
+                density: Optional[Dict[str, Any]]) -> str:
+    return "; ".join(r["why"] for r in _refutations(reading, yard, qty, density))
 
 
 def resolve_mixed_size(part: Dict[str, Any], yardstick: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -173,14 +196,16 @@ def resolve_mixed_size(part: Dict[str, Any], yardstick: Dict[str, Any]) -> Optio
         return None
     qty = int(_num(part.get("quantity")) or 1)
     density = density_for_purchased(desc)
-    verdicts = [(r, _impossible(r, yardstick or {}, qty, density)) for r in readings]
-    possible = [r for r, why in verdicts if not why]
+    verdicts = [(r, _refutations(r, yardstick or {}, qty, density)) for r in readings]
+    possible = [r for r, refs in verdicts if not refs]
     if len(possible) != 1:
         return None
     chosen = possible[0]
-    why = "; ".join(w for r, w in verdicts if w)
+    refs = [x for _, rr in verdicts for x in rr]
+    why = "; ".join(x["why"] for x in refs)
+    rests_on = "; and ".join(dict.fromkeys(x["rests_on"] for x in refs))
     inferred = {"printed": mix["text"], "text": chosen["text"], "label": chosen["label"],
-                "figures_mm": chosen["figures_mm"], "why": why,
+                "figures_mm": chosen["figures_mm"], "why": why, "rests_on": rests_on,
                 "yardstick": {k: yardstick.get(k) for k in ("mm", "basis", "kg", "kg_basis")}}
     part["size_reading_inferred"] = inferred
     # THE PRICE CHAIN IS ASKED THE READING; THE PRINTED WORDS STAY ON THE RECORD.
@@ -188,15 +213,17 @@ def resolve_mixed_size(part: Dict[str, Any], yardstick: Dict[str, Any]) -> Optio
         part["price_chain_description"] = desc.replace(mix["text"], chosen["text"])
     part.setdefault("review_flags", []).append(
         f"size read as {chosen['text']} ({chosen['label']}) — inferred, not confirmed: {why}; "
-        f"the inference rests on the stated weight, the printed quantity and the material's "
-        f"density — priced at that reading as a working figure; confirm")
+        f"the inference rests on {rests_on} — priced at that reading as a working figure; "
+        f"confirm")
     return inferred
 
 
-def apply_size_readings(parts: Sequence[Dict[str, Any]], summary: Any) -> int:
-    """Resolve every purchased line's two-unit size that the job's yardsticks can decide.
-    Returns the parts stamped."""
-    yard = job_yardstick_mm(summary, parts)
+def apply_size_readings(parts: Sequence[Dict[str, Any]], summary: Any,
+                        yard_parts: Optional[Sequence[Dict[str, Any]]] = None) -> int:
+    """Resolve every purchased line's two-unit size that the job's yardsticks can decide;
+    the yardstick is measured over `yard_parts` where given (every record the job holds),
+    else over `parts`. Returns the parts stamped."""
+    yard = job_yardstick_mm(summary, yard_parts if yard_parts is not None else parts)
     if not (yard.get("mm") or yard.get("kg")):
         return 0
     n = 0

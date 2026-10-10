@@ -3015,6 +3015,14 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
     away; outside config.BLANK_WEIGHT_CHECK_TOLERANCE_PCT the gauge the weight fits is named
     and the question is raised. No figure moves."""
     try:
+        # AN ASSEMBLY HAS NO BLANK OF ITS OWN TO WEIGH (D-451): its stated weight is the
+        # whole unit's, and 8188-08_GA was weighed as a 53 x 20 sheet blank against 43.6 kg.
+        try:
+            from detail_page_geometry import not_cut_from_a_blank as _nc
+            if _nc(part):
+                return None
+        except Exception:                                             # noqa: BLE001
+            pass
         ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
         # THE BLANK THE MONEY CAME FROM (D-450). 8188-08-011 was checked as a 30 x 6 blank —
         # a size read off the page — while its material was costed on the 157 x 745 DXF flat;
@@ -3045,6 +3053,30 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         under = float(getattr(config, "BLANK_WEIGHT_CHECK_UNDER_PCT", 20.0)) / 100.0
         if stated * (1.0 - under) <= blank_kg <= stated * (1.0 + over):
             return None
+        # THE SHEET'S WEIGHT MAY BE THE MODEL'S MASS IN ANOTHER MATERIAL (D-451). 8188-08's
+        # acrylic parts 008, 011, 014 and 015 each "weighed" 6.6 times their blank — exactly
+        # 7,850 / 1,190, steel over acrylic: the SolidWorks model carries a default steel
+        # material and its mass is printed in the title block. That is not four wrong gauges.
+        # Where the same blank in one of config MODEL_DEFAULT_MATERIALS weighs the stated
+        # weight within config MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT, the weight is read as
+        # that, the gauge is not questioned, and the model's material is what is asked.
+        _tol = float(getattr(config, "MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT", 8.0)) / 100.0
+        for _alt in (getattr(config, "MODEL_DEFAULT_MATERIALS", None) or ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")):
+            _alt_u = str(_alt).upper()
+            if _alt_u.replace("_", " ") == mat:
+                continue
+            _ad = (MATERIAL_DENSITY_KG_PER_M3.get(_alt_u) or MATERIAL_DENSITY_KG_PER_M3.get(_alt_u.replace(" ", "_")))
+            if not _ad:
+                continue
+            _alt_kg = area * t * float(_ad) * 1e-9
+            if abs(_alt_kg - stated) <= stated * _tol:
+                _what0 = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
+                          if _measured_area else f"the {L:g} x {W:g} blank")
+                return (f"WEIGHT NOTE: the sheet's {stated:.3f} kg is {_what0} at {t:g} mm in "
+                        f"{_alt_u.lower()} ({_alt_kg:.3f} kg), not in {mat.lower()} "
+                        f"({blank_kg:.3f} kg) — the model carries {_alt_u.lower()} as its "
+                        f"material, so its printed mass is that material's. The gauge is not in "
+                        f"question; set the model's material to read its weight")
         fit_t = stated / (area * float(dens) * 1e-9)
         _what = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
                  if _measured_area else f"the {L:g} x {W:g} blank")
@@ -7952,6 +7984,9 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     # THE SHEET'S WEIGHT IS THE ONE CHECK ON A GAUGE NOBODY STATED (D-392).
     _wc = _blank_weight_check(part)
+    if _wc and _wc.startswith("WEIGHT NOTE:") and _wc not in (part.get("review_flags") or []):
+        part.setdefault("review_flags", []).append(_wc)       # the model's material, not a gauge
+        _wc = None
     if _wc and _wc not in (part.get("review_flags") or []):
         part.setdefault("review_flags", []).append(_wc)
         try:
@@ -11439,9 +11474,26 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
         # costing, so the size resolver that ran before costing (D-445) never met it and the
         # 10:12 book still priced fourteen two-metre bars. The late records are read against
         # the job's yardsticks before they are costed, with every record as the measure.
+        # ONE ROW READ TWO WAYS IS ONE RECORD, WHEREVER IT WAS BORN (D-451). The insert's
+        # whole-cell reading reached three books past three minters; it is folded here, where
+        # every record meets the costing, onto the coded record it is a reading of.
+        try:
+            from part_identity import fold_one_cell_duplicates as _fold
+            _folded = _fold(_pes)
+            if _folded:
+                print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
+                      f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
+                _late = [r for r in _late if r in _pes]
+        except Exception as _fold_exc:                               # noqa: BLE001
+            print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
         try:
             from size_reading import apply_size_readings as _size_late
-            _n_sz = _size_late(_late if not isinstance(_pes, list) else _pes, summary)
+            # MEASURED AGAINST THE WRITEUP'S RECORDS TOO (D-451): the costed records keep only
+            # normalized_geometry, whose largest size on 8188-08 was the wire frame's 500 x 400
+            # fallback envelope — the 10:12 magnet was refused "against 500 mm".
+            _yard_parts = list(_pes) + list(((summary.get("manufacturing_writeup") or {}).get("parts") or [])
+                                            if isinstance(summary, dict) else [])
+            _n_sz = _size_late(_late, summary, yard_parts=_yard_parts)
             if _n_sz:
                 print(f"   [size] {_n_sz} late purchased line(s) read at the one size the job "
                       f"allows; priced at that reading, still to confirm", flush=True)
@@ -11770,10 +11822,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _cl_src = ((_cline or {}).get("price_source") or {})
             _from_hold = bool(_cl_src.get("source_class") == "config_house_rate")
             _from_method = bool(_cl_src.get("source_class") == "packing_method")
+            # SDI LIVE'S OWN FIGURE IS NAMED AS SDI LIVE'S (D-451): a CommercialRate x the
+            # counted shipment, or past quotes' lines, is not an "AI market figure".
+            _from_live = str(_cl_src.get("source_class") or "") in ("sdi_commercial_rate", "sdi_history")
             _stub["cost_source"] = ("config_commercial_indicative" if _from_hold
                                     else ("stated_method_system_priced" if _from_method
-                                          else ("market_indication" if _unit
-                                                else "estimator_to_price")))
+                                          else ("sdi_live_commercial" if _from_live and _unit
+                                                else ("market_indication" if _unit
+                                                      else "estimator_to_price"))))
             if _from_method:
                 # "when we explain the packaging and delivery on s/sheet we need to try to
                 # provide as much clarity as possible on the number" — James, 15 Sep. The
@@ -11799,6 +11855,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             if not _from_method:
                 _stub["description"] = commercial_line_wording(
                     _desc, float(_unit or 0.0), _from_hold)
+                if _from_live and _unit:
+                    _stub["description"] = _stub["description"].replace(
+                        "AI market figure — estimator to confirm", "SDI Live figure — confirm")
             if _cline:
                 _stub["commercial_line"] = _cline
                 _announce_packing_status(_cline)
@@ -11816,10 +11875,18 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                  f"{(_cline or {}).get('packing_working')} — counts stated, prices live "
                  f"from the system this run; confirm the method fits this job before "
                  f"quoting.") if _from_method and _unit else
+                (f"SDI LIVE FIGURE £{float(_unit):.2f}/unit — {_cl_src.get('source_name')}: "
+                 f"{(_cline or {}).get('history_working') or ''} — the business's own figure "
+                 f"applied to this order; confirm it fits before quoting.")
+                if _from_live and _unit else
                 (f"AI MARKET FIGURE £{float(_unit):.2f}/unit — an indication from the market "
                  f"lookup, not a quotation; confirm or replace it before quoting"
-                 + (f". Packing method: {(_cline or {}).get('method_status')}."
-                    if (_cline or {}).get("method_status") else "."))
+                 + (f". Shipment: {(_cline or {}).get('shipment_working')}"
+                    if (_cline or {}).get("shipment_working") else "")
+                 + (f". Packing method: {(_cline or {}).get('method_status')}"
+                    if (_cline or {}).get("method_status") else "")
+                 + (f". SDI Live: {(_cline or {}).get('sdi_live_status')}"
+                    if (_cline or {}).get("sdi_live_status") else "") + ".")
                 if _unit else
                 (f"Commercial line — estimator to price. Packing method: "
                  f"{(_cline or {}).get('method_status')}.")

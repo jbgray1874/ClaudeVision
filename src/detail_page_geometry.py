@@ -110,6 +110,14 @@ def not_cut_from_a_blank(part: Mapping[str, Any]) -> bool:
             or part.get("supplied_by_third_party")
             or str(part.get("costing_basis") or "") == "supplied_by_third_party"):
         return True
+    # A RECORD WHOSE CODE NAMES AN ASSEMBLY DRAWING IS ONE (D-451): the product root
+    # 8188-08_GA carried no assembly flag and was checked as a 53 x 20 sheet blank.
+    try:
+        from part_code_conventions import carries_assembly_role
+        if carries_assembly_role(part.get("part_number")):
+            return True
+    except Exception:                                            # noqa: BLE001
+        pass
     try:
         from bought_in_policy import is_bought_in
         return bool(is_bought_in(dict(part)))

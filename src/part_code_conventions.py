@@ -283,6 +283,15 @@ def strip_assembly_role(identity: str) -> str:
     return text
 
 
+def carries_assembly_role(identity: str) -> bool:
+    """True when the identity ends in a sheet-role token (GA, ASSY, ARR …): the record is an
+    assembly drawing's whatever the tree flags say (D-451). 8188-08_GA, the product root, had
+    no is_assembly_parent flag and was weighed as a 53 x 20 sheet blank and counted into the
+    shipment as a part."""
+    text = str(identity or "").strip()
+    return bool(text) and strip_assembly_role(text) != text
+
+
 def is_category_not_a_code(identity: str) -> bool:
     """True when the part-code column holds a CLASS of thing rather than an identifier.
 
