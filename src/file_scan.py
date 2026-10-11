@@ -4881,6 +4881,14 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+            if _brief:
+                # A WELD THE BRIEF STATES IS A STATED WELD (D-467): the brief is this run's
+                # stated facts, and a concept pack has no sheets to outrank it.
+                _welded = concept_scan.apply_brief_stated_welds(_sighted, _brief)
+                if _welded:
+                    print(f"   [concept] welded per the enquiry brief: "
+                          f"{', '.join(_welded)} — the sighted weld is charged as stated, "
+                          f"not stripped as an inference", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
             if _sheet_read and _unit:
                 # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
@@ -4956,6 +4964,21 @@ def _finalize_scan_summary(
             if _unit:
                 summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            # NOT VISIBLE MUST NOT MEAN UNPRICED (D-468). A consumable the read names gets a
+            # provisional bought-in line down the ordinary price chain; a design unknown is
+            # asked on the record — and neither lives only in this log any more.
+            _nv_cons, _nv_unknown = concept_scan.split_not_visible(
+                _answer.get("not_visible") or [])
+            _nv_lines = concept_scan.consumable_lines(_nv_cons, _job_name)
+            if _nv_lines:
+                summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
+                print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
+                      f"from the read's not-visible list — priced by the ordinary bought-in "
+                      f"chain, flagged for confirmation", flush=True)
+            for _u in _nv_unknown:
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE ON THE RENDER — NOT PRICED: {_u} — a design unknown, not "
+                    f"a consumable; name it as a part and it prices itself")
             if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
                 # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
                 # report's callout, the sheet's banner and the quote's gate all read this.
