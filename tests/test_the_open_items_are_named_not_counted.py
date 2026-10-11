@@ -46,7 +46,7 @@ def test_the_names_are_on_the_record():
 
 def test_the_named_phrase_carries_the_tally_and_the_list():
     out = outstanding_summary(_job(_d("PACKAGING"), _d("FIXING")))
-    assert out["named_phrase"].startswith("2 prices missing")
+    assert out["named_phrase"].startswith("2 prices to add")
     assert "PACKAGING, FIXING" in out["named_phrase"]
 
 
@@ -55,7 +55,7 @@ def test_the_counts_are_exactly_as_they_were():
     out = outstanding_summary(_job(
         _d("PACKAGING"), _d("FIXING"),
         _d("12349-02-69-06A", "manufacturing_decision")))
-    assert out["phrase"] == "2 prices missing + 1 manufacturing decision"
+    assert out["phrase"] == "2 prices to add + 1 manufacturing decision"
     assert out["blocking"] == 3 and out["total"] == 3
 
 

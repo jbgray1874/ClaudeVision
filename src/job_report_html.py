@@ -2216,7 +2216,7 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
     _open = _out["total"]
     # THE HEADLINE AND ITS PHRASE, TOGETHER (12173-02 printed the phrase alone here, and
     # gated it on a total that left failing checks out). Both are now one count.
-    _open_note = (f" Still to settle: {_out['total']} — {_esc(_out['phrase'])} — listed under "
+    _open_note = (f" Still to confirm: {_out['total']} — {_esc(_out['phrase'])} — listed under "
                   f"Decisions required at the top of this page." if _open else "")
     # "NOTHING IS COUNTED TWICE" ONLY WHERE SECTION 2 ESTABLISHED IT — the same record.
     _dc = {"clear": "nothing is counted twice",
@@ -2397,7 +2397,7 @@ def _provenance_strip(summary: Dict[str, Any]) -> str:
             f'<tr><td><b>Operations not priced &mdash; nothing in the pack claims them</b></td>'
             f'<td>{own_txt}</td></tr>'
             f'<tr><td><b>Ties left unsettled</b></td><td>{tie_txt}</td></tr>'
-            + (f'<tr><td><b>Still to settle</b></td><td>{settle_txt}</td></tr>'
+            + (f'<tr><td><b>Still to confirm</b></td><td>{settle_txt}</td></tr>'
                if settle_txt else '') +
             f'<tr><td><b>Powder decided by</b></td><td>{pow_txt}</td></tr>'
             '</tbody></table>')
@@ -3520,12 +3520,12 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
         from costed_facts import outstanding_summary
         s = outstanding_summary(record)
         return ("t-bad",
-                f"Not for release — {s['total']} to settle: {s['phrase']}",
+                f"Estimator review — {s['total']} item(s) to confirm: {s['phrase']}",
                 reasons)
     if inv is None:
         return "t-warn", "Unverified — the consistency checks did not run", reasons
     if not inv.get("may_quote_firm"):
-        return ("t-bad", "Not for release — a consistency check failed or could not run",
+        return ("t-bad", "Estimator review — an automated check is still to run",
                 reasons)
     if rel.get("status") == "firm":
         return ("t-good", "Releasable — every check passed and nothing is outstanding",

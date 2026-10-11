@@ -53,7 +53,7 @@ def test_a_reached_item_with_no_line_is_a_missing_price():
     s = _summary([TOP, BODY, PANEL, SHUTTER], [_charged("P-01M")])
     summary = cf.outstanding_summary(s)
     assert summary["prices_missing"] == 1, summary
-    assert summary["phrase"].startswith("1 price missing")
+    assert summary["phrase"].startswith("1 price to add")
     d = next(d for d in cf.costed_job(s)["decisions_required"] if d["part"] == "WIDGET SHUTTER")
     assert d["kind"] == "missing_price" and d["qty"] == 2.0
     assert "no line on the sheet" in d["issue"]

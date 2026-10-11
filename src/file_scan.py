@@ -4881,14 +4881,13 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
-            if _brief:
-                # A WELD THE BRIEF STATES IS A STATED WELD (D-467): the brief is this run's
-                # stated facts, and a concept pack has no sheets to outrank it.
-                _welded = concept_scan.apply_brief_stated_welds(_sighted, _brief)
-                if _welded:
-                    print(f"   [concept] welded per the enquiry brief: "
-                          f"{', '.join(_welded)} — the sighted weld is charged as stated, "
-                          f"not stripped as an inference", flush=True)
+            _welded = concept_scan.brief_stated_welds(_sighted)
+            if _welded:
+                # A WELD THE BRIEF STATES IS A STATED WELD (D-467), on the parts the model
+                # attributed it to (D-469) — never a pack-level word made part-level evidence.
+                print(f"   [concept] welded per the enquiry brief: "
+                      f"{', '.join(_welded)} — the stated joint is charged on the parts "
+                      f"the brief names, not spread across the pack", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
             if _sheet_read and _unit:
                 # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
@@ -4967,8 +4966,14 @@ def _finalize_scan_summary(
             # NOT VISIBLE MUST NOT MEAN UNPRICED (D-468). A consumable the read names gets a
             # provisional bought-in line down the ordinary price chain; a design unknown is
             # asked on the record — and neither lives only in this log any more.
-            _nv_cons, _nv_unknown = concept_scan.split_not_visible(
+            _nv_cons, _nv_ship, _nv_unknown = concept_scan.split_not_visible(
                 _answer.get("not_visible") or [])
+            for _s in _nv_ship:
+                # PRICED ONCE (D-469): the commercial PACKAGING and DELIVERY lines carry
+                # shipment scope; a second line here would charge the pallet twice.
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
+                    f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
             _nv_lines = concept_scan.consumable_lines(_nv_cons, _job_name)
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)

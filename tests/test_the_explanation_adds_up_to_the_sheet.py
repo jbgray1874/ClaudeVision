@@ -364,8 +364,8 @@ def test_the_lines_needing_a_person_are_listed_not_counted(tmp_path):
     wb.save(workbook)
 
     text = handover_note.build(workbook, _run_json(tmp_path))
-    assert "## What a person still has to settle" in text
-    section = text.split("## What a person still has to settle")[1].split("## ")[0]
+    assert "## For the estimator to confirm" in text
+    section = text.split("## For the estimator to confirm")[1].split("## ")[0]
     slab = next(l for l in section.splitlines() if l.startswith("| 12552-01-02X"))
     assert "£171.24" in slab, "the money at stake, not just the fact of it"
     assert "cannot be reproduced" in slab

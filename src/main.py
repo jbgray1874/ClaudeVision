@@ -339,17 +339,18 @@ def _rewrite_estimate_banner(xlsx_path, summary) -> None:
             _bhits = 0
             for _brow in _bws.iter_rows():
                 for _bcell in _brow:
-                    if isinstance(_bcell.value, str) and _bcell.value.startswith("PROVISIONAL —"):
-                        _bcell.value = (f"PROVISIONAL — {_total_b} to settle: {_phrase_b} "
-                                        f"(every one is listed on the AI Explanation tab)")
+                    if isinstance(_bcell.value, str) and _bcell.value.startswith(
+                            ("PROVISIONAL —", "DRAFT —")):
+                        _bcell.value = (f"DRAFT — {_total_b} item(s) to confirm: {_phrase_b} "
+                                        f"(each is listed on the AI Explanation tab)")
                         _bhits += 1
                     elif (isinstance(_bcell.value, str)
                           and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
                           and "questions from the drawings" not in _bcell.value):
                         _head_b = _bcell.value.split(")", 1)[0] + ")"
                         _bcell.value = (f"{_head_b} — questions from the drawings, read with "
-                                        f"the {_total_b} to settle on the AI Explanation tab; "
-                                        f"this sheet is NOT a price until they are answered")
+                                        f"the {_total_b} item(s) to confirm on the AI "
+                                        f"Explanation tab; the sheet firms as they are answered")
                         _bhits += 1
             if _bhits:
                 _bwb.save(str(xlsx_path))
