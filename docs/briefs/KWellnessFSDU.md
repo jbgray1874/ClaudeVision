@@ -37,14 +37,43 @@ pages (D-462).
    customer's fixture code — either works, one spelling throughout).
 2. Units box: **200, 1, 10** — the document prices at 200; 1 and 10 are the breaks.
 3. Add the job folder (the tech brief PDF). Method: **LLM** (render/concept read).
-4. The brief box (optional but recommended — it outranks the document's words where they
-   differ): state the height if known, the gauge if SDI would choose one, and anything the
-   estimator wants fixed, e.g. *"500 x 500 mm footprint, height approx. ___ mm. Folded
-   sheet steel, powder coated neutral. 4 slotted corner posts, top cap, central spine,
-   rear graphic panel, 5 front shelves, 10 side shelves (5 mirrored pairs), metal header,
-   2 base graphic holders. 200 off."*
+4. The brief box — PASTE THE BRIEF BELOW (it outranks the document's words where they
+   differ, and it carries the traps the reviewer found in the pack). Adjust the height
+   before running if a better figure is known.
+
+```
+BR099X K-Wellness permanent metal FSDU, pages 5-8 of the tech brief - the ONLY product
+priced. The card unit and the superseded MDF/plastic version are background, not costed.
+The SOTF podium on page 3 is an existing reference product: take NO dimensions from it.
+Footprint 500 x 500 mm; height approx 1500 mm (assumed - adjust if known). Folded sheet
+steel throughout, powder coated one neutral colour (blue is the graphics, never the coat).
+No electrical items, illumination or screens. Display aids are separate; the fixture keeps
+its graphic holders and 35 mm shelf-edge provision.
+Make list: 6 slotted corner posts (31.75 mm slot pitch); central spine/core in top-hat
+section; fabricated base/plinth; top cap with graphic pass-through cut-out; metal header
+and rear graphic panel; 5 front shelf trays and 10 side shelf trays (5 left + 5 right,
+mirrored), each tray with its hooked brackets WELDED to the tray (riveted is the
+alternative, not costed); 2 base graphic holders; 35 mm shelf-edge strips for all 15
+shelves; replaceable card/magnetic graphics as one separate provisional graphics line.
+Assembly, inspection, protective packaging and palletised delivery to Boots SEC
+Castleford included. 200 off; breaks 1 and 10. The 5% spares and the design, development,
+prototype and testing costs are NOT in the unit price - the estimator lists them
+separately in the response. UK manufacture at SDI rates; Europe/Asia options are a
+separate sourcing exercise, never an unexplained discount.
+```
 5. One portal only: the stale service on port 8071 must be stopped first, or a job
    submitted through it loses its quantity breaks (see the 8188-08 close-out).
+
+## Traps in this pack (reviewer's read, 11/10 — why the brief above says what it says)
+
+1. Page 3's dimensioned drawing is the existing SOTF podium — its heights must not become
+   the new fixture's. 2. Page 2's MDF/plastic construction is explicitly superseded. 3. Blue
+   branding is the graphics, not the powder coat — the fixture is neutral. 4. No electrical:
+   page 4 excludes illumination and digital content. 5. Display aids are managed separately;
+   the fixture keeps its graphic holders and shelf-edge provision. 6. Page 13 cites "page
+   17", which does not exist — the quantity instruction is page 10 (1 / 10 / 200, prices
+   based on 200, plus 5% spares separately identified). 7. Bracket construction is welded OR
+   riveted — one method chosen, priced and stated, never both.
 
 ## Gates for the first book
 
@@ -52,9 +81,13 @@ pages (D-462).
   (~14,000 chars)` — D-462 live.
 - The sighted parts are **sheet steel, powder coated** — not MDF, not acrylic: the
   material is stated in the document and may not be guessed off the renders.
-- Shelf counts **5 + 10** (the mirrored ten as five pairs or ten lines, each counted),
-  corner posts, top cap, spine, rear graphic panel, headers and 2 base graphic holders all
-  present as lines; graphics/print as their own lines (c4), never folded into the steel.
+- Shelf counts **5 + 10** (ten side trays as five left + five right, never ten of each),
+  **6** corner posts, top cap, spine/core, base, rear graphic panel, header and 2 base
+  graphic holders all present as lines; brackets priced on ONE stated method (welded);
+  shelf-edge strips allowed for 15 shelves; graphics/print as their own lines (c4), never
+  folded into the steel.
+- **No podium dimensions**: nothing sized from page 3's SOTF drawing; no electrical lines;
+  the coat neutral, not blue.
 - The book prices at **200 off with 1 and 10 as breaks**, per-unit packaging/delivery at
   every break.
 - Every unstated figure (height above all) is stamped assumed with its cue; the unit is
