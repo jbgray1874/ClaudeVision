@@ -513,36 +513,64 @@ def brief_weld_statements(brief: Any) -> List[str]:
 
 
 def price_the_joint_once(parts: List[Any]) -> List[str]:
-    """One joint, one charge (D-471). Where part A's own words locate its joint — "welded
-    to <counterpart>" — and the counterpart ALSO carries the brief's weld, the counterpart's
-    is removed: book 2 charged bracket and tray for one connection. Returns the parts whose
-    duplicate weld was removed."""
+    """One joint, one charge (D-471, widened to sighted welds by D-472). Where part A's own
+    words locate its joint — "welded to <counterpart>" — and the counterpart ALSO carries a
+    weld for that same joint, the counterpart's is removed: book 2 charged bracket and tray
+    for one connection. D-471 deduped the brief's attributions; D-472 prices every sighted
+    concept weld, so the sighted operation itself is now stripped from the duplicate too
+    (a popped source alone would leave a priced inference behind), and a SIGHTED weld on
+    the counterpart is the same joint only where the counterpart's own words do not locate
+    a different joint of its own. Returns the parts whose duplicate weld was removed."""
     removed: List[str] = []
     stop = {"the", "a", "an", "each", "its", "their", "every", "all", "of"}
-    for a in parts or []:
-        if not isinstance(a, dict) or not a.get("weld_stated_by_brief"):
-            continue
-        m = _WELD_TO_RE.search(str(a.get("description") or ""))
+    weld_ops = ("welding", "spot_welding")
+
+    def _carries_weld(rec: Dict[str, Any]) -> bool:
+        return bool(rec.get("weld_stated_by_brief")
+                    or set(weld_ops) & set(rec.get("inferred_operations") or []))
+
+    def _joint_tail(rec: Dict[str, Any]) -> List[str]:
+        m = _WELD_TO_RE.search(str(rec.get("description") or ""))
         if not m:
-            continue
-        tail = [w for w in re.findall(r"[A-Za-z]+",
-                                      str(a.get("description"))[m.end():])[:4]
+            return []
+        return [w for w in re.findall(r"[A-Za-z]+",
+                                      str(rec.get("description"))[m.end():])[:4]
                 if w.lower() not in stop]
+
+    for a in parts or []:
+        if not isinstance(a, dict) or not _carries_weld(a):
+            continue
+        tail = _joint_tail(a)
         if not tail:
             continue
         for b in parts:
-            if b is a or not isinstance(b, dict) or not b.get("weld_stated_by_brief"):
+            if b is a or not isinstance(b, dict) or not _carries_weld(b):
                 continue
             desc_b = str(b.get("description") or "").lower()
-            if any(w.lower() in desc_b for w in tail):
-                for op in ("welding", "spot_welding"):
-                    (b.get("operation_sources") or {}).pop(op, None)
-                b.pop("weld_stated_by_brief", None)
-                b.setdefault("review_flags", []).append(
-                    f"CONCEPT: the joint to {a.get('part_number')} is priced once, on the "
-                    f"attaching part — this line's duplicate weld attribution was removed "
-                    f"(D-471)")
-                removed.append(str(b.get("part_number") or ""))
+            if not any(w.lower() in desc_b for w in tail):
+                continue
+            if not b.get("weld_stated_by_brief"):
+                # The counterpart's weld is only sighted. Where its own words locate a
+                # joint that is NOT this one ("welded to <some third part>"), that is its
+                # own joint and its charge stands — only a mutual or unlocated sighting
+                # collapses into the joint A already owns (D-472).
+                b_tail = _joint_tail(b)
+                desc_a = str(a.get("description") or "").lower()
+                if b_tail and not any(w.lower() in desc_a for w in b_tail):
+                    continue
+            for op in weld_ops:
+                (b.get("operation_sources") or {}).pop(op, None)
+            b.pop("weld_stated_by_brief", None)
+            # The operation itself goes with the attribution: a concept weld prices from
+            # inferred_operations (D-472), so leaving it there would charge the joint twice.
+            if set(weld_ops) & set(b.get("inferred_operations") or []):
+                b["inferred_operations"] = [o for o in b["inferred_operations"]
+                                            if o not in weld_ops]
+            b.setdefault("review_flags", []).append(
+                f"CONCEPT: the joint to {a.get('part_number')} is priced once, on the "
+                f"attaching part — this line's duplicate weld attribution was removed "
+                f"(D-471)")
+            removed.append(str(b.get("part_number") or ""))
     return removed
 
 
