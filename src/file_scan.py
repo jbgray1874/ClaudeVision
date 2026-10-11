@@ -4815,6 +4815,13 @@ def _finalize_scan_summary(
             else:
                 _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
                 _answer = _read.get("parsed") or {}
+                if _read.get("document_text_chars"):
+                    # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
+                    # stated footprint, construction and counts are facts, not visual cues.
+                    summary["concept_document_text_chars"] = int(_read["document_text_chars"])
+                    print(f"   [concept] the pack's own words went to the model with its "
+                          f"pages ({_read['document_text_chars']} chars) — a figure, material "
+                          f"or count stated in them is a fact, not a visual cue", flush=True)
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
             # in the output tree, so the anchor's stem is a hash — and every sighted part
             # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type
