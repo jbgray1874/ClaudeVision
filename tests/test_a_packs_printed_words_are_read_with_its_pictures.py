@@ -658,3 +658,31 @@ def test_the_portal_declares_the_standards_and_an_all_reference_run_is_refused()
     assert "reference_documents_declared" in src
     assert "reference_pack=_ref_pack" in src
     assert "standards_requirements" in src
+
+
+def test_the_marker_in_the_staged_folder_holds_the_manual_out_end_to_end(tmp_path):
+    """D-477/D-478, the proof the 23:5x run demanded: with REFERENCE_DOCUMENTS.json beside
+    the pack, the REAL scan pipeline never reads the declared file as the product — it is
+    absent from scanned_documents, stashed on reference_pack_paths, and the anchor is the
+    product. When a live run extracts the manual, the marker was not in the folder: the
+    fault is the hand-off, not engine enforcement."""
+    import os
+    import json as _json
+    import pymupdf
+    os.environ.setdefault("SDI_OFFLINE", "1")
+    job = tmp_path / "TESTJOB"
+    job.mkdir()
+    for name, words in [("Product.pdf", "Folded sheet steel fixture 500 x 500"),
+                        ("Manual.pdf", "Standards manual. Example fixture with screen.")]:
+        d = pymupdf.open()
+        d.new_page(width=600, height=400).insert_text((40, 60), words)
+        d.save(str(job / name))
+        d.close()
+    (job / "REFERENCE_DOCUMENTS.json").write_text(
+        _json.dumps({"files": ["Manual.pdf"]}), encoding="utf-8")
+    import file_scan
+    summary, paths = file_scan.scan_folder_job(
+        job, [job / "Product.pdf", job / "Manual.pdf"])
+    assert [Path(p).name for p in summary["scanned_documents"]] == ["Product.pdf"]
+    assert [Path(p).name for p in summary["reference_pack_paths"]] == ["Manual.pdf"]
+    assert "Manual" not in str(paths)
