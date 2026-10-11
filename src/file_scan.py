@@ -4809,6 +4809,13 @@ def _finalize_scan_summary(
                     + ("…" if len(_brief) > 300 else ""))
                 print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
                       f"facts outrank what the render suggests", flush=True)
+            else:
+                # NO BRIEF IS SAID ON THE BOOK (D-473), not only in the run log: the read
+                # still prices — a concept budget from the documents alone — but what it
+                # lacked joins the confirm list every surface shows.
+                _nb = concept_scan.missing_brief_flag(bool(_client_document))
+                summary.setdefault("review_flags", []).append(_nb)
+                print(f"   [concept] {_nb}", flush=True)
             # A DRAWING SHEET IS READ AS A DRAWING (D-415). Design-intent pages go to the model
             # with their own printed text, under a preamble that makes the sheet's dimensions
             # and notes facts; the bill that comes back is held against the body and weight the

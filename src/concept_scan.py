@@ -167,6 +167,23 @@ def find_brief(folders: List[Any]) -> tuple:
     return "", ""
 
 
+def missing_brief_flag(client_document: bool = False) -> str:
+    """The book's own statement that NO enquiry brief reached this read (D-473).
+
+    The 11 Oct K-Wellness 20:07 book priced £720.99 with `enquiry_brief: null` on its saved
+    record: a page reload had emptied the portal's brief box, the service correctly removed
+    the brief an earlier run filed (D-360 — the brief is this run's), and the only trace was
+    one quiet line in the run log — the posts took the excluded reference product's 1800 mm
+    because the brief's working height never arrived. What the read lacked is said ON THE
+    BOOK, in the confirm list every surface shows, not only in a log nobody re-reads."""
+    return ("CONCEPT: NO ENQUIRY BRIEF reached this read"
+            + (" of the client document" if client_document else "")
+            + " — every size, count and construction choice rests on the documents and the "
+              "read's own assumptions. To state the facts, type the brief in the portal's "
+              "Enquiry brief box and run again; an empty box also removes the brief an "
+              "earlier run filed with this job")
+
+
 def _from_brief(sighted: Mapping[str, Any], field: str) -> bool:
     """Did the model say the brief fixes this field of this part?"""
     fb = sighted.get("from_brief")

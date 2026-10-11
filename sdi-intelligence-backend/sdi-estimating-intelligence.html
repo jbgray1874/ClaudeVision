@@ -2123,6 +2123,17 @@ $("bRunLLM").onclick = async () => {
             + "BOM reader, no DXF flat patterns, no SolidWorks. It reads the parts list and "
             + "the routes; it CANNOT size a folded part.\n\nThe workbook it produces looks "
             + "like an estimate and is not one. Do not quote its total.\n\nRun it?")) return;
+  /* AN EMPTY BRIEF BOX IS A DECISION, NOT A DEFAULT (D-473). The 11 Oct K-Wellness 20:07
+     run went out with the box empty after a page reload: the service correctly removed the
+     brief an earlier run had filed (D-360 — the brief is this run's), the model priced the
+     pack alone and took the excluded reference product's 1800mm height, and the only trace
+     was one quiet line in the run log. A read without stated facts answers a different
+     question, so it is asked out loud BEFORE the run starts, never discovered on the book. */
+  if(!($("enquiryBrief").value || "").trim()
+     && !confirm("No enquiry brief is typed.\n\nThe model reads the pack alone — sizes, "
+               + "counts and construction rest on the documents and the read's own "
+               + "assumptions. An empty box also removes the brief an earlier run filed "
+               + "with this job.\n\nRun without a brief?")) return;
   /* THE JOB PANEL'S OWN STATE, not the enquiry's. This first reported into bSet/bRows/bCount
      because that is where the button first sat — press it up here and the log appeared in a
      different card halfway down the page, while the panel it was launched from sat idle.
