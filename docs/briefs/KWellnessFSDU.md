@@ -60,7 +60,32 @@ Castleford included. 200 off; breaks 1 and 10. The 5% spares and the design, dev
 prototype and testing costs are NOT in the unit price - the estimator lists them
 separately in the response. UK manufacture at SDI rates; Europe/Asia options are a
 separate sourcing exercise, never an unexplained discount.
+The Boots in-store equipment design standards manual (BFDG v6) accompanies this enquiry
+as a REFERENCE document: read it only for the requirements that apply to this fixture,
+never for parts, dimensions or loads - its illustrated fixtures are examples. Applicable:
+BTC topple, tilt and bump tests plus the CUSTOM-size shelf deflection pair (BTC006/007 -
+these trays are not the standard 760mm shelf); the O&M manual; the drawing pack and CAD
+deliverables; the first-off sample (never charged beside a prototype for the same thing);
+a PROVISIONAL Sustain assessment allowance with the classification conflict recorded (the
+manual calls an FSDU temporary and routes temporary fixtures via In-store Marketing; this
+unit is specified permanent - Boots to confirm, never silently exempted). QR component
+labels (20 x 20 mm, Boots plain-text format) are a per-unit requirement: production,
+application and verification, with the D&D exception for too-small components. Safe
+deburred edges are required; weld dressing is priced per the construction and finish, not
+automatically. QC is batch setup plus sampled and unit checks, not full inspection per
+unit. Confirm the delivered assembly state - the hooked trays make shelf fitting
+tool-free, not the whole unit's assembly. The manual's shelf-load prose (1.5kg per 100mm2)
+conflicts with its own worked example (1.5kg per 100x100mm square): use the worked
+example's basis and flag it for Boots to confirm, never silently choose. Design,
+prototypes, testing and documentation are per-order project costs, shown separately.
 ```
+
+**All-in run (11 Oct, D-474/476):** add BOTH PDFs to the Drawings panel — the product pack
+AND the standards manual — and tick the manual in the "Reference / standards documents"
+list (hard-refresh the page if the list is missing). Units `200,1,10` — the brief's own
+basis. Expect in the log: "ENQUIRY BRIEF filed", "REFERENCE DOCUMENTS: … read as the
+customer's standards", "CLIENT DOCUMENT". After the first book, price or exclude each
+PROJECT line in the answers file under `estimator_decisions.project_costs` and re-run.
 5. One portal only: the stale service on port 8071 must be stopped first, or a job
    submitted through it loses its quantity breaks (see the 8188-08 close-out).
 6. Client-document mode (D-464): the engine stands misread reader rows down only where the
