@@ -178,3 +178,60 @@ def test_client_document_mode_is_the_portals_marker_never_a_guess(tmp_path):
     assert cs.document_mode_requested([tmp_path]) is False
     (tmp_path / cs.DOCUMENT_MODE_FILENAME).write_text("not json", encoding="utf-8")
     assert cs.document_mode_requested([tmp_path]) is False
+
+
+def _doc(tmp_path, name, pages):
+    import pymupdf
+    pdf = tmp_path / name
+    doc = pymupdf.open()
+    for lines in pages:
+        page = doc.new_page(width=960, height=540)
+        y = 60
+        for line in lines:
+            page.insert_text((40, y), line)
+            y += 24
+    doc.save(str(pdf))
+    doc.close()
+    return str(pdf)
+
+
+def test_every_page_contributes_within_the_budget_and_the_cut_is_said(tmp_path, monkeypatch):
+    """D-466: over the cap, each page keeps a share, a cut is said, and the coverage line
+    closes the text — never again a sixteen-page brief silently sent as pages one to six."""
+    long_line = "FOLDED SHEET STEEL POWDER COATED NEUTRAL " * 4
+    pdf = _doc(tmp_path, "brief.pdf", [[long_line] * 12 for _ in range(4)])
+    monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 1200)
+    text, cov = cs.sheet_text_with_coverage([pdf])
+    for n in (1, 2, 3):
+        assert f"[brief.pdf, page {n}]" in text          # early pages all present
+    assert "trimmed — the full page is in the images" in text
+    assert "[text coverage:" in text and "character budget" in text
+    assert cov["total"] > 1200 and cov["pages_trimmed"] >= 1
+    assert cov["sent"] <= 1200 + 500                      # budget plus markers and the tail
+    assert cs.sheet_text([pdf]) == text
+
+    # Under the cap nothing changes and nothing is announced.
+    small = _doc(tmp_path, "small.pdf", [["2mm STEEL CONSTRUCTION"]])
+    t2, c2 = cs.sheet_text_with_coverage([small])
+    assert "[text coverage:" not in t2 and c2["pages_trimmed"] == 0 == c2["pages_omitted"]
+
+
+def test_a_thousand_tiny_pages_cannot_ride_the_floor_past_the_budget(tmp_path, monkeypatch):
+    pdf = _doc(tmp_path, "many.pdf", [["ROW"]] * 60)
+    monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 800)
+    text, cov = cs.sheet_text_with_coverage([pdf] * 10)   # 600 page blocks
+    assert cov["sent"] <= 800 + 500
+    assert cov["pages_omitted"] > 0
+    assert "only in the images" in text
+
+
+def test_read_concept_reports_the_coverage_when_trimmed(tmp_path, monkeypatch):
+    pdf = _doc(tmp_path, "brief.pdf", [["FOLDED SHEET STEEL " * 10] * 10 for _ in range(3)])
+    monkeypatch.setattr(cs, "SHEET_TEXT_MAX_CHARS", 600)
+    import _bom_vision_reader as pathB
+    monkeypatch.setattr(pathB, "count_pages", lambda p: 1)
+    monkeypatch.setattr(pathB, "render_page_to_png", lambda p, i: b"png")
+    monkeypatch.setattr(cs, "_cache_dir", lambda: tmp_path / "cache")
+    monkeypatch.setattr(cs, "_call_vision_llm", lambda *a, **k: '{"parts": []}')
+    read = cs.read_concept([pdf])
+    assert read["text_coverage"]["pages_trimmed"] >= 1
