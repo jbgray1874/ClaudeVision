@@ -20,6 +20,8 @@ Keys understood (all optional; the replay keys behave as they do there):
                                  description carries these words (a merged pair or a doubled
                                  line both fail)
   required_operations            {code: [op]} routed or charged on the line
+  total_quantity_by_words        {words: qty} summed across every line the words
+                                 match — a mirrored pair of fives is ten
   required_operations_by_words   {words: [op]} routed or charged on the line(s) the
                                  words match — never keyed by a run's minted codes
   required_operations_incl_pieces{code: [op]} met by the line or its numbered pieces
@@ -200,6 +202,15 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         for op in ops:
             res.add("required_op", f"{code} {op}", op.lower() in got,
                     "no line" if line is None else f"line carries {sorted(got)}")
+    for words, q in (facts.get("total_quantity_by_words") or {}).items():
+        # THE TOTAL ACROSS MATCHING LINES (D-471's facts fix): ten side trays built as five
+        # left and five right is CORRECT manufacture, and a one-line gate failed it.
+        key = _sq(words)
+        hits = [l for l in lines
+                if key in _sq(l.get("part_number")) or key in _sq(l.get("description"))]
+        got = sum(_num(l.get("qty_per_unit")) or 0 for l in hits)
+        res.add("total_quantity", words, abs(got - float(q)) < 0.01,
+                f"{len(hits)} line(s) totalling {got:g} / brief {q:g}")
     for words, ops in (facts.get("required_operations_by_words") or {}).items():
         # KEYED BY DESCRIPTION WORDS (D-469), never by a run's minted codes, which shift
         # between reads — the facts file must not let a book define its own expected answer.

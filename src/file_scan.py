@@ -4901,6 +4901,16 @@ def _finalize_scan_summary(
                 except Exception as _sw_exc:                       # noqa: BLE001
                     print(f"   [concept] the sheet's weld note could not be read "
                           f"({type(_sw_exc).__name__}: {_sw_exc})", flush=True)
+            if _brief:
+                # A STATED JOINT ALWAYS RECEIVES ONE TRACEABLE CHARGE (D-471): the model's
+                # own placements stand, deduplicated to one charge per joint; where none
+                # landed, the brief's affirmative weld statement is put to the unit through
+                # the sheet-note reader, with the located pieces stated — never a bare
+                # question over a known requirement.
+                _ja = concept_scan.ensure_stated_joint_charged(_sighted, _unit, _brief)
+                if _ja:
+                    summary.setdefault("review_flags", []).append(_ja)
+                    print(f"   [concept] {_ja}", flush=True)
             if _sheet_read:
                 # WHAT THE SHEET CHECK COULD NOT SETTLE IS ASKED (D-415), on the unit, in the
                 # channel the book's "to settle" count already reads.

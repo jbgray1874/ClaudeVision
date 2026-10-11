@@ -486,6 +486,110 @@ def stand_down_reader_rows(summary: Any, declared_sight: bool,
             f"concept_superseded_parts, never costed beside it)")
 
 
+_WELD_TO_RE = re.compile(r"(?i)\bwelded\s+to\b")
+_WELD_WORD_RE = re.compile(r"(?i)\bweld\w*")
+
+
+def brief_weld_statements(brief: Any) -> List[str]:
+    """The brief's AFFIRMATIVE weld sentences — the joints the run must charge (D-471).
+
+    Sentence by sentence, with negation and alternatives respected by the three words before
+    the weld word (config CONCEPT_NEGATION_WORDS): "hooked brackets WELDED to the tray
+    (riveted is the alternative, not costed)" states a joint; "riveted rather than welded"
+    and "no welding" state none."""
+    negs = [str(w).strip().lower() for w in
+            (_vocab("CONCEPT_NEGATION_WORDS", []) or []) if str(w).strip()]
+    out: List[str] = []
+    for sent in re.split(r"[.;\n]+", str(brief or "")):
+        said = sent.strip()
+        if not said:
+            continue
+        for m in _WELD_WORD_RE.finditer(said):
+            window = " " + " ".join(said[:m.start()].split()[-3:]).lower() + " "
+            if not any(f" {n} " in window for n in negs):
+                out.append(said)
+                break
+    return out
+
+
+def price_the_joint_once(parts: List[Any]) -> List[str]:
+    """One joint, one charge (D-471). Where part A's own words locate its joint — "welded
+    to <counterpart>" — and the counterpart ALSO carries the brief's weld, the counterpart's
+    is removed: book 2 charged bracket and tray for one connection. Returns the parts whose
+    duplicate weld was removed."""
+    removed: List[str] = []
+    stop = {"the", "a", "an", "each", "its", "their", "every", "all", "of"}
+    for a in parts or []:
+        if not isinstance(a, dict) or not a.get("weld_stated_by_brief"):
+            continue
+        m = _WELD_TO_RE.search(str(a.get("description") or ""))
+        if not m:
+            continue
+        tail = [w for w in re.findall(r"[A-Za-z]+",
+                                      str(a.get("description"))[m.end():])[:4]
+                if w.lower() not in stop]
+        if not tail:
+            continue
+        for b in parts:
+            if b is a or not isinstance(b, dict) or not b.get("weld_stated_by_brief"):
+                continue
+            desc_b = str(b.get("description") or "").lower()
+            if any(w.lower() in desc_b for w in tail):
+                for op in ("welding", "spot_welding"):
+                    (b.get("operation_sources") or {}).pop(op, None)
+                b.pop("weld_stated_by_brief", None)
+                b.setdefault("review_flags", []).append(
+                    f"CONCEPT: the joint to {a.get('part_number')} is priced once, on the "
+                    f"attaching part — this line's duplicate weld attribution was removed "
+                    f"(D-471)")
+                removed.append(str(b.get("part_number") or ""))
+    return removed
+
+
+def ensure_stated_joint_charged(parts: List[Any], unit: Optional[Dict[str, Any]],
+                                brief: str) -> Optional[str]:
+    """A STATED JOINT ALWAYS RECEIVES ONE TRACEABLE CHARGE (D-471).
+
+    James Gray, 11 Oct 2026, after the 19:19 book charged no weld although the brief states
+    "hooked brackets WELDED to the tray": "a failed attribution must not leave a known
+    requirement free… nobody cares about excuses." Order of preference: the model's own
+    per-part attribution (D-469) stands where it exists, deduplicated to one charge per
+    joint; where NO part carries it, the brief's affirmative weld statements are put to the
+    unit assembly through the SAME note reader a design sheet's "WELDED AND FINISHED FLUSH"
+    uses (D-418) — the joint is the assembly's, exactly where D-385 says a members' joint
+    lives — with the pieces the read's own words locate ("welded to …") counted into the
+    flag as information, never as evidence. Returns the allowance note, or None."""
+    stmts = brief_weld_statements(brief)
+    if not stmts:
+        return None
+    price_the_joint_once(parts)
+    if any(isinstance(p, dict) and p.get("weld_stated_by_brief") for p in parts or []):
+        return None                     # placed by the model; charged there, once
+    if not isinstance(unit, dict) or unit.get("weld_stated_by_note"):
+        return None                     # no unit to carry it, or a sheet note already does
+    try:
+        from weld_symbols import _clean_pn, apply_sheet_weld_notes  # noqa: WPS433
+    except Exception:                                               # noqa: BLE001
+        return None
+    merged = {"notes": " ".join(stmts), "text": str(brief or "")}
+    if not apply_sheet_weld_notes([unit], {_clean_pn(unit.get("part_number")): merged}):
+        return None
+    located = [p for p in parts or [] if isinstance(p, dict)
+               and _WELD_TO_RE.search(str(p.get("description") or ""))]
+    pieces = sum(int(float(p.get("quantity") or 1)) for p in located)
+    unit["brief_joint_allowance"] = {
+        "statements": stmts, "pieces": pieces or None,
+        "located": [str(p.get("part_number") or "") for p in located]}
+    note = ("JOINT ALLOWANCE per the enquiry brief: " + "; ".join(s[:120] for s in stmts)
+            + " — charged once on the unit assembly"
+            + (f"; the read locates it on {pieces} piece(s) ("
+               + ", ".join(str(p.get("description") or "")[:40] for p in located[:3]) + ")"
+               if located else "")
+            + " — confirm the pieces and the minutes")
+    unit.setdefault("review_flags", []).append(note)
+    return note
+
+
 def brief_stated_welds(parts: List[Any]) -> List[str]:
     """The parts whose weld the model attributed to the brief (D-467/D-469) — for the log.
 
