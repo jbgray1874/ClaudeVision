@@ -474,6 +474,96 @@ def stand_down_reader_rows(summary: Any, declared_sight: bool,
             f"concept_superseded_parts, never costed beside it)")
 
 
+_WELD_WORDS = re.compile(r"(?i)\bweld")
+
+
+def apply_brief_stated_welds(parts: List[Any], brief: str) -> List[str]:
+    """A weld the enquiry brief states is a stated weld on a concept read (D-467).
+
+    On a drawing pack the drawings outrank a typed brief, and the compiler's evidenceless-
+    leaf rule (D-385/D-387) rightly strips welds no sheet supports. The K-Wellness book
+    applied that rule to a pack with NO sheets: the brief said "hooked brackets WELDED to
+    the tray", the model sighted the welds, the compiler stripped every one for want of a
+    weld symbol no page could ever carry, and then asked five questions the brief had
+    already answered. Where the brief's own words state welding, every sighted part whose
+    inferred operations include a weld carries the brief as that weld's source — evidence,
+    exactly as a sheet's own note is on a sheet read (D-418). Returns the parts stamped."""
+    if not brief or not _WELD_WORDS.search(str(brief)):
+        return []
+    stamped: List[str] = []
+    for p in parts or []:
+        if not isinstance(p, dict):
+            continue
+        ops = {str(o or "").strip().lower() for o in (p.get("inferred_operations") or [])}
+        welds = ops & {"welding", "spot_welding"}
+        if not welds:
+            continue
+        srcs = p.setdefault("operation_sources", {})
+        for op in sorted(welds):
+            srcs[op] = BRIEF_SOURCE
+        p["weld_stated_by_brief"] = True
+        p.setdefault("review_flags", []).append(
+            "CONCEPT: welded per the enquiry brief — the brief states welding, so the "
+            "sighted weld is charged as stated, not stripped as an inference (the riveted "
+            "or mechanical alternative, where the brief offered one, is not costed)")
+        stamped.append(str(p.get("part_number") or ""))
+    return stamped
+
+
+def split_not_visible(items: List[Any]) -> tuple:
+    """(consumables, design unknowns) — what a real unit needs that the images cannot show.
+
+    A consumable (fixings, adhesives, packing materials) is NAMED by the config vocabulary
+    CONCEPT_CONSUMABLE_WORDS and can carry a justified provisional allowance; a design
+    unknown ("internal reinforcement not shown") is not a purchasable thing and is asked,
+    never priced at a guess (D-468)."""
+    words = [str(w).strip().lower() for w in
+             (_vocab("CONCEPT_CONSUMABLE_WORDS", []) or []) if str(w).strip()]
+    cons: List[str] = []
+    unknown: List[str] = []
+    for it in items or []:
+        said = str(it or "").strip()
+        if not said:
+            continue
+        (cons if any(w in said.lower() for w in words) else unknown).append(said)
+    return cons, unknown
+
+
+def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
+    """Provisional bought-in lines for the consumables a render cannot show (D-468).
+
+    "Not visible" must not mean unpriced: a flagged omission is an unresolved exception,
+    not a passed gate. Each named consumable becomes a bought-in line of one assembly set
+    per unit, down the SAME price chain as every bought-in (D-153) — SDI Live, research,
+    then the flagged provisional allowance a refused research answer already earns — so
+    the book works towards a price and the line says exactly what it rests on."""
+    from document_builder import _empty_part_record                 # noqa: WPS433
+    from source_precedence import apply_field                       # noqa: WPS433
+    out: List[Dict[str, Any]] = []
+    for n, it in enumerate((items or []), 1):
+        said = str(it or "").strip()
+        if not said:
+            continue
+        record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}",
+                                    item_number=None, description=said, quantity=None)
+        record["concept"] = True
+        record["concept_kind"] = "bought_in"
+        record["concept_not_visible"] = True
+        record["page_roles"] = ["render"]
+        apply_field(record, "quantity", 1, SOURCE,
+                    note="one assembly set per unit — provisional; the render cannot "
+                         "show a count")
+        apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
+                    note="a consumables set the render cannot show, named by the read")
+        record["is_bought_in"] = True
+        record["review_flags"].append(
+            "CONCEPT: NOT VISIBLE ON THE RENDER — a provisional consumables allowance, "
+            "priced by the ordinary bought-in chain; confirm the contents and the figure "
+            "before release")
+        out.append(record)
+    return out
+
+
 def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
     """The text printed on these pages and what was sent of it: (text, coverage).
 

@@ -235,3 +235,47 @@ def test_read_concept_reports_the_coverage_when_trimmed(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_call_vision_llm", lambda *a, **k: '{"parts": []}')
     read = cs.read_concept([pdf])
     assert read["text_coverage"]["pages_trimmed"] >= 1
+
+
+def test_a_weld_the_brief_states_is_a_stated_weld_on_a_concept_read():
+    """D-467: the K-Wellness brief said 'hooked brackets WELDED to the tray'; the compiler
+    stripped every sighted weld for want of a sheet no concept pack has, then asked five
+    questions the brief had answered."""
+    parts = [{"part_number": "X-CPT07", "inferred_operations": ["folding", "welding"]},
+             {"part_number": "X-CPT03", "inferred_operations": ["folding"]}]
+    stamped = cs.apply_brief_stated_welds(parts, "hooked brackets WELDED to the tray")
+    assert stamped == ["X-CPT07"]
+    assert parts[0]["operation_sources"]["welding"] == cs.BRIEF_SOURCE
+    assert parts[0]["weld_stated_by_brief"] is True
+    assert any("welded per the enquiry brief" in f for f in parts[0]["review_flags"])
+    assert "operation_sources" not in parts[1]
+    # A brief that states no weld stamps nothing, and neither does an empty one.
+    assert cs.apply_brief_stated_welds(
+        [{"part_number": "A", "inferred_operations": ["welding"]}], "500 x 500, steel") == []
+    assert cs.apply_brief_stated_welds(parts, "") == []
+    # And the compiler now treats the brief's stamp as evidence.
+    import route_compiler as rc
+    assert "enquiry_brief" not in rc._WELD_EVIDENCE_FREE_SOURCES
+    assert "vision_concept" in rc._WELD_EVIDENCE_FREE_SOURCES
+
+
+def test_not_visible_consumables_are_priced_and_unknowns_are_asked():
+    """D-468: 'not visible' must not mean unpriced — a flagged omission is an unresolved
+    exception, not a passed gate."""
+    cons, unknown = cs.split_not_visible([
+        "fixings, screws, bolts, nuts for assembly of posts and shelves",
+        "protective packaging materials and pallet",
+        "35mm shelf edge strip fixings/adhesives",
+        "any internal reinforcing angles or brackets not shown on exploded view"])
+    assert len(cons) == 3 and len(unknown) == 1
+    assert "reinforcing" in unknown[0]
+    lines = cs.consumable_lines(cons, "KWellnessFSDU")
+    assert [l["part_number"] for l in lines] == [
+        "KWELLNESSFSDU-NV01", "KWELLNESSFSDU-NV02", "KWELLNESSFSDU-NV03"]
+    for line in lines:
+        assert line["is_bought_in"] is True and line["concept_kind"] == "bought_in"
+        assert line["quantity"] == 1
+        assert line["normalized_material"] == "BOUGHT_IN"
+        assert line["concept_not_visible"] is True
+        assert any("provisional consumables allowance" in f for f in line["review_flags"])
+    assert cs.consumable_lines([], "X") == []

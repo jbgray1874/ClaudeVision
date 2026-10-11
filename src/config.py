@@ -674,6 +674,17 @@ UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LE
 # part with no material assigned weighs as the template's default; the title block prints that
 # mass. Where the same blank in one of these weighs the stated weight within the tolerance, the
 # weight is read as the model's material — a note, not a gauge question.
+# ── WHAT COUNTS AS A CONSUMABLE ON A CONCEPT READ (D-468) ──────────────────────────────
+# The read lists what a real unit needs that the images cannot show. An item naming one of
+# these words is a purchasable consumable and gets a provisional bought-in allowance line;
+# anything else is a design unknown and is asked, never priced at a guess. Vocabulary, not
+# logic: extend it here, never in code.
+CONCEPT_CONSUMABLE_WORDS = [
+    "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
+    "tape", "velcro", "packing", "packaging", "pallet", "carton", "strap", "label",
+    "clip", "plug", "foot", "feet", "glide",
+]
+
 MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")
 # AN ASSUMPTION TO VALIDATE ACROSS PACKS, not a measured figure: set from one pack (8188-08's
 # four acrylic parts fit steel within 1%), wide enough for a printed weight's rounding.
