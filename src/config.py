@@ -690,6 +690,11 @@ CONCEPT_SHIPMENT_WORDS = [
     "pallet", "packaging", "packing", "carton", "crate", "shrink", "stretch wrap",
     "banding", "strap", "protective wrap", "bubble",
 ]
+# A weld word within three words of one of these is a negation or an alternative, not a
+# statement ("riveted rather than welded", "no welding") — the brief's joint test (D-471)
+# reads sentences, not the pack-level word D-469 removed. Vocabulary, not logic.
+CONCEPT_NEGATION_WORDS = ["no", "not", "never", "without", "rather than", "instead of"]
+
 
 MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")
 # AN ASSUMPTION TO VALIDATE ACROSS PACKS, not a measured figure: set from one pack (8188-08's

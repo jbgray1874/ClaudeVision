@@ -7,7 +7,6 @@
     "plinth": 1,
     "Top cap": 1,
     "Front shelf tray": 5,
-    "Side shelf tray": 10,
     "shelf-edge strip": 15,
     "Rear graphic": 1,
     "Replaceable card": 1,
@@ -32,11 +31,12 @@
     "DIGITAL LOCK"
   ],
   "required_operations_by_words": {
-    "Front shelf tray": [
-      "welding"
-    ],
-    "Side shelf tray": [
+    "KWELLNESSFSDU": [
       "welding"
     ]
+  },
+  "total_quantity_by_words": {
+    "Side shelf tray": 10,
+    "Front shelf tray": 5
   }
 }

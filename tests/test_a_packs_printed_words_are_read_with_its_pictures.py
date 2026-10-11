@@ -303,3 +303,45 @@ def test_not_visible_consumables_are_priced_and_unknowns_are_asked():
         assert line["concept_not_visible"] is True
         assert any("provisional consumables allowance" in f for f in line["review_flags"])
     assert cs.consumable_lines([], "X") == []
+
+
+def test_a_stated_joint_always_receives_one_traceable_charge():
+    """D-471: the 19:19 book charged no weld although the brief states 'hooked brackets
+    WELDED to the tray' — the model skipped the attribution and nothing checked. A known
+    requirement is never left free: where no part carries the brief's weld, the unit
+    assembly does, through the same note reader a design sheet's own weld note uses."""
+    # Negation and alternatives are respected, sentence by sentence.
+    assert len(cs.brief_weld_statements(
+        "hooked brackets WELDED to the tray (riveted is the alternative, not costed)")) == 1
+    assert cs.brief_weld_statements("riveted rather than welded brackets") == []
+    assert cs.brief_weld_statements("no welding anywhere; bolted construction") == []
+
+    # No attribution -> the unit carries the stated joint once, with the located pieces.
+    unit = {"part_number": "KWELLNESSFSDU-CPT00", "description": "unit assembly"}
+    parts = [{"part_number": "A", "description": "Hooked bracket (welded to shelf tray)",
+              "quantity": 30},
+             {"part_number": "T", "description": "Front shelf tray", "quantity": 5}]
+    note = cs.ensure_stated_joint_charged(
+        parts, unit, "hooked brackets WELDED to the tray (riveted alternative, not costed)")
+    assert note and "charged once on the unit assembly" in note and "30 piece(s)" in note
+    assert unit.get("weld_stated_by_note")
+    assert unit["brief_joint_allowance"]["pieces"] == 30
+    assert unit["brief_joint_allowance"]["located"] == ["A"]
+
+    # The model's own placement stands instead, and never both sides of one joint.
+    unit2 = {"part_number": "X-CPT00"}
+    att = [{"part_number": "A", "description": "Hooked bracket (welded to shelf tray)",
+            "weld_stated_by_brief": True, "operation_sources": {"welding": "enquiry_brief"},
+            "quantity": 30},
+           {"part_number": "B", "description": "Side shelf tray (left)",
+            "weld_stated_by_brief": True, "operation_sources": {"welding": "enquiry_brief"}}]
+    assert cs.ensure_stated_joint_charged(att, unit2, "brackets WELDED to the tray") is None
+    assert "brief_joint_allowance" not in unit2
+    assert att[0].get("weld_stated_by_brief")                  # the attaching part keeps it
+    assert not att[1].get("weld_stated_by_brief")              # the counterpart's removed
+    assert any("priced once" in f for f in att[1]["review_flags"])
+
+    # A brief that states no weld never mints anything.
+    unit3 = {"part_number": "Y-CPT00"}
+    assert cs.ensure_stated_joint_charged(parts, unit3, "bolted, no welding") is None
+    assert "brief_joint_allowance" not in unit3
