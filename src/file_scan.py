@@ -974,6 +974,13 @@ def scan_folder_job(
         elif _held:
             print(f"   -> every staged document is declared reference — the declaration "
                   f"is set aside so the read has a product", flush=True)
+    elif len(pdfs) > 1:
+        # THE ABSENCE IS SAID WHERE THE HOUR IS ABOUT TO BE SPENT (D-479): two K-Wellness
+        # runs read a 101-page standards manual as the product because the declaration was
+        # lost on the way in, and the only sign was a line that was not printed.
+        print(f"   -> NOTE: {len(pdfs)} documents and NO reference declaration — every one "
+              f"is read as the product. If one is a standards or reference manual, tick it "
+              f"in the portal's Reference/standards list and run again.", flush=True)
     # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
     # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
     # (text, title block, BOM) is absent because a render carries none, not because a reader

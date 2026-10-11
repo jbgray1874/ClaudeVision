@@ -686,3 +686,40 @@ def test_the_marker_in_the_staged_folder_holds_the_manual_out_end_to_end(tmp_pat
     assert [Path(p).name for p in summary["scanned_documents"]] == ["Product.pdf"]
     assert [Path(p).name for p in summary["reference_pack_paths"]] == ["Manual.pdf"]
     assert "Manual" not in str(paths)
+
+
+def test_the_submission_shows_its_roles_and_the_engine_says_a_missing_declaration(tmp_path):
+    """D-479: two runs went out with the document roles silently lost and each burned an
+    hour pricing the manual's example fixtures. The submit dialog now shows what the
+    request will actually carry — PRODUCT / REFERENCE / CLIENT-DOCUMENT MODE / BRIEF —
+    computed at submit time, and a multi-document job with no declaration says so in the
+    engine log's first lines, not in a line that was never printed."""
+    page = (Path(__file__).resolve().parents[1] / "sdi-intelligence-backend"
+            / "sdi-estimating-intelligence.html").read_text(encoding="utf-8")
+    i = page.index("THIS SUBMISSION:")
+    block = page[i - 200:i + 900]
+    assert "REFERENCE/STANDARDS:" in block and "CLIENT-DOCUMENT MODE:" in block
+    assert "ENQUIRY BRIEF:" in block and "(none)" in block
+    assert page.index('$("bRunLLM").onclick') < i          # in the LLM submit handler
+
+    # And the engine's side, live: two PDFs, no marker → the absence is printed and both
+    # documents read as the product (nothing is guessed to be a manual).
+    import io
+    import os
+    import contextlib
+    import pymupdf
+    os.environ.setdefault("SDI_OFFLINE", "1")
+    job = tmp_path / "TWOJOB"
+    job.mkdir()
+    for name in ("A.pdf", "B.pdf"):
+        d = pymupdf.open()
+        d.new_page(width=600, height=400).insert_text((40, 60), f"part {name}")
+        d.save(str(job / name))
+        d.close()
+    import file_scan
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        summary, _ = file_scan.scan_folder_job(job, [job / "A.pdf", job / "B.pdf"])
+    assert "NO reference declaration" in out.getvalue()
+    assert sorted(Path(p).name for p in summary["scanned_documents"]) == ["A.pdf", "B.pdf"]
+    assert not summary.get("reference_pack_paths")

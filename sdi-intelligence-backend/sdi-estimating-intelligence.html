@@ -2166,10 +2166,25 @@ $("bRunLLM").onclick = async () => {
   if(running || bRunLLM.disabled) return;
   /* ASKED, BECAUSE THE OUTPUT CANNOT BE TOLD APART AFTERWARDS. The workbook this produces
      carries the same template, tabs and totals as a real estimate. */
-  if(!confirm("LLM read only.\n\nThe vision model reads the pack alone — no deterministic "
-            + "BOM reader, no DXF flat patterns, no SolidWorks. It reads the parts list and "
-            + "the routes; it CANNOT size a folded part.\n\nThe workbook it produces looks "
-            + "like an estimate and is not one. Do not quote its total.\n\nRun it?")) return;
+  /* THE DIALOG SHOWS WHAT THE REQUEST WILL ACTUALLY CARRY (D-479). Two runs went out with
+     the roles silently lost — ticks eaten by a rebuild race (D-478), form state reset by a
+     hard reload — and each burned an hour pricing the standards manual's example fixtures.
+     The receipt is computed HERE, at submit time, from the state that will be sent: if a
+     tick was lost, this dialog says REFERENCE/STANDARDS: (none) and the person cancels,
+     before staging, before the engine, before the hour. */
+  { const _fl = drawings.filter(d => !d.is_dir);
+    const _refNames = _fl.filter(f => refDocs.has(f.name)).map(f => f.name);
+    const _prodNames = _fl.filter(f => !refDocs.has(f.name)).map(f => f.name);
+    const _bLen = ($("enquiryBrief").value || "").trim().length;
+    if(!confirm("LLM read only.\n\nTHIS SUBMISSION:\n"
+              + "  PRODUCT: " + (_prodNames.join(", ") || "(none)") + "\n"
+              + "  REFERENCE/STANDARDS: " + (_refNames.join(", ") || "(none)") + "\n"
+              + "  CLIENT-DOCUMENT MODE: " + ($("conceptDocument").checked ? "ON" : "OFF") + "\n"
+              + "  ENQUIRY BRIEF: " + (_bLen ? _bLen + " chars" : "(none)") + "\n\n"
+              + "The vision model reads the pack alone — no deterministic "
+              + "BOM reader, no DXF flat patterns, no SolidWorks. It reads the parts list and "
+              + "the routes; it CANNOT size a folded part.\n\nThe workbook it produces looks "
+              + "like an estimate and is not one. Do not quote its total.\n\nRun it?")) return; }
   /* AN EMPTY BRIEF BOX IS A DECISION, NOT A DEFAULT (D-473). The 11 Oct K-Wellness 20:07
      run went out with the box empty after a page reload: the service correctly removed the
      brief an earlier run had filed (D-360 — the brief is this run's), the model priced the
