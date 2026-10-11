@@ -82,3 +82,49 @@ def test_a_miss_is_not_stored_as_a_price(monkeypatch, tmp_path):
     monkeypatch.setattr(gpc, "default_cache_dir", lambda: str(tmp_path / "gp"))
     svc = pricing_service.PricingService(conn=object())
     assert svc._get_web_ai_fallback(_part()) is None
+
+
+def test_a_capacity_refusal_trips_the_model_breaker_for_the_run(monkeypatch):
+    """D-478: a capacity refusal is account-level, not per-line (the serpapi rule, applied
+    to the model). The 21:20 K-Wellness run met 'HTTP 429 resource-exhausted' and kept
+    asking line after line, each with its own timeout into the same wall. Two capacity
+    refusals now trip the breaker for the rest of the run; the lines are left for the
+    estimator, never priced at nothing."""
+    import io
+    import urllib.error
+    import urllib.request
+
+    wap = web_ai_price_lookup
+    monkeypatch.setattr(wap, "_XAI_CAPACITY_SEEN", 0)
+    monkeypatch.setattr(wap, "_XAI_CAPACITY_TRIPPED", False)
+    monkeypatch.setattr(wap, "_offline", lambda: False)
+    monkeypatch.setenv("XAI_API_KEY", "xai-test")
+    calls = {"n": 0}
+
+    def _refused(req, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(
+            "https://api.x.ai/v1/chat/completions", 429, "Too Many Requests", {},
+            io.BytesIO(b'{"code":"resource-exhausted","error":"at capacity"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _refused)
+    assert wap._call_xai_llm("price this") is None          # first refusal: counted
+    assert wap._call_xai_llm("price this") is None          # second: breaker trips
+    assert wap._XAI_CAPACITY_TRIPPED is True
+    assert wap._call_xai_llm("price this") is None          # third: no call is made
+    assert calls["n"] == 2
+    # An ordinary 429 without the capacity body never trips it (a per-request throttle
+    # can clear; an account at capacity cannot, within one run).
+    monkeypatch.setattr(wap, "_XAI_CAPACITY_SEEN", 0)
+    monkeypatch.setattr(wap, "_XAI_CAPACITY_TRIPPED", False)
+
+    def _throttled(req, timeout=None):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(
+            "https://api.x.ai/v1/chat/completions", 429, "Too Many Requests", {},
+            io.BytesIO(b'{"error":"rate limited, slow down"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", _throttled)
+    assert wap._call_xai_llm("price this") is None
+    assert wap._call_xai_llm("price this") is None
+    assert wap._XAI_CAPACITY_TRIPPED is False
