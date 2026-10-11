@@ -1865,9 +1865,14 @@ def main() -> None:
                         try:
                             from quantity_breaks_tab import (write_quantity_breaks_tab,
                                                              select_show_formulas)
-                            _tab = write_quantity_breaks_tab(xlsx_path, _swept,
-                                                             requested=_breaks,
-                                                             warning=_mpb_warning)
+                            _tab = write_quantity_breaks_tab(
+                                xlsx_path, _swept, requested=_breaks,
+                                warning=_mpb_warning,
+                                # Project costs (D-476): one-off obligations of the order,
+                                # shown beside the order values, never in the unit price.
+                                project_costs=(summary.get("project_costs")
+                                               if isinstance(summary.get("project_costs"),
+                                                             dict) else None))
                             if _tab:
                                 summary["quantity_breaks_tab"] = _tab
                             # The same request's other half. A view, not a change to a cell:

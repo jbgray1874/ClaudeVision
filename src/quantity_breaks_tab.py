@@ -136,7 +136,8 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
 
 def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                               requested: Optional[List[int]] = None,
-                              warning: Optional[str] = None) -> Optional[str]:
+                              warning: Optional[str] = None,
+                              project_costs: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Add (or replace) the one-sheet break table. Returns the sheet name, or None.
 
     `warning` is printed in red above the figures when the run knows the comparison is
@@ -227,14 +228,35 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                 ws.cell(row=head + 7, column=col, value=_wbk.rsplit("\\", 1)[-1]
                         .rsplit("/", 1)[-1])
 
+        # PROJECT COSTS ARE CHARGED ONCE AND SHOWN BESIDE THE ORDER, NEVER IN THE UNIT
+        # (D-476): design development, prototypes, testing and documentation from the
+        # customer's standards are one-off obligations of the order — the same £ at every
+        # quantity — so the combined total is the view that answers "what does this order
+        # cost", and the unit price stays the manufacturing figure the brief asked for.
+        _pc_total = _money((project_costs or {}).get("total_gbp"))
+        _pc_rows = 0
+        if _pc_total:
+            _pc_rows = 3
+            ws.cell(row=head + 8, column=1,
+                    value="Project costs £ (charged once — not in the unit price)"
+                    ).font = bold
+            ws.cell(row=head + 9, column=1,
+                    value="Order total incl. project costs £").font = bold
+            for col, r in enumerate(rows, start=2):
+                _u = _money(r.get("unit"))
+                ws.cell(row=head + 8, column=col, value=_pc_total)
+                if _u is not None:
+                    ws.cell(row=head + 9, column=col,
+                            value=round(_u * int(r["quantity"]) + _pc_total, 2))
+
         ws.column_dimensions["A"].width = 22
         for col in range(2, len(rows) + 2):
             ws.column_dimensions[ws.cell(row=head, column=col).column_letter].width = 17
-        for _r in range(head, head + 8):
+        for _r in range(head, head + 8 + _pc_rows):
             for _c in range(2, len(rows) + 2):
                 ws.cell(row=_r, column=_c).alignment = Alignment(horizontal="right")
 
-        _basis_rows = _write_basis(ws, rows, head + 9, bold, Alignment)
+        _basis_rows = _write_basis(ws, rows, head + 9 + _pc_rows, bold, Alignment)
 
         _n = ws.max_row + 2
         ws.cell(row=_n, column=1, value=(
