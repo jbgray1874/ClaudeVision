@@ -599,6 +599,12 @@
       <textarea id="enquiryBrief" rows="4" maxlength="4000"
         style="width:100%;box-sizing:border-box;margin:0 0 10px;font:inherit"
         placeholder="e.g. 600 x 600 x 1200mm bump bin with lid and 1800mm back panel. Plywood construction with print. 350 off."></textarea>
+      <label class="note" style="display:block;margin-bottom:10px">
+        <input type="checkbox" id="conceptDocument">
+        <b>Client brief with embedded images — provisional costing.</b>
+        Use the LLM read button. Read the selected PDF's text and page images together
+        with the enquiry brief above, infer a BOM and route, then price into the normal workbook.
+        Select one design per run. Measured CAD is not replaced by guesses.</label>
 
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
@@ -2158,10 +2164,15 @@ $("bRunLLM").onclick = async () => {
                             files: drawings.filter(d => !d.is_dir).map(d => d.path),
                             output_root: OUTPUT_ROOT, deliverables: true,
                             method: "llm", fresh_read: !!freshRead.checked,
+                            concept_document: !!$("conceptDocument").checked,
                             enquiry_brief: ($("enquiryBrief").value || "").trim() || null})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;
+    if($("conceptDocument").checked && started.concept_document !== true){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not acknowledge client-document mode. Update the service before running this brief.");
+    }
     if(started.output_path){ runDest = started.output_path; refresh(); }
     /* A BRIEF THE SERVICE DID NOT FILE IS A RUN ANSWERING A DIFFERENT QUESTION (D-362).
        The 13:34 M&S read went out with a plywood brief typed here and a service still running

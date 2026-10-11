@@ -536,6 +536,7 @@ class EstimateRequest(BaseModel):
     # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
     # any other method: a drawing pack's drawings are its facts.
     enquiry_brief: Optional[str] = None
+    concept_document: bool = False
     # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
     # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
     # test run wants and what an API caller that has never heard of this field gets.
@@ -1454,6 +1455,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if method not in {"both", "llm", "engine"}:
         raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
                                  f"engine.")
+    if req.concept_document and method != "llm":
+        raise HTTPException(400, "Client-document costing requires the LLM read method.")
 
     # CHECKED BEFORE ANYTHING IS STAGED, for the same reason `method` is: a typo in an
     # address should not cost the estimator a rewritten job folder. Reported rather than
@@ -1545,6 +1548,15 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             502, f"The drawings could not be staged to {staging.staging_root()} "
                  f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
     folder = staged["folder"]
+    # An explicit input, reset for every submission. Never infer this mode from a job code.
+    _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
+    try:
+        if req.concept_document:
+            _document_marker.write_text('{"mode": "client_document"}\n', encoding="utf-8")
+        elif _document_marker.exists():
+            _document_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the client-document mode: {exc}. Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
     # a new job; a file somebody wrote by hand is left alone.
@@ -1638,6 +1650,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "quoted or compared with a normal run's.")
     _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
                      if run.llm_only else "not_an_llm_read")
+    if req.concept_document:
+        run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
+                 "brief together; infer a provisional BOM and route for ordinary costing.")
     if run.fresh_read:
         # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
         # answer exactly; this one may not, and "the number moved and nothing changed" is
@@ -1695,7 +1710,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None,
-            "enquiry_brief": _brief_status}
+            "enquiry_brief": _brief_status,
+            "concept_document": bool(req.concept_document)}
 
 
 @router.post("/override")
