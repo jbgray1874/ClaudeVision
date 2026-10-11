@@ -681,8 +681,14 @@ UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LE
 # logic: extend it here, never in code.
 CONCEPT_CONSUMABLE_WORDS = [
     "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
-    "tape", "velcro", "packing", "packaging", "pallet", "carton", "strap", "label",
-    "clip", "plug", "foot", "feet", "glide",
+    "tape", "velcro", "label", "clip", "plug", "foot", "feet", "glide",
+]
+# Items in SHIPMENT scope are already carried by the commercial PACKAGING and DELIVERY
+# lines every run prices — never duplicated as a parts line, and never one per fixture
+# (D-469). Checked BEFORE the consumable words, so "packing tape" lands here.
+CONCEPT_SHIPMENT_WORDS = [
+    "pallet", "packaging", "packing", "carton", "crate", "shrink", "stretch wrap",
+    "banding", "strap", "protective wrap", "bubble",
 ]
 
 MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")

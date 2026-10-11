@@ -237,23 +237,43 @@ def test_read_concept_reports_the_coverage_when_trimmed(tmp_path, monkeypatch):
     assert read["text_coverage"]["pages_trimmed"] >= 1
 
 
-def test_a_weld_the_brief_states_is_a_stated_weld_on_a_concept_read():
-    """D-467: the K-Wellness brief said 'hooked brackets WELDED to the tray'; the compiler
-    stripped every sighted weld for want of a sheet no concept pack has, then asked five
-    questions the brief had answered."""
-    parts = [{"part_number": "X-CPT07", "inferred_operations": ["folding", "welding"]},
-             {"part_number": "X-CPT03", "inferred_operations": ["folding"]}]
-    stamped = cs.apply_brief_stated_welds(parts, "hooked brackets WELDED to the tray")
-    assert stamped == ["X-CPT07"]
-    assert parts[0]["operation_sources"]["welding"] == cs.BRIEF_SOURCE
-    assert parts[0]["weld_stated_by_brief"] is True
-    assert any("welded per the enquiry brief" in f for f in parts[0]["review_flags"])
-    assert "operation_sources" not in parts[1]
-    # A brief that states no weld stamps nothing, and neither does an empty one.
-    assert cs.apply_brief_stated_welds(
-        [{"part_number": "A", "inferred_operations": ["welding"]}], "500 x 500, steel") == []
-    assert cs.apply_brief_stated_welds(parts, "") == []
-    # And the compiler now treats the brief's stamp as evidence.
+def test_a_weld_the_brief_states_belongs_to_the_parts_the_model_attributed_it_to():
+    """D-467, narrowed by D-469: the stamp comes from the model's own per-part from_brief
+    attribution — 'brackets welded to the tray' must not validate a weld on the posts, and
+    'riveted rather than welded' or 'no welding' must validate none at all."""
+    answer = {"parts": [
+        {"name": "Front shelf tray", "kind": "fabricated", "quantity": 5,
+         "material_guess": "MILD STEEL", "operations": ["folding", "welding"],
+         "from_brief": ["quantity", "welding"],
+         "assumed_blank_mm": {"length": 500, "width": 300, "thickness": 1.5}},
+        {"name": "Slotted corner post", "kind": "fabricated", "quantity": 6,
+         "material_guess": "MILD STEEL", "operations": ["laser_cutting", "welding"],
+         "from_brief": ["quantity"],
+         "assumed_blank_mm": {"length": 1500, "width": 120, "thickness": 2}},
+    ]}
+    parts = cs.parts_from_concept(answer, "KWellnessFSDU")
+    tray = next(x for x in parts if "tray" in str(x.get("description", "")).lower())
+    post = next(x for x in parts if "post" in str(x.get("description", "")).lower())
+    assert tray["operation_sources"]["welding"] == cs.BRIEF_SOURCE
+    assert tray["weld_stated_by_brief"] is True
+    assert any("welded per the enquiry brief" in f for f in tray["review_flags"])
+    # The post sighted a weld too, but the model did not attribute it to the brief: the
+    # weld stays a sighting for the evidenceless-leaf rule to weigh as before.
+    assert (post.get("operation_sources") or {}).get("welding") != cs.BRIEF_SOURCE
+    assert not post.get("weld_stated_by_brief")
+    assert cs.brief_stated_welds(parts) == [tray["part_number"]]
+    # The brief section carries the joint instruction, pinned like the other prompts.
+    import hashlib
+    got = hashlib.sha256(cs._BRIEF_SECTION.encode()).hexdigest()[:12]
+    assert got == cs._BRIEF_SECTION_FINGERPRINT, (
+        f"the brief section changed. Bump BRIEF_PROMPT_VERSION (now "
+        f"{cs.BRIEF_PROMPT_VERSION!r}) and set _BRIEF_SECTION_FINGERPRINT = {got!r}")
+    assert "BELONGS TO THE PARTS IT NAMES" in cs._BRIEF_SECTION
+    # A changed brief-section version is a new question for briefed reads only.
+    assert (cs._cache_key([b"png"], "m", "a brief")
+            != cs._cache_key([b"png"], "m", "another brief"))
+    assert cs._cache_key([b"png"], "m") == cs._cache_key([b"png"], "m", "")
+    # And the compiler treats the brief's stamp as evidence.
     import route_compiler as rc
     assert "enquiry_brief" not in rc._WELD_EVIDENCE_FREE_SOURCES
     assert "vision_concept" in rc._WELD_EVIDENCE_FREE_SOURCES
@@ -262,16 +282,20 @@ def test_a_weld_the_brief_states_is_a_stated_weld_on_a_concept_read():
 def test_not_visible_consumables_are_priced_and_unknowns_are_asked():
     """D-468: 'not visible' must not mean unpriced — a flagged omission is an unresolved
     exception, not a passed gate."""
-    cons, unknown = cs.split_not_visible([
+    cons, ship, unknown = cs.split_not_visible([
         "fixings, screws, bolts, nuts for assembly of posts and shelves",
         "protective packaging materials and pallet",
         "35mm shelf edge strip fixings/adhesives",
         "any internal reinforcing angles or brackets not shown on exploded view"])
-    assert len(cons) == 3 and len(unknown) == 1
+    assert len(cons) == 2 and len(unknown) == 1
+    # SHIPMENT SCOPE IS PRICED ONCE (D-469): the pallet and protective packaging are the
+    # commercial PACKAGING/DELIVERY lines' scope, never a second parts line and never one
+    # per fixture.
+    assert ship == ["protective packaging materials and pallet"]
     assert "reinforcing" in unknown[0]
     lines = cs.consumable_lines(cons, "KWellnessFSDU")
     assert [l["part_number"] for l in lines] == [
-        "KWELLNESSFSDU-NV01", "KWELLNESSFSDU-NV02", "KWELLNESSFSDU-NV03"]
+        "KWELLNESSFSDU-NV01", "KWELLNESSFSDU-NV02"]
     for line in lines:
         assert line["is_bought_in"] is True and line["concept_kind"] == "bought_in"
         assert line["quantity"] == 1

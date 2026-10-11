@@ -113,9 +113,14 @@ construction, quantities, and parts the images cannot show.
   what the brief leaves open.
 - If the brief offers alternative constructions ("A … or B …"), cost ONLY the FIRST one and
   list the others in "options_not_costed".
-- Add to every part "from_brief": a list of which of "size", "material", "quantity" the brief
-  states or directly fixes for that part (empty list if none), and say "from the brief" in
-  why_size / quantity_basis for those.
+- Add to every part "from_brief": a list of which of "size", "material", "quantity",
+  "welding" the brief states or directly fixes for that part (empty list if none), and say
+  "from the brief" in why_size / quantity_basis for those.
+- A JOINT THE BRIEF STATES BELONGS TO THE PARTS IT NAMES. Where the brief says a particular
+  part or joint IS welded, include "welding" in THAT part's operations and add "welding" to
+  its "from_brief". Where the brief says something is NOT welded, or costs a riveted or
+  mechanical alternative, do not — and never spread a weld the brief states for one joint
+  onto other parts: their joints stay your own sighting.
 - A figure the brief gives as a price is ignored: you still never state a price.
 Add "options_not_costed": ["<each alternative the brief offered that you did not cost>"] to
 the top level of the JSON.
@@ -276,6 +281,13 @@ class ConceptUnavailable(RuntimeError):
 # ── the call, isolated exactly as _bom_vision_reader isolates its own ───────────────
 
 BRIEF_PAGE_STEM = "ENQUIRY_BRIEF"
+
+# THE BRIEF SECTION'S OWN VERSION (D-469), hashed into the key only where a brief is sent, so
+# every brief-less read keeps its key; its fingerprint is pinned like the other two prompts'.
+#   b1  the original stated-facts section (D-360)
+#   b2  a joint the brief states belongs to the parts it names, exclusions respected (D-469)
+BRIEF_PROMPT_VERSION = "b2"
+_BRIEF_SECTION_FINGERPRINT = "01a25f165f0a"
 
 # NO IMAGES, ONLY WORDS (D-401). The make-list prompt is written for renders; a brief typed
 # on a site or the portal with nothing attached has no picture to sight from, and the model
@@ -474,59 +486,48 @@ def stand_down_reader_rows(summary: Any, declared_sight: bool,
             f"concept_superseded_parts, never costed beside it)")
 
 
-_WELD_WORDS = re.compile(r"(?i)\bweld")
+def brief_stated_welds(parts: List[Any]) -> List[str]:
+    """The parts whose weld the model attributed to the brief (D-467/D-469) — for the log.
 
-
-def apply_brief_stated_welds(parts: List[Any], brief: str) -> List[str]:
-    """A weld the enquiry brief states is a stated weld on a concept read (D-467).
-
-    On a drawing pack the drawings outrank a typed brief, and the compiler's evidenceless-
-    leaf rule (D-385/D-387) rightly strips welds no sheet supports. The K-Wellness book
-    applied that rule to a pack with NO sheets: the brief said "hooked brackets WELDED to
-    the tray", the model sighted the welds, the compiler stripped every one for want of a
-    weld symbol no page could ever carry, and then asked five questions the brief had
-    already answered. Where the brief's own words state welding, every sighted part whose
-    inferred operations include a weld carries the brief as that weld's source — evidence,
-    exactly as a sheet's own note is on a sheet read (D-418). Returns the parts stamped."""
-    if not brief or not _WELD_WORDS.search(str(brief)):
-        return []
-    stamped: List[str] = []
-    for p in parts or []:
-        if not isinstance(p, dict):
-            continue
-        ops = {str(o or "").strip().lower() for o in (p.get("inferred_operations") or [])}
-        welds = ops & {"welding", "spot_welding"}
-        if not welds:
-            continue
-        srcs = p.setdefault("operation_sources", {})
-        for op in sorted(welds):
-            srcs[op] = BRIEF_SOURCE
-        p["weld_stated_by_brief"] = True
-        p.setdefault("review_flags", []).append(
-            "CONCEPT: welded per the enquiry brief — the brief states welding, so the "
-            "sighted weld is charged as stated, not stripped as an inference (the riveted "
-            "or mechanical alternative, where the brief offered one, is not costed)")
-        stamped.append(str(p.get("part_number") or ""))
-    return stamped
+    The stamp itself is made in parts_from_concept from the model's own per-part
+    "from_brief" attribution, never from a pack-level word: "brackets welded to the tray"
+    must not validate a weld on the posts, and "riveted rather than welded" or "no welding"
+    must validate none at all. The model reads the brief under instructions that say
+    exactly that, and this helper only reports what it marked."""
+    return [str(p.get("part_number") or "") for p in (parts or [])
+            if isinstance(p, dict) and p.get("weld_stated_by_brief")]
 
 
 def split_not_visible(items: List[Any]) -> tuple:
-    """(consumables, design unknowns) — what a real unit needs that the images cannot show.
+    """(consumables, shipment scope, design unknowns) — what the images cannot show.
 
-    A consumable (fixings, adhesives, packing materials) is NAMED by the config vocabulary
-    CONCEPT_CONSUMABLE_WORDS and can carry a justified provisional allowance; a design
-    unknown ("internal reinforcement not shown") is not a purchasable thing and is asked,
-    never priced at a guess (D-468)."""
-    words = [str(w).strip().lower() for w in
-             (_vocab("CONCEPT_CONSUMABLE_WORDS", []) or []) if str(w).strip()]
+    A consumable (fixings, adhesives) is NAMED by the config vocabulary
+    CONCEPT_CONSUMABLE_WORDS and carries a justified provisional allowance per unit. An
+    item in SHIPMENT scope (pallets, protective packaging — CONCEPT_SHIPMENT_WORDS, checked
+    FIRST) is already carried by the commercial PACKAGING and DELIVERY lines every run
+    prices, and is never duplicated as a parts line (D-469): each requirement is priced
+    once, and a pallet is per order, not one per fixture. A design unknown ("internal
+    reinforcement not shown") is not a purchasable thing and is asked, never priced at a
+    guess (D-468)."""
+    cons_words = [str(w).strip().lower() for w in
+                  (_vocab("CONCEPT_CONSUMABLE_WORDS", []) or []) if str(w).strip()]
+    ship_words = [str(w).strip().lower() for w in
+                  (_vocab("CONCEPT_SHIPMENT_WORDS", []) or []) if str(w).strip()]
     cons: List[str] = []
+    ship: List[str] = []
     unknown: List[str] = []
     for it in items or []:
         said = str(it or "").strip()
         if not said:
             continue
-        (cons if any(w in said.lower() for w in words) else unknown).append(said)
-    return cons, unknown
+        low = said.lower()
+        if any(w in low for w in ship_words):
+            ship.append(said)
+        elif any(w in low for w in cons_words):
+            cons.append(said)
+        else:
+            unknown.append(said)
+    return cons, ship, unknown
 
 
 def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
@@ -734,6 +735,8 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
         # A CHANGED BRIEF IS A NEW QUESTION. Only a run with a brief hashes it, so every
         # brief-less read keeps the key it already has in the cache.
         h.update(b"\x00brief\x00")
+        h.update(BRIEF_PROMPT_VERSION.encode("utf-8"))
+        h.update(b"\x00")
         h.update(brief.encode("utf-8"))
     if doc_words and not sheet:
         # A PACK WITH PRINTED WORDS IS A NEW QUESTION (D-462), and only a read that sends
@@ -2007,6 +2010,19 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                     field="banded edges")
         if seen_ops:
             record["inferred_operations"] = seen_ops
+            # A WELD THE BRIEF STATES FOR THIS PART IS THIS PART'S STATED WELD (D-467,
+            # narrowed by D-469 to the model's own attribution): the brief names the joint,
+            # the model marks the part, and only that part's weld carries the brief as its
+            # source. A pack-level word never becomes part-level evidence.
+            if _from_brief(sighted, "welding") and ({"welding", "spot_welding"} & set(seen_ops)):
+                _srcs = record.setdefault("operation_sources", {})
+                for _wop in ("welding", "spot_welding"):
+                    if _wop in seen_ops:
+                        _srcs[_wop] = BRIEF_SOURCE
+                record["weld_stated_by_brief"] = True
+                record["review_flags"].append(
+                    "CONCEPT: welded per the enquiry brief — the brief states this part's "
+                    "joint, so the weld is charged as stated, not stripped as an inference")
             # No file key: the answers file states what a drawing says, and it takes no
             # operations. A route sighted from a picture is turned off through
             # `estimator_decisions.operations_off`, which is a DECISION, not a reading.
