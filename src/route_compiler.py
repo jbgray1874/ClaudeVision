@@ -6146,7 +6146,18 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
     leaf has no required weld at all and the dressing rests on an inference alone.
 
     A leaf with no parent keeps D-258's rule (an inference is priced and asked): there is no
-    assembly to carry the joint. A weld stated by the part's own sheet is never touched here."""
+    assembly to carry the joint. A weld stated by the part's own sheet is never touched here.
+
+    A CONCEPT PART keeps D-258's rule too (D-472). This withhold holds a leaf's weld to the
+    standard its own pack sets — a drawing pack gives every part a sheet, and a weld that
+    sheet does not state is contradicted by the pack's own evidence. A concept part has no
+    sheet at all: the model's sighting is the only reading the job has, and the estimate is
+    a concept budget whose every sighted operation is a priced provisional operation. James
+    Gray, 11 Oct 2026: "if the llm passes us back welds, we price welds" — 'no individual
+    part drawing' must not silently turn a concept weld into £0. The weld stays priced with
+    its concept provenance on the record (the assumptions list carries 'the work sighted on
+    the render'), and one located joint is still one charge (concept_scan's
+    price_the_joint_once dedupes the pair before the compiler ever sees it)."""
     kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
     parents = graph.get("parents") or {}
     withheld: List[str] = []
@@ -6178,6 +6189,11 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
             continue
         _tid = str(_d.target_id or "")
         if not _leaf_under_assembly(_tid):
+            continue
+        if _graph_record(graph, _tid).get("concept"):
+            # A concept part has no sheet to give evidence, so "its own sheet gives no
+            # weld" can never be true of it — the sighting is priced and asked (D-472).
+            weld_state[_tid] = "kept"
             continue
         _ev = _own_evidence(_d, _tid)
         if _ev:

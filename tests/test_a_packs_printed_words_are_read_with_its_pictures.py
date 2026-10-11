@@ -345,3 +345,91 @@ def test_a_stated_joint_always_receives_one_traceable_charge():
     unit3 = {"part_number": "Y-CPT00"}
     assert cs.ensure_stated_joint_charged(parts, unit3, "bolted, no welding") is None
     assert "brief_joint_allowance" not in unit3
+
+
+def test_a_sighted_concept_weld_is_priced_never_withheld_to_nothing():
+    """D-472: 'no individual part drawing' must not silently turn a concept weld into £0.
+    The evidenceless-leaf withhold holds a leaf to the standard its own pack sets — a
+    drawing pack gives every part a sheet. A concept part has no sheet at all: the model's
+    sighting is the only reading the job has, and it is priced and asked (D-258), with the
+    joint still charged once. James Gray, 11 Oct 2026: 'if the llm passes us back welds,
+    we price welds'."""
+    from types import SimpleNamespace as NS
+    import route_compiler as rc
+
+    def _d(target, op):
+        return NS(target_id=target, operation=op, scope="part", status=rc.REQUIRED,
+                  source="inference", reason="", field_provenance={})
+
+    graph = {"nodes": [NS(part_number="K-CPT00", kind="assembly"),
+                       NS(part_number="K-CPT01", kind="leaf"),
+                       NS(part_number="D-01M", kind="leaf")],
+             "parents": {"K-CPT01": {"K-CPT00"}, "D-01M": {"K-CPT00"}},
+             "records": {"K-CPT01": {"concept": True}, "D-01M": {}}}
+    ds = [_d("K-CPT01", "welding"), _d("K-CPT01", "dress_welds"),
+          _d("D-01M", "welding")]
+    withheld = rc._withhold_evidenceless_leaf_welds(ds, graph, [])
+    # The concept part's weld and its dressing stand priced; the drawing-pack leaf,
+    # whose own sheet gives no weld, is withheld exactly as before (D-385/D-387).
+    assert ds[0].status == rc.REQUIRED and ds[1].status == rc.REQUIRED
+    assert ds[2].status == rc.NOT_APPLICABLE
+    assert withheld == ["D-01M"]
+
+
+def test_a_located_joint_dedupes_the_sighted_counterpart_once():
+    """D-472 widens D-471's one-joint-one-charge to SIGHTED welds: now that a concept weld
+    prices, a 'welded to' pair the read placed on both pieces must collapse to one charge —
+    and stripping the attribution alone is not enough, the operation itself must go, or the
+    priced inference stays behind."""
+    # The located counterpart's sighted weld is the same joint: stripped, op and all.
+    a = {"part_number": "A", "description": "Hooked bracket welded to the shelf tray",
+         "inferred_operations": ["welding", "folding"], "quantity": 30}
+    b = {"part_number": "B", "description": "Front shelf tray",
+         "inferred_operations": ["welding", "folding"],
+         "operation_sources": {"welding": "vision_concept"}}
+    assert cs.price_the_joint_once([a, b]) == ["B"]
+    assert b["inferred_operations"] == ["folding"]
+    assert "welding" not in (b.get("operation_sources") or {})
+    assert any("priced once" in f for f in b["review_flags"])
+    assert a["inferred_operations"] == ["welding", "folding"]   # the attaching part keeps it
+
+    # A counterpart whose own words locate a DIFFERENT joint keeps its weld: two joints,
+    # two charges.
+    c = {"part_number": "C", "description": "Bracket welded to the tray",
+         "inferred_operations": ["welding"]}
+    d = {"part_number": "D", "description": "Tray welded to the central spine",
+         "inferred_operations": ["welding"]}
+    assert cs.price_the_joint_once([c, d]) == []
+    assert d["inferred_operations"] == ["welding"]
+
+    # A mutual pair is one joint: one side keeps it, the other is stripped.
+    e = {"part_number": "E", "description": "Bracket welded to the tray",
+         "inferred_operations": ["welding"]}
+    f = {"part_number": "F", "description": "Tray welded to the bracket",
+         "inferred_operations": ["welding"]}
+    assert cs.price_the_joint_once([e, f]) == ["F"]
+    assert e["inferred_operations"] == ["welding"]
+    assert f["inferred_operations"] == []
+
+    # The brief-attributed duplicate loses the operation too — D-471 popped the source and
+    # left 'welding' inferred, which the withhold then zeroed; with concept welds priced
+    # (D-472) the leftover would have charged the joint twice.
+    g = {"part_number": "G", "description": "Bracket welded to the tray",
+         "weld_stated_by_brief": True, "operation_sources": {"welding": "enquiry_brief"},
+         "inferred_operations": ["welding"]}
+    h = {"part_number": "H", "description": "Side shelf tray",
+         "weld_stated_by_brief": True, "operation_sources": {"welding": "enquiry_brief"},
+         "inferred_operations": ["welding", "forming"]}
+    assert cs.price_the_joint_once([g, h]) == ["H"]
+    assert not h.get("weld_stated_by_brief")
+    assert h["inferred_operations"] == ["forming"]
+
+    # And D-471's unit fallback stands down where a sighted weld already charges the job:
+    # before D-472 a sighting was withheld to nothing, which is why the fallback existed;
+    # now it prices, and the allowance on top would charge the joint twice.
+    unit = {"part_number": "Z-CPT00"}
+    sighted = [{"part_number": "S", "description": "Slotted corner post",
+                "inferred_operations": ["welding"], "quantity": 6}]
+    assert cs.ensure_stated_joint_charged(
+        sighted, unit, "posts WELDED to the base") is None
+    assert "brief_joint_allowance" not in unit and not unit.get("weld_stated_by_note")

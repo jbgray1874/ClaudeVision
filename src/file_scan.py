@@ -4901,6 +4901,14 @@ def _finalize_scan_summary(
                 except Exception as _sw_exc:                       # noqa: BLE001
                     print(f"   [concept] the sheet's weld note could not be read "
                           f"({type(_sw_exc).__name__}: {_sw_exc})", flush=True)
+            # ONE LOCATED JOINT IS ONE CHARGE whatever stated it (D-471, widened by D-472):
+            # a sighted concept weld is priced now, so a "welded to" pair the read placed on
+            # both pieces must collapse to one charge with or without a brief.
+            _once = concept_scan.price_the_joint_once(_sighted)
+            if _once:
+                print(f"   [concept] the located joint is priced once, on the attaching "
+                      f"part — the duplicate weld attribution was removed from: "
+                      f"{', '.join(_once)}", flush=True)
             if _brief:
                 # A STATED JOINT ALWAYS RECEIVES ONE TRACEABLE CHARGE (D-471): the model's
                 # own placements stand, deduplicated to one charge per joint; where none
