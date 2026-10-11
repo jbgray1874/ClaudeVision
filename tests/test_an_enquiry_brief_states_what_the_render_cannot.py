@@ -197,3 +197,38 @@ def test_the_stop_line_names_the_machine_and_port_to_restart():
 def test_a_brief_saved_with_a_byte_order_mark_reads_clean(tmp_path):
     (tmp_path / cs.BRIEF_FILENAME).write_bytes("﻿".encode("utf-8") + BRIEF.encode("utf-8"))
     assert cs.read_brief(tmp_path) == BRIEF
+
+
+# ── D-473 ──────────────────────────────────────────────────────────────────────────────
+
+def test_an_empty_brief_box_is_asked_out_loud_before_the_run():
+    """D-473: the 11 Oct K-Wellness 20:07 run went out with the brief box empty after a page
+    reload — the service removed the filed brief (D-360, correctly) and the model priced the
+    pack alone, borrowing the excluded reference product's height, with one quiet log line
+    as the only trace. The page asks BEFORE the run starts; an empty box is a decision."""
+    page = (ROOT / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    assert "Run without a brief?" in page
+    i = page.index("Run without a brief?")
+    # In the LLM run's own click handler, before the body that sends the brief.
+    assert page.index('$("bRunLLM").onclick') < i
+    assert i < page.index('enquiry_brief: ($("enquiryBrief").value')
+    assert "confirm(" in page[i - 600:i]
+    assert "removes the brief an earlier run filed" in page[i - 600:i + 200]
+
+
+def test_a_read_with_no_brief_says_so_on_the_book():
+    """The saved record already carried brief_used=false; now the book's own confirm list
+    says it too, on every surface, instead of only a log line nobody re-reads."""
+    flag = cs.missing_brief_flag()
+    assert "NO ENQUIRY BRIEF" in flag
+    assert "Enquiry brief box" in flag
+    assert "removes the brief an earlier run filed" in flag
+    assert "client document" not in flag
+    assert "client document" in cs.missing_brief_flag(True)
+    # Wired where the brief is resolved: the absent case joins review_flags beside the
+    # present case's ENQUIRY BRIEF USED flag.
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    i = src.index("missing_brief_flag")
+    assert 'review_flags' in src[i:i + 300]
+    assert "ENQUIRY BRIEF USED" in src[i - 1500:i]

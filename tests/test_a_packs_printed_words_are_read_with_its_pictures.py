@@ -433,3 +433,106 @@ def test_a_located_joint_dedupes_the_sighted_counterpart_once():
     assert cs.ensure_stated_joint_charged(
         sighted, unit, "posts WELDED to the base") is None
     assert "brief_joint_allowance" not in unit and not unit.get("weld_stated_by_note")
+
+
+# ── D-474: a standards manual states requirements, never parts ───────────────────────────
+
+def test_a_standards_manual_is_declared_pinned_and_a_new_question(tmp_path):
+    """Boots' 101-page in-store equipment manual, 11 Oct 2026: pages 84-86 are explicitly
+    examples for reference. Run as the product, the read could cost those examples or borrow
+    their dimensions, exactly as the 20:07 book borrowed the SOTF height."""
+    # The declaration is an explicit marker the portal writes, never a guess.
+    assert cs.reference_documents_declared([tmp_path, None]) == []
+    (tmp_path / cs.REFERENCE_DOCUMENTS_FILENAME).write_text(
+        '{"files": ["BootsInstoreEquipment.pdf"]}', encoding="utf-8")
+    assert cs.reference_documents_declared([tmp_path]) == ["BootsInstoreEquipment.pdf"]
+    # The section is pinned like every other prompt, and says the one thing that matters.
+    got = hashlib.sha256(cs._STANDARDS_SECTION.encode()).hexdigest()[:12]
+    assert got == cs._STANDARDS_FINGERPRINT, (
+        f"the standards section changed. Bump STANDARDS_PROMPT_VERSION (now "
+        f"{cs.STANDARDS_PROMPT_VERSION!r}) and set _STANDARDS_FINGERPRINT = {got!r}")
+    assert "EXAMPLES FOR REFERENCE, NEVER PARTS OF THIS PRODUCT" in cs._STANDARDS_SECTION
+    assert "applicable_requirements" in cs._STANDARDS_SECTION
+    # It joins the prompt only when standards words are sent; the product's words read
+    # before it and the brief still reads after and over it. (The probes are deliberately
+    # unlike any section's own prose — "the brief" appears inside the doc-text section.)
+    text = cs.concept_prompt_text([b"png"], "BRIEFPAYLOAD600X600",
+                                  doc_words="PRODUCTWORDSPAYLOAD",
+                                  standards_words="STANDARDSWORDSPAYLOAD")
+    assert (text.index("PRODUCTWORDSPAYLOAD") < text.index("STANDARDSWORDSPAYLOAD")
+            < text.index("BRIEFPAYLOAD600X600"))
+    assert "SUPPORTING STANDARDS" not in cs.concept_prompt_text([b"png"], "a brief")
+    # A declared standards document is a new question; every run without one keeps its key.
+    assert cs._cache_key([b"png"], "m", standards_words="x") != cs._cache_key([b"png"], "m")
+    assert cs._cache_key([b"png"], "m", standards_words="") == cs._cache_key([b"png"], "m")
+
+
+def test_the_manual_rides_as_words_only_and_its_pages_are_never_rendered(tmp_path, monkeypatch):
+    import pymupdf
+    product = tmp_path / "NewFixture.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=960, height=540).insert_text((40, 60), "Fixture of folded sheet steel")
+    doc.save(str(product)); doc.close()
+    manual = tmp_path / "BootsInstoreEquipment.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=960, height=540).insert_text(
+        (40, 60), "All fixtures require stability and loading tests before rollout")
+    doc.save(str(manual)); doc.close()
+
+    import _bom_vision_reader as pathB
+    monkeypatch.setattr(pathB, "count_pages", lambda p: 1)
+    monkeypatch.setattr(pathB, "render_page_to_png", lambda p, i: f"png:{Path(p).name}".encode())
+    monkeypatch.setattr(cs, "_cache_dir", lambda: tmp_path / "cache")
+    sent = {}
+
+    def fake_call(pngs, model, brief="", **kw):
+        sent.update(kw, prompt=cs.concept_prompt_text(pngs, brief, **kw), pngs=list(pngs))
+        return '{"parts": []}'
+
+    monkeypatch.setattr(cs, "_call_vision_llm", fake_call)
+    read = cs.read_concept([str(product)], reference_pack=[str(manual)])
+    # Only the product's page went as an image; the manual went as words, under its section.
+    assert sent["pngs"] == [b"png:NewFixture.pdf"]
+    assert "stability and loading tests" in sent.get("standards_words", "")
+    assert "SUPPORTING STANDARDS" in sent["prompt"]
+    assert read["reference_documents"] == ["BootsInstoreEquipment.pdf"]
+    assert read["standards_text_chars"] > 0
+
+
+def test_an_applicable_requirement_is_a_named_allowance_never_a_part():
+    reqs = cs.standards_requirements({"applicable_requirements": [
+        {"name": "Stability and loading tests", "requirement": "applicable fixtures tested",
+         "scope": "per_order", "where": "manual, page 43"},
+        {"name": "Component QR labels", "scope": "per_unit"},
+        {"name": "Odd scope lands per-order", "scope": "weekly"},
+        {"requirement": "nameless is dropped"},
+        "not a dict"]})
+    assert [r["name"] for r in reqs] == ["Stability and loading tests",
+                                         "Component QR labels", "Odd scope lands per-order"]
+    assert reqs[1]["scope"] == "per_unit" and reqs[2]["scope"] == "per_order"
+    flags = cs.requirement_flags(reqs)
+    assert len(flags) == 3 and all(f.startswith("STANDARDS: ") for f in flags)
+    assert "per-order project cost" in flags[0] and "manual, page 43" in flags[0]
+    assert "per-unit production requirement" in flags[1]
+    assert cs.requirement_flags([]) == []
+    assert cs.standards_requirements({}) == []
+
+
+def test_the_portal_declares_the_standards_and_an_all_reference_run_is_refused():
+    root = Path(__file__).resolve().parents[1]
+    routes = (root / "sdi-intelligence-backend" / "estimate_routes.py").read_text(
+        encoding="utf-8")
+    assert "reference_documents: Optional[List[str]] = None" in routes
+    assert '"reference_documents": list(_ref_docs),' in routes
+    assert "REFERENCE_DOCUMENTS.json" in routes
+    assert "there is no product to cost" in routes
+    page = (root / "sdi-intelligence-backend" / "sdi-estimating-intelligence.html").read_text(
+        encoding="utf-8")
+    assert 'id="refDocsBox"' in page
+    assert "reference_documents: refDocs.size" in page
+    assert "did not acknowledge the reference/standards documents" in page
+    assert "there is no product to" in page
+    src = (root / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "reference_documents_declared" in src
+    assert "reference_pack=_ref_pack" in src
+    assert "standards_requirements" in src
