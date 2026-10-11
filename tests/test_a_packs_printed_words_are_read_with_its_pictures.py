@@ -144,18 +144,37 @@ def test_every_text_block_names_its_file_and_page(tmp_path):
     assert "[tech_brief.pdf, page 1]" not in words
 
 
-def test_reader_rows_stand_down_only_on_a_declared_sight_run():
+def test_reader_rows_stand_down_only_on_a_declared_run_with_a_real_replacement():
     rows = [{"part_number": "HEADING-MISREAD"}, {"part_number": "TIMELINE-ROW"}]
     summary = {"manufacturing_writeup": {"parts": list(rows)}}
-    note = cs.stand_down_reader_rows(summary, declared_sight=True)
+    note = cs.stand_down_reader_rows(summary, declared_sight=True, replacement_parts=7)
     assert note and "2 row(s)" in note and "stand down" in note
     assert summary["manufacturing_writeup"]["parts"] == []
     assert summary["concept_superseded_parts"] == rows
 
+    # Not declared: the readers' rows are real drawings read from a PDF — kept (D-464).
     kept = {"manufacturing_writeup": {"parts": list(rows)}}
-    assert cs.stand_down_reader_rows(kept, declared_sight=False) is None
+    assert cs.stand_down_reader_rows(kept, declared_sight=False, replacement_parts=7) is None
     assert kept["manufacturing_writeup"]["parts"] == rows and "concept_superseded_parts" not in kept
 
+    # A failed read never mints an empty book: no replacement, nothing stands down (D-464).
+    failed = {"manufacturing_writeup": {"parts": list(rows)}}
+    assert cs.stand_down_reader_rows(failed, declared_sight=True, replacement_parts=0) is None
+    assert failed["manufacturing_writeup"]["parts"] == rows
+    assert "concept_superseded_parts" not in failed
+
     empty = {"manufacturing_writeup": {"parts": []}}
-    assert cs.stand_down_reader_rows(empty, declared_sight=True) is None
+    assert cs.stand_down_reader_rows(empty, declared_sight=True, replacement_parts=7) is None
     assert "concept_superseded_parts" not in empty
+
+
+def test_client_document_mode_is_the_portals_marker_never_a_guess(tmp_path):
+    assert cs.document_mode_requested([tmp_path]) is False
+    (tmp_path / cs.DOCUMENT_MODE_FILENAME).write_text(
+        '{"mode": "client_document"}', encoding="utf-8")
+    assert cs.document_mode_requested([tmp_path]) is True
+    assert cs.document_mode_requested([None, "", tmp_path]) is True
+    (tmp_path / cs.DOCUMENT_MODE_FILENAME).write_text('{"mode": "drawings"}', encoding="utf-8")
+    assert cs.document_mode_requested([tmp_path]) is False
+    (tmp_path / cs.DOCUMENT_MODE_FILENAME).write_text("not json", encoding="utf-8")
+    assert cs.document_mode_requested([tmp_path]) is False

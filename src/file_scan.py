@@ -4571,6 +4571,15 @@ def _finalize_scan_summary(
     # parts never pays for this, and a full engine run never sights what it can measure.
     _llm_only_run = os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
     _is_render_pack = summary.get("source_format") == "image_render"
+    # CLIENT-DOCUMENT MODE IS DECLARED, NEVER GUESSED (D-464): the portal stages the marker
+    # beside the pack, and only an LLM-only run honours it. An ordinary LLM run of drawings
+    # supplied as PDFs keeps the readers' parts — their dimensions are real and the
+    # measured-CAD guard cannot protect a PDF read.
+    import concept_scan as _cs_mode
+    _client_document = _llm_only_run and _cs_mode.document_mode_requested(
+        [job_folder, summary.get("job_folder")]
+        + [Path(str(_sp)).parent for _sp in (summary.get("staged_inputs") or [])]
+        + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
     _no_parts = not summary["manufacturing_writeup"]["parts"]
     if _is_render_pack and not _llm_only_run:
         # A RENDER PACK ON AN ENGINE RUN IS AN EMPTY BOOK WAITING TO BE MISREAD. The four
@@ -4675,11 +4684,11 @@ def _finalize_scan_summary(
     # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
     # a deliberate refusal is never reported as a concept read that crashed.
     _concept_refused = None
-    # A DECLARED LLM-ONLY RUN IS A SIGHT RUN WHATEVER THE READERS PARSED (D-463): the method
-    # is the estimator's explicit choice on the portal, so a document whose pages were minted
-    # as BOM rows still goes to the concept read, and those rows stand down below. The
-    # measured-CAD guard right here still refuses a pack with real geometry, declared or not.
-    if _sight_run and (_no_parts or _is_render_pack or _llm_only_run):
+    # A DECLARED CLIENT-DOCUMENT RUN IS A SIGHT RUN WHATEVER THE READERS PARSED (D-463,
+    # narrowed by D-464 to the portal's explicit marker): a tech brief whose pages were
+    # minted as BOM rows still goes to the concept read, and those rows stand down below.
+    # The measured-CAD guard right here still refuses a pack with real geometry.
+    if _sight_run and (_no_parts or _is_render_pack or _client_document):
         try:
             import concept_scan as _cs_probe
             # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
@@ -4718,7 +4727,7 @@ def _finalize_scan_summary(
         _brief_unused = ""
     if _brief_unused and (_concept_refused or not (_sight_run and (_no_parts
                                                                   or _is_render_pack
-                                                                  or _llm_only_run))):
+                                                                  or _client_document))):
         summary.setdefault("review_flags", []).append(
             "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
@@ -4728,7 +4737,7 @@ def _finalize_scan_summary(
     _fallback_sheets: List[str] = []
     _fallback_pick: Optional[Dict[str, Any]] = None
     _fallback_ask = ""
-    if _sight_run and (_no_parts or _is_render_pack or _llm_only_run) and not _concept_refused and _design_intent_pages:
+    if _sight_run and (_no_parts or _is_render_pack or _client_document) and not _concept_refused and _design_intent_pages:
         try:
             import model_takeoff as _mt_sheets
             _cands = ([str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4760,7 +4769,7 @@ def _finalize_scan_summary(
         summary.setdefault("review_flags", []).append(
             f"CONCEPT READ NOT RUN: {_fallback_ask}. One design is read per book; say which.")
         print(f"   [concept] not run — {_fallback_ask}", flush=True)
-    elif _sight_run and (_no_parts or _is_render_pack or _llm_only_run):
+    elif _sight_run and (_no_parts or _is_render_pack or _client_document):
         try:
             import concept_scan
             _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4893,7 +4902,8 @@ def _finalize_scan_summary(
                                            input_documents=[Path(p).name for p in _pack],
                                            brief_used=bool(_brief),
                                            document_text_chars=int(
-                                               _read.get("document_text_chars") or 0))
+                                               _read.get("document_text_chars") or 0),
+                                           client_document=bool(_client_document))
             if _sheet_read:
                 summary["concept_read"].update(
                     sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
@@ -4917,10 +4927,21 @@ def _finalize_scan_summary(
             # together. The honest fix is a part: an assembly parent whose children are
             # the sighted panels, which the existing board-assembly rule then fits and
             # times off the shop's own measured rate. See unit_assembly_part.
-            _stood_down = concept_scan.stand_down_reader_rows(summary, _llm_only_run)
+            _replacement = len(_sighted) + (1 if _unit else 0)
+            _stood_down = concept_scan.stand_down_reader_rows(
+                summary, _client_document, replacement_parts=_replacement)
             if _stood_down:
                 summary.setdefault("review_flags", []).append(_stood_down)
                 print(f"   [concept] {_stood_down}", flush=True)
+            elif (_client_document and not _replacement
+                  and summary["manufacturing_writeup"]["parts"]):
+                # A FAILED READ NEVER MINTS AN EMPTY BOOK (D-464): the earlier rows stand,
+                # said out loud, instead of being traded for nothing.
+                _kept = ("CLIENT DOCUMENT READ RETURNED NO PARTS — the readers' "
+                         f"{len(summary['manufacturing_writeup']['parts'])} row(s) are kept "
+                         "and the read must be repaired before this book is trusted")
+                summary.setdefault("review_flags", []).append(_kept)
+                print(f"   [concept] {_kept}", flush=True)
             if _unit:
                 summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)

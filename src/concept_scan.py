@@ -80,6 +80,30 @@ BRIEF_SOURCE = "enquiry_brief"
 BRIEF_FILENAME = "ENQUIRY_BRIEF.txt"
 BRIEF_MAX_CHARS = 4000
 
+# THE PORTAL SAYS CLIENT-DOCUMENT, OR NOBODY DOES (D-464). A tech brief run as a declared
+# client document is sighted whatever the readers parsed; an ordinary LLM run of production
+# drawings supplied as PDFs is not — the readers' dimensions and parts are real, and the
+# measured-CAD guard cannot protect them (it knows files and flats, not PDF reads). So the
+# mode is an explicit staged marker the portal writes beside the pack, never a guess from a
+# customer's name or a filename. (The marker and its shape come from the runner PC's own
+# parallel cut of this rule.)
+DOCUMENT_MODE_FILENAME = "CONCEPT_DOCUMENT.json"
+
+
+def document_mode_requested(folders: List[Any]) -> bool:
+    """Explicit portal client-document mode, read from the staged marker — or False."""
+    for folder in folders:
+        if not folder:
+            continue
+        try:
+            data = json.loads((Path(str(folder)) / DOCUMENT_MODE_FILENAME)
+                              .read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("mode") == "client_document":
+                return True
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+    return False
+
 _BRIEF_SECTION = """
 
 ENQUIRY BRIEF — written by SDI estimating for THIS job. These are STATED FACTS and they
@@ -420,16 +444,19 @@ def is_brief_page(path: Any) -> bool:
     return BRIEF_PAGE_STEM in Path(str(path or "")).stem.upper()
 
 
-def stand_down_reader_rows(summary: Any, declared_sight: bool) -> Optional[str]:
-    """On a DECLARED sight run, rows the readers minted from a non-drawing document stand
+def stand_down_reader_rows(summary: Any, declared_sight: bool,
+                           replacement_parts: int = 0) -> Optional[str]:
+    """On a DECLARED client-document run, rows the readers minted from the document stand
     down for the sighted bill — moved to `concept_superseded_parts` for audit, never costed
     beside it as a second fixture (D-463). Returns the note to flag and print, or None.
 
-    Only a declared run (the estimator chose the LLM method on the portal) may do this, and
-    it runs only after `why_not_sightable` has already passed: a pack with measured CAD or a
-    measured flat never reaches here, so nothing measured is ever stood down.
+    Only a declared run (the portal staged the client-document marker) may do this; it runs
+    only after `why_not_sightable` has already passed, so nothing measured is ever stood
+    down; and it refuses to trade a bill for nothing (D-464): a read that produced no
+    replacement parts leaves the earlier rows standing for the caller to warn about —
+    an empty book is never silently minted from a failed read.
     """
-    if not declared_sight:
+    if not declared_sight or replacement_parts <= 0:
         return None
     writeup = summary.get("manufacturing_writeup") if isinstance(summary, dict) else None
     rows = writeup.get("parts") if isinstance(writeup, dict) else None
