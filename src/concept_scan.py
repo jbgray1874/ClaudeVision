@@ -370,6 +370,41 @@ pad or trim lines to hit a figure: every line must be drawn on the sheet and siz
 _SHEET_PROMPT_FINGERPRINT = "72a1d6c427c9"
 
 
+# ── A PACK'S PRINTED WORDS ARE READ WITH ITS PICTURES (D-462) ────────────────────────────
+#
+# A customer's technical brief — a presentation, not a drawing sheet and not a bare render —
+# states the product in its words: the footprint, the construction ("folded sheet steel,
+# powder coated"), the shelf counts, the quantity the price is wanted at. A render read sent
+# the pictures alone, so every one of those stated facts was left to be guessed off the
+# images, sixteen pages of them.
+#
+# So every concept read extracts the pack's own text layer (sheet_text already does, and
+# already skips the staged brief's own page); where the pages are NOT drawing sheets — those
+# have their own, stricter channel (D-415) — and the text is non-empty, the words go to the
+# model under this section. Only a read that sends words hashes them, so every cache key a
+# wordless pack already holds still stands, exactly as the brief and the sheet read keep
+# theirs.
+#   d1  first cut (D-462)
+DOC_TEXT_PROMPT_VERSION = "d1"
+
+_DOC_TEXT_SECTION = """
+
+WORDS PRINTED ON THE PAGES, extracted verbatim from the document's own text layer; their order
+is not the pages' layout. They are the customer's statement of the product: a dimension,
+material, finish, construction, count or quantity stated in them is a FACT that outranks what
+you infer from the pictures — size, make and count every part from the words first, and say
+"stated in the document" in why_size or quantity_basis where you did. Prose about process
+(testing, timelines, submissions, warranties, contacts) is context, never a part. Where an
+ENQUIRY BRIEF is also given, the brief outranks these words.
+<<<
+{text}
+>>>"""
+
+# The document-words section's own hash, pinned beside DOC_TEXT_PROMPT_VERSION exactly as the
+# other two prompts pin theirs.
+_DOC_TEXT_FINGERPRINT = "43f735a49a7c"
+
+
 def is_brief_page(path: Any) -> bool:
     """Is this document the staged brief's own page, and not a drawing or a render?"""
     return BRIEF_PAGE_STEM in Path(str(path or "")).stem.upper()
@@ -406,17 +441,22 @@ def _envelope_words(envelope: Any) -> str:
 
 
 def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool = False,
-                        sheet_words: str = "", recheck: str = "", envelope: Any = None,
-                        envelope_of: str = "") -> str:
+                        sheet_words: str = "", doc_words: str = "", recheck: str = "",
+                        envelope: Any = None, envelope_of: str = "") -> str:
     """The words put to the model: the make-list prompt, the text-only preamble where there
     is no image, the sheet preamble and the sheet's own text where the pages are drawing
-    sheets, the brief section where there is a brief, and what broke where it is re-asked."""
+    sheets, the document's own words where they are not (D-462), the brief section where
+    there is a brief, and what broke where it is re-asked."""
     _ops = "\n".join(f"  {name} — {what}" for name, what in SIGHTABLE_OPERATIONS.items())
     _text = _PROMPT.format(n=len(png_pages), ops=_ops)
     if not png_pages:
         _text = _TEXT_ONLY_PREAMBLE + _text
     if sheet:
         _text = _SHEET_PREAMBLE.format() + _text
+    if doc_words and not sheet:
+        # BEFORE the brief, so the brief's own "overrides anything inferred" reads after the
+        # document's words and covers them.
+        _text += _DOC_TEXT_SECTION.format(text=doc_words)
     if brief:
         _text += _BRIEF_SECTION.format(brief=brief)
     if sheet and sheet_words:
@@ -477,8 +517,8 @@ def _cache_dir() -> Path:
 
 
 def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bool = False,
-               sheet_words: str = "", recheck: str = "", envelope: Any = None,
-               envelope_of: str = "") -> str:
+               sheet_words: str = "", doc_words: str = "", recheck: str = "",
+               envelope: Any = None, envelope_of: str = "") -> str:
     h = hashlib.sha256()
     for png in png_pages:
         h.update(png)
@@ -491,6 +531,13 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
         # brief-less read keeps the key it already has in the cache.
         h.update(b"\x00brief\x00")
         h.update(brief.encode("utf-8"))
+    if doc_words and not sheet:
+        # A PACK WITH PRINTED WORDS IS A NEW QUESTION (D-462), and only a read that sends
+        # them hashes them: every wordless render keeps the key, and the answer, it has.
+        h.update(b"\x00doctext\x00")
+        h.update(DOC_TEXT_PROMPT_VERSION.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(doc_words.encode("utf-8"))
     if sheet:
         # A SHEET READ IS A DIFFERENT QUESTION (D-415), and only a sheet read hashes it: every
         # render keeps the key, and the answer, it already has.
@@ -539,15 +586,20 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     if not pngs and not brief:
         raise ConceptUnavailable("no pages could be rendered from this pack")
     recheck = str(recheck or "").strip()
-    _words = sheet_text(pdf_paths) if sheet else ""
+    # THE PACK'S OWN WORDS ARE READ ON EVERY READ (D-462). A sheet read sends them under the
+    # sheet preamble as before; any other pack with a text layer sends them as the document's
+    # statement; a wordless render asks exactly the question it always has.
+    _words = sheet_text(pdf_paths)
     _sheet_kw: Dict[str, Any] = (
         dict({"sheet": True, "sheet_words": _words, "recheck": recheck},
              **({"envelope": list(envelope), "envelope_of": envelope_of}
                 if _envelope_words(envelope) else {})) if sheet
-        else ({"recheck": recheck} if recheck else {}))
+        else dict(**({"doc_words": _words} if _words else {}),
+                  **({"recheck": recheck} if recheck else {})))
     key = _cache_key(pngs, model, brief, **_sheet_kw)
     path = _cache_dir() / (key + ".json")
-    _extra = {"sheet_text": _words} if sheet else {}
+    _extra = ({"sheet_text": _words} if sheet
+              else ({"document_text_chars": len(_words)} if _words else {}))
     if not refresh and path.is_file():
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
