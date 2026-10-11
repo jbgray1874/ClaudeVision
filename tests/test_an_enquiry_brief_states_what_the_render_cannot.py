@@ -169,7 +169,11 @@ def test_the_service_says_what_it_did_with_the_brief(routes, tmp_path):
     assert routes._file_enquiry_brief(run, tmp_path, BRIEF) == "filed"
     assert routes._file_enquiry_brief(run, tmp_path, None) == "removed"
     src = (ROOT / "sdi-intelligence-backend" / "estimate_routes.py").read_text(encoding="utf-8")
-    assert '"enquiry_brief": _brief_status}' in src
+    # The start() response must report what became of the brief; since D-464 the
+    # client-document acknowledgement rides in the same reply, so the line no longer
+    # closes the dict.
+    assert '"enquiry_brief": _brief_status' in src
+    assert '"concept_document": bool(req.concept_document)}' in src
 
 
 def test_the_page_stops_a_run_whose_brief_was_not_filed():
