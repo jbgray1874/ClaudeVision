@@ -519,36 +519,73 @@ def test_an_applicable_requirement_is_a_named_allowance_never_a_part():
 
 
 def test_a_requirement_gets_one_line_a_charge_an_allowance_or_an_exclusion():
-    """D-475: 'shared project costs are charged once, not repeated against every fixture' —
-    a per-order figure divides across the order (and the break table re-divides it at each
-    quantity, as freight is), a per-unit requirement charges each unit, the figure 0 or
-    'not required' is a decision shown at a deliberate £0, and no requirement is ever an
-    invisible obligation."""
+    """D-475, corrected by D-476: a per-order project cost is charged ONCE and kept OUT of
+    the unit price (the K-Wellness brief excludes design/testing from the unit; a one-off
+    fee × 200 is wrong money) — its money rides the record and the Quantity Breaks tab
+    shows the combined order total. A per-unit requirement charges each unit. Words decide
+    meaning, never a bare zero."""
     reqs = [
         {"name": "Stability and loading tests", "scope": "per_order", "where": "manual, p43"},
         {"name": "Component QR labels", "scope": "per_unit"},
         {"name": "O&M manual", "scope": "per_order"},
         {"name": "Electrical compliance", "scope": "per_order"},
+        {"name": "Protective packaging spec", "scope": "per_order"},
     ]
     decisions = {"project_costs": {
         "stability and loading": 450,       # the estimator's figure, matched by words
         "QR labels": 0.12,
         "electrical": "not required",
-        "o&m": 0,                           # the figure 0 is a decision too
+        "o&m": 0,                           # a bare zero is a genuine zero, asked to re-word
+        "protective packaging": "included in the PACKAGING line",
     }}
     plan = cs.project_cost_plan(reqs, decisions, 200)
-    assert [p["code"] for p in plan] == ["PROJECT-01", "PROJECT-02",
-                                         "PROJECT-03", "PROJECT-04"]
+    assert [p["code"] for p in plan] == ["PROJECT-01", "PROJECT-02", "PROJECT-03",
+                                         "PROJECT-04", "PROJECT-05"]
     by = {p["name"]: p for p in plan}
     t = by["Stability and loading tests"]
     assert t["state"] == "charged" and t["order_gbp"] == 450.0
-    assert t["unit_gbp"] == round(450 / 200, 4)
-    assert "re-divides" in t["flag"] and "manual, p43" in t["flag"]
+    assert t["unit_gbp"] == 0.0                     # charged once — never in the unit price
+    assert "out of the unit price" in t["flag"] and "manual, p43" in t["flag"]
     q = by["Component QR labels"]
     assert q["state"] == "charged" and q["unit_gbp"] == 0.12 and q["order_gbp"] is None
-    assert by["O&M manual"]["state"] == "excluded"
+    # Words decide: "not required" excludes; "included …" says another line carries it;
+    # a numeric zero stands as zero with the re-word ask on its flag.
     assert by["Electrical compliance"]["state"] == "excluded"
-    assert "NOT REQUIRED" in by["O&M manual"]["description"]
+    assert "NOT REQUIRED" in by["Electrical compliance"]["description"]
+    om = by["O&M manual"]
+    assert om["state"] == "charged" and om["order_gbp"] == 0.0
+    assert "zero figure" in om["flag"]
+    pp = by["Protective packaging spec"]
+    assert pp["state"] == "included_elsewhere" and pp["unit_gbp"] == 0.0
+    assert "charging twice" in pp["flag"]
+
+
+def test_a_requirement_without_a_figure_carries_the_models_provisional_allowance():
+    """D-476: estimate before asking — the first book arrives substantially priced. The
+    model's own provisional allowance (asked for by the r2 standards section, with its
+    basis) prices the line when the estimator has not; the estimator's figure overrides
+    it; only with neither does the line stand at an honest £0 to price."""
+    reqs = [{"name": "Design development", "scope": "per_order", "where": "p12",
+             "provisional_gbp": 600.0, "provisional_basis": "16h of design work at UK rates"},
+            {"name": "Rollout QR labelling", "scope": "per_unit",
+             "provisional_gbp": 0.4, "provisional_basis": "typical printed label cost"},
+            {"name": "Sustainability assessment", "scope": "per_order", "where": "p43"}]
+    plan = cs.project_cost_plan(reqs, {}, 10)
+    d, q, s = plan
+    assert d["state"] == "provisional" and d["order_gbp"] == 600.0 and d["unit_gbp"] == 0.0
+    assert "16h of design work" in d["flag"] and "not a quotation" in d["flag"]
+    assert q["state"] == "provisional" and q["unit_gbp"] == 0.4 and q["order_gbp"] is None
+    assert s["state"] == "to_price" and "estimator to price" in s["description"]
+    # The estimator's figure overrides the model's provisional allowance.
+    over = cs.project_cost_plan(reqs[:1], {"project_costs": {"design development": 250}}, 10)
+    assert over[0]["state"] == "charged" and over[0]["order_gbp"] == 250.0
+    # And the r2 section asks for the allowance and carries it through normalisation.
+    assert "provisional_gbp" in cs._STANDARDS_SECTION
+    got = cs.standards_requirements({"applicable_requirements": [
+        {"name": "X", "provisional_gbp": "120.5", "provisional_basis": "basis words"},
+        {"name": "Y", "provisional_gbp": -3}]})
+    assert got[0]["provisional_gbp"] == 120.5 and got[0]["provisional_basis"] == "basis words"
+    assert got[1]["provisional_gbp"] is None
 
 
 def test_an_unpriced_requirement_is_an_open_allowance_on_the_sheet_never_an_omission():
@@ -560,14 +597,21 @@ def test_an_unpriced_requirement_is_an_open_allowance_on_the_sheet_never_an_omis
     # Bad inputs never crash the plan into silence.
     assert cs.project_cost_plan([], None, None) == []
     assert cs.project_cost_plan([{"name": ""}], {"project_costs": "junk"}, "x") == []
-    # And the engine mints the lines in the commercial block — the one place every quote's
-    # per-order lines are born, where the break table already re-divides order figures.
+    # The engine mints the lines in the commercial block, keeps per-order money out of the
+    # unit price, and totals the project costs for the separate order view.
     src = (Path(__file__).resolve().parents[1] / "src" / "estimator.py").read_text(
         encoding="utf-8")
     i = src.index("project_cost_plan")
-    block = src[i:i + 3500]
-    assert '_stub["commercial_line"] = {"order_gbp"' in block
+    block = src[i:i + 4500]
     assert '"estimator_confirmed"' in block and '"estimator_to_price"' in block
+    assert '"market_indication"' in block
+    assert 'summary["project_costs"]' in block
+    assert '_stub["commercial_line"]' not in block      # never divided into the unit price
+    # And the Quantity Breaks tab shows the combined order total beside the order values.
+    qb = (Path(__file__).resolve().parents[1] / "src" / "quantity_breaks_tab.py").read_text(
+        encoding="utf-8")
+    assert "Project costs £ (charged once — not in the unit price)" in qb
+    assert "Order total incl. project costs £" in qb
 
 
 def test_the_portal_declares_the_standards_and_an_all_reference_run_is_refused():

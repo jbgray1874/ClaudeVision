@@ -4874,6 +4874,19 @@ def _finalize_scan_summary(
                         "CONCEPT: the declared reference document(s) have no readable text "
                         "layer, so no requirement reached the model — the standards remain "
                         "the estimator's own list this run")
+                _sc = (_read.get("standards_coverage")
+                       if isinstance(_read.get("standards_coverage"), dict) else None)
+                if _sc:
+                    # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
+                    # words only, so a trimmed page's diagram-only requirement may be missed.
+                    _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
+                                f"{_sc.get('total')} extracted character(s) of the reference "
+                                f"document(s) went to the model; its pages are not read as "
+                                f"images, so a requirement carried only by a trimmed page's "
+                                f"diagram may be missed — walk the manual's checklist "
+                                f"sections against the requirement lines before issue")
+                    summary.setdefault("review_flags", []).append(_sc_note)
+                    print(f"   [concept] {_sc_note}", flush=True)
                 _answer = _read.get("parsed") or {}
                 if _read.get("document_text_chars"):
                     # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's

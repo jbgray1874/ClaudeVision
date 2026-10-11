@@ -12401,27 +12401,41 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["_commercial_placeholder"] = True
                 _stub["project_cost_line"] = {k: _p.get(k) for k in
                                               ("name", "scope", "where", "state",
-                                               "requirement")}
+                                               "requirement", "order_gbp")}
                 # Pure commercial placeholders: no operations, no handling labour.
                 _stub["textual_operations"] = []
                 _stub["inferred_operations"] = []
+                # A PER-ORDER PROJECT COST IS NOT IN THE UNIT PRICE (D-476): the plan gives
+                # those lines a £0 unit figure and carries the order money on the record —
+                # the Quantity Breaks tab shows manufacturing order value, project costs and
+                # the combined total. Only a per_unit production requirement charges here.
                 _stub["unit_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
                 _stub["unit_material_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
                 _stub["extended_total_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
-                _stub["price_verified"] = _p["state"] in ("charged", "excluded")
+                _stub["price_verified"] = _p["state"] in ("charged", "excluded",
+                                                          "included_elsewhere")
                 _stub["cost_source"] = ("estimator_confirmed" if _p["state"] == "charged"
-                                        else "estimator_to_price")
-                if _p.get("order_gbp"):
-                    # Any line with an order figure is re-divided by the break table — a
-                    # one-off project cost falls per unit at 200 exactly as freight does.
-                    _stub["commercial_line"] = {"order_gbp": float(_p["order_gbp"])}
+                                        else ("market_indication"
+                                              if _p["state"] == "provisional"
+                                              else "estimator_to_price"))
                 _stub["review_flag"] = True
                 _stub["review_flags"] = [_p["flag"]]
                 parts.append(_stub)
                 _existing_now.add(_p["code"])
             if _pc_plan:
+                # THE SEPARATE PROJECT-COSTS VIEW: charged once, beside the unit price.
+                _pc_total = round(sum(float(p.get("order_gbp") or 0.0)
+                                      for p in _pc_plan
+                                      if p["state"] in ("charged", "provisional")), 2)
+                summary["project_costs"] = {
+                    "total_gbp": _pc_total,
+                    "lines": [{k: p.get(k) for k in ("code", "name", "scope", "state",
+                                                     "order_gbp", "unit_gbp", "where")}
+                              for p in _pc_plan]}
                 print("   [project] requirement line(s) from the customer's standards: "
-                      + ", ".join(f"{p['code']} {p['state']}" for p in _pc_plan), flush=True)
+                      + ", ".join(f"{p['code']} {p['state']}" for p in _pc_plan)
+                      + f" — project costs £{_pc_total:,.2f} the order, charged once, "
+                        f"kept out of the unit price", flush=True)
 
         # ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ───────────────────────────────
         #
