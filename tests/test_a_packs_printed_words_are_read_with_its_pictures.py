@@ -423,3 +423,13 @@ def test_a_located_joint_dedupes_the_sighted_counterpart_once():
     assert cs.price_the_joint_once([g, h]) == ["H"]
     assert not h.get("weld_stated_by_brief")
     assert h["inferred_operations"] == ["forming"]
+
+    # And D-471's unit fallback stands down where a sighted weld already charges the job:
+    # before D-472 a sighting was withheld to nothing, which is why the fallback existed;
+    # now it prices, and the allowance on top would charge the joint twice.
+    unit = {"part_number": "Z-CPT00"}
+    sighted = [{"part_number": "S", "description": "Slotted corner post",
+                "inferred_operations": ["welding"], "quantity": 6}]
+    assert cs.ensure_stated_joint_charged(
+        sighted, unit, "posts WELDED to the base") is None
+    assert "brief_joint_allowance" not in unit and not unit.get("weld_stated_by_note")

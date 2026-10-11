@@ -593,6 +593,13 @@ def ensure_stated_joint_charged(parts: List[Any], unit: Optional[Dict[str, Any]]
     price_the_joint_once(parts)
     if any(isinstance(p, dict) and p.get("weld_stated_by_brief") for p in parts or []):
         return None                     # placed by the model; charged there, once
+    if any(isinstance(p, dict)
+           and {"welding", "spot_welding"} & set(p.get("inferred_operations") or [])
+           for p in parts or []):
+        # A SIGHTED weld now prices (D-472), so the stated joint already has its charge on
+        # the sighted rows — the unit allowance on top would charge the joint twice. Before
+        # D-472 a sighting was withheld to nothing, which is why this fallback existed.
+        return None
     if not isinstance(unit, dict) or unit.get("weld_stated_by_note"):
         return None                     # no unit to carry it, or a sheet note already does
     try:
