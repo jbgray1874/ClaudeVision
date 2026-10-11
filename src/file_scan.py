@@ -4788,6 +4788,34 @@ def _finalize_scan_summary(
                          if _fallback_pick.get("other_designs") else ""), flush=True)
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
+            # A STANDARDS MANUAL STATES REQUIREMENTS, NEVER PARTS (D-474). Files the portal
+            # declared as reference leave the product pack here: their pages are never
+            # rendered as the product and their words ride under the standards section,
+            # from which the model may take only the requirements that apply.
+            _ref_names = set(concept_scan.reference_documents_declared(
+                [job_folder, summary.get("job_folder")]
+                + [Path(str(p)).parent for p in _pack]))
+            _ref_pack: List[str] = []
+            if _ref_names:
+                _ref_pack = [p for p in _pack if Path(p).name in _ref_names]
+                _product_pack = [p for p in _pack if Path(p).name not in _ref_names]
+                if _product_pack and _ref_pack:
+                    _pack = _product_pack
+                    print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                          f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+                else:
+                    # A read must have a product. Declared-everything, or names matching
+                    # nothing staged, sets the declaration aside and says so — the portal
+                    # refuses the all-reference submission before it gets here.
+                    _why = ("every staged document is declared reference"
+                            if _ref_pack else
+                            "the declared reference documents are not among the staged files")
+                    _ref_pack = []
+                    summary.setdefault("review_flags", []).append(
+                        "CONCEPT: " + _why + " — the declaration was set aside so the "
+                        "read has a product; stage the product's pack or brief beside "
+                        "the standards document and run again")
+                    print(f"   [concept] {_why} — declaration set aside", flush=True)
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
             _brief, _brief_file = concept_scan.find_brief(
                 [job_folder, summary.get("job_folder")]
@@ -4833,8 +4861,19 @@ def _finalize_scan_summary(
                     envelope_of=str(_door_rec.get("model_envelope_of") or ""))
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
+                if _ref_pack:
+                    summary.setdefault("review_flags", []).append(
+                        "CONCEPT: the declared reference document(s) do not ride on a "
+                        "design-sheet read — the standards remain the estimator's own list "
+                        "this run")
             else:
-                _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
+                _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief,
+                                                  reference_pack=_ref_pack)
+                if _ref_pack and not _read.get("standards_text_chars"):
+                    summary.setdefault("review_flags", []).append(
+                        "CONCEPT: the declared reference document(s) have no readable text "
+                        "layer, so no requirement reached the model — the standards remain "
+                        "the estimator's own list this run")
                 _answer = _read.get("parsed") or {}
                 if _read.get("document_text_chars"):
                     # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
@@ -4843,6 +4882,18 @@ def _finalize_scan_summary(
                     print(f"   [concept] the pack's own words went to the model with its "
                           f"pages ({_read['document_text_chars']} chars) — a figure, material "
                           f"or count stated in them is a fact, not a visual cue", flush=True)
+            # A REQUIREMENT THE STANDARDS DOCUMENT STATES IS A NAMED ALLOWANCE (D-474):
+            # design development, testing, assessments and documentation are project costs
+            # the estimator prices SEPARATELY, never parts and never silently buried in the
+            # unit — each lands on the confirm list with the manual's own words and place.
+            _reqs = concept_scan.standards_requirements(_answer)
+            if _reqs:
+                summary["standards_requirements"] = [dict(r) for r in _reqs]
+                for _rf in concept_scan.requirement_flags(_reqs):
+                    summary.setdefault("review_flags", []).append(_rf)
+                print(f"   [concept] {len(_reqs)} requirement(s) of the customer's standards "
+                      f"document apply — each is a named allowance on the confirm list, "
+                      f"never a part", flush=True)
             _tc = (_read.get("text_coverage")
                    if isinstance(_read.get("text_coverage"), dict) else None)
             if _tc:
@@ -4943,6 +4994,9 @@ def _finalize_scan_summary(
                                                              if _answers_path else ""),
                                            cache_hit=bool(_read.get("cache_hit")),
                                            input_documents=[Path(p).name for p in _pack],
+                                           reference_documents=[Path(p).name
+                                                                for p in _ref_pack],
+                                           standards_requirements=len(_reqs),
                                            brief_used=bool(_brief),
                                            document_text_chars=int(
                                                _read.get("document_text_chars") or 0),

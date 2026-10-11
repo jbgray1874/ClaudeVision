@@ -606,6 +606,20 @@
         with the enquiry brief above, infer a BOM and route, then price into the normal workbook.
         Select one design per run. Measured CAD is not replaced by guesses.</label>
 
+      <!-- A STANDARDS MANUAL IS NOT THE PRODUCT (D-474). Boots' 101-page in-store equipment
+           manual illustrates example fixtures, test rigs and electrical systems: requirements
+           to meet, never parts to make. A file ticked here rides with the run as the
+           customer's STANDARDS — its words go to the model under their own section, none of
+           its pages is read as the product, and nothing it illustrates can join the bill.
+           Each applicable requirement comes back as a named allowance on the confirm list. -->
+      <div class="note" id="refDocsBox" style="display:none;margin-bottom:10px">
+        <b>Reference / standards documents.</b> Tick any added file that states requirements
+        (a design-standards manual, a test specification) rather than the product itself —
+        its examples never become parts; its applicable requirements come back as named
+        allowances to price separately.
+        <div id="refDocsList" style="margin-top:4px"></div>
+      </div>
+
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
@@ -1125,6 +1139,7 @@ const bList=$("bList"), bEmpty=$("bEmpty"), bWhere=$("bWhere"), bRun=$("bRun"),
 const bRunLLM=$("bRunLLM"), freshRead=$("freshRead");
 
 let drawings = [];      // {path, name, is_dir}
+let refDocs  = new Set();   // file NAMES among `drawings` declared reference/standards (D-474)
 let running  = false;
 let poll     = null;
 /* THE RUN THE STOP BUTTON WOULD STOP. It lived inside the start handler, so the moment that
@@ -1377,10 +1392,30 @@ function destination(){
    Disabled until every input is present AND at least one drawing is
    added, and disabled again for the whole of a run. A second click on a
    job already running is how two estimates end up writing one folder. */
+function renderRefDocs(){
+  /* The tick list mirrors the Drawings panel: a name whose file was removed is forgotten,
+     and the box only appears when there is more than one file — one file cannot be both
+     the product and its standards, and the service refuses an all-reference run anyway. */
+  const files = drawings.filter(d => !d.is_dir);
+  for(const n of [...refDocs]) if(!files.some(f => f.name === n)) refDocs.delete(n);
+  const box = $("refDocsBox"), list = $("refDocsList");
+  if(!box || !list) return;
+  box.style.display = files.length > 1 ? "" : "none";
+  if(files.length <= 1){ list.innerHTML = ""; return; }
+  list.innerHTML = files.map(f =>
+    '<label style="display:block;margin:2px 0"><input type="checkbox" data-ref="'
+    + String(f.name).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")
+    + '"' + (refDocs.has(f.name) ? " checked" : "") + "> "
+    + String(f.name).replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</label>").join("");
+  list.querySelectorAll("input[data-ref]").forEach(cb => { cb.onchange = () => {
+    if(cb.checked) refDocs.add(cb.dataset.ref); else refDocs.delete(cb.dataset.ref); }; });
+}
+
 function refresh(){
   // The enquiry panel reads the same client and quantity, so whatever changes one changes
   // the other's gate. Asking here is how they cannot get out of step.
   if(typeof renderBatch === "function") renderBatch();
+  renderRefDocs();
   const missing = [];
   if(!unitList().length)              missing.push("number of units");
   if(!safe(client.value))             missing.push("client");
@@ -2134,6 +2169,14 @@ $("bRunLLM").onclick = async () => {
                + "counts and construction rest on the documents and the read's own "
                + "assumptions. An empty box also removes the brief an earlier run filed "
                + "with this job.\n\nRun without a brief?")) return;
+  /* A STANDARDS MANUAL ALONE IS NOT A PRODUCT (D-474): refused here with the reason, before
+     a folder is staged for a run the service would refuse anyway. */
+  { const _files = drawings.filter(d => !d.is_dir);
+    if(refDocs.size && _files.length && _files.every(f => refDocs.has(f.name))){
+      line("Every added file is ticked as reference/standards — there is no product to "
+         + "cost. A standards manual states requirements; add the product's pack or brief "
+         + "beside it, or untick one.", "e");
+      return; } }
   /* THE JOB PANEL'S OWN STATE, not the enquiry's. This first reported into bSet/bRows/bCount
      because that is where the button first sat — press it up here and the log appeared in a
      different card halfway down the page, while the panel it was launched from sat idle.
@@ -2176,13 +2219,21 @@ $("bRunLLM").onclick = async () => {
                             output_root: OUTPUT_ROOT, deliverables: true,
                             method: "llm", fresh_read: !!freshRead.checked,
                             concept_document: !!$("conceptDocument").checked,
-                            enquiry_brief: ($("enquiryBrief").value || "").trim() || null})});
+                            enquiry_brief: ($("enquiryBrief").value || "").trim() || null,
+                            reference_documents: refDocs.size ? [...refDocs] : null})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;
     if($("conceptDocument").checked && started.concept_document !== true){
       await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
       throw new Error("The service did not acknowledge client-document mode. Update the service before running this brief.");
+    }
+    /* THE SAME GUARD FOR THE DECLARATION (D-474): a service that does not echo the
+       reference documents never filed them, so the manual's examples would be read as the
+       product — the exact failure the tick exists to prevent. */
+    if(refDocs.size && !Array.isArray(started.reference_documents)){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not acknowledge the reference/standards documents. Update the service before running this pack.");
     }
     if(started.output_path){ runDest = started.output_path; refresh(); }
     /* A BRIEF THE SERVICE DID NOT FILE IS A RUN ANSWERING A DIFFERENT QUESTION (D-362).

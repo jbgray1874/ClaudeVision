@@ -537,6 +537,13 @@ class EstimateRequest(BaseModel):
     # any other method: a drawing pack's drawings are its facts.
     enquiry_brief: Optional[str] = None
     concept_document: bool = False
+    # REFERENCE / STANDARDS DOCUMENTS (D-474). File names among the submitted files that the
+    # estimator declares to be the customer's standards or requirements manual, not the
+    # product — Boots' 101-page in-store equipment manual illustrates example fixtures and
+    # test rigs that must never become BOM parts. Filed as REFERENCE_DOCUMENTS.json beside
+    # the pack; the concept read sends their words under the standards section and renders
+    # none of their pages as the product.
+    reference_documents: Optional[List[str]] = None
     # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
     # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
     # test run wants and what an API caller that has never heard of this field gets.
@@ -1457,6 +1464,21 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                                  f"engine.")
     if req.concept_document and method != "llm":
         raise HTTPException(400, "Client-document costing requires the LLM read method.")
+    _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
+                 if str(f or "").strip()]
+    if _ref_docs and method != "llm":
+        raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    if _ref_docs and req.files:
+        _file_names = {Path(str(f)).name for f in req.files if str(f or "").strip()}
+        _unknown = sorted(set(_ref_docs) - _file_names)
+        if _unknown:
+            raise HTTPException(400, f"These reference documents are not among the submitted "
+                                     f"files: {', '.join(_unknown)}.")
+        if _file_names and set(_ref_docs) >= _file_names:
+            raise HTTPException(400, "Every submitted document is declared reference/standards "
+                                     "— there is no product to cost. A standards manual states "
+                                     "requirements; stage the product's pack or brief beside "
+                                     "it, or untick one.")
 
     # CHECKED BEFORE ANYTHING IS STAGED, for the same reason `method` is: a typo in an
     # address should not cost the estimator a rewritten job folder. Reported rather than
@@ -1557,6 +1579,17 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             _document_marker.unlink()
     except OSError as exc:
         raise HTTPException(502, f"Could not file the client-document mode: {exc}. Nothing queued.")
+    # The reference-document declaration, beside it and under the same reset-every-run rule.
+    _reference_marker = Path(folder) / "REFERENCE_DOCUMENTS.json"
+    try:
+        if _ref_docs:
+            _reference_marker.write_text(
+                json.dumps({"files": _ref_docs}) + "\n", encoding="utf-8")
+        elif _reference_marker.exists():
+            _reference_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the reference-document declaration: {exc}. "
+                                 f"Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
     # a new job; a file somebody wrote by hand is left alone.
@@ -1653,6 +1686,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if req.concept_document:
         run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
                  "brief together; infer a provisional BOM and route for ordinary costing.")
+    if _ref_docs:
+        run.line("REFERENCE DOCUMENTS: " + ", ".join(_ref_docs) + " — read as the customer's "
+                 "standards: applicable requirements become named allowances, and the "
+                 "objects they illustrate never become parts.")
     if run.fresh_read:
         # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
         # answer exactly; this one may not, and "the number moved and nothing changed" is
@@ -1711,6 +1748,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None,
             "enquiry_brief": _brief_status,
+            "reference_documents": list(_ref_docs),
             "concept_document": bool(req.concept_document)}
 
 
