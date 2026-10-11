@@ -4675,7 +4675,11 @@ def _finalize_scan_summary(
     # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
     # a deliberate refusal is never reported as a concept read that crashed.
     _concept_refused = None
-    if _sight_run and (_no_parts or _is_render_pack):
+    # A DECLARED LLM-ONLY RUN IS A SIGHT RUN WHATEVER THE READERS PARSED (D-463): the method
+    # is the estimator's explicit choice on the portal, so a document whose pages were minted
+    # as BOM rows still goes to the concept read, and those rows stand down below. The
+    # measured-CAD guard right here still refuses a pack with real geometry, declared or not.
+    if _sight_run and (_no_parts or _is_render_pack or _llm_only_run):
         try:
             import concept_scan as _cs_probe
             # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
@@ -4713,7 +4717,8 @@ def _finalize_scan_summary(
     except Exception:                                                # noqa: BLE001
         _brief_unused = ""
     if _brief_unused and (_concept_refused or not (_sight_run and (_no_parts
-                                                                  or _is_render_pack))):
+                                                                  or _is_render_pack
+                                                                  or _llm_only_run))):
         summary.setdefault("review_flags", []).append(
             "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
@@ -4723,7 +4728,7 @@ def _finalize_scan_summary(
     _fallback_sheets: List[str] = []
     _fallback_pick: Optional[Dict[str, Any]] = None
     _fallback_ask = ""
-    if _sight_run and (_no_parts or _is_render_pack) and not _concept_refused and _design_intent_pages:
+    if _sight_run and (_no_parts or _is_render_pack or _llm_only_run) and not _concept_refused and _design_intent_pages:
         try:
             import model_takeoff as _mt_sheets
             _cands = ([str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4755,7 +4760,7 @@ def _finalize_scan_summary(
         summary.setdefault("review_flags", []).append(
             f"CONCEPT READ NOT RUN: {_fallback_ask}. One design is read per book; say which.")
         print(f"   [concept] not run — {_fallback_ask}", flush=True)
-    elif _sight_run and (_no_parts or _is_render_pack):
+    elif _sight_run and (_no_parts or _is_render_pack or _llm_only_run):
         try:
             import concept_scan
             _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4884,7 +4889,11 @@ def _finalize_scan_summary(
                                            assumptions=_assumed,
                                            assumptions_file=(str(_answers_path)
                                                              if _answers_path else ""),
-                                           cache_hit=bool(_read.get("cache_hit")))
+                                           cache_hit=bool(_read.get("cache_hit")),
+                                           input_documents=[Path(p).name for p in _pack],
+                                           brief_used=bool(_brief),
+                                           document_text_chars=int(
+                                               _read.get("document_text_chars") or 0))
             if _sheet_read:
                 summary["concept_read"].update(
                     sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
@@ -4908,6 +4917,10 @@ def _finalize_scan_summary(
             # together. The honest fix is a part: an assembly parent whose children are
             # the sighted panels, which the existing board-assembly rule then fits and
             # times off the shop's own measured rate. See unit_assembly_part.
+            _stood_down = concept_scan.stand_down_reader_rows(summary, _llm_only_run)
+            if _stood_down:
+                summary.setdefault("review_flags", []).append(_stood_down)
+                print(f"   [concept] {_stood_down}", flush=True)
             if _unit:
                 summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
