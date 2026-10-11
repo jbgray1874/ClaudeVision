@@ -63,6 +63,12 @@ separate sourcing exercise, never an unexplained discount.
 ```
 5. One portal only: the stale service on port 8071 must be stopped first, or a job
    submitted through it loses its quantity breaks (see the 8188-08 close-out).
+6. Client-document mode (D-464): the engine stands misread reader rows down only where the
+   portal staged `CONCEPT_DOCUMENT.json` (`{"mode": "client_document"}`) beside the pack —
+   the portal control that writes it is uncommitted work on the runner PC, to be
+   reconciled. Without the marker the run still prices correctly whenever the readers mint
+   nothing from the slides (the usual case); with rows minted and no marker, the concept
+   read stands down instead, as before D-463.
 
 ## Traps in this pack (reviewer's read, 11/10 — why the brief above says what it says)
 
