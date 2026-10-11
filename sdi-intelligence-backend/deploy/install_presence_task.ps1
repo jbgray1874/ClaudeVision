@@ -37,6 +37,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# Elevation first, before any other work. Registering a task that runs as
+# SYSTEM needs Administrator, and without this check the failure arrives late,
+# as a bare "Access is denied" buried in red after everything else succeeded.
+$elevated = ([Security.Principal.WindowsPrincipal] `
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+    ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $elevated) {
+    throw @"
+This PowerShell window is not running as Administrator, and registering a
+scheduled task needs it.
+
+Close this window. Start -> type powershell -> right-click Windows PowerShell
+-> Run as administrator. The title bar should then read
+"Administrator: Windows PowerShell". Then:
+
+  cd $BackendDir
+  .\deploy\install_presence_task.ps1
+"@
+}
+
 $runner = Join-Path $BackendDir "deploy\run_presence_sync.ps1"
 if (-not (Test-Path $runner)) { throw "run_presence_sync.ps1 not found at $runner" }
 if (-not (Test-Path (Join-Path $BackendDir ".env"))) {
@@ -173,11 +193,15 @@ $register = @{
 if ($principal) { $register.Principal = $principal }
 else            { $register.User = $User; $register.Password = $plain; $register.RunLevel = "Highest" }
 
-Register-ScheduledTask @register | Out-Null
+# -ErrorAction Stop explicitly: these cmdlets are CDXML-generated, run in their
+# own module scope, and do not see this script's $ErrorActionPreference. Without
+# it a failed registration is non-terminating and the script carries on into a
+# readback of a task that does not exist - "Cannot index into a null array".
+Register-ScheduledTask @register -ErrorAction Stop | Out-Null
 
 # ── Read it back ─────────────────────────────────────────────────────────
 # Registration succeeding is not the same as the schedule being right.
-$live = Get-ScheduledTask -TaskName $TaskName
+$live = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
 $rep = $live.Triggers[0].Repetition
 Write-Host ""
 if ($rep.Interval) {
