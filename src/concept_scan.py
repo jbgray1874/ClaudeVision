@@ -313,7 +313,12 @@ not in the brief" in why_size. Do not describe visual cues: there are none.
 #   s4  a face with a window is still a panel; an internal divider spans the inside of the body
 #       (D-418: the 14:42 read dropped the front and back and sized the divider off a bag)
 SHEET_PROMPT_VERSION = "s4"
-SHEET_TEXT_MAX_CHARS = 6000
+# THE BUDGET FITS A WHOLE DOCUMENT (D-466). 6,000 characters was sized for single drawing
+# sheets and silently cut a sixteen-page tech brief at page six; 24,000 holds such a
+# document entire (the K-Wellness brief extracts ~15,000), and the page-aware trimming
+# with its disclosed coverage remains the safety net for truly huge packs. The words are
+# what is hashed, so a text that always fitted keeps its cache key and its answer.
+SHEET_TEXT_MAX_CHARS = 24000
 
 _SHEET_PREAMBLE = """THESE ARE DRAWING SHEETS, NOT PHOTOGRAPHS. Each image is a general-arrangement or
 design-intent drawing with a title block, dimensions and notes; the text printed on the sheets
