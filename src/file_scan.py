@@ -4836,6 +4836,17 @@ def _finalize_scan_summary(
                     print(f"   [concept] the pack's own words went to the model with its "
                           f"pages ({_read['document_text_chars']} chars) — a figure, material "
                           f"or count stated in them is a fact, not a visual cue", flush=True)
+            _tc = (_read.get("text_coverage")
+                   if isinstance(_read.get("text_coverage"), dict) else None)
+            if _tc:
+                # EVERY PAGE WENT IN, AND THE CUT IS SAID (D-466) — never again a sixteen-page
+                # brief silently reaching the model as pages one to six.
+                _tc_note = (f"DOCUMENT TEXT TRIMMED TO FIT — {_tc.get('sent')} of "
+                            f"{_tc.get('total')} extracted character(s) went to the model, "
+                            f"every page included, {_tc.get('pages_trimmed')} page(s) "
+                            f"trimmed; the page images carry the full pages")
+                summary.setdefault("review_flags", []).append(_tc_note)
+                print(f"   [concept] {_tc_note}", flush=True)
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
             # in the output tree, so the anchor's stem is a hash — and every sighted part
             # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type

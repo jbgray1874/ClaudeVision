@@ -127,3 +127,22 @@ def test_the_job_number_is_answered_from_the_drawings_parts_lists(api, monkeypat
     monkeypatch.setattr(er, "_ENGINE_PYTHON", sys.executable)
     out = er.product_check(er.ProductCheckRequest(drawing_number="12173", files=[str(job)]))
     assert out["status"] == "job" and out["match"]["number"] == "12173-02-GA", out
+
+
+def test_a_client_documents_own_name_is_recognised_when_no_number_exists():
+    """D-465: 'KWellnessFSDU' typed against KWellnessFSDU.pdf is a match said out loud,
+    not a shrug — raised twice from the estimating page before it was heard."""
+    import product_identity as pi
+    got = pi.resolve_product("KWellnessFSDU", ["KWellnessFSDU.pdf"])
+    assert got["status"] == "unchecked"
+    assert got["named_files"] == ["KWellnessFSDU.pdf"]
+    assert "matches KWellnessFSDU.pdf" in got["message"]
+    assert "job's identity" in got["message"]
+    # Spacing and case are typing conventions, not disagreements.
+    spaced = pi.resolve_product("K Wellness FSDU", ["K Wellness FSDU - Tech brief 280926.pdf"])
+    assert spaced["status"] == "unchecked" and spaced.get("named_files")
+    # No match stays the honest old answer, and a short name is not evidence.
+    none = pi.resolve_product("KWellnessFSDU", ["Something Else Entirely.pdf"])
+    assert none["status"] == "unchecked" and "cannot be checked" in none["message"]
+    short = pi.resolve_product("KW", ["KW.pdf"])
+    assert short["status"] == "unchecked" and "cannot be checked" in short["message"]

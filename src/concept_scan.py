@@ -469,11 +469,18 @@ def stand_down_reader_rows(summary: Any, declared_sight: bool,
             f"concept_superseded_parts, never costed beside it)")
 
 
-def sheet_text(pdf_paths: List[Any]) -> str:
-    """The text printed on these sheets, from each file's own text layer, capped — or "".
+def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
+    """The text printed on these pages and what was sent of it: (text, coverage).
 
-    Verbatim and unparsed: the model is told it is the sheet's words, and `sheet_check` looks
-    a figure up in it. A scan with no text layer gives "" and the read proceeds on the image."""
+    Verbatim and unparsed: the model is told it is the pages' words, and `sheet_check` looks
+    a figure up in it. A scan with no text layer gives "" and the read proceeds on the image.
+
+    EVERY PAGE CONTRIBUTES, AND A CUT IS SAID (D-466). The cap used to be one silent slice
+    off the front, so a sixteen-page brief reached the model as pages one to six and nothing
+    anywhere said so. Over the cap, each page now keeps its proportional share (never less
+    than a floor), a trimmed page says it was trimmed, and the text ends by stating the
+    coverage — to the model, on the record, and in the run log through the caller.
+    coverage = {"total": chars extracted, "sent": chars sent, "pages_trimmed": n}."""
     chunks: List[str] = []
     for pdf in (pdf_paths or []):
         if is_brief_page(pdf):
@@ -486,7 +493,7 @@ def sheet_text(pdf_paths: List[Any]) -> str:
                     # the document, page N" and a reader can look the citation up.
                     words = page.extract_text() or ""
                     if words.strip():
-                        chunks.append(f"[{Path(str(pdf)).name}, page {index}]\n{words}")
+                        chunks.append(f"[{Path(str(pdf)).name}, page {index}]\n{words.strip()}")
         except Exception:                                               # noqa: BLE001
             try:
                 import pymupdf                                          # noqa: WPS433
@@ -494,11 +501,47 @@ def sheet_text(pdf_paths: List[Any]) -> str:
                     for index, page in enumerate(doc, 1):
                         words = page.get_text() or ""
                         if words.strip():
-                            chunks.append(f"[{Path(str(pdf)).name}, page {index}]\n{words}")
+                            chunks.append(f"[{Path(str(pdf)).name}, page {index}]\n{words.strip()}")
             except Exception:                                           # noqa: BLE001
                 continue
-    text = "\n".join(c.strip() for c in chunks if c and c.strip())
-    return text[:SHEET_TEXT_MAX_CHARS]
+    chunks = [c for c in chunks if c]
+    total = sum(len(c) for c in chunks) + max(0, len(chunks) - 1)
+    if total <= SHEET_TEXT_MAX_CHARS:
+        return "\n".join(chunks), {"total": total, "sent": total, "pages_trimmed": 0,
+                                   "pages_omitted": 0}
+    # A BUDGET, NOT A GUESS: each page gets its proportional share, never less than a floor
+    # that itself shrinks when pages are many, and the spend is counted as written so a
+    # thousand tiny pages cannot ride a per-page floor past the cap. Pages the budget cannot
+    # reach are omitted and counted — said, not silent.
+    _MARK = "\n[… trimmed — the full page is in the images]"
+    floor = min(200, max(40, SHEET_TEXT_MAX_CHARS // len(chunks)))
+    budget = SHEET_TEXT_MAX_CHARS
+    out: List[str] = []
+    trimmed = omitted = 0
+    for c in chunks:
+        if budget <= floor:
+            omitted += 1
+            continue
+        share = min(budget, max(floor, int(len(c) * SHEET_TEXT_MAX_CHARS / total)))
+        if len(c) > share:
+            piece = c[:share].rstrip() + _MARK
+            trimmed += 1
+        else:
+            piece = c
+        out.append(piece)
+        budget -= len(piece) + 1
+    text = "\n".join(out) + (
+        f"\n[text coverage: {len(chunks) - omitted} of {len(chunks)} page(s) included"
+        + (f", {trimmed} trimmed" if trimmed else "")
+        + (f", {omitted} only in the images" if omitted else "")
+        + f" — {SHEET_TEXT_MAX_CHARS} character budget of {total} extracted]")
+    return text, {"total": total, "sent": len(text), "pages_trimmed": trimmed,
+                  "pages_omitted": omitted}
+
+
+def sheet_text(pdf_paths: List[Any]) -> str:
+    """The text alone — see sheet_text_with_coverage."""
+    return sheet_text_with_coverage(pdf_paths)[0]
 
 
 def _envelope_words(envelope: Any) -> str:
@@ -655,7 +698,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     # THE PACK'S OWN WORDS ARE READ ON EVERY READ (D-462). A sheet read sends them under the
     # sheet preamble as before; any other pack with a text layer sends them as the document's
     # statement; a wordless render asks exactly the question it always has.
-    _words = sheet_text(pdf_paths)
+    _words, _coverage = sheet_text_with_coverage(pdf_paths)
     _sheet_kw: Dict[str, Any] = (
         dict({"sheet": True, "sheet_words": _words, "recheck": recheck},
              **({"envelope": list(envelope), "envelope_of": envelope_of}
@@ -666,6 +709,9 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     path = _cache_dir() / (key + ".json")
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
+    if _words and _coverage.get("pages_trimmed"):
+        # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
+        _extra = dict(_extra, text_coverage=dict(_coverage))
     if not refresh and path.is_file():
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))

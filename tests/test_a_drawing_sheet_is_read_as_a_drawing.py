@@ -130,7 +130,10 @@ def test_the_sheets_words_come_from_its_own_text_layer(tmp_path):
     words = cs.sheet_text([str(pdf)])
     assert "2mm STEEL CONSTRUCTION" in words and "67.44kg" in words
     assert cs.sheet_text([str(tmp_path / "x-ENQUIRY_BRIEF.pdf")]) == ""
-    assert len(cs.sheet_text([str(pdf)] * 2000)) <= cs.SHEET_TEXT_MAX_CHARS
+    # The cap is a BUDGET since D-466: every included page may carry a trim marker and the
+    # text closes with the coverage line, so the bound allows for that disclosure — what it
+    # still forbids is the unbounded text the old silent slice prevented.
+    assert len(cs.sheet_text([str(pdf)] * 2000)) <= cs.SHEET_TEXT_MAX_CHARS + 500
 
 
 # ── the check: the bill weighed and measured against the sheet ───────────────────────────
