@@ -4019,7 +4019,19 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         blocks.append(f'<h3>Lines outside the assemblies</h3><div class="scroll"><table>{head}'
                       f'<tbody>{loose_rows}</tbody></table></div>')
     run = record.get("run") or {}
-    total = sum(money_of(l) for l in lines if not (l.get("cross_reference") and not l.get("charged_ext_gbp")))
+    # AN ASSEMBLY'S CHARGED £ IS ITS LABOUR ROWS, NOT MATERIAL (D-461). The 19:35 book's bill
+    # summed the four sub-assemblies' read-back labour (£22.00 + £43.04 + £4.85 + £25.99 =
+    # £95.88) into "charged material" and reported a £95.88 difference "on the sheet and on no
+    # line here" — the wrong lines AND the wrong direction. The material tally takes material-
+    # carrying lines only; the assemblies' money is named for what it is.
+    def _is_material_line(l: Dict[str, Any]) -> bool:
+        if l.get("cross_reference") and not l.get("charged_ext_gbp"):
+            return False
+        return str(l.get("kind") or "").lower() != "assembly"
+
+    total = sum(money_of(l) for l in lines if _is_material_line(l))
+    asm_money = round(sum(money_of(l) for l in lines
+                          if str(l.get("kind") or "").lower() == "assembly"), 2)
     sheet = run.get("material_gbp")
     recon = ""
     if sheet is not None:
@@ -4028,7 +4040,12 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
                  f"sheet's Total Material Cost of {_money(sheet)}"
                  + (" — they agree." if abs(gap) < 0.005 else
                     f" — {_money(abs(gap))} of rounding across the rows." if abs(gap) <= 0.02 else
-                    f", a difference of {_money(abs(gap))} on the sheet and on no line here.")
+                    (f", a difference of {_money(abs(gap))} on the sheet and on no line here."
+                     if gap > 0 else
+                     f", a difference of {_money(abs(gap))} on these lines and not in the "
+                     f"sheet's material total — reconcile before quoting."))
+                 + (f" The assemblies' own rows ({_money(asm_money)}) are labour, compared on "
+                    f"the Manufacturing route table, not here." if asm_money else "")
                  + "</p>")
     return (f'<h2>Bill of materials and hierarchy</h2>'
             f'<p>Every line the sheet carries, under the assembly it belongs to. <b>Charged £</b> is '
