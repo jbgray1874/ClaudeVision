@@ -120,11 +120,11 @@ def test_a_job_whose_only_open_item_is_a_failing_check_says_so_everywhere():
     _with_checks(s, [inv._violation("geometry_unreconciled", inv.BLOCKING,
                                     "P-01M geometry does not reconcile.", parts=["P-01M"])])
     job = cf.costed_job(s)
-    assert J._release_words(job, s)[1] == ("Not for release — 1 to settle: "
-                                           "1 consistency finding failed")
+    assert J._release_words(job, s)[1] == ("Estimator review — 1 item(s) to confirm: "
+                                           "1 automated check to review")
     assert "not itemised here" not in J._render_decisions(job)
     verdict = J._render_verdict(J._extract_headline(s), J._extract_drawing_quality(s), False, s)
-    assert "Still to settle: 1 — 1 consistency finding failed" in verdict
+    assert "Still to confirm: 1 — 1 automated check to review" in verdict
 
 
 def test_an_engine_fault_is_owned_by_the_engine_from_config():
@@ -364,7 +364,7 @@ def test_the_workbook_banner_points_at_the_list_with_the_same_count(tmp_path):
     main._rewrite_estimate_banner(path, s)
     ws2 = openpyxl.load_workbook(path)["Estimate"]
     o = cf.outstanding_summary(s)
-    assert f"{o['total']} to settle" in ws2["H4"].value
+    assert f"{o['total']} item(s) to confirm" in ws2["H4"].value
     assert "OUTSTANDING ESTIMATOR INPUTS" not in ws2["H4"].value
     assert "AI Explanation" in ws2["H4"].value
     assert ws2["C40"].value.startswith("OUTSTANDING ESTIMATOR INPUTS (3)")
@@ -586,5 +586,5 @@ def test_section_thirteen_counts_findings_against_findings_and_checks_against_ch
                       if x["code"].startswith("reached") else "check_canonical_route_shadow")
     _with_checks(s, v, run=[f"c{i}" for i in range(45)])
     sec = _text(J._invariants_section(s))
-    assert "2 consistency finding(s) failed" in sec and "from 2 of the 45 checks" in sec
+    assert "2 automated check(s) to review" in sec and "from 2 of the 45 checks" in sec
     assert "out of 45" not in sec and "already Decisions required" in sec

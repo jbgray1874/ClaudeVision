@@ -3870,7 +3870,7 @@ def _failing_checks_words(decisions: List[Mapping[str, Any]],
 
     blocking_words = ""
     if total:
-        blocking_words = f"{total} consistency finding(s) failed"
+        blocking_words = f"{total} automated check(s) to review"
         if itemised:
             names = ", ".join(dict.fromkeys(str(d.get("part") or "") for d in netted)) or "—"
             blocking_words += (f" ({itemised} of them, {names}, already listed as "
@@ -4079,7 +4079,7 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
         # FIRST, because it is the fact the other bits are about (D-409).
         bits.append("nothing to cost — the run stopped before pricing")
     if prices:
-        bits.append(f"{prices} price{'s' if prices != 1 else ''} missing")
+        bits.append(f"{prices} price{'s' if prices != 1 else ''} to add")
     if stated:
         bits.append(f"{stated} stated row{'s' if stated != 1 else ''} not carried")
     if off_sheet:
@@ -4102,7 +4102,7 @@ def outstanding_summary(source: Any) -> Dict[str, Any]:
     if _assumed:
         bits.append(f"{_assumed} size{'s' if _assumed != 1 else ''} assumed from a render")
     if _checks:
-        bits.append(f"{_checks} consistency finding{'s' if _checks != 1 else ''} failed")
+        bits.append(f"{_checks} automated check{'s' if _checks != 1 else ''} to review")
     if other:
         bits.append(f"{other} other open item{'s' if other != 1 else ''}")
     # A TALLY THAT COULD NOT SEE THE CHECKS SAYS SO (12173-02). The workbook banner and its

@@ -173,12 +173,12 @@ def test_the_release_status_agrees(surfaces):
     the counts cannot drift again."""
     rel = surfaces["record"]["release"]
     assert rel["draft"] and rel["outstanding"] == 4
-    phrase = ("2 prices missing + 2 manufacturing decisions "
+    phrase = ("2 prices to add + 2 manufacturing decisions "
               "+ 2 indicative rates to verify")
     assert "PROVISIONAL" in surfaces["subject"]
-    assert f"To settle: {phrase}." in surfaces["subject"]
-    assert f"Not for release — 6 to settle: {phrase}" in surfaces["report"]
-    assert f"No — 6 to settle: {phrase}." in surfaces["explanation"]
+    assert f"To confirm: {phrase}." in surfaces["subject"]
+    assert f"Estimator review — 6 item(s) to confirm: {phrase}" in surfaces["report"]
+    assert f"No — 6 item(s) to confirm: {phrase}." in surfaces["explanation"]
     # THE QUOTE IS NO LONGER ONE OF THE SURFACES, AND THAT IS THE POINT OF THE OTHER THREE.
     # It is the only document here that leaves the building, and it is regenerated and sent
     # after the estimator has settled these items — so the tally would be false exactly when

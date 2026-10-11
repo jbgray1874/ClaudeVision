@@ -200,8 +200,8 @@ def test_the_explanation_leads_with_the_decisions(tmp_path):
     jp = tmp_path / "7332-01.json"
     jp.write_text(json.dumps(job), encoding="utf-8")
     md = ee.build(xlsx, jp)
-    assert md.index("## What a person still has to settle") < md.index("## The questions, answered first")
-    settle = md.split("## What a person still has to settle")[1].split("## ")[0]
+    assert md.index("## For the estimator to confirm") < md.index("## The questions, answered first")
+    settle = md.split("## For the estimator to confirm")[1].split("## ")[0]
     assert "plated after welding" in settle and "PACKAGING" in settle
     # and the rows the two dropped tabs used to feed are still on the page, from the JSON
     assert "— (subcontract service)" in md and "— (commercial line)" in md

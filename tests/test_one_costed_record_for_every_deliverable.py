@@ -594,7 +594,7 @@ def test_outstanding_summary_is_one_phrase_from_either_a_summary_or_a_record():
     from_summary = cf.outstanding_summary(job)
     from_record = cf.outstanding_summary(cf.costed_job(job))
     assert from_summary == from_record
-    assert from_summary["phrase"] == ("2 prices missing + 2 manufacturing decisions "
+    assert from_summary["phrase"] == ("2 prices to add + 2 manufacturing decisions "
                                       "+ 2 indicative rates to verify")
     assert from_summary["total"] == 6
     assert from_summary["blocking"] == 4 and from_summary["advisory"] == 2

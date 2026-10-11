@@ -820,9 +820,10 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('    <div class="prov">PROVISIONAL — the consistency checks did not run on '
-                'this estimate, so none of its figures have been verified against the '
-                'workbook. Not for release as a firm price.</div>')
+        return ('    <div class="prov">PROVISIONAL — the automated checks are still to run '
+                'on this estimate, so its figures are not yet verified against the '
+                'workbook. Subject to estimator confirmation before it is issued as a '
+                'firm price.</div>')
     if inv.get("may_quote_firm"):
         return ""
     _blocking = [v for v in (inv.get("violations") or [])
@@ -840,7 +841,7 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
     _not_run = [v for v in _unver if v not in _rulings]
     _bits = []
     if _blocking:
-        _bits.append(f"{len(_blocking)} consistency finding(s) FAILED")
+        _bits.append(f"{len(_blocking)} automated check(s) to review")
     if _rulings:
         _bits.append(f"{len(_rulings)} finding(s) need an estimator's ruling")
     if _not_run:
@@ -848,7 +849,7 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
                      f"unverified")
     _detail = "; ".join(_esc(str(v.get("message") or "")) for v in (_blocking + _unver)[:3])
     return ('    <div class="prov">PROVISIONAL — ' + _esc(" and ".join(_bits)) +
-            '. This estimate is not for release as a firm price until they are resolved.'
+            '. Subject to estimator confirmation before it is issued as a firm price.'
             + (f'<span class="prov-d">{_detail}</span>' if _detail else "") + '</div>')
 
 
