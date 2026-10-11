@@ -6046,8 +6046,8 @@ _WELD_EVIDENCE_FREE_SOURCES = frozenset({
     "inference", "geometry_inference", "estimator_inferred", "override_rule", "unknown",
     "vision_concept", "",
     # "enquiry_brief" left this set with D-467: a weld source is stamped enquiry_brief in
-    # exactly one place — the concept read, where the brief's own words state welding
-    # (concept_scan.apply_brief_stated_welds) — and a concept pack has no sheets to outrank
+    # exactly one place — the concept read, from the model's own per-part from_brief
+    # attribution (parts_from_concept, D-469) — and a concept pack has no sheets to outrank
     # it. On a drawing pack no operation source is ever the brief, so the drawings still rule.
 })
 # A person's answer, or a measurement: a weld these state is never re-homed by a rule here.
