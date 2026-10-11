@@ -946,6 +946,34 @@ def scan_folder_job(
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     started = time.time()
     pdfs = [Path(p) for p in pdf_paths if Path(p).suffix.lower() == ".pdf"]
+    # A DECLARED REFERENCE DOCUMENT NEVER ENTERS THE PRODUCT READ (D-477). D-474 kept a
+    # standards manual out of the CONCEPT prompt, but the 11 Oct 21:20 K-Wellness run never
+    # reached that prompt: the ordinary pipeline extracted all 101 pages of the Boots
+    # manual, sent them to the BOM vision read, minted 32 parts from Appendix A's worked
+    # EXAMPLE pack (a DS Screen FSU with Samsung screens — on a job whose brief states no
+    # electrics), took the manual as the anchor PDF and could not resolve the declared
+    # product. The separation is a property of the DOCUMENT, so it is enforced here, where
+    # documents enter the pipeline — extraction, geometry, the pooled BOM, the vision read
+    # and the roots never see a declared reference file. Its words still reach the model,
+    # through the standards channel the concept read carries (reference_pack_paths below).
+    reference_pdfs: List[Path] = []
+    try:
+        import concept_scan as _cs_ref                              # noqa: WPS433
+        _ref_names = set(_cs_ref.reference_documents_declared([job_folder]))
+    except Exception:                                               # noqa: BLE001
+        _ref_names = set()
+    if _ref_names:
+        _held = [p for p in pdfs if p.name in _ref_names]
+        _product_pdfs = [p for p in pdfs if p.name not in _ref_names]
+        if _held and _product_pdfs:
+            reference_pdfs, pdfs = _held, _product_pdfs
+            print(f"   -> Reference document(s) held OUT of the product read: "
+                  f"{', '.join(p.name for p in reference_pdfs)} — their words ride the "
+                  f"concept read as the customer's standards; nothing they illustrate can "
+                  f"join the bill")
+        elif _held:
+            print(f"   -> every staged document is declared reference — the declaration "
+                  f"is set aside so the read has a product", flush=True)
     # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
     # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
     # (text, title block, BOM) is absent because a render carries none, not because a reader
@@ -981,6 +1009,9 @@ def scan_folder_job(
     # renders ITS pages from these, and a wrapped render lives in the output tree, not in
     # the job folder, so a glob of the folder would silently miss the whole point.
     merged["scanned_documents"] = [str(p) for p in pdfs]
+    if reference_pdfs:
+        # The held-out standards documents, for the concept read's requirements channel.
+        merged["reference_pack_paths"] = [str(p) for p in reference_pdfs]
     # THE PACK THE ESTIMATOR STAGED, exactly as handed in, before this function dropped what
     # no reader opens. The measured-CAD guard reads THIS, not a listing of the folder: a STEP
     # file selected for the job is part of the job even though nothing read it, and a STEP
@@ -4788,15 +4819,21 @@ def _finalize_scan_summary(
                          if _fallback_pick.get("other_designs") else ""), flush=True)
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
-            # A STANDARDS MANUAL STATES REQUIREMENTS, NEVER PARTS (D-474). Files the portal
-            # declared as reference leave the product pack here: their pages are never
-            # rendered as the product and their words ride under the standards section,
-            # from which the model may take only the requirements that apply.
-            _ref_names = set(concept_scan.reference_documents_declared(
-                [job_folder, summary.get("job_folder")]
-                + [Path(str(p)).parent for p in _pack]))
-            _ref_pack: List[str] = []
-            if _ref_names:
+            # A STANDARDS MANUAL STATES REQUIREMENTS, NEVER PARTS (D-474; enforced at the
+            # scan by D-477). scan_folder_job holds a declared reference document out of the
+            # product read entirely — extraction, geometry, the BOM vision read and the
+            # roots never see it — and stashes its path here for the standards channel.
+            # The split below remains for any path that did not come through that scan.
+            _ref_pack: List[str] = [str(p) for p in
+                                    (summary.get("reference_pack_paths") or [])]
+            _ref_names = set() if _ref_pack else set(
+                concept_scan.reference_documents_declared(
+                    [job_folder, summary.get("job_folder")]
+                    + [Path(str(p)).parent for p in _pack]))
+            if _ref_pack:
+                print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                      f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+            elif _ref_names:
                 _ref_pack = [p for p in _pack if Path(p).name in _ref_names]
                 _product_pack = [p for p in _pack if Path(p).name not in _ref_names]
                 if _product_pack and _ref_pack:

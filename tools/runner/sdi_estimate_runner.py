@@ -1018,8 +1018,14 @@ def _execute(requests, base: str, headers: Dict[str, str], job: Dict[str, Any],
             quiet = time.time() - last_said
             if quiet >= _SAY_QUIET_AFTER and (time.time() - said_at) >= _SAY_QUIET_AFTER:
                 said_at = time.time()
-                say(f"Still running — no output for {int(quiet)}s. The engine is driving "
-                    f"Excel/SOLIDWORKS, which prints nothing; the process is alive.")
+                # SAY WHAT IS KNOWN, NOT A GUESS (D-477). This line used to claim the engine
+                # was "driving Excel/SOLIDWORKS" — on the 21:20 K-Wellness run it printed
+                # that during PDF extraction and price lookups, on a run whose own banner
+                # said SolidWorks was off. The heartbeat cannot see the active stage, so it
+                # names the quiet kinds without claiming one.
+                say(f"Still running — no output for {int(quiet)}s. A quiet stage "
+                    f"(extraction, a model call, a price lookup, or Excel/COM work) prints "
+                    f"nothing; the process is alive.")
             flush(force=True)
 
     print(f"\n--- {job['drawing_number']} · {job['client']} · {job['units']} off")

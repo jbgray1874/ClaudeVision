@@ -614,6 +614,32 @@ def test_an_unpriced_requirement_is_an_open_allowance_on_the_sheet_never_an_omis
     assert "Order total incl. project costs £" in qb
 
 
+def test_a_reference_document_never_enters_the_product_read(tmp_path):
+    """D-477: the 11 Oct 21:20 K-Wellness run proved D-474's prompt-level separation was
+    not enough — the ordinary pipeline extracted all 101 manual pages, sent them to the BOM
+    vision read, minted 32 parts from Appendix A's worked EXAMPLE pack (a DS Screen FSU
+    with Samsung screens, on a job whose brief states no electrics) and took the manual as
+    the anchor PDF. The separation is a property of the DOCUMENT, enforced where documents
+    enter the pipeline."""
+    src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    # scan_folder_job holds the declared file out BEFORE extraction…
+    i = src.index("def scan_folder_job")
+    block = src[i:i + 4500]
+    assert "reference_documents_declared" in block
+    assert "held OUT of the product read" in block
+    # …stashes it for the standards channel…
+    assert 'merged["reference_pack_paths"]' in src
+    # …and the concept hook consumes the stash before falling back to its own split.
+    j = src.index('summary.get("reference_pack_paths")', i)
+    assert "ride as REQUIREMENTS" in src[j:j + 1200]
+    # The runner's quiet-heartbeat no longer claims a stage it cannot see.
+    runner = (Path(__file__).resolve().parents[1] / "tools" / "runner"
+              / "sdi_estimate_runner.py").read_text(encoding="utf-8")
+    assert "The engine is driving" not in runner
+    assert "A quiet stage" in runner
+
+
 def test_the_portal_declares_the_standards_and_an_all_reference_run_is_refused():
     root = Path(__file__).resolve().parents[1]
     routes = (root / "sdi-intelligence-backend" / "estimate_routes.py").read_text(
