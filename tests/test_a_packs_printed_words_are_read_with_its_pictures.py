@@ -518,6 +518,58 @@ def test_an_applicable_requirement_is_a_named_allowance_never_a_part():
     assert cs.standards_requirements({}) == []
 
 
+def test_a_requirement_gets_one_line_a_charge_an_allowance_or_an_exclusion():
+    """D-475: 'shared project costs are charged once, not repeated against every fixture' —
+    a per-order figure divides across the order (and the break table re-divides it at each
+    quantity, as freight is), a per-unit requirement charges each unit, the figure 0 or
+    'not required' is a decision shown at a deliberate £0, and no requirement is ever an
+    invisible obligation."""
+    reqs = [
+        {"name": "Stability and loading tests", "scope": "per_order", "where": "manual, p43"},
+        {"name": "Component QR labels", "scope": "per_unit"},
+        {"name": "O&M manual", "scope": "per_order"},
+        {"name": "Electrical compliance", "scope": "per_order"},
+    ]
+    decisions = {"project_costs": {
+        "stability and loading": 450,       # the estimator's figure, matched by words
+        "QR labels": 0.12,
+        "electrical": "not required",
+        "o&m": 0,                           # the figure 0 is a decision too
+    }}
+    plan = cs.project_cost_plan(reqs, decisions, 200)
+    assert [p["code"] for p in plan] == ["PROJECT-01", "PROJECT-02",
+                                         "PROJECT-03", "PROJECT-04"]
+    by = {p["name"]: p for p in plan}
+    t = by["Stability and loading tests"]
+    assert t["state"] == "charged" and t["order_gbp"] == 450.0
+    assert t["unit_gbp"] == round(450 / 200, 4)
+    assert "re-divides" in t["flag"] and "manual, p43" in t["flag"]
+    q = by["Component QR labels"]
+    assert q["state"] == "charged" and q["unit_gbp"] == 0.12 and q["order_gbp"] is None
+    assert by["O&M manual"]["state"] == "excluded"
+    assert by["Electrical compliance"]["state"] == "excluded"
+    assert "NOT REQUIRED" in by["O&M manual"]["description"]
+
+
+def test_an_unpriced_requirement_is_an_open_allowance_on_the_sheet_never_an_omission():
+    plan = cs.project_cost_plan([{"name": "Sustainability assessment",
+                                  "scope": "per_order", "where": "p43"}], {}, 10)
+    assert plan[0]["state"] == "to_price" and plan[0]["unit_gbp"] == 0.0
+    assert "estimator to price" in plan[0]["description"]
+    assert "project_costs" in plan[0]["flag"]           # the flag names the answers-file key
+    # Bad inputs never crash the plan into silence.
+    assert cs.project_cost_plan([], None, None) == []
+    assert cs.project_cost_plan([{"name": ""}], {"project_costs": "junk"}, "x") == []
+    # And the engine mints the lines in the commercial block — the one place every quote's
+    # per-order lines are born, where the break table already re-divides order figures.
+    src = (Path(__file__).resolve().parents[1] / "src" / "estimator.py").read_text(
+        encoding="utf-8")
+    i = src.index("project_cost_plan")
+    block = src[i:i + 3500]
+    assert '_stub["commercial_line"] = {"order_gbp"' in block
+    assert '"estimator_confirmed"' in block and '"estimator_to_price"' in block
+
+
 def test_the_portal_declares_the_standards_and_an_all_reference_run_is_refused():
     root = Path(__file__).resolve().parents[1]
     routes = (root / "sdi-intelligence-backend" / "estimate_routes.py").read_text(

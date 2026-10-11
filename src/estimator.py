@@ -12371,6 +12371,58 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         if debug:
             print("[DEBUG] Added Packaging + Delivery placeholder lines (unpriced, flagged)")
 
+        # ── A REQUIREMENT OF THE CUSTOMER'S STANDARDS GETS A LINE (D-475) ────────────────
+        #
+        # Boots' design-standards manual, 11 Oct 2026: design development, prototypes,
+        # testing, assessments and documentation are obligations of the order, not of any
+        # fixture — "shared project costs are charged once, not repeated against every
+        # fixture". Each applicable requirement the concept read returned (D-474) becomes
+        # ONE line here: the estimator's figure from the answers file charged once and
+        # divided across the order (the break table re-divides it at each quantity, exactly
+        # as freight is), an explicit NOT-REQUIRED £0 where that was the decision, or an
+        # honest "estimator to price" £0 the confirm list counts. Never an invisible
+        # obligation, and never a project cost multiplied into every unit.
+        _std_reqs = list((summary or {}).get("standards_requirements") or [])
+        if _std_reqs:
+            try:
+                import concept_scan as _cs_pc
+                _pc_plan = _cs_pc.project_cost_plan(
+                    _std_reqs, _dec_block, _commercial_order_quantity(summary))
+            except Exception as _pc_exc:                     # noqa: BLE001
+                print(f"   [project] the standards requirements could not be planned "
+                      f"({type(_pc_exc).__name__}: {_pc_exc}) — the D-474 flags still name "
+                      f"each one", flush=True)
+                _pc_plan = []
+            for _p in _pc_plan:
+                if _p["code"] in _existing_now:
+                    continue
+                _stub = _bought_in_part_stub(_p["code"], _p["description"], 1)
+                _stub["source"] = "commercial_placeholder"
+                _stub["_commercial_placeholder"] = True
+                _stub["project_cost_line"] = {k: _p.get(k) for k in
+                                              ("name", "scope", "where", "state",
+                                               "requirement")}
+                # Pure commercial placeholders: no operations, no handling labour.
+                _stub["textual_operations"] = []
+                _stub["inferred_operations"] = []
+                _stub["unit_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
+                _stub["unit_material_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
+                _stub["extended_total_cost_gbp"] = float(_p.get("unit_gbp") or 0.0)
+                _stub["price_verified"] = _p["state"] in ("charged", "excluded")
+                _stub["cost_source"] = ("estimator_confirmed" if _p["state"] == "charged"
+                                        else "estimator_to_price")
+                if _p.get("order_gbp"):
+                    # Any line with an order figure is re-divided by the break table — a
+                    # one-off project cost falls per unit at 200 exactly as freight does.
+                    _stub["commercial_line"] = {"order_gbp": float(_p["order_gbp"])}
+                _stub["review_flag"] = True
+                _stub["review_flags"] = [_p["flag"]]
+                parts.append(_stub)
+                _existing_now.add(_p["code"])
+            if _pc_plan:
+                print("   [project] requirement line(s) from the customer's standards: "
+                      + ", ".join(f"{p['code']} {p['state']}" for p in _pc_plan), flush=True)
+
         # ── ABS EDGING: A MATERIAL LINE, NOT A QUESTION ───────────────────────────────
         #
         # Tony Ford, 11908-21: "Not all materials calculated no ABS edging Allowed." The
