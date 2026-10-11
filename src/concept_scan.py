@@ -168,6 +168,93 @@ def requirement_flags(reqs: List[Dict[str, str]]) -> List[str]:
     return out
 
 
+def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
+                      order_qty: Any) -> List[Dict[str, Any]]:
+    """Every applicable requirement becomes ONE workbook line: a charge, an open allowance
+    to price, or an explicit exclusion (D-475) — never an invisible obligation.
+
+    The figure is the ESTIMATOR'S, from the answers file (estimator_decisions.project_costs,
+    keys matched to the requirement by words): design development, prototypes, testing and
+    documentation have no rate card and no market lookup worth trusting, so the engine never
+    invents them. A per_order cost is charged ONCE and divided across the order — the line
+    carries the order figure, and the break table re-divides it at each quantity exactly as
+    freight is (wb_populate reads any line with an order figure). A per_unit requirement
+    charges each unit. The figure 0, or "not required"/"excluded", is a decision: the line
+    stays on the sheet at a deliberate £0 saying so. No figure yet: the line stays at an
+    honest £0 reading "estimator to price", counted by the confirm list — on the sheet,
+    never an omission."""
+    try:
+        oq = max(1, int(float(order_qty or 1)))
+    except (TypeError, ValueError):
+        oq = 1
+    stated: Dict[str, Any] = {}
+    if isinstance(decisions, Mapping) and isinstance(decisions.get("project_costs"), Mapping):
+        stated = {" ".join(str(k).lower().split()): v
+                  for k, v in decisions["project_costs"].items() if str(k).strip()}
+
+    def _figure_for(name: str) -> Any:
+        n = " ".join(name.lower().split())
+        for k, v in stated.items():
+            if k in n or n in k:
+                return v
+        return None
+
+    out: List[Dict[str, Any]] = []
+    for i, r in enumerate(reqs or [], start=1):
+        name = str((r or {}).get("name") or "").strip()
+        if not name:
+            continue
+        scope = "per_unit" if str((r or {}).get("scope")) == "per_unit" else "per_order"
+        where = str((r or {}).get("where") or "").strip()
+        _at = f" ({where})" if where else ""
+        fig = _figure_for(name)
+        gbp: Optional[float] = None
+        excluded = isinstance(fig, str) and any(
+            w in fig.lower() for w in ("not required", "excluded"))
+        if not excluded and fig is not None:
+            try:
+                gbp = float(fig)
+            except (TypeError, ValueError):
+                gbp = None
+        if gbp is not None and gbp <= 0:
+            excluded, gbp = True, None
+        plan: Dict[str, Any] = {"code": f"PROJECT-{i:02d}", "name": name, "scope": scope,
+                                "where": where,
+                                "requirement": str((r or {}).get("requirement") or "")}
+        if excluded:
+            plan.update(
+                state="excluded", unit_gbp=0.0, order_gbp=None,
+                description=f"{name} — NOT REQUIRED for this job (the estimator's "
+                            f"decision, not a missing price)",
+                flag=f"PROJECT: {name} excluded by the estimator{_at} — the £0 is the "
+                     f"decision, not a gap")
+        elif gbp is not None and scope == "per_order":
+            plan.update(
+                state="charged", unit_gbp=round(gbp / oq, 4), order_gbp=float(gbp),
+                description=f"{name} — per-order project cost, £{gbp:,.2f} ÷ {oq} off "
+                            f"(the estimator's figure)",
+                flag=f"PROJECT: {name} charged once for the order at the estimator's "
+                     f"£{gbp:,.2f}{_at} — the break table re-divides it at each quantity")
+        elif gbp is not None:
+            plan.update(
+                state="charged", unit_gbp=float(gbp), order_gbp=None,
+                description=f"{name} — per-unit production requirement at the estimator's "
+                            f"£{gbp:,.2f} each",
+                flag=f"PROJECT: {name} charged on every unit at the estimator's "
+                     f"£{gbp:,.2f}{_at}")
+        else:
+            _kind = ("per-order project cost" if scope == "per_order"
+                     else "per-unit production requirement")
+            plan.update(
+                state="to_price", unit_gbp=0.0, order_gbp=None,
+                description=f"{name} — {_kind}, estimator to price",
+                flag=f"PROJECT: {name} applies per the customer's standards{_at} — set the "
+                     f"figure in estimator_decisions.project_costs[{name!r}] and the line "
+                     f"prices itself; until then the £0 is an open allowance, not an answer")
+        out.append(plan)
+    return out
+
+
 _BRIEF_SECTION = """
 
 ENQUIRY BRIEF — written by SDI estimating for THIS job. These are STATED FACTS and they
