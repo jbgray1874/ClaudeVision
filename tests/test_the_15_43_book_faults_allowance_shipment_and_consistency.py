@@ -502,3 +502,14 @@ def test_a_past_quotes_class_word_price_is_flagged_as_history_not_market():
     src = inspect.getsource(wb_populate)
     assert "a past SDI quote's line price (SDI Live history) via" in src
     assert "historical_quote" in src
+
+
+# ── the 19:35 report's £95.88 (D-461): assembly labour summed as material ────────────
+
+def test_the_bills_material_tally_excludes_assembly_labour_and_states_the_direction():
+    import inspect
+    import job_report_html as jr
+    src = inspect.getsource(jr)
+    assert "_is_material_line" in src and '!= "assembly"' in src
+    assert "on these lines and not in the" in src, "the gap's direction is said both ways"
+    assert "are labour, compared on" in src, "the assemblies' money is named for what it is"
