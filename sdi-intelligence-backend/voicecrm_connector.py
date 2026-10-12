@@ -17,7 +17,8 @@ Each also shows a card in the conversation (connector_cards.py).
 
 Who is calling: every request carries a Microsoft Entra access token for this
 API (scope tracker.access), obtained when the person connected the app and
-signed in with their SDI account and MFA. It is checked here - signature,
+signed in with their SDI account and MFA - through this server's own sign-in
+front door when it is set up (connector_oauth.py). It is checked here - signature,
 tenant, audience, scope and (optionally) which client app asked for it - and
 then exchanged on-behalf-of for a Microsoft Graph token, so SharePoint is read
 and written with that person's own rights, exactly as in the web app.
@@ -41,13 +42,14 @@ import config  # noqa: F401  (loads .env before the modules below read it)
 import auth
 import voicecrm
 import connector_cards as cards
+import connector_oauth
 
 import jwt
 import uvicorn
 from mcp.server.apps import Apps
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.provider import AccessToken
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.settings import AuthSettings, ClientRegistrationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
@@ -77,6 +79,18 @@ SCOPE_URI = f"api://{API_ID}/{SCOPE}" if API_ID else SCOPE
 ISSUERS = [f"https://login.microsoftonline.com/{TENANT}/v2.0", f"https://sts.windows.net/{TENANT}/"]
 JWKS_URL = _opt("SDI_CONNECTOR_JWKS_URL",
                 f"https://login.microsoftonline.com/{TENANT}/discovery/v2.0/keys")
+# The sign-in front door (connector_oauth.py): ChatGPT / Claude sign in here and
+# this server does the Entra part, as the "SDI Tracker for ChatGPT" app. Unset,
+# ChatGPT / Claude are pointed straight at Entra (which refuses ChatGPT's request).
+OAUTH_CLIENT = _opt("SDI_CONNECTOR_OAUTH_CLIENT")
+OAUTH_SECRET = _opt("SDI_CONNECTOR_OAUTH_SECRET")
+FRONT_DOOR = bool(OAUTH_CLIENT and OAUTH_SECRET)
+if FRONT_DOOR and CLIENTS:
+    CLIENTS.add(OAUTH_CLIENT.lower())          # its tokens are the ones ChatGPT now carries
+OAUTH_CLIENTS_FILE = _opt("SDI_CONNECTOR_CLIENTS_FILE",
+                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "connector_clients.json"))
+OAUTH_REDIRECTS = tuple(r.strip() for r in _opt("SDI_CONNECTOR_REDIRECTS").split(",") if r.strip()) \
+    or connector_oauth.DEFAULT_REDIRECTS
 
 
 # ── Who is calling ────────────────────────────────────────────────────────────
@@ -413,13 +427,30 @@ apps.add_html_resource(UI_RECENT, cards.RECENT_HTML, title="Recent activity")
 
 
 def build_server() -> MCPServer:
-    return MCPServer(
+    if not FRONT_DOOR:
+        return MCPServer(
+            name="SDI Tracker", instructions=INSTRUCTIONS, extensions=[apps],
+            token_verifier=EntraTokenVerifier(),
+            # Tells ChatGPT / Claude where to sign in (Entra) and which scope to ask
+            # for; the token's audience is checked by the verifier above.
+            auth=AuthSettings(issuer_url=ISSUERS[0], resource_server_url=PUBLIC_URL,
+                              required_scopes=[SCOPE_URI], validate_token_resource=False))
+    door = connector_oauth.FrontDoor(
+        public_url=PUBLIC_URL, tenant=TENANT, client_id=OAUTH_CLIENT, client_secret=OAUTH_SECRET,
+        api_scope=SCOPE_URI, scope=SCOPE, verify=EntraTokenVerifier()._check,
+        clients_file=OAUTH_CLIENTS_FILE, redirects=OAUTH_REDIRECTS)
+    server = MCPServer(
         name="SDI Tracker", instructions=INSTRUCTIONS, extensions=[apps],
-        token_verifier=EntraTokenVerifier(),
-        # Tells ChatGPT / Claude where to sign in (Entra) and which scope to ask
-        # for; the token's audience is checked by the verifier above.
-        auth=AuthSettings(issuer_url=ISSUERS[0], resource_server_url=PUBLIC_URL,
-                          required_scopes=[SCOPE_URI], validate_token_resource=False))
+        # This server is where ChatGPT / Claude sign in; every token is still
+        # Entra's, checked by the same verifier, through the front door.
+        auth_server_provider=door,
+        auth=AuthSettings(issuer_url=door.base, resource_server_url=PUBLIC_URL,
+                          required_scopes=[SCOPE], validate_token_resource=False,
+                          client_registration_options=ClientRegistrationOptions(
+                              enabled=True, valid_scopes=door.scopes, default_scopes=door.scopes)))
+    server.custom_route(connector_oauth.CONSENT_PATH, methods=["GET", "POST"])(door.consent)
+    server.custom_route(connector_oauth.CALLBACK_PATH, methods=["GET"])(door.callback)
+    return server
 
 
 def build_app():
@@ -439,5 +470,6 @@ if __name__ == "__main__":
     if not ENABLED:
         raise SystemExit("The tracker connector is off. Set SDI_CONNECTOR_ENABLED=yes to start it.")
     print(f"[connector] starting on {HOST}:{PORT} for {PUBLIC_URL} (scope {SCOPE_URI}; "
-          f"writers {sorted(voicecrm.WRITERS)}; writes {'on' if voicecrm.WRITE_ENABLED else 'off'})", flush=True)
+          f"writers {sorted(voicecrm.WRITERS)}; writes {'on' if voicecrm.WRITE_ENABLED else 'off'}; sign-in "
+          f"{'front door as ' + OAUTH_CLIENT if FRONT_DOOR else 'direct to Entra'})", flush=True)
     uvicorn.run(build_app(), host=HOST, port=PORT)

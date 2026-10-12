@@ -47,7 +47,8 @@ $Files = @(
     "morning_review.py",
     "appportal/voice-crm.html",
     "voicecrm_connector.py",
-    "connector_cards.py"
+    "connector_cards.py",
+    "connector_oauth.py"
 )
 
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # C:\ClaudeVision

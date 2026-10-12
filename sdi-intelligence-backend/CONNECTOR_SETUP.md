@@ -44,22 +44,24 @@ Nick's behalf, exactly as the web app does.
    now (it is shown once). It goes into ChatGPT in step 6, nowhere else.
 3. **API permissions** → Add → *My APIs* → *SDI Intelligence* → Delegated →
    `tracker.access` → Add → **Grant admin consent**.
-4. **Authentication** → Add a platform → Web → the **callback URL ChatGPT shows**
-   when you create the connector in step 6 (come back and add it then).
+4. **Authentication** → Add Redirect URI → Web →
+   `https://sditracker-sdidisplays.msappproxy.net/oauth/callback` (the connector's
+   own sign-in front door, below). Leave any `https://chatgpt.com/connector/oauth/…`
+   address that is already there; it does no harm.
 5. **Enterprise applications** → *SDI Tracker for ChatGPT* → Properties →
    **Assignment required: Yes** → Users and groups → add **Nick** and **James**.
    Nobody else can connect it.
 
-For the Claude app later: the same again as *SDI Tracker for Claude*, with the
-callback URL Claude shows.
+The same registration serves the Claude app: Claude signs in through the same
+front door, so no second registration is needed.
 
 ## 3. App Proxy (Entra ID → Enterprise applications → New → Add an on-premises application)
 
 | Setting | Value |
 |---|---|
 | Name | SDI Tracker connector |
-| Internal URL | `http://10.0.0.5:8073/` |
-| External URL | `https://sdi-tracker-sdidisplays.msappproxy.net/` (or what the portal offers) |
+| Internal URL | `http://sdi-app01:8073/` (App Proxy refuses an IP address) |
+| External URL | `https://sditracker-sdidisplays.msappproxy.net/` (no hyphen allowed in the prefix) |
 | Pre-authentication | **Passthrough** |
 | Connector group | Default |
 
@@ -74,9 +76,22 @@ Add (keep everything else as it is):
 
 ```ini
 SDI_CONNECTOR_ENABLED=yes
-SDI_CONNECTOR_URL=https://sdi-tracker-sdidisplays.msappproxy.net/mcp
+SDI_CONNECTOR_URL=https://sditracker-sdidisplays.msappproxy.net/mcp
 SDI_CONNECTOR_CLIENTS=<Application ID of SDI Tracker for ChatGPT>
+SDI_CONNECTOR_OAUTH_CLIENT=<Application ID of SDI Tracker for ChatGPT>
+SDI_CONNECTOR_OAUTH_SECRET=<its client secret Value>
 ```
+
+The last two switch on the **sign-in front door** (`connector_oauth.py`). ChatGPT
+and Claude can't sign in to Entra directly: Entra has no self-registration, and
+it refuses the `resource` parameter they send (AADSTS9010010). With the front
+door, ChatGPT signs in to the connector the standard MCP way (it registers
+itself, then sends the person through a "Connect SDI Tracker?" page and an
+Entra account picker), and the connector does the Entra part as *SDI Tracker for
+ChatGPT*. The tokens are still Entra's, checked exactly as before. Registered
+clients are kept in `connector_clients.json` beside the code (never committed);
+only ChatGPT and Claude callback addresses may register (`SDI_CONNECTOR_REDIRECTS`
+to change the list). When the secret is renewed, update it here and restart.
 
 Optional: `SDI_CONNECTOR_PORT` (default 8073). Writers, write switch and
 approval are the web app's own settings (`SDI_VOICECRM_WRITERS` and so on).
@@ -84,7 +99,7 @@ approval are the web app's own settings (`SDI_VOICECRM_WRITERS` and so on).
 ## 5. The Windows service (PowerShell as admin, on SDI-App01)
 
 ```powershell
-$nssm = "C:\tools\nssm-2.24\win64\nssm.exe"
+$nssm = "C:\Tools\nssm.exe"
 $dir  = "C:\ClaudeVision\sdi-intelligence-backend"
 & $nssm install SDITrackerConnector "$dir\.venv\Scripts\python.exe" "$dir\voicecrm_connector.py"
 & $nssm set SDITrackerConnector AppDirectory $dir
@@ -103,11 +118,13 @@ From then on `Deploy-AMCRM.ps1` copies its files and restarts it with the main a
 **Check it** (from anywhere):
 
 ```powershell
-Invoke-RestMethod https://sdi-tracker-sdidisplays.msappproxy.net/.well-known/oauth-protected-resource/mcp
+Invoke-RestMethod https://sditracker-sdidisplays.msappproxy.net/.well-known/oauth-protected-resource/mcp
+Invoke-RestMethod https://sditracker-sdidisplays.msappproxy.net/.well-known/oauth-authorization-server
 ```
 
-should name `login.microsoftonline.com/<tenant>/v2.0` and `tracker.access`; and a
-request to `/mcp` with no token should get **401**.
+The first should name `https://sditracker-sdidisplays.msappproxy.net` as its
+authorization server and `tracker.access`; the second should list `/authorize`,
+`/token` and `/register`. A request to `/mcp` with no token should get **401**.
 
 ## 6. ChatGPT (workspace admin, at a desk)
 
@@ -117,18 +134,15 @@ the values are what matter):
 | Field | Value |
 |---|---|
 | Name | SDI Tracker |
-| URL | `https://sdi-tracker-sdidisplays.msappproxy.net/mcp` |
+| Server URL | `https://sditracker-sdidisplays.msappproxy.net/mcp` |
 | Authentication | OAuth |
-| Client ID / secret | from *SDI Tracker for ChatGPT* (step 2b) |
-| Authorization URL | `https://login.microsoftonline.com/<tenant id>/oauth2/v2.0/authorize` |
-| Token URL | `https://login.microsoftonline.com/<tenant id>/oauth2/v2.0/token` |
-| Scope | `api://<SDI_CLIENT_ID>/tracker.access offline_access` |
+| Advanced → Registration method | **Dynamic Client Registration** (ChatGPT registers itself; no client ID or secret goes into ChatGPT) |
+| Advanced → everything else | as discovered: the endpoints are the connector's own; leave Resource as the server URL |
 
-Copy the callback URL ChatGPT shows into step 2b.4. Publish it to the workspace
-(or to Nick and James).
-
-**Nick, once:** ChatGPT → Apps → SDI Tracker → Connect → Microsoft sign-in with
-MFA. If ChatGPT offers "always allow" for saving changes, choose it, so he is
+**Nick, once:** ChatGPT → Apps → SDI Tracker → Connect → "Connect SDI Tracker to
+ChatGPT?" → **Continue** → choose his SDI Microsoft account → MFA. The account
+picker always appears, so a browser signed in to another Microsoft account
+(an admin one, say) can't be used by mistake. If ChatGPT offers "always allow" for saving changes, choose it, so he is
 never asked to tap while driving: our server still saves only on his plain yes.
 
 ## Switching it off
