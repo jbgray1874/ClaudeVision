@@ -737,3 +737,40 @@ def test_the_submission_shows_its_roles_and_the_engine_says_a_missing_declaratio
     assert "NO reference declaration" not in out2.getvalue()
     assert not any("NO reference declaration" in str(f)
                    for f in summary2.get("review_flags") or [])
+
+
+def test_the_handoff_trace_answers_the_four_checkpoints_without_a_run(tmp_path):
+    """D-480: three K-Wellness runs priced the manual's example fixture, and each discovery
+    cost a full run. The trace answers the reviewer's four checkpoints against the staged
+    folder in seconds — markers, split, gate, product — using the engine's own functions,
+    with no model call and no pricing."""
+    import json as _json
+    import sys as _sys
+    _sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    from trace_handoff import trace
+
+    # Tonight's failure state: two PDFs, no markers → FAIL on both marker checkpoints.
+    a = tmp_path / "A"
+    a.mkdir()
+    (a / "KWellnessFSDU.pdf").write_bytes(b"%PDF-1.4")
+    (a / "Manual.pdf").write_bytes(b"%PDF-1.4")
+    ra = trace(a, "KWellnessFSDU")
+    assert ra["ok"] is False
+    assert [s for s, _ in ra["lines"]][:2] == ["FAIL", "FAIL"]
+
+    # The correct hand-off: both markers staged → all PASS, with the right split.
+    b = tmp_path / "B"
+    b.mkdir()
+    (b / "KWellnessFSDU.pdf").write_bytes(b"%PDF-1.4")
+    (b / "Manual.pdf").write_bytes(b"%PDF-1.4")
+    (b / "CONCEPT_DOCUMENT.json").write_text('{"mode": "client_document"}', encoding="utf-8")
+    (b / "REFERENCE_DOCUMENTS.json").write_text(
+        _json.dumps({"files": ["Manual.pdf"]}), encoding="utf-8")
+    rb = trace(b, "KWellnessFSDU")
+    assert rb["ok"] is True
+    assert rb["product_docs"] == ["KWellnessFSDU.pdf"]
+    assert rb["reference_docs"] == ["Manual.pdf"]
+
+    # A product that matches only the reference document is a FAIL with the reason named.
+    rc = trace(b, "Manual")
+    assert rc["ok"] is False and "REFERENCE document" in rc["lines"][-1][1]
