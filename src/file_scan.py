@@ -5167,6 +5167,15 @@ def _finalize_scan_summary(
                 print(f"   The unit itself is {_unit['part_number']} — "
                       f"{len(_unit.get('assembly_children') or [])} made part(s) to fit "
                       f"together, so the shop's own bench rule times the build.")
+            # THE BILL, BEFORE THE PRICING (D-481). The banner promised "the parts below"
+            # and listed none, so the only place to see the proposed bill was the finished
+            # book an hour later. A read that is not the product is visible here, in the
+            # first minutes, and the run can be stopped before a single price is looked up.
+            print("   THE PROPOSED BILL — check it now; if it is not the product, stop the "
+                  "run here:")
+            for _bl in concept_scan.bill_lines(
+                    ([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or [])):
+                print(f"     {_bl}", flush=True)
             # WHAT IT ASSUMED, AND WHERE TO ANSWER IT. A concept budget is only honest if
             # the assumptions are a list somebody can work through, not stamps on twelve
             # records that have to be opened one at a time.

@@ -2180,6 +2180,50 @@ def raise_sheet_questions(parts: List[Dict[str, Any]], check: Mapping[str, Any],
     return n
 
 
+def bill_lines(parts: List[Dict[str, Any]], limit: int = 60) -> List[str]:
+    """The proposed bill as one line per part, for the run log before any pricing (D-481).
+
+    Code, description, count, sighted blank and gauge, material, kind and the operations
+    the route will cost — so the person watching can see in the first minutes whether the
+    read is the product, and stop the run there instead of after an hour of pricing.
+    """
+    def _n(v: Any) -> str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return ""
+        return f"{f:g}" if f > 0 else ""
+
+    out: List[str] = []
+    for rec in parts[:limit]:
+        size = "×".join(s for s in (_n(rec.get("blank_length_mm")),
+                                    _n(rec.get("blank_width_mm"))) if s)
+        gauge = _n(rec.get("normalized_thickness_mm"))
+        if size and gauge:
+            size = f"{size}×{gauge}mm"
+        elif size:
+            size += "mm"
+        elif gauge:
+            size = f"{gauge}mm"
+        ops = rec.get("inferred_operations") or []
+        if rec.get("assembly_children"):
+            kind = f"unit of {len(rec['assembly_children'])} part(s)"
+        else:
+            kind = str(rec.get("concept_kind") or "")
+        out.append("  ".join(s for s in (
+            str(rec.get("part_number") or ""),
+            str(rec.get("description") or ""),
+            f"×{rec.get('quantity') or 1}",
+            size,
+            str(rec.get("normalized_material") or ""),
+            kind,
+            f"[{', '.join(str(o) for o in ops)}]" if ops else "",
+        ) if s))
+    if len(parts) > limit:
+        out.append(f"... and {len(parts) - limit} more line(s) — the full bill is in the book")
+    return out
+
+
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                        sheet: bool = False) -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.

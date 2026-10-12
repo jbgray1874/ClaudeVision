@@ -774,3 +774,30 @@ def test_the_handoff_trace_answers_the_four_checkpoints_without_a_run(tmp_path):
     # A product that matches only the reference document is a FAIL with the reason named.
     rc = trace(b, "Manual")
     assert rc["ok"] is False and "REFERENCE document" in rc["lines"][-1][1]
+
+
+def test_the_proposed_bill_is_printed_before_any_pricing():
+    """D-481: the reviewer's order is "inspect the proposed BOM before spending time on
+    pricing". The concept banner said "the parts below are SIGHTED" and listed none, so the
+    bill was only visible in the finished book an hour later. Each line now names its code,
+    count, sighted size and gauge, material, kind and the operations the route will cost."""
+    ans = {"design": "X", "parts": [
+        {"name": "SLOTTED POST", "kind": "fabricated", "quantity": 6,
+         "material_guess": "MILD STEEL",
+         "assumed_blank_mm": {"length": 1500, "width": 120, "thickness": 2},
+         "operations": ["laser_cutting", "folding", "powder_coating"]},
+        {"name": "EDGE STRIP", "kind": "bought_in", "quantity": 15, "operations": []},
+    ]}
+    recs = cs.parts_from_concept(ans, "JOB")
+    lines = cs.bill_lines(recs)
+    assert len(lines) == 2
+    assert "SLOTTED POST" in lines[0] and "×6" in lines[0]
+    assert "1500×120×2mm" in lines[0] and "MILD STEEL" in lines[0]
+    assert "[laser_cutting, folding, powder_coating]" in lines[0]
+    assert "EDGE STRIP" in lines[1] and "×15" in lines[1] and "bought_in" in lines[1]
+    assert "more line(s)" in cs.bill_lines(recs, limit=1)[-1]
+
+    src = (Path(__file__).resolve().parents[1] / "src" / "file_scan.py").read_text(
+        encoding="utf-8")
+    banner = src[src.index("THE PROPOSED BILL"):]
+    assert "concept_scan.bill_lines(" in banner[:400]
