@@ -18,7 +18,7 @@ one we hold.
 
 | # | Item | Owner | State |
 |---|---|---|---|
-| 1.1 | **Partner secret** | **InVentry Support** | **Answered 8 Oct: it is per site, not shared, and lives in our own database.** The value in their Postman collection is not ours — that is the 401. Their support team will log on, read it out of the database and give it to us. Escalated by Charlotte the same day. |
+| 1.1 | **Partner secret** | **James — test it** | **Received 12 Oct** (first sent 7 Oct on a support ticket from Farhan). Per site, not shared — the Postman collection's value was never ours, which was the 401. Goes in `INVENTRY_PARTNER_SECRET`, **not** the API key, despite being called the "End User Developer Key". Next: `python tools\\probe_inventry.py`. If still 401, InVentry escalate to a developer. |
 | 1.2 | ~~Does a new API key need the service restarted?~~ | — | **No** (Charlotte, 8 Oct). Ruled out. |
 | 1.3 | ~~Does `ActionLocation` accept free text?~~ | — | **Yes** (Charlotte, 8 Oct). Unblocks automatic sign-out — but confirm the value *round-trips* as `LastEventLocation` with one `probe_inventry.py --sign-in` before enabling it. Accepting a value is not the same as storing and returning it, and the safety argument rests on the round trip. |
 

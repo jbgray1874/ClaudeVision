@@ -785,3 +785,19 @@ never quoted - the API key goes to the engineer on the call, not into an inbox.
 > Thanks,
 > James Gray
 > AI & Systems Controller, SDI Displays Ltd
+
+## Round 8 reply — Charlotte Fastenbauer, 12 Oct 2026
+
+The site's partner secret arrived: a 16-character value she calls the "End
+User Developer Key", first sent on 7 Oct on a support ticket from Farhan that
+was missed on our side. **Not recorded here** - it lives in `.env` only.
+
+Despite the name, it goes in `INVENTRY_PARTNER_SECRET`, not `INVENTRY_API_KEY`.
+"End User Developer" is the partner's name; this is that partner's secret for
+our site. Its format confirms it - 16 alphanumerics, like the collection's
+generic secret - whereas the API key is the GUID created in our own console.
+Swapping the GUID out for it would produce a fresh 401 for a different reason.
+
+If it still 401s, she will escalate to a developer. Rule out transcription
+first: the value mixes characters that email fonts render ambiguously (0/O,
+I/l).
