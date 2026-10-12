@@ -1428,10 +1428,13 @@ class PricingService:
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             from bought_in_policy import is_bought_in as _bought
+            from bought_in_policy import read_states_a_made_part as _read_made
             _is_purchase = bool(_bought(part))
             # The service's own word heuristic (NUT, PIN, SPRING, WHEEL...) must not turn a
-            # made part with a measured flat into a purchase and lose it its material row.
-            if not _is_purchase and self._is_bought_in_heuristic(part) and not _measured(part):
+            # made part with a measured flat into a purchase and lose it its material row —
+            # nor one the concept read states it makes, with evidence (D-489).
+            if (not _is_purchase and self._is_bought_in_heuristic(part)
+                    and not _measured(part) and not _read_made(part)):
                 _is_purchase = True
         except Exception:                                        # noqa: BLE001
             _is_purchase = bool(self._is_bought_in_heuristic(part))

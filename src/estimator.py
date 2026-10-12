@@ -7337,11 +7337,19 @@ def _is_special_bought_in_item(part: Dict[str, Any]) -> bool:
     # -X suffix above is SDI's own purchasing convention and still does.
     try:
         from bought_in_policy import own_sheet_states_a_stock_material as _own_stock
-        if _own_stock(part):
+        from bought_in_policy import read_states_a_made_part as _read_made
+        # OR THE CONCEPT READ STATES IT, WITH EVIDENCE (D-489): made, in a stock SDI cuts,
+        # with a sighted blank and a fabrication route — a sighted part has no sheet of its own.
+        _by_sheet = _own_stock(part)
+        if _by_sheet or _read_made(part):
             part.setdefault("review_flags", [])
+            _mat_said = str(part.get('normalized_material') or (part.get('materials') or [''])[0]).replace('_', ' ')
             _msg = (f"named '{part.get('description')}' — read as what it holds, not what it "
-                    f"is made of: its own sheet states {str(part.get('normalized_material') or (part.get('materials') or [''])[0]).replace('_', ' ')}, "
-                    f"a stock SDI cuts, so it is made here and not bought")
+                    f"is made of: its own sheet states {_mat_said}, a stock SDI cuts, so it is "
+                    f"made here and not bought" if _by_sheet else
+                    f"named '{part.get('description')}' — read as what it holds, not what it "
+                    f"is made of: the concept read classes it as made, in {_mat_said}, with a "
+                    f"sighted blank and its own route, so it is made here and not bought")
             if _msg not in part["review_flags"]:
                 part["review_flags"].append(_msg)
             return False
@@ -8368,7 +8376,24 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if "folding" in ops:
         rule = LABOUR_RULES["folding"]
         setup_times_min["folding"] = round(rule["setup_min"], 2)
-        run_times_min["folding"] = round((bends * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
+        # A FOLDED PART IS NEVER FOLDED IN NO TIME (D-490). With no bend counted the run time
+        # came to 0.00 minutes, so the workbook's per-part rate was the part's pieces over the
+        # set-up alone — "CPT01 36,036/hr; CPT08 60,060/hr" on the K-Wellness fold rows — and
+        # the floor guard swapped the row for the department median. A part routed through
+        # folding that nothing has counted (and no model has measured flat) is charged the
+        # stated minimum, and the line says so.
+        _bends_charged = bends
+        if not bends and not _model_measured_zero_bends(part):
+            _assumed_folds = int(getattr(config, "FOLDS_ASSUMED_WHEN_UNCOUNTED", 1) or 0)
+            if _assumed_folds > 0:
+                _bends_charged = _assumed_folds
+                part["fold_count_assumed"] = _assumed_folds
+                part.setdefault("review_flags", []).append(
+                    f"folding charged on {_assumed_folds} ASSUMED fold(s): the part is routed "
+                    f"through folding and nothing counted its bends — the minimum for a folded "
+                    f"part (config FOLDS_ASSUMED_WHEN_UNCOUNTED), not a count. Give the fold "
+                    f"count and the time follows it")
+        run_times_min["folding"] = round((_bends_charged * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
         # ── WHERE THE FOLD COUNT CAME FROM, ON THE LINE THAT CHARGES IT ──────────────
         #
         # James Gray, 401912-02: "why are we getting this incorrect ever?"
@@ -8779,6 +8804,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"— {_per:g} min (LABOUR_RULES handling, per part) for each of {_pieces} piece(s) "
                 f"it fits, counted from its parts' quantities, not one unit at a department "
                 f"rate. Confirm it suits a unit this size")
+        # APPLYING AND CHECKING THE PER-COMPONENT ITEMS, ONCE, ON THE UNIT (D-491): the labels'
+        # line carries their price per item; their application is this unit's time, here only.
+        _apply_n = _safe_int(part.get("items_to_apply")) or 0
+        if _apply_n > 0 and (part.get("is_assembly_parent") or part.get("assembly_children")):
+            _apply_min = float(getattr(config, "CONCEPT_APPLY_MIN_PER_ITEM", 0.25) or 0.0)
+            if _apply_min > 0:
+                _added = round(_apply_n * _apply_min, 2)
+                run_times_min["handling"] = round(run_times_min.get("handling", 0.0) + _added, 2)
+                part["unit_fitting_applied"] = True
+                part.setdefault("review_flags", []).append(
+                    f"applying and checking {_apply_n} per-component item(s): {_added:g} min "
+                    f"added to this unit's Assemble/pack — {_apply_min:g} min each "
+                    f"(config CONCEPT_APPLY_MIN_PER_ITEM, an assumption to confirm), charged "
+                    f"once here and nowhere else")
         # A PART THAT LEAVES THE BUILDING IS PACKED TWICE.
         #
         # "There would be consideration for two ops for Packing — to and from Plater & Final

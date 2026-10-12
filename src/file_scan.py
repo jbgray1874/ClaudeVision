@@ -4908,6 +4908,17 @@ def _finalize_scan_summary(
             _sheet_read = bool(_design_intent_pages)
             _sheet_check: Dict[str, Any] = {}
             _set_aside: List[Dict[str, Any]] = []
+            # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked
+            # because the question changed is shown the bill it priced last time; a cached
+            # answer to the same question still replays untouched.
+            _bill_job = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            _prev_bill = concept_scan.load_previous_bill(job_folder, _bill_job)
+            _prev_text = concept_scan.previous_bill_text(_prev_bill)
+            if _prev_text:
+                print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
+                      f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
+                      f"new read, to keep unless the pages say otherwise", flush=True)
             if _sheet_read:
                 _door_rec = (summary.get("model_takeoff_door")
                              if isinstance(summary.get("model_takeoff_door"), dict) else {})
@@ -4918,13 +4929,26 @@ def _finalize_scan_summary(
                     _pack, refresh=_fresh, brief=_brief,
                     envelope=list(_door_rec.get("model_envelope_mm") or []),
                     envelope_of=str(_door_rec.get("model_envelope_of") or ""),
-                    reference_pack=_ref_pack)
+                    reference_pack=_ref_pack, previous=_prev_text)
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
             else:
                 _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief,
-                                                  reference_pack=_ref_pack)
+                                                  reference_pack=_ref_pack,
+                                                  previous=_prev_text)
                 _answer = _read.get("parsed") or {}
+            # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
+            # moved against the previous read — on the book, not only in the log.
+            _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []
+            if _changes:
+                _ch = ("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(_changes[:20])
+                       + (f"; and {len(_changes) - 20} more" if len(_changes) > 20 else ""))
+                summary.setdefault("review_flags", []).append(_ch)
+                print(f"   [concept] {_ch}", flush=True)
+            elif _prev_bill and _answer:
+                print("   [concept] the bill is unchanged from the previous read", flush=True)
+            if _answer:
+                concept_scan.save_bill(job_folder, _bill_job, _answer)
             if _ref_pack and not _read.get("standards_text_chars"):
                 summary.setdefault("review_flags", []).append(
                     "CONCEPT: the declared reference document(s) have no readable text "
@@ -5131,6 +5155,10 @@ def _finalize_scan_summary(
                     # orphans the consistency check blocks on.
                     _unit.setdefault("assembly_fitted_items", []).extend(
                         str(_l.get("part_number")) for _l in _nv_lines)
+                    # AND APPLYING THEM IS THE UNIT'S WORK, ONCE (D-491).
+                    _to_apply = sum(int(_l.get("items_to_apply") or 0) for _l in _nv_lines)
+                    if _to_apply:
+                        _unit["items_to_apply"] = _to_apply
                 print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
                       f"from the read's not-visible list — priced by the ordinary bought-in "
                       f"chain, flagged for confirmation", flush=True)

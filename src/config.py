@@ -683,11 +683,28 @@ CONCEPT_CONSUMABLE_WORDS = [
     "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
     "tape", "velcro", "label", "clip", "plug", "foot", "feet", "glide",
 ]
+# A PART ROUTED THROUGH FOLDING THAT NOTHING COUNTED IS FOLDED AT LEAST ONCE (D-490). A count,
+# never a time: the minutes come from LABOUR_RULES["folding"]. Without it the run time was 0
+# and the workbook's per-part fold rate was pieces over set-up alone (36,036/hr).
+FOLDS_ASSUMED_WHEN_UNCOUNTED = 1
 # A consumable the read says is PER COMPONENT is counted once per piece the unit fits
 # (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
 # Vocabulary, not logic.
 CONCEPT_PER_COMPONENT_WORDS = ["component", "per part", "each part", "every part", "per piece",
                                "each piece", "every piece"]
+# HOW MANY EACH COMPONENT CARRIES (D-491): a COUNT, never a price — the line is priced per
+# item by the ordinary chain and counted as this × the components the unit fits. AN
+# ASSUMPTION TO CONFIRM: the customer's own labelling rule decides.
+CONCEPT_PER_COMPONENT = {
+    "items_per_component": 1,
+    "basis": "an assumption to confirm — one per component",
+}
+# Per-component items that are APPLIED to the product, whose application and checking is
+# labour charged once on the unit (D-491). Vocabulary, not logic.
+CONCEPT_APPLIED_ITEM_WORDS = ["label", "sticker", "decal", "tag"]
+# Minutes to apply and check ONE such item — a time, an assumption to confirm (15 seconds:
+# peel, place, scan to verify). Charged once, on the unit's Assemble/pack time.
+CONCEPT_APPLY_MIN_PER_ITEM = 0.25
 # THE ALLOWANCE FOR A CONSUMABLES SET THE MARKET COULD NOT PRICE (D-487): a COUNT, never a
 # price. The set is costed as this many of the reference item per piece the unit fits, and
 # the reference item is priced by the ordinary chain (SDI's own sources first, then

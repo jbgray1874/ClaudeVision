@@ -43,6 +43,7 @@ FLAT_PATTERN = "flat_pattern_bend_lines"
 DRAWING_NOTE = "drawing_fold_note"
 MODEL_FEATURES = "solidworks_bend_features"
 DASHED_PROXY = "inferred_dashed_lines"
+CONCEPT_READ = "concept_read_fold_count"
 NO_EVIDENCE = "no_bend_evidence"
 CALLOUTS_AND_MODEL = "drawing_callouts_agreeing_with_model"
 
@@ -53,6 +54,7 @@ _LABEL = {
     DRAWING_NOTE: "the drawing's fold callouts",
     MODEL_FEATURES: "the SolidWorks bend features",
     DASHED_PROXY: "dashed lines read off a drawing view",
+    CONCEPT_READ: "the concept read's provisional fold count (sighted, not measured)",
     NO_EVIDENCE: "nothing on this part",
     CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model confirms",
 }
@@ -116,6 +118,17 @@ def solidworks_bend_features(part: Dict[str, Any]) -> Optional[int]:
     return _int(part.get("solidworks_bend_features"))
 
 
+def concept_read_fold_count(part: Dict[str, Any]) -> Optional[int]:
+    """The folds the concept read gave a part it sighted (D-490): a provisional count off a
+    brief or render, below every reading of a drawing, model or flat. Without it a sighted
+    folded part was charged no fold at all — run time 0, so the workbook's per-part rate was
+    its pieces over the set-up alone (36,036/hr on the K-Wellness posts)."""
+    if not isinstance(part, dict):
+        return None
+    value = _int(part.get("concept_fold_count"))
+    return value if value and value > 0 else None
+
+
 def dashed_line_proxy(part: Dict[str, Any]) -> Optional[int]:
     """Our own inference from dashed vectors in a PDF view. The weakest thing here."""
     if not isinstance(part, dict):
@@ -148,6 +161,7 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
         (FLAT_PATTERN, flat_pattern_bend_lines(part)),
         (DRAWING_NOTE, drawing_fold_note(part)),
         (MODEL_FEATURES, solidworks_bend_features(part)),
+        (CONCEPT_READ, concept_read_fold_count(part)),
         (DASHED_PROXY, dashed_line_proxy(part)),
     )
     count, source = 0, NO_EVIDENCE
