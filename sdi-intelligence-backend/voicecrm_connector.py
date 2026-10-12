@@ -32,6 +32,7 @@ CONNECTOR_SETUP.md.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import threading
@@ -218,6 +219,10 @@ def plain_yes(reply: str) -> bool:
     return 0 < len(n.split()) <= 6 and not _NO.search(n) and bool(_YES.match(n))
 
 
+NOT_READ = ("The tracker could not be read just now. Tell the person you couldn't check it. "
+            "Do not quote records from earlier in the conversation as current.")
+
+
 def _timed(tool: str, started: float, user: dict, note: str = "") -> None:
     print(f"[connector] tool={tool} user={user.get('email', '')} "
           f"secs={time.monotonic() - started:.1f} {note}", flush=True)
@@ -233,6 +238,9 @@ client or job. Speech recognition misspells names, so match by sound ("barber"
 is Barbour, "the perfume shop" is TPS). Answer from what it returns in short
 spoken sentences, leading with what's overdue, due soonest, at risk or highest
 value. Never invent values. Dates have a "(spoken)" form; use it.
+If a lookup fails, say plainly that you couldn't check the tracker just now.
+Don't answer from records seen earlier in the conversation as if they were
+current: the tracker may have changed since.
 
 Changing things - always in this order, never skipping a step:
 1. Call propose_changes with every change the person asked for (several in one
@@ -276,12 +284,15 @@ def get_records(search: str = "") -> dict:
     user, api = _caller()
     token = _graph_token(api)
     if not token:
-        return {"state": "no_token", "records": [],
+        _timed("get_records", started, user, "state=no_token")
+        return {"state": "no_token", "records": [], "warning": NOT_READ,
                 "detail": "Couldn't reach the tracker as you. Reconnect SDI Tracker and sign in again."}
     data = voicecrm.records_for(token)
     if data.get("state") != "ok":
-        _timed("get_records", started, user, f"state={data.get('state')}")
-        return {"state": data.get("state"), "records": [], "detail": str(data.get("detail", ""))[:300]}
+        detail = str(data.get("detail", ""))
+        _timed("get_records", started, user,
+               f"state={data.get('state')} status={data.get('status')} detail={detail[:200]!r}")
+        return {"state": data.get("state"), "records": [], "warning": NOT_READ, "detail": detail[:300]}
     _COLUMNS[user["oid"]] = (time.time(), list(data.get("columns") or []))
     rows = [_record(i) for i in data["items"]]
     words = [w for w in re.findall(r"[a-z0-9]+", search.lower()) if len(w) > 1]
@@ -326,7 +337,7 @@ def propose_changes(changes: list[Change]) -> dict:
                       "old_spoken": r["old_spoken"] or "blank", "new_spoken": r["new_spoken"]})
         lines.append(f"{name}: {r['field']} from {r['old_spoken'] or 'blank'} to {r['new_spoken']}")
     if not pids:
-        _timed("propose_changes", started, user, "nothing to propose")
+        _timed("propose_changes", started, user, f"nothing to propose {problems[:2]!r}"[:300])
         return {"state": "nothing_to_save", "problems": problems}
     read_back = (("One change. " if len(pids) == 1 else f"{len(pids)} changes. ")
                  + ". ".join(lines) + ". Shall I save " + ("it?" if len(pids) == 1 else "them?"))
@@ -464,6 +475,19 @@ def build_app():
         # Reached through App Proxy under its public name; the bearer token is
         # the lock, so the localhost-only Host check does not apply.
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False))
+
+
+class _QuietSignIn(logging.Filter):
+    """Keep sign-in codes and states out of the access log: show the path only."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str) and \
+                args[2].startswith(("/oauth/", "/authorize", "/token")):
+            record.args = (*args[:2], args[2].split("?", 1)[0], *args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietSignIn())
 
 
 if __name__ == "__main__":
