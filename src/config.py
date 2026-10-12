@@ -2001,6 +2001,18 @@ CONCEPT_COMPONENT_WORDS = (
 CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "CASTOR",
                                 "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
 CONCEPT_LABEL_MAX_WORDS = 4
+# A short line is a CALLOUT only if it reads like a label, not a wrapped fragment of a sentence
+# (D-482). A tech brief is paragraph text, and PDF extraction breaks paragraphs into lines: the
+# K-Wellness brief's "uprights. These could" was three words carrying UPRIGHT, so it was taken
+# as a printed part, the bill "missed" it, and a corrective second read was spent on prose.
+# A line with a sentence break inside it, or that starts or ends on one of these words, is
+# prose — a label never begins or ends on an article, conjunction, pronoun or modal verb.
+CONCEPT_LABEL_PROSE_WORDS = (
+    "A", "AN", "THE", "AND", "OR", "BUT", "OF", "TO", "IN", "ON", "AT", "BY", "FOR", "WITH",
+    "FROM", "AS", "THAT", "THIS", "THESE", "THOSE", "IT", "ITS", "THEY", "THEIR", "WHICH",
+    "IS", "ARE", "BE", "BEEN", "WAS", "WERE", "CAN", "COULD", "WILL", "WOULD", "SHOULD",
+    "MAY", "MIGHT", "MUST", "ALSO", "THEN", "SO", "IF",
+)
 
 # A short "<gauge>mm <material>" note on a design sheet ("2mm STEEL CONSTRUCTION", D-419), and
 # the stock material it names. Plain STEEL on a design sheet is mild steel unless it says

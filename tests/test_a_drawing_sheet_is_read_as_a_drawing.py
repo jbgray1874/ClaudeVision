@@ -522,6 +522,28 @@ def test_the_sheet_labels_its_feet_and_divider_and_nothing_from_the_legend():
     assert not any(l["head"] == "BAG" for l in more)
 
 
+def test_a_wrapped_line_of_prose_is_not_a_printed_label():
+    """D-482: a tech brief is paragraph text, and extraction breaks it into lines. The
+    K-Wellness read took "uprights. These could" as a printed part (three words carrying
+    UPRIGHT), the bill 'missed' it, and a corrective second read was spent on prose. A short
+    line with a sentence break inside it, or that starts or ends on an article, pronoun or
+    modal, is a fragment of a sentence — the real callouts beside it still count."""
+    brief = ("The corner posts carry the shelves and the\n"
+             "uprights. These could\n"
+             "be riveted to the base\n"
+             "TOP CAP\n"
+             "with the header panel\n"
+             "SLOTTED CORNER POST\n")
+    labels = [l["label"] for l in cs.sheet_labels(brief, {})]
+    assert "uprights. These could" not in labels
+    assert "be riveted to the base" not in labels, "starts on a modal: prose"
+    assert "with the header panel" not in labels, "starts on a preposition: prose"
+    assert labels == ["TOP CAP", "SLOTTED CORNER POST"]
+    # The 12675-01 GA's real callouts are untouched.
+    assert [l["label"] for l in cs.sheet_labels(REAL_TEXT, {"goods": "customer bags"})] == [
+        "ADJUSTABLE FEET", "CENTRAL SOLID DIVIDER"]
+
+
 def test_a_bill_without_the_labelled_divider_or_feet_disagrees():
     bill = _with(_the_sheets_bill())
     bill["parts"] = [p for p in bill["parts"] if p["name"] not in ("CENTRAL SOLID DIVIDER",

@@ -1582,10 +1582,15 @@ def sheet_labels(words: str, facts: Optional[Mapping[str, Any]] = None) -> List[
             seen.add(head)
             out.append({"label": label, "head": head})
 
+    prose = {str(w).upper() for w in (_vocab("CONCEPT_LABEL_PROSE_WORDS", ()) or ())}
     for line in str(words or "").splitlines():
         line = " ".join(line.split())
         tokens = re.findall(r"[A-Za-z]+", line)
         if not tokens or len(line.split()) > max_words or re.search(r"\d+\s*[xX×]\s", line):
+            continue
+        # A wrapped fragment of a sentence is not a callout (D-482).
+        if re.search(r"[.!?;]\s+\S", line) or tokens[0].upper() in prose \
+                or tokens[-1].upper() in prose:
             continue
         heads = [_singular(t) for t in tokens if _singular(t) in components]
         if heads:
