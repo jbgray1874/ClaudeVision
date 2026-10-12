@@ -380,3 +380,45 @@ def test_the_engine_also_keeps_its_own_copy_outside_the_staged_folder(tmp_path, 
     (job / "JOB_concept_bill.json").unlink()                         # a re-stage emptied it
     assert (tmp_path / "engine" / "cache" / "concept_bills" / "Boots__JOB.json").is_file()
     assert cs.load_previous_bill(job, "JOB")["parts"][0]["name"] == "Post"
+
+
+# ── D-494: measured holes establish the holes, not the tooling ───────────────────────────
+
+def _peg_panel(**over):
+    p = {"part_number": "P-1", "description": "PEG PANEL", "quantity": 1,
+         "normalized_material": "MILD STEEL", "normalized_thickness_mm": 1.5,
+         "blank_length_mm": 600, "blank_width_mm": 400,
+         "normalized_geometry": {"blank_length_mm": 600, "blank_width_mm": 400},
+         "geometry_rollup": {"estimated_hole_count": 120, "estimated_pierce_count": 120},
+         "inferred_operations": ["laser_cutting"]}
+    p.update(over)
+    return p
+
+
+def test_a_punch_switch_is_said_as_a_provisional_process_assumption():
+    import estimator as E
+    pe = E.estimate_part(_peg_panel(), job_quantity=10)
+    assert "punch" in (pe.get("labour_estimate") or {}).get("costs_gbp", {})
+    assert any(f.startswith("PUNCH — A PROVISIONAL PROCESS ASSUMPTION") and "not verified" in f
+               for f in pe["review_flags"])
+
+
+def test_stated_punch_limits_are_checked(monkeypatch):
+    import config
+    import estimator as E
+    monkeypatch.setitem(config.PUNCH_RECOGNITION, "max_gauge_mm", 1.2)
+    pe = E.estimate_part(_peg_panel(), job_quantity=10)
+    costs = (pe.get("labour_estimate") or {}).get("costs_gbp", {})
+    assert "punch" not in costs and "laser_cutting" in costs
+    assert any(f.startswith("PUNCH NOT USED") and "1.5 mm is over" in f for f in pe["review_flags"])
+    monkeypatch.setitem(config.PUNCH_RECOGNITION, "max_gauge_mm", None)
+    monkeypatch.setitem(config.PUNCH_RECOGNITION, "max_tool_mm", 10)
+    pe2 = E.estimate_part(_peg_panel(hole_sizes_mm=[6, 12]), job_quantity=10)
+    assert "punch" not in (pe2.get("labour_estimate") or {}).get("costs_gbp", {})
+    assert any("12 mm hole is over the largest stated punch tool" in f for f in pe2["review_flags"])
+
+
+def test_the_brief_uses_the_manual_for_constraints_not_its_examples():
+    text = (ROOT / "docs" / "briefs" / "KWellnessFSDU.md").read_text(encoding="utf-8")
+    assert "use the manual for applicable requirements and constraints" in text
+    assert "never for parts, dimensions or loads" not in text

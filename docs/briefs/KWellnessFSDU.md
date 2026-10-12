@@ -66,8 +66,9 @@ prototype and testing costs are NOT in the unit price - the estimator lists them
 separately in the response. UK manufacture at SDI rates; Europe/Asia options are a
 separate sourcing exercise, never an unexplained discount.
 The Boots in-store equipment design standards manual (BFDG v6) accompanies this enquiry
-as a REFERENCE document: read it only for the requirements that apply to this fixture,
-never for parts, dimensions or loads - its illustrated fixtures are examples. Applicable:
+as a REFERENCE document: use the manual for applicable requirements and constraints. Do not
+treat its illustrated example fixtures as ordered parts or borrow their example dimensions
+or loads. Applicable:
 BTC topple, tilt and bump tests plus the CUSTOM-size shelf deflection pair (BTC006/007 -
 these trays are not the standard 760mm shelf); the O&M manual; the drawing pack and CAD
 deliverables; the first-off sample (never charged beside a prototype for the same thing);

@@ -4207,6 +4207,10 @@ PUNCH_RECOGNITION = {
     # Corpus-validated descriptive terms; require a modest hole count alongside.
     "punch_keywords": ["PEG", "SLOT", "PERFORAT", "PERF", "MESH", "GRILLE", "VENT"],
     "min_holes_with_keyword": int(os.getenv("PUNCH_MIN_HOLES_KEYWORD", "8")),
+    # THE PUNCH'S OWN LIMITS (D-494) — unset until the shop states them. Set, the switch
+    # checks them; unset, a switch is costed but said as a provisional process assumption.
+    "max_gauge_mm": None,
+    "max_tool_mm": None,
 }
 
 POWDER_COSTING_POLICY = {

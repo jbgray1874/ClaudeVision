@@ -8017,8 +8017,38 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
             f"perimeter with a pierce. If SDI punches these on standard tooling, say so and the "
             f"time follows")
     elif (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
-        ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
-        record_operation(part, "punch", "inference")
+        # MEASURED HOLES ESTABLISH THE HOLES, NOT THE TOOLING (D-494). The switch is the shop's
+        # corpus rule; whether the punch has tools for these hole sizes at this gauge is a
+        # separate fact. Where config states the punch's limits (max_gauge_mm, max_tool_mm) they
+        # are checked; otherwise the switch stands as a PROVISIONAL process assumption, said on
+        # the line with what would settle it.
+        _pr = getattr(config, "PUNCH_RECOGNITION", {}) or {}
+        _max_g = _safe_float(_pr.get("max_gauge_mm"))
+        _max_t = _safe_float(_pr.get("max_tool_mm"))
+        _sizes = [h for h in (_safe_float(x) for x in (part.get("hole_sizes_mm") or [])) if h]
+        _not_punch = ""
+        if _max_g and thickness_mm and float(thickness_mm) > _max_g:
+            _not_punch = f"{float(thickness_mm):g} mm is over the punch's stated {_max_g:g} mm"
+        elif _max_t and _sizes and max(_sizes) > _max_t:
+            _not_punch = (f"a {max(_sizes):g} mm hole is over the largest stated punch tool "
+                          f"({_max_t:g} mm)")
+        if _not_punch:
+            part.setdefault("review_flags", []).append(
+                f"PUNCH NOT USED: {_punch_hole_signal} measured hole(s) would send this part to "
+                f"the punch, but {_not_punch} (config PUNCH_RECOGNITION) — costed as laser")
+        else:
+            ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
+            record_operation(part, "punch", "inference")
+            part.setdefault("review_flags", []).append(
+                f"PUNCH — A PROVISIONAL PROCESS ASSUMPTION: {_punch_hole_signal} measured "
+                f"hole(s) in {float(thickness_mm or 0):g} mm {_mat_u.lower() or 'sheet'} send this "
+                f"part to the punch under the shop rule (config PUNCH_RECOGNITION, from the 2023 "
+                f"estimates), but tooling for "
+                + (f"these hole sizes ({', '.join(f'{h:g}' for h in sorted(set(_sizes))[:6])} mm)"
+                   if _sizes else "these holes")
+                + " at this gauge is not verified. Confirm the tooling, or rule punch off and "
+                  "the laser costing follows; state the punch's limits in PUNCH_RECOGNITION "
+                  "(max_gauge_mm, max_tool_mm) and the rule checks them")
 
     # Known peg-family panels carry a measured machine cycle time; force punch
     # (drop laser) so the calibrated time below replaces the collapsed hit model.
