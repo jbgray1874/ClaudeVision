@@ -926,16 +926,33 @@ def split_not_visible(items: List[Any]) -> tuple:
     return cons, ship, unknown
 
 
-def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
+def consumable_lines(items: List[Any], stem: str,
+                     pieces_fitted: int = 0) -> List[Dict[str, Any]]:
     """Provisional bought-in lines for the consumables a render cannot show (D-468).
 
     "Not visible" must not mean unpriced: a flagged omission is an unresolved exception,
     not a passed gate. Each named consumable becomes a bought-in line of one assembly set
     per unit, down the SAME price chain as every bought-in (D-153) — SDI Live, research,
     then the flagged provisional allowance a refused research answer already earns — so
-    the book works towards a price and the line says exactly what it rests on."""
+    the book works towards a price and the line says exactly what it rests on.
+
+    SCALED TO THE UNIT IT GOES ON (D-487). The K-Wellness 12:31 book asked the market for
+    "fixings and fasteners for carcass assembly" — no answer, held at £0 — and priced "QR
+    component labels" at 3p for ONE label on a unit of about forty pieces. An item the read
+    says is per component is counted once per piece fitted; a set is asked about with the
+    size of the unit it fixes, and carries `consumable_allowance` — a count rule from
+    config, priced by a named reference item through the ordinary chain — for when the
+    market has no answer. Config holds the counts; the money comes from SDI's own sources."""
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
+    try:
+        import config                                               # noqa: WPS433
+        _rule = dict(getattr(config, "CONCEPT_CONSUMABLE_ALLOWANCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        _rule = {}
+    per_component = [str(w).strip().lower() for w in
+                     (_vocab("CONCEPT_PER_COMPONENT_WORDS", []) or []) if str(w).strip()]
+    pieces = max(0, int(pieces_fitted or 0))
     out: List[Dict[str, Any]] = []
     for n, it in enumerate((items or []), 1):
         said = str(it or "").strip()
@@ -947,12 +964,33 @@ def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
         record["concept_kind"] = "bought_in"
         record["concept_not_visible"] = True
         record["page_roles"] = ["render"]
-        apply_field(record, "quantity", 1, SOURCE,
-                    note="one assembly set per unit — provisional; the render cannot "
-                         "show a count")
+        _each = pieces > 1 and any(w in said.lower() for w in per_component)
+        if _each:
+            apply_field(record, "quantity", pieces, SOURCE,
+                        note=f"one per component — the read says so, and the unit fits "
+                             f"{pieces} piece(s); provisional")
+        else:
+            apply_field(record, "quantity", 1, SOURCE,
+                        note="one assembly set per unit — provisional; the render cannot "
+                             "show a count")
         apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
                     note="a consumables set the render cannot show, named by the read")
         record["is_bought_in"] = True
+        if pieces > 1 and not _each:
+            record["research_description"] = (
+                f"{said} — one set for a fixture of {pieces} fitted pieces; price the set as "
+                f"a standard trade assortment of that size")
+            _per = _rule.get("per_piece_fitted")
+            _ref = str(_rule.get("reference_item") or "").strip()
+            try:
+                _per = float(_per)
+            except (TypeError, ValueError):
+                _per = 0.0
+            if _per > 0 and _ref:
+                record["consumable_allowance"] = {
+                    "count": round(_per * pieces, 2), "per_piece_fitted": _per,
+                    "pieces_fitted": pieces, "reference_item": _ref,
+                    "basis": str(_rule.get("basis") or "")}
         record["review_flags"].append(
             "CONCEPT: NOT VISIBLE ON THE RENDER — a provisional consumables allowance, "
             "priced by the ordinary bought-in chain; confirm the contents and the figure "
@@ -1059,8 +1097,9 @@ def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool 
         # BEFORE the brief, so the brief's own "overrides anything inferred" reads after the
         # document's words and covers them.
         _text += _DOC_TEXT_SECTION.format(text=doc_words)
-    if standards_words and not sheet:
-        # After the product's words, before the brief, for the same ordering reason.
+    if standards_words:
+        # After the product's words, before the brief, for the same ordering reason — on a
+        # drawing-sheet read too (D-483): the requirements apply whatever the pages are.
         _text += _STANDARDS_SECTION.format(text=standards_words)
     if brief:
         _text += _BRIEF_SECTION.format(brief=brief)
@@ -1146,9 +1185,10 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
         h.update(DOC_TEXT_PROMPT_VERSION.encode("utf-8"))
         h.update(b"\x00")
         h.update(doc_words.encode("utf-8"))
-    if standards_words and not sheet:
+    if standards_words:
         # A DECLARED STANDARDS DOCUMENT IS A NEW QUESTION (D-474), and only a read that sends
-        # one hashes it: every run without one keeps the key, and the answer, it has.
+        # one hashes it: every run without one keeps the key, and the answer, it has. A sheet
+        # read sends it too (D-483), hashed the same way.
         h.update(b"\x00standards\x00")
         h.update(STANDARDS_PROMPT_VERSION.encode("utf-8"))
         h.update(b"\x00")
@@ -1209,13 +1249,17 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     # A DECLARED STANDARDS DOCUMENT RIDES AS WORDS ONLY (D-474): none of its pages is
     # rendered — its examples are reference, never the product — and its text goes under
     # its own section asking for the requirements that apply, nothing else.
+    # A DRAWING-SHEET READ CARRIES THEM TOO (D-483): the K-Wellness pages were classed as
+    # design-intent sheets, and the sheet read was never given the manual — no test, no
+    # documentation, no project cost reached the model, though the hand-off had worked.
     _refs = [str(p) for p in (reference_pack or [])]
     _std_words = ""
     _std_cov: Dict[str, Any] = {}
-    if _refs and not sheet:
+    if _refs:
         _std_words, _std_cov = sheet_text_with_coverage(_refs)
     _sheet_kw: Dict[str, Any] = (
         dict({"sheet": True, "sheet_words": _words, "recheck": recheck},
+             **({"standards_words": _std_words} if _std_words else {}),
              **({"envelope": list(envelope), "envelope_of": envelope_of}
                 if _envelope_words(envelope) else {})) if sheet
         else dict(**({"doc_words": _words} if _words else {}),
@@ -1228,7 +1272,7 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     if _words and _coverage.get("pages_trimmed"):
         # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
         _extra = dict(_extra, text_coverage=dict(_coverage))
-    if _refs and not sheet:
+    if _refs:
         # The declared documents and what of them was readable, on the record: a scanned
         # manual with no text layer sends nothing, and that is a fact the caller flags.
         _extra = dict(_extra, reference_documents=[Path(p).name for p in _refs],
@@ -1760,6 +1804,24 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
 
     failures: List[str] = []
     breaches: List[Dict[str, Any]] = []
+
+    # A PART WE MAKE WITH NO SIZE IS NOT YET A BILL (D-484). The K-Wellness 12:31 read gave
+    # every made part a count, a material and a route and every size as 0: nothing could be
+    # nested, so each fell to a market price for a finished item with our own labour charged
+    # on top. Each one is a failure, so the read is put back once naming them.
+    sizeless: List[str] = []
+    for p in made:
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        if _num(blank.get("length")) or _num(blank.get("width")):
+            continue
+        name = str(p.get("name") or "a part").strip()
+        sizeless.append(name)
+        failures.append(
+            f"{name} is a part SDI makes and the bill gives it no size — give its blank length, "
+            f"width and gauge from the dimensions that bound it, the body or footprint the "
+            f"pages state and the brief, and write \"not dimensioned\" in why_size where it is "
+            f"estimated")
+
     body_checked = len(dims) >= 2 and bool(made)
     if body_checked:
         _body_words = " × ".join(f"{d:g}" for d in dims)
@@ -1985,7 +2047,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         unverified.append("no body size to hold the parts to")
 
     checked = body_checked or weight_checked or goods_checked or bool(required) \
-        or gauge_checked or finish_checked
+        or gauge_checked or finish_checked or bool(sizeless)
     verdict = ("disagrees" if failures else "unchecked" if not checked
                else "unverified" if unverified else "agrees")
     return {"checked": checked, "agrees": verdict == "agrees", "verdict": verdict,
@@ -2003,6 +2065,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
             "ratio": round(ratio, 3) if ratio is not None else None,
             "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet,
+            "sizeless": sizeless,
             "read_gave_facts": read_gave_facts, "facts_from_sheet_text": from_text}
 
 
@@ -2091,14 +2154,16 @@ def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
 
 def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
                        brief: str = "", model: Optional[str] = None, envelope: Any = None,
-                       envelope_of: str = "") -> Dict[str, Any]:
+                       envelope_of: str = "",
+                       reference_pack: Optional[List[str]] = None) -> Dict[str, Any]:
     """A concept read of drawing sheets: read, held against the sheet, put back once with what
     broke, and the undrawn fittings set aside. Returns {'read', 'answer', 'check', 'set_aside'}.
 
     THE BETTER OF TWO, NEVER A THIRD. The second read is taken only where it agrees with the
     sheet more closely than the first; a bill that still does not agree is costed as sighted
     and the book says so — a concept budget to walk against the sheet, not a price."""
-    _env = {"envelope": list(envelope or []), "envelope_of": envelope_of}
+    _env = {"envelope": list(envelope or []), "envelope_of": envelope_of,
+            "reference_pack": list(reference_pack or [])}
     read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True, **_env)
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
@@ -2804,6 +2869,21 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
         f"that is most of what it is made of ({_mix or 'no material sighted'}); set "
         f"`estimator_decisions.throughput_per_hour` for the bench department to time it "
         f"yourself")
+    # EVERY PIECE IT FITS, COUNTED (D-486), and EVERY LINE IT HOLDS, OWNED (D-487). The
+    # pieces are the parts' quantities added up — ten side trays are ten pieces to fit, not
+    # one line — and the bought and printed lines hang under the unit for the hierarchy, in
+    # a field of their own: assembly_children stays the made parts the weld and powder
+    # rules read as members.
+    def _qty(p: Mapping[str, Any]) -> int:
+        try:
+            return max(1, int(p.get("quantity") or 1))
+        except (TypeError, ValueError):
+            return 1
+    fitted = [p for p in (parts or []) if isinstance(p, dict)
+              and p.get("concept_kind") != "assembly" and str(p.get("part_number") or "")]
+    record["pieces_fitted"] = sum(_qty(p) for p in fitted)
+    record["assembly_fitted_items"] = [str(p.get("part_number")) for p in fitted
+                                       if p.get("concept_kind") != "fabricated"]
     return record
 
 

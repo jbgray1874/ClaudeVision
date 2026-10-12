@@ -391,8 +391,15 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     # stay as a second net for records that arrive without either.
     try:
         from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence, is_bought_in
+        # THE COSTED RECORD KEEPS ITS ROUTE UNDER route_context (D-485). The last-resort rescue
+        # asks this of the costed line, not the raw part, so the top-level fields were empty and
+        # the K-Wellness trays, posts and spine — laser, fold, weld and powder on every one —
+        # read as things to buy: £6,163 of finished-item market figures with our own labour
+        # charged on top. Both places are read.
+        _rc = part.get("route_context") if isinstance(part.get("route_context"), dict) else {}
         _ops = {str(o).strip().lower() for o in
-                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or []))}
+                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
+                 + (_rc.get("textual_operations") or []) + (_rc.get("inferred_operations") or []))}
         if has_fabrication_evidence(part):
             return False
         # AN OPERATION READ ONTO A PURCHASED ITEM IS A MIS-READ, NOT A MAKE. MAGNET21 sat on

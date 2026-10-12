@@ -683,6 +683,21 @@ CONCEPT_CONSUMABLE_WORDS = [
     "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
     "tape", "velcro", "label", "clip", "plug", "foot", "feet", "glide",
 ]
+# A consumable the read says is PER COMPONENT is counted once per piece the unit fits
+# (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
+# Vocabulary, not logic.
+CONCEPT_PER_COMPONENT_WORDS = ["component", "per part", "each part", "every part", "per piece",
+                               "each piece", "every piece"]
+# THE ALLOWANCE FOR A CONSUMABLES SET THE MARKET COULD NOT PRICE (D-487): a COUNT, never a
+# price. The set is costed as this many of the reference item per piece the unit fits, and
+# the reference item is priced by the ordinary chain (SDI's own sources first, then
+# research) at run time — so nothing here can go stale invisibly. AN ASSUMPTION TO CONFIRM:
+# estimating to state the real fixings count for a fixture of this kind.
+CONCEPT_CONSUMABLE_ALLOWANCE = {
+    "per_piece_fitted": 4,
+    "reference_item": "M6 x 16 pan head machine screw, zinc plated, with nut and washer",
+    "basis": "an assumption to confirm — four fixings for each piece the unit fits",
+}
 # Items in SHIPMENT scope are already carried by the commercial PACKAGING and DELIVERY
 # lines every run prices — never duplicated as a parts line, and never one per fixture
 # (D-469). Checked BEFORE the consumable words, so "packing tape" lands here.

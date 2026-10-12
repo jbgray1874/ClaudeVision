@@ -4911,46 +4911,45 @@ def _finalize_scan_summary(
             if _sheet_read:
                 _door_rec = (summary.get("model_takeoff_door")
                              if isinstance(summary.get("model_takeoff_door"), dict) else {})
+                # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
+                # apply whatever the product's pages are, and only the render read was given
+                # them — the K-Wellness 12:31 book priced no test, documentation or project row.
                 _sr = concept_scan.read_sheet_concept(
                     _pack, refresh=_fresh, brief=_brief,
                     envelope=list(_door_rec.get("model_envelope_mm") or []),
-                    envelope_of=str(_door_rec.get("model_envelope_of") or ""))
+                    envelope_of=str(_door_rec.get("model_envelope_of") or ""),
+                    reference_pack=_ref_pack)
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
-                if _ref_pack:
-                    summary.setdefault("review_flags", []).append(
-                        "CONCEPT: the declared reference document(s) do not ride on a "
-                        "design-sheet read — the standards remain the estimator's own list "
-                        "this run")
             else:
                 _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief,
                                                   reference_pack=_ref_pack)
-                if _ref_pack and not _read.get("standards_text_chars"):
-                    summary.setdefault("review_flags", []).append(
-                        "CONCEPT: the declared reference document(s) have no readable text "
-                        "layer, so no requirement reached the model — the standards remain "
-                        "the estimator's own list this run")
-                _sc = (_read.get("standards_coverage")
-                       if isinstance(_read.get("standards_coverage"), dict) else None)
-                if _sc:
-                    # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
-                    # words only, so a trimmed page's diagram-only requirement may be missed.
-                    _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
-                                f"{_sc.get('total')} extracted character(s) of the reference "
-                                f"document(s) went to the model; its pages are not read as "
-                                f"images, so a requirement carried only by a trimmed page's "
-                                f"diagram may be missed — walk the manual's checklist "
-                                f"sections against the requirement lines before issue")
-                    summary.setdefault("review_flags", []).append(_sc_note)
-                    print(f"   [concept] {_sc_note}", flush=True)
                 _answer = _read.get("parsed") or {}
-                if _read.get("document_text_chars"):
-                    # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
-                    # stated footprint, construction and counts are facts, not visual cues.
-                    summary["concept_document_text_chars"] = int(_read["document_text_chars"])
-                    print(f"   [concept] the pack's own words went to the model with its "
-                          f"pages ({_read['document_text_chars']} chars) — a figure, material "
-                          f"or count stated in them is a fact, not a visual cue", flush=True)
+            if _ref_pack and not _read.get("standards_text_chars"):
+                summary.setdefault("review_flags", []).append(
+                    "CONCEPT: the declared reference document(s) have no readable text "
+                    "layer, so no requirement reached the model — the standards remain "
+                    "the estimator's own list this run")
+            _sc = (_read.get("standards_coverage")
+                   if isinstance(_read.get("standards_coverage"), dict) else None)
+            if _sc:
+                # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
+                # words only, so a trimmed page's diagram-only requirement may be missed.
+                _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
+                            f"{_sc.get('total')} extracted character(s) of the reference "
+                            f"document(s) went to the model; its pages are not read as "
+                            f"images, so a requirement carried only by a trimmed page's "
+                            f"diagram may be missed — walk the manual's checklist "
+                            f"sections against the requirement lines before issue")
+                summary.setdefault("review_flags", []).append(_sc_note)
+                print(f"   [concept] {_sc_note}", flush=True)
+            if not _sheet_read and _read.get("document_text_chars"):
+                # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
+                # stated footprint, construction and counts are facts, not visual cues.
+                summary["concept_document_text_chars"] = int(_read["document_text_chars"])
+                print(f"   [concept] the pack's own words went to the model with its "
+                      f"pages ({_read['document_text_chars']} chars) — a figure, material "
+                      f"or count stated in them is a fact, not a visual cue", flush=True)
             # A REQUIREMENT THE STANDARDS DOCUMENT STATES IS A NAMED ALLOWANCE (D-474):
             # design development, testing, assessments and documentation are project costs
             # the estimator prices SEPARATELY, never parts and never silently buried in the
@@ -5122,9 +5121,16 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
-            _nv_lines = concept_scan.consumable_lines(_nv_cons, _job_name)
+            _nv_lines = concept_scan.consumable_lines(
+                _nv_cons, _job_name,
+                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0))
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
+                if _unit:
+                    # THE CONSUMABLES GO ON THE UNIT (D-487): owned in the hierarchy, not
+                    # orphans the consistency check blocks on.
+                    _unit.setdefault("assembly_fitted_items", []).extend(
+                        str(_l.get("part_number")) for _l in _nv_lines)
                 print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
                       f"from the read's not-visible list — priced by the ordinary bought-in "
                       f"chain, flagged for confirmation", flush=True)

@@ -5087,6 +5087,10 @@ _STATED_SHOP_TIME_MARKERS = (
     ("bench_work_applied", ("bench_work",),
      "the bench-fitting rule for a board assembly (the joinery bench rate, or the house "
      "allowance per part fitted)"),
+    # THE SIGHTED UNIT'S FITTING TIME (D-486): the per-part handling minutes for every piece
+    # it fits — not a derivation for the floor guard to replace with a department median.
+    ("unit_fitting_applied", ("handling", "assembly"),
+     "the per-part handling allowance for each piece the unit fits (LABOUR_RULES handling)"),
 )
 
 
