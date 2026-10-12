@@ -36,7 +36,12 @@ pages (D-462).
 1. Client **Boots**, drawing number **KWellnessFSDU** (the folder's name; BR099X is the
    customer's fixture code — either works, one spelling throughout).
 2. Units box: **200, 1, 10** — the document prices at 200; 1 and 10 are the breaks.
-3. Add the job folder (the tech brief PDF). Method: **LLM** (render/concept read).
+3. Add the tech brief PDF as a FILE, not its folder. Method: **LLM** (render/concept read).
+   With a reference/standards document, add BOTH PDFs as files: the "Reference / standards
+   documents" tick list lists added FILES only, so a product added as a folder hides it and
+   the manual cannot be declared. Then press LLM read only and read the THIS SUBMISSION
+   dialog — PRODUCT must name the tech brief, REFERENCE the manual, CLIENT-DOCUMENT MODE ON
+   — and Cancel if any line is wrong (nothing is staged on Cancel).
 4. The brief box — PASTE THE BRIEF BELOW (it outranks the document's words where they
    differ, and it carries the traps the reviewer found in the pack). Adjust the height
    before running if a better figure is known.
