@@ -688,7 +688,8 @@ def test_the_marker_in_the_staged_folder_holds_the_manual_out_end_to_end(tmp_pat
     assert "Manual" not in str(paths)
 
 
-def test_the_submission_shows_its_roles_and_the_engine_says_a_missing_declaration(tmp_path):
+def test_the_submission_shows_its_roles_and_the_engine_says_a_missing_declaration(
+        tmp_path, monkeypatch):
     """D-479: two runs went out with the document roles silently lost and each burned an
     hour pricing the manual's example fixtures. The submit dialog now shows what the
     request will actually carry — PRODUCT / REFERENCE / CLIENT-DOCUMENT MODE / BRIEF —
@@ -717,9 +718,22 @@ def test_the_submission_shows_its_roles_and_the_engine_says_a_missing_declaratio
         d.save(str(job / name))
         d.close()
     import file_scan
+    monkeypatch.setenv("SDI_LLM_ONLY", "1")
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         summary, _ = file_scan.scan_folder_job(job, [job / "A.pdf", job / "B.pdf"])
     assert "NO reference declaration" in out.getvalue()
+    # And the same fact ON THE BOOK, not only in a log nobody re-reads.
+    assert any("NO reference declaration" in str(f)
+               for f in summary.get("review_flags") or [])
     assert sorted(Path(p).name for p in summary["scanned_documents"]) == ["A.pdf", "B.pdf"]
     assert not summary.get("reference_pack_paths")
+    # An ordinary multi-sheet drawing pack (not an LLM read) stays quiet: it has no
+    # declaration and needs none.
+    monkeypatch.delenv("SDI_LLM_ONLY", raising=False)
+    out2 = io.StringIO()
+    with contextlib.redirect_stdout(out2):
+        summary2, _ = file_scan.scan_folder_job(job, [job / "A.pdf", job / "B.pdf"])
+    assert "NO reference declaration" not in out2.getvalue()
+    assert not any("NO reference declaration" in str(f)
+                   for f in summary2.get("review_flags") or [])

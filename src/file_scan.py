@@ -957,6 +957,7 @@ def scan_folder_job(
     # and the roots never see a declared reference file. Its words still reach the model,
     # through the standards channel the concept read carries (reference_pack_paths below).
     reference_pdfs: List[Path] = []
+    _undeclared_note = ""
     try:
         import concept_scan as _cs_ref                              # noqa: WPS433
         _ref_names = set(_cs_ref.reference_documents_declared([job_folder]))
@@ -974,13 +975,22 @@ def scan_folder_job(
         elif _held:
             print(f"   -> every staged document is declared reference — the declaration "
                   f"is set aside so the read has a product", flush=True)
-    elif len(pdfs) > 1:
-        # THE ABSENCE IS SAID WHERE THE HOUR IS ABOUT TO BE SPENT (D-479): two K-Wellness
+    elif (len(pdfs) > 1
+          and os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}):
+        # THE ABSENCE IS SAID WHERE THE HOUR IS ABOUT TO BE SPENT (D-479): three K-Wellness
         # runs read a 101-page standards manual as the product because the declaration was
-        # lost on the way in, and the only sign was a line that was not printed.
+        # lost on the way in, and the only sign was a line that was not printed. Scoped to
+        # LLM-only runs — an ordinary multi-sheet drawing pack has no declaration and needs
+        # none. The flag below puts the same fact ON THE BOOK the estimator opens.
         print(f"   -> NOTE: {len(pdfs)} documents and NO reference declaration — every one "
               f"is read as the product. If one is a standards or reference manual, tick it "
               f"in the portal's Reference/standards list and run again.", flush=True)
+        _undeclared_note = (
+            f"{len(pdfs)} documents reached this LLM read with NO reference declaration "
+            f"and every one was read as the product ("
+            + ", ".join(p.name for p in pdfs)
+            + ") — if one of them is a standards or reference manual, its examples are in "
+              "this bill: tick it in the portal's Reference/standards list and run again")
     # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
     # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
     # (text, title block, BOM) is absent because a render carries none, not because a reader
@@ -1019,6 +1029,8 @@ def scan_folder_job(
     if reference_pdfs:
         # The held-out standards documents, for the concept read's requirements channel.
         merged["reference_pack_paths"] = [str(p) for p in reference_pdfs]
+    if _undeclared_note:
+        merged.setdefault("review_flags", []).append(_undeclared_note)
     # THE PACK THE ESTIMATOR STAGED, exactly as handed in, before this function dropped what
     # no reader opens. The measured-CAD guard reads THIS, not a listing of the folder: a STEP
     # file selected for the job is part of the job even though nothing read it, and a STEP
