@@ -305,6 +305,24 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
             price_provenance.NOT_APPLICABLE,
             "FREE-ISSUE: the customer supplies this item, so the nil is on purpose. "
             "Confirm free issue with the customer; do not price it")
+    # A PROJECT COST CHARGED ONCE ON THE ORDER (D-497): its £0 in the unit column is the
+    # rule, and the order figure is charged on the Quantity Breaks tab. The 18:17 K-Wellness
+    # provenance tab called four such lines "ESTIMATOR TO PRICE: no catalogue … holds this
+    # item" beside the £2,720 the book had charged for them.
+    _pcl = part.get("project_cost_line")
+    if isinstance(_pcl, Mapping) and str(_pcl.get("scope") or "") in ("per_order", "per_batch"):
+        try:
+            _og = float(_pcl.get("order_gbp") or 0.0)
+        except (TypeError, ValueError):
+            _og = 0.0
+        if _og > 0:
+            return price_provenance.unpriced_reason(
+                price_provenance.NOT_APPLICABLE,
+                f"a {'per-batch' if _pcl.get('scope') == 'per_batch' else 'per-order'} project "
+                f"cost of £{_og:,.2f}, charged ONCE on the order (Quantity Breaks tab) and kept "
+                f"out of the unit price"
+                + ("; an AI provisional allowance to confirm"
+                   if str(_pcl.get("state") or "") == "provisional" else ""))
     # "Delivery is not required" is an estimator's ruling, recorded through the answers
     # file — the £0 is the decision, and it comes off the outstanding list for good.
     if part.get("_commercial_excluded"):

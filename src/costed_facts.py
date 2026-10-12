@@ -2080,6 +2080,22 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
                           + (f"; its own count here ({_num(_own_q):g}) is not charged — the "
                              f"quantity on {_same.group(1)} is"
                              if _num(_own_q) else ""))}
+    # A PROJECT COST CHARGED ONCE ON THE ORDER IS NOT A MISSING UNIT PRICE (D-497). The
+    # K-Wellness 18:17 book listed the O&M manual, drawing pack, Sustain and risk assessment
+    # lines as "NOT PRICED — enter the per-unit amount" and counted them as "4 prices to add",
+    # while the Quantity Breaks tab charged their £2,720 once. Their £0 in the unit column is
+    # the rule (D-476), and the order figure rides the record.
+    _pcl = part.get("project_cost_line") if isinstance(part.get("project_cost_line"),
+                                                        Mapping) else None
+    if (_pcl and not money and str(_pcl.get("scope") or "") in ("per_order", "per_batch")
+            and _num(_pcl.get("order_gbp")) > 0):
+        _prov = str(_pcl.get("state") or "") == "provisional"
+        return {"class": "per_order_project", "firmness": NIL, "owner": "nobody",
+                "label": (f"{'per-batch' if _pcl.get('scope') == 'per_batch' else 'per-order'} "
+                          f"project cost — £{_num(_pcl.get('order_gbp')):,.2f} charged ONCE on the "
+                          f"order (Quantity Breaks tab), not in the unit price; "
+                          + ("an AI provisional allowance to confirm on the decisions list"
+                             if _prov else "the estimator's figure"))}
     if kind == "commercial" and not money:
         # "Delivery is not required" — Tony Ford, 16 Sep 2026 — is an ANSWER: the line's
         # £0 is a person's decision, and asking somebody to price it on every run is how

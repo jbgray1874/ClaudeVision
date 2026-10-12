@@ -2216,8 +2216,14 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
             continue
         if part_cannot_be_powder_coated(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
-        if not says_coated(_sp):
-            continue   # the route decided this part does not go through the booth
+        if not says_coated(_sp) and not (
+                isinstance(_sp.get("coated_with_host"), (list, tuple))
+                and any(says_coated({"part_number": str(_h)})
+                        for _h in _sp.get("coated_with_host"))):
+            # the route decided this part does not go through the booth — unless it is
+            # welded to a host that does (D-499): its area is coated with the host's, and it
+            # adds no P.Coat piece of its own. The K-Wellness brackets' area had disappeared.
+            continue
         # AN ASSEMBLY COATED AS ONE THING HAS NO BLANK, AND STILL HAS AN AREA. 12567-02-101
         # HEADER CASE: the coat is claimed on the case, its members' sheets carry none of
         # their own, so the route names the case and not the panels. This sum read blanks —
@@ -3584,8 +3590,12 @@ def canonical_labour_groups(
                 if _r and _r > 0:
                     group["run_hours_per_unit"] = (
                         group.get("run_hours_per_unit") or 0.0) + float(_r) * qty
+                # `rh` is the run time a piece THIS ROW INCLUDED for the member — found here
+                # under the department's other name — so a stated time replaces exactly it
+                # (D-495), and the row's working shows the member's own rate (D-498).
                 group.setdefault("hours_by_part", {})[str(_asm_id)] = {
-                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1)}
+                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_r or 0.0)}
                 group["assembly_own_time"] = True
                 continue
 
@@ -3618,7 +3628,8 @@ def canonical_labour_groups(
             # kept, so a row combining a long strap and a small cap could not be audited.
             if (hours and hours > 0) or (_rh and _rh > 0):
                 group.setdefault("hours_by_part", {})[str(representative_id)] = {
-                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1)}
+                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_rh or 0.0)}
 
             geometry = estimates[representative_id].get("normalized_geometry") or {}
             if operation == "folding":
@@ -5142,6 +5153,31 @@ def _member_stated_hours(hours: Dict[str, Any], covered: Any, engine_ops: Any) -
     return 0.0
 
 
+def member_rates(hours_by_part: Mapping[str, Any], order_qty: Any) -> List[Tuple[str, float, float]]:
+    """(part, pieces an hour, batch hours) for each member of a shared labour row — the row's
+    working, shown beside the one combined rate it charges.
+
+    A MEMBER'S RATE IS ITS OWN PIECE TIME (D-498). The batch hours a part estimate carries are
+    its piece time × the ORDER's units, not × its pieces a unit — so multiplying the order by
+    the pieces a unit inflated every multi-off member: a bracket thirty to a unit read 5807/hr
+    beside its true ~194/hr, and the spread warning fired on that. The row's charge never used
+    these figures; only what the row SAID about its members was wrong."""
+    out: List[Tuple[str, float, float]] = []
+    try:
+        oq = float(order_qty or 0)
+    except (TypeError, ValueError):
+        oq = 0.0
+    for _ppn, _rec in (hours_by_part or {}).items():
+        _rec = _rec if isinstance(_rec, Mapping) else {}
+        _pbh = _safe(_rec.get("bh"))
+        _prh = _safe(_rec.get("rh"))
+        if _prh and _prh > 0:
+            out.append((str(_ppn), 1.0 / _prh, float(_pbh or 0.0)))
+        elif _pbh and _pbh > 0 and oq > 0:
+            out.append((str(_ppn), oq / _pbh, float(_pbh)))
+    return out
+
+
 def stated_row_hours(group: Dict[str, Any], stated_time_by_pn: Dict[str, str],
                      stated_hours_by_pn: Dict[str, Dict[str, Any]],
                      stated_ops_by_pn: Dict[str, Any]) -> Tuple[float, List[str]]:
@@ -5177,7 +5213,14 @@ def stated_row_hours(group: Dict[str, Any], stated_time_by_pn: Dict[str, str],
         _rec = by_part.get(_gk) or {}
         _q = _safe(_rec.get("qty_per_unit"), 1) or 1
         _computed = 0.0
-        if _rec:
+        if "rh" in _rec:
+            # WHAT THE ROW ACTUALLY INCLUDED FOR THIS MEMBER (D-495). The stated time is found
+            # under the department's other name ("assembly" on the route, "handling" in the
+            # costing); asking for the computed share by the route's spelling found nothing,
+            # so the K-Wellness unit's 82.95 minutes were added on top of themselves and the
+            # Assemble/pack row charged 165.9. The grouping records the share it summed.
+            _computed = _safe(_rec.get("rh")) or 0.0
+        elif _rec:
             for _eop in (g.get("engine_ops") or []):
                 _computed = _safe(_hrs.get(str(_eop).strip().lower())) or 0.0
                 if _computed:
@@ -8069,13 +8112,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _hbp = g.get("hours_by_part") or {}
             _each_cell = None
             if len(_hbp) > 1 and order_qty:
-                _per_part = []
-                for _ppn, _rec in _hbp.items():
-                    _pbh = _safe(_rec.get("bh"))
-                    _pq = _safe(_rec.get("qty_per_unit"), 1) or 1
-                    if not _pbh or _pbh <= 0:
-                        continue
-                    _per_part.append((_ppn, (order_qty * _pq) / _pbh, _pbh))
+                _per_part = member_rates(_hbp, order_qty)
                 if len(_per_part) > 1:
                     _rates = [r for _, r, _ in _per_part]
                     _spread = max(_rates) / max(1e-9, min(_rates))

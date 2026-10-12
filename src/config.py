@@ -715,6 +715,62 @@ CONCEPT_CONSUMABLE_ALLOWANCE = {
     "reference_item": "M6 x 16 pan head machine screw, zinc plated, with nut and washer",
     "basis": "an assumption to confirm — four fixings for each piece the unit fits",
 }
+# THE FIXINGS A SIGHTED UNIT NEEDS WHEN THE READ NAMES NONE (D-499). Not visible must not
+# mean unpriced: the unit gets a provisional fixings line counted per MECHANICALLY fitted
+# piece — a welded piece's joint is its weld and a piece that hangs or clips is fitted
+# without tools, so neither is counted. Words that say a line IS fixings (so the read named
+# them), and words that say a piece needs none. Vocabulary, not logic.
+CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "screws",
+                        "bolt", "bolts", "rivet", "rivets", "nut", "nuts", "washer"]
+CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
+                             "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
+                             "snap", "magnet", "magnetic", "tool-free"]
+# A PIECE WELDED TO A NAMED HOST IS PART OF THAT HOST'S COMPONENT (D-499): "<piece> welded
+# to <host>". It is not fitted, labelled or fixed at the unit on its own, and it is coated
+# with its host. The joining words that name the host:
+CONCEPT_WELDED_TO_WORDS = ["welded to", "welded onto", "welded on to"]
+# A FLANGE DEPTH FOR A CONCEPT BLANK WHOSE READ GAVE NONE (D-499) — a typical return on a
+# folded sheet-steel display part. AN ASSUMPTION TO CONFIRM, recorded on every part it sizes.
+CONCEPT_FLANGE_ALLOWANCE_MM = 25
+# A SHELF-EDGE STRIP, TRIM OR LIP SIZED FROM THE PART IT EDGES (D-499): when the read gives
+# one line whose count is the total of several host parts of different sizes, it is split
+# into one line per host, each at its host's own length. Words that make a line an edging.
+CONCEPT_EDGE_STRIP_WORDS = ["strip", "trim", "edging", "edge", "lip", "nosing"]
+
+# HOW OFTEN A PROJECT REQUIREMENT HAPPENS IS EVIDENCE, NOT A GUESS (D-497). The read classed
+# the K-Wellness topple/tilt/bump tests "per unit" and the book charged £450 on each of 200
+# units, though the brief says testing is NOT in the unit price. The scope is decided, in
+# order, by the estimator's answer, the brief's own sentence, the requirement's own words,
+# and only then the read — whose call is labelled unconfirmed. Vocabulary, not logic.
+PROJECT_SCOPE_EVIDENCE = {
+    # What a requirement IS, read from its name, its words and its allowance basis.
+    "categories": {
+        "testing": ["test", "tests", "testing", "tested", "trial", "trials"],
+        "design": ["design", "development", "cad", "drawing pack", "drawings"],
+        "prototype": ["prototype", "prototypes", "first-off", "first off", "sample"],
+        "documentation": ["documentation", "manual", "o&m", "document", "report"],
+        "assessment": ["assessment", "audit", "survey", "certification", "certificate",
+                       "approval"],
+        "labelling": ["label", "labels", "labelling", "marking"],
+        "inspection": ["inspection", "qc", "quality check", "verification"],
+    },
+    # How often, in the words of the brief or the requirement. Checked per_order first
+    # ("NOT in the unit price" is a per-order sentence), then per_batch, then per_unit; a
+    # phrase negated earlier in its clause ("not full inspection per unit") does not count.
+    "per_order": ["not in the unit price", "per-order", "per order", "shown separately",
+                  "listed separately", "charged once", "project cost", "type test",
+                  "type-test", "per design", "once per design", "before production",
+                  "prior to production", "pre-production", "design approval", "one-off"],
+    "per_batch": ["per batch", "each batch", "every batch", "batch setup", "batch set-up",
+                  "per production run", "per lot", "each delivery", "per consignment",
+                  "sampled"],
+    "per_unit": ["per-unit requirement", "per unit requirement", "each unit", "every unit",
+                 "per unit", "each fixture", "every fixture", "all units", "100%"],
+    # A requirement repeated when the design changes is still a per-design cost; the flag
+    # says a change brings it back.
+    "repeat_on_change": ["design change", "after any change", "re-test", "retest",
+                         "modification"],
+}
 # Items in SHIPMENT scope are already carried by the commercial PACKAGING and DELIVERY
 # lines every run prices — never duplicated as a parts line, and never one per fixture
 # (D-469). Checked BEFORE the consumable words, so "packing tape" lands here.

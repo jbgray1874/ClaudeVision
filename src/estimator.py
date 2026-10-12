@@ -9247,6 +9247,19 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
         _qsrc = str(_src_of(part, "quantity") or "")
     except Exception:                                                # noqa: BLE001
         _qsrc = ""
+    # A COUNT THE ENGINE WORKED OUT, WITH ITS WORKING, IS NOT PARSER NOISE EITHER (D-496). The
+    # K-Wellness labels were counted 1 per component × 79 components; this cap reset them to 1
+    # and the book charged one label for the unit while the report said 79. A record that
+    # carries `quantity_counted` states the rule and the count it applied.
+    if raw_qty > _MAX and isinstance(part.get("quantity_counted"), dict):
+        part.setdefault("review_flags", []).append({
+            "severity": "info",
+            "flag": "quantity_over_cap_kept",
+            "detail": (f"qty {raw_qty} is over MAX_PART_QTY_PER_UNIT ({_MAX}) and kept — the "
+                       f"engine counted it: "
+                       f"{part['quantity_counted'].get('basis') or 'a stated count rule'}"),
+        })
+        return raw_qty
     if raw_qty > _MAX and _qsrc in _QTY_SOURCES_THAT_READ_A_COUNT:
         part.setdefault("review_flags", []).append({
             "severity": "info",
@@ -10431,6 +10444,11 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "material_priced_as": (dict(part["material_priced_as"])
                                if isinstance(part.get("material_priced_as"), dict) else None),
         "drawn_thickness_mm": part.get("drawn_thickness_mm"),
+        # A PIECE WELDED TO A COATED HOST IS COATED WITH IT (D-499): its area belongs in the
+        # powder sum though it never hangs on the line as a piece of its own.
+        **({"coated_with_host": list(part.get("coated_with_host"))}
+           if isinstance(part.get("coated_with_host"), (list, tuple))
+           and part.get("coated_with_host") else {}),
         # What the part's own sheet showed of its welds (weld_symbols), carried so the costed
         # record can say it joins members — the envelope sweep reads it.
         "weld_symbols": (dict(part["weld_symbols"])
@@ -12657,7 +12675,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             try:
                 import concept_scan as _cs_pc
                 _pc_plan = _cs_pc.project_cost_plan(
-                    _std_reqs, _dec_block, _commercial_order_quantity(summary))
+                    _std_reqs, _dec_block, _commercial_order_quantity(summary),
+                    brief=str(((summary or {}).get("enquiry_brief") or {}).get("text") or ""))
             except Exception as _pc_exc:                     # noqa: BLE001
                 print(f"   [project] the standards requirements could not be planned "
                       f"({type(_pc_exc).__name__}: {_pc_exc}) — the D-474 flags still name "
@@ -12671,7 +12690,7 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["_commercial_placeholder"] = True
                 _stub["project_cost_line"] = {k: _p.get(k) for k in
                                               ("name", "scope", "where", "state",
-                                               "requirement", "order_gbp")}
+                                               "requirement", "order_gbp", "scope_basis")}
                 # Pure commercial placeholders: no operations, no handling labour.
                 _stub["textual_operations"] = []
                 _stub["inferred_operations"] = []
@@ -12700,7 +12719,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 summary["project_costs"] = {
                     "total_gbp": _pc_total,
                     "lines": [{k: p.get(k) for k in ("code", "name", "scope", "state",
-                                                     "order_gbp", "unit_gbp", "where")}
+                                                     "order_gbp", "unit_gbp", "where",
+                                                     "per_batch_gbp", "batch_size")}
                               for p in _pc_plan]}
                 print("   [project] requirement line(s) from the customer's standards: "
                       + ", ".join(f"{p['code']} {p['state']}" for p in _pc_plan)

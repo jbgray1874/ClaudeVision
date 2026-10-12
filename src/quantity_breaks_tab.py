@@ -233,21 +233,34 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
         # customer's standards are one-off obligations of the order — the same £ at every
         # quantity — so the combined total is the view that answers "what does this order
         # cost", and the unit price stays the manufacturing figure the brief asked for.
+        #
+        # A PER-BATCH COST IS RECALCULATED AT EACH QUANTITY (D-497, reviewed): once a batch is
+        # not once the order — each column counts the batches its own quantity makes.
         _pc_total = _money((project_costs or {}).get("total_gbp"))
         _pc_rows = 0
         if _pc_total:
             _pc_rows = 3
+            _per_batch = any(isinstance(_l, dict) and _l.get("scope") == "per_batch"
+                             for _l in ((project_costs or {}).get("lines") or []))
             ws.cell(row=head + 8, column=1,
-                    value="Project costs £ (charged once — not in the unit price)"
+                    value=("Project costs £ (per order once, per batch each batch — not in "
+                           "the unit price)" if _per_batch else
+                           "Project costs £ (charged once — not in the unit price)")
                     ).font = bold
             ws.cell(row=head + 9, column=1,
                     value="Order total incl. project costs £").font = bold
+            try:
+                from concept_scan import project_costs_at as _pc_at
+            except Exception:                                        # noqa: BLE001
+                _pc_at = None
             for col, r in enumerate(rows, start=2):
                 _u = _money(r.get("unit"))
-                ws.cell(row=head + 8, column=col, value=_pc_total)
+                _here = (_pc_at(project_costs, r.get("quantity"))
+                         if (_pc_at and (project_costs or {}).get("lines")) else _pc_total)
+                ws.cell(row=head + 8, column=col, value=_here)
                 if _u is not None:
                     ws.cell(row=head + 9, column=col,
-                            value=round(_u * int(r["quantity"]) + _pc_total, 2))
+                            value=round(_u * int(r["quantity"]) + _here, 2))
 
         ws.column_dimensions["A"].width = 22
         for col in range(2, len(rows) + 2):
