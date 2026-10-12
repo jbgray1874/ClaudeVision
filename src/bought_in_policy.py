@@ -380,9 +380,11 @@ def read_states_a_made_part(part: Dict[str, Any]) -> bool:
       - the make/buy status: the read classed the line as made (concept_kind "fabricated"),
         and no estimator ruling says buy;
       - the material: a stock SDI cuts (config's density table);
-      - the manufacturing evidence: a sighted blank (length and width) and at least one
-        fabrication operation on the line.
-    A steel item the read called bought-in, or one with no size or no route, is not covered."""
+      - the manufacturing evidence: at least one fabrication operation on the line.
+    A SIZE IS NOT REQUIRED (review of D-489): an explicitly made part the read could not size
+    stays made — its route kept, its material a provisional raw-material allowance (D-485) —
+    and never reverts to a finished-item purchase because of a word in its name. A steel item
+    the read called bought-in or a graphic, or one with no fabrication route, is not covered."""
     if not isinstance(part, dict) or part.get("concept_kind") != "fabricated":
         return False
     if make_or_buy_ruling(part) == "buy":
@@ -394,13 +396,6 @@ def read_states_a_made_part(part: Dict[str, Any]) -> bool:
         dens = {}
     mat = _upper(part.get("normalized_material")).replace("_", " ").strip()
     if not mat or mat == "BOUGHT IN" or not (mat in dens or mat.replace(" ", "_") in dens):
-        return False
-    try:
-        length = float(part.get("blank_length_mm") or 0)
-        width = float(part.get("blank_width_mm") or 0)
-    except (TypeError, ValueError):
-        return False
-    if length <= 0 or width <= 0:
         return False
     ops = {str(o).strip().lower() for o in
            (list(part.get("inferred_operations") or []) + list(part.get("textual_operations") or []))}

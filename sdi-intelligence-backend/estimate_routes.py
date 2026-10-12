@@ -1700,6 +1700,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))
+    if staged.get("job_data_kept"):
+        # THE JOB'S OWN DATA SURVIVED THE RE-STAGE, AND THE LOG SAYS WHICH (review of D-492).
+        run.line(f"  kept      {', '.join(staged['job_data_kept'])} — the job's own data "
+                 f"(estimator answers, the previous read's bill), carried across the re-stage")
     # SAY WHEN THE SOLIDWORKS EXTRACT CAME WITH IT, and say when it did not. Layer 0 applying
     # or not is the single biggest difference between two runs of the same pack, and it used to
     # be invisible either way.

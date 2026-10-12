@@ -4929,13 +4929,17 @@ def _finalize_scan_summary(
                     _pack, refresh=_fresh, brief=_brief,
                     envelope=list(_door_rec.get("model_envelope_mm") or []),
                     envelope_of=str(_door_rec.get("model_envelope_of") or ""),
-                    reference_pack=_ref_pack, previous=_prev_text)
+                    reference_pack=_ref_pack, previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
             else:
-                _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief,
-                                                  reference_pack=_ref_pack,
-                                                  previous=_prev_text)
+                _read = concept_scan.read_concept(
+                    _pack, refresh=_fresh, brief=_brief, reference_pack=_ref_pack,
+                    previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _answer = _read.get("parsed") or {}
             # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
             # moved against the previous read — on the book, not only in the log.
@@ -4947,8 +4951,10 @@ def _finalize_scan_summary(
                 print(f"   [concept] {_ch}", flush=True)
             elif _prev_bill and _answer:
                 print("   [concept] the bill is unchanged from the previous read", flush=True)
-            if _answer:
-                concept_scan.save_bill(job_folder, _bill_job, _answer)
+            if _read.get("baseline"):
+                print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
+                                 or "")
             if _ref_pack and not _read.get("standards_text_chars"):
                 summary.setdefault("review_flags", []).append(
                     "CONCEPT: the declared reference document(s) have no readable text "
@@ -5031,6 +5037,13 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+            # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
+            # values an estimator APPROVED, and the bill names the question and the answer it
+            # came from, so the next read can tell an unchanged read from a new one.
+            if _answer:
+                concept_scan.save_bill(job_folder, _bill_job, _answer, records=_sighted,
+                                       base_key=_bill_base_key,
+                                       read_key=str(_read.get("read_key") or ""))
             _welded = concept_scan.brief_stated_welds(_sighted)
             if _welded:
                 # A WELD THE BRIEF STATES IS A STATED WELD (D-467), on the parts the model

@@ -644,11 +644,14 @@ pad or trim lines to hit a figure: every line must be drawn on the sheet and siz
 # cached answer for the same question still replays, which is what an engine-only change wants.
 _PREVIOUS_SECTION = """
 
-A PREVIOUS READ OF THIS SAME PACK priced the make list below. KEEP each part, its count and its
-size unless these pages or the brief contradict it, or a question this request asks that the
-previous one did not (folds, flange depth, blank basis, cut-outs, one line per size) changes
-it. Where you change a part, a count or a size, say what changed and why in that part's
-why_size. It is your own earlier answer, not the customer's statement.
+A PREVIOUS READ OF THIS SAME PACK priced the make list below. It is a BASELINE, not evidence:
+- A value marked APPROVED was confirmed by SDI's estimator: keep it exactly.
+- Everything else is your own earlier PROVISIONAL assumption, not the customer's statement:
+  keep it where nothing better is available, and improve it where these pages, the brief, or a
+  question this request asks that the previous one did not (folds, flange depth, blank basis,
+  cut-outs, one line per size) supports a better figure.
+Where you change a part, a count or a size, give the old value, the new value and the reason
+in that part's why_size.
 <<<
 {bill}
 >>>"""
@@ -1267,7 +1270,8 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
                  refresh: bool = False, brief: str = "", sheet: bool = False,
                  reference_pack: Optional[List[str]] = None,
                  recheck: str = "", envelope: Any = None,
-                 envelope_of: str = "", previous: str = "") -> Dict[str, Any]:
+                 envelope_of: str = "", previous: str = "",
+                 previous_base_key: str = "", previous_read_key: str = "") -> Dict[str, Any]:
     """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}, and
     'sheet_text' for a sheet read.
 
@@ -1319,8 +1323,8 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         else dict(**({"doc_words": _words} if _words else {}),
                   **({"standards_words": _std_words} if _std_words else {}),
                   **({"recheck": recheck} if recheck else {})))
-    key = _cache_key(pngs, model, brief, **_sheet_kw)
-    path = _cache_dir() / (key + ".json")
+    base_key = _cache_key(pngs, model, brief, **_sheet_kw)
+    key = base_key
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
     if _words and _coverage.get("pages_trimmed"):
@@ -1336,6 +1340,37 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             # so a trimmed page's diagram-only requirement may be missed — the caller puts
             # that on the book, not in a log.
             _extra = dict(_extra, standards_coverage=dict(_std_cov))
+    _extra = dict(_extra, base_key=base_key)
+    # ── AN UNCHANGED READ IS REUSED; A NEW BASELINE IS A NEW QUESTION (review of D-492) ──
+    # The previous bill changes what the model is shown, so a cached answer must never
+    # silently ignore it. Two cases, kept apart:
+    #   - the baseline IS the bill this same question already produced (its base_key matches
+    #     and its answer is cached): nothing new to interpret — that answer is replayed;
+    #   - any other baseline (seeded, edited, from a different question): a NEW
+    #     interpretation, its text hashed into the key, so the same baseline replays and a
+    #     different one is asked.
+    if previous:
+        _prev_path = (_cache_dir() / (previous_read_key + ".json")) if previous_read_key else None
+        if (not refresh and previous_base_key and previous_base_key == base_key
+                and _prev_path is not None and _prev_path.is_file()):
+            try:
+                entry = json.loads(_prev_path.read_text(encoding="utf-8"))
+                raw = entry.get("raw_response", "")
+                parsed = parse_concept_response(raw)
+                if parsed is not None:
+                    return dict({"parsed": parsed, "raw_response": raw, "cache_hit": True,
+                                 "read_key": previous_read_key,
+                                 "baseline": "unchanged read reused"}, **_extra)
+            except (OSError, ValueError):
+                pass
+        h = hashlib.sha256()
+        h.update(base_key.encode("utf-8"))
+        h.update(b"\x00baseline\x00")
+        h.update(previous.encode("utf-8"))
+        key = h.hexdigest()
+        _extra = dict(_extra, baseline="new interpretation with the previous bill")
+    path = _cache_dir() / (key + ".json")
+    _extra = dict(_extra, read_key=key)
     if not refresh and path.is_file():
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
@@ -2212,7 +2247,8 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
                        brief: str = "", model: Optional[str] = None, envelope: Any = None,
                        envelope_of: str = "",
                        reference_pack: Optional[List[str]] = None,
-                       previous: str = "") -> Dict[str, Any]:
+                       previous: str = "", previous_base_key: str = "",
+                       previous_read_key: str = "") -> Dict[str, Any]:
     """A concept read of drawing sheets: read, held against the sheet, put back once with what
     broke, and the undrawn fittings set aside. Returns {'read', 'answer', 'check', 'set_aside'}.
 
@@ -2221,11 +2257,15 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     and the book says so — a concept budget to walk against the sheet, not a price."""
     _env = {"envelope": list(envelope or []), "envelope_of": envelope_of,
             "reference_pack": list(reference_pack or []), "previous": previous}
-    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True, **_env)
+    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
+                        previous_base_key=previous_base_key,
+                        previous_read_key=previous_read_key, **_env)
+    first_base_key = str(read.get("base_key") or "")
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
     check = sheet_check(answer, words, envelope=envelope)
-    if check.get("failures"):
+    # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
+    if check.get("failures") and read.get("baseline") != "unchanged read reused":
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
                              recheck=recheck_text(check), **_env)
@@ -2240,7 +2280,8 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
         check["first_read_failures"] = first
     answer, aside = set_aside_undrawn(answer)
     check["sheet_text_chars"] = len(words)
-    return {"read": read, "answer": answer, "check": check, "set_aside": aside}
+    return {"read": read, "answer": answer, "check": check, "set_aside": aside,
+            "base_key": first_base_key}
 
 
 def apply_sheet_notes_to_unit(unit: Optional[Dict[str, Any]],
@@ -2370,32 +2411,83 @@ def _bill_rows(answer: Mapping[str, Any]) -> List[Dict[str, Any]]:
                      "length": _num(b.get("length")), "width": _num(b.get("width")),
                      "thickness": _num(b.get("thickness")),
                      "blank_basis": str(p.get("blank_basis") or "").strip(),
-                     "folds": _num(p.get("folds"))})
+                     "folds": _num(p.get("folds")),
+                     "why": str(p.get("why_size") or "").strip()[:200]})
     return [r for r in rows if r["name"]]
 
 
-def save_bill(folder: Any, job: str, answer: Mapping[str, Any]) -> Optional[Path]:
-    """The read's bill, saved beside the job for the next read to keep (D-492). Machine-owned
-    and overwritten each read — the estimator's own answers file is never touched."""
-    path = _bill_path(folder, job)
-    rows = _bill_rows(answer or {})
-    if path is None or not rows:
-        return None
+# The sources an estimator's answers file writes (estimator_confirmed): a value carrying one
+# was APPROVED by a person, and a baseline must say so (review of D-492).
+_APPROVED_SOURCES = {"estimator_confirmed", "estimator_read_drawing", "estimator_inferred"}
+_APPROVABLE = {"quantity": "count", "blank_length_mm": "size", "blank_width_mm": "size",
+               "normalized_thickness_mm": "gauge", "normalized_material": "material"}
+
+
+def _approved_fields(record: Mapping[str, Any]) -> List[str]:
     try:
-        path.write_text(json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
-                                    "parts": rows}, indent=1), encoding="utf-8")
-    except OSError:
+        from source_precedence import source_of                       # noqa: WPS433
+    except Exception:                                                  # noqa: BLE001
+        return []
+    out: List[str] = []
+    for field, label in _APPROVABLE.items():
+        if source_of(dict(record), field) in _APPROVED_SOURCES and label not in out:
+            out.append(label)
+    return out
+
+
+def _runner_bill_path(folder: Any, job: str) -> Optional[Path]:
+    """The runner's own copy, outside anything staging clears (review of D-492): keyed by the
+    staged folder's client and job, under the engine's cache beside the read cache itself."""
+    if folder is None:
         return None
-    return path
+    f = Path(folder)
+    client = re.sub(r"[^\w\-. ]", "", f.parent.name or "").strip() or "job"
+    name = re.sub(r"[^\w\-. ]", "", str(job or f.name)).strip() or "concept"
+    return _cache_dir().parent / "concept_bills" / f"{client}__{name}.json"
+
+
+def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
+              records: Optional[List[Mapping[str, Any]]] = None,
+              base_key: str = "", read_key: str = "") -> Optional[Path]:
+    """The read's bill, saved for the next read (D-492): beside the job AND in the runner's
+    own store, so a re-stage that empties the job folder cannot lose it. Machine-owned and
+    overwritten each read — the estimator's own answers file is never touched. Each line
+    carries which of its values an estimator APPROVED (from the costed records), and the bill
+    carries the question it answered (base_key) and the answer it came from (read_key), so
+    the next run can tell an unchanged read from a new one."""
+    rows = _bill_rows(answer or {})
+    if not rows:
+        return None
+    by_name = {re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(): r
+               for r in (records or []) if isinstance(r, Mapping)}
+    for row in rows:
+        rec = by_name.get(re.sub(r"[^a-z0-9]+", " ", row["name"].lower()).strip())
+        row["approved"] = _approved_fields(rec) if rec else []
+    payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
+                          "base_key": base_key, "read_key": read_key, "parts": rows}, indent=1)
+    written = None
+    for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
+        if path is None:
+            continue
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload, encoding="utf-8")
+            written = written or path
+        except OSError:
+            continue
+    return written
 
 
 def load_previous_bill(folder: Any, job: str) -> Dict[str, Any]:
-    path = _bill_path(folder, job)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path and path.is_file() else {}
-    except (OSError, ValueError):
-        data = {}
-    return data if isinstance(data, dict) and data.get("parts") else {}
+    """The previous bill: the job folder's copy first, else the runner's own."""
+    for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path and path.is_file() else {}
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict) and data.get("parts"):
+            return data
+    return {}
 
 
 def previous_bill_text(bill: Mapping[str, Any]) -> str:
@@ -2406,8 +2498,12 @@ def previous_bill_text(bill: Mapping[str, Any]) -> str:
         size = (f"{r['length']:g} × {r['width']:g}" + (f" × {r['thickness']:g}" if r.get("thickness") else "")
                 + " mm" + (f" ({r['blank_basis']})" if r.get("blank_basis") else "")
                 if r.get("length") and r.get("width") else "no size")
+        _ok = [a for a in (r.get("approved") or [])]
+        status = (f"APPROVED by the estimator: {', '.join(_ok)} — keep exactly; the rest provisional"
+                  if _ok else "provisional AI assumption")
         lines.append(f"- {r['name']} ({r['kind']}) x{r['quantity']:g}, {r.get('material') or 'material not given'}, "
-                     f"{size}" + (f", {r['folds']:g} fold(s)" if r.get("folds") else ""))
+                     f"{size}" + (f", {r['folds']:g} fold(s)" if r.get("folds") else "")
+                     + f" [{status}]")
     return "\n".join(lines)
 
 
@@ -2425,11 +2521,17 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
         if p is None:
             out.append(f"added: {r['name']} x{r['quantity']:g}")
             continue
+        _why = f" (why: {r['why']})" if r.get("why") else " (no reason given)"
+        _ok = set(p.get("approved") or [])
         if (p.get("quantity") or 0) != (r.get("quantity") or 0):
-            out.append(f"{r['name']}: count {p.get('quantity'):g} → {r.get('quantity'):g}")
+            out.append(f"{r['name']}: count {p.get('quantity'):g} → {r.get('quantity'):g}"
+                       + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "count" in _ok else "")
+                       + _why)
         if (p.get("length"), p.get("width")) != (r.get("length"), r.get("width")):
             out.append(f"{r['name']}: size {p.get('length') or 0:g} × {p.get('width') or 0:g} → "
-                       f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm")
+                       f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm"
+                       + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "size" in _ok else "")
+                       + _why)
     for k, p in before.items():
         if k not in after:
             out.append(f"dropped: {p['name']} x{p.get('quantity') or 0:g}")
@@ -2729,6 +2831,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             _gr = record.setdefault("geometry_rollup", {})
             _gr["estimated_cut_length_mm"] = _total
             _gr["estimated_hole_count"] = int(_cuts["pierces"])
+            _gr["estimated_pierce_count"] = int(_cuts["pierces"])
             record["concept_cutouts"] = list(_cuts["said"])
             _assume("", ", ".join(_cuts["said"]),
                     f"internal cut-outs given by the concept read — {_cuts['internal_mm']:g} mm "

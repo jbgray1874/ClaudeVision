@@ -8003,7 +8003,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # Recognise on the geometry pierce/hole count (DXF truth, e.g. 386), not the
     # manufacturing "hole_count" field, which can collapse to distinct-size count.
     _punch_hole_signal = int(max(holes or 0, pierces or 0))
-    if (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
+    # A SIGHTED CUT-OUT DOES NOT ESTABLISH PUNCH TOOLING (D-493). The punch time charges each
+    # hole as one hit, which assumes a tool of that size and shape; a measured flat or a
+    # stated punch can say so, a slot sighted off a brief cannot. Sighted cut-outs stay on the
+    # laser — each cut round its perimeter with a pierce — and the line says why.
+    _sighted_cuts = bool(part.get("concept_cutouts"))
+    if (_mat_u in _SHEET_METALS) and "punch" not in ops and _sighted_cuts \
+            and _is_punch_part(part, _punch_hole_signal, _punch_blob):
+        part.setdefault("review_flags", []).append(
+            f"PUNCH NOT ASSUMED: {_punch_hole_signal} cut-out(s) here are sighted, not measured "
+            f"({'; '.join(part.get('concept_cutouts') or [])}), so punch tooling to suit them "
+            f"is not established — costed as laser profile cutting, each cut-out round its "
+            f"perimeter with a pierce. If SDI punches these on standard tooling, say so and the "
+            f"time follows")
+    elif (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
         ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
         record_operation(part, "punch", "inference")
 
@@ -8389,10 +8402,11 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 _bends_charged = _assumed_folds
                 part["fold_count_assumed"] = _assumed_folds
                 part.setdefault("review_flags", []).append(
-                    f"folding charged on {_assumed_folds} ASSUMED fold(s): the part is routed "
-                    f"through folding and nothing counted its bends — the minimum for a folded "
-                    f"part (config FOLDS_ASSUMED_WHEN_UNCOUNTED), not a count. Give the fold "
-                    f"count and the time follows it")
+                    f"FOLD ALLOWANCE: folding is charged on an allowance of {_assumed_folds} "
+                    f"fold(s) — the part is routed through folding and nothing counted its "
+                    f"bends, so this is the minimum for a folded part (config "
+                    f"FOLDS_ASSUMED_WHEN_UNCOUNTED), an allowance and not a count. Give the "
+                    f"fold count and the time follows it")
         run_times_min["folding"] = round((_bends_charged * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
         # ── WHERE THE FOLD COUNT CAME FROM, ON THE LINE THAT CHARGES IT ──────────────
         #
@@ -8461,6 +8475,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{bends:g} fold(s) charged, counted by {_fr.get('source_label')}; the "
                 f"SolidWorks model's bend features agree. No DXF bend lines reached this run, "
                 f"so the flat pattern did not count them.")
+        elif part.get("fold_count_assumed") and not bends:
+            # AN ALLOWANCE IS NOT A COUNT (D-493): the sentence says what was charged and why.
+            part.setdefault("review_flags", []).append(
+                f"{part['fold_count_assumed']} fold(s) charged as an ALLOWANCE, not a count — "
+                f"nothing that can see the part counted its bends")
+        elif str(_fr.get("source") or "") == "concept_read_fold_count":
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged from the concept read's provisional count — sighted "
+                f"off the brief or pages, not measured; confirm against a drawing")
         else:
             _ng_fold = part.get("normalized_geometry") or {}
             _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
