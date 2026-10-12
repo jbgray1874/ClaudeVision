@@ -71,6 +71,9 @@ TENANT = auth.TENANT_ID
 API_ID = auth.CLIENT_ID                   # the SDI Intelligence app exposes the scope
 AUDIENCES = [a for a in (API_ID, f"api://{API_ID}" if API_ID else "",
                          _opt("SDI_CONNECTOR_AUDIENCE")) if a]
+# The scope as Entra knows it, and as ChatGPT / Claude must ask for it:
+# api://<SDI_CLIENT_ID>/tracker.access. (Inside the token it is just "tracker.access".)
+SCOPE_URI = f"api://{API_ID}/{SCOPE}" if API_ID else SCOPE
 ISSUERS = [f"https://login.microsoftonline.com/{TENANT}/v2.0", f"https://sts.windows.net/{TENANT}/"]
 JWKS_URL = _opt("SDI_CONNECTOR_JWKS_URL",
                 f"https://login.microsoftonline.com/{TENANT}/discovery/v2.0/keys")
@@ -102,6 +105,8 @@ class EntraTokenVerifier:
         if why:
             print(f"[connector.auth] refused: wrong {why} (client={client})", flush=True)
             return None
+        # Both spellings, so the check against the advertised full name passes.
+        scopes += [f"api://{API_ID}/{s}" for s in scopes if "/" not in s]
         return AccessToken(token=token, client_id=client, scopes=scopes,
                            expires_at=int(claims["exp"]), subject=claims["oid"],
                            claims={k: claims.get(k) for k in
@@ -414,7 +419,7 @@ def build_server() -> MCPServer:
         # Tells ChatGPT / Claude where to sign in (Entra) and which scope to ask
         # for; the token's audience is checked by the verifier above.
         auth=AuthSettings(issuer_url=ISSUERS[0], resource_server_url=PUBLIC_URL,
-                          required_scopes=[SCOPE], validate_token_resource=False))
+                          required_scopes=[SCOPE_URI], validate_token_resource=False))
 
 
 def build_app():
@@ -433,6 +438,6 @@ def build_app():
 if __name__ == "__main__":
     if not ENABLED:
         raise SystemExit("The tracker connector is off. Set SDI_CONNECTOR_ENABLED=yes to start it.")
-    print(f"[connector] starting on {HOST}:{PORT} for {PUBLIC_URL} (scope {SCOPE}; "
+    print(f"[connector] starting on {HOST}:{PORT} for {PUBLIC_URL} (scope {SCOPE_URI}; "
           f"writers {sorted(voicecrm.WRITERS)}; writes {'on' if voicecrm.WRITE_ENABLED else 'off'})", flush=True)
     uvicorn.run(build_app(), host=HOST, port=PORT)
