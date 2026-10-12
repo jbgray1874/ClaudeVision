@@ -10194,11 +10194,20 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # booth time on six parts with a coated area of 0.0 — no blank, so no area — and no
     # powder material at all: the material line is computed from area, and a zero area
     # writes no line. A coat charged without its powder is flagged on the part, never left
-    # as a silent zero. A parent coated over its members, or asked about its scope, is not.
+    # as a silent zero. A parent coated over its members, or asked about its scope, is not —
+    # and nor is a part with a blank: whatever the engine's own area figure, the workbook's
+    # Powder Qty Calculator charges the area of that blank on the Sheet Steel block. Only a
+    # part with no size at all has nothing for either to coat.
     _pcd = (process.get("powder_coating_detail")
             if isinstance(process.get("powder_coating_detail"), dict) else {})
+    _has_blank = bool(
+        (_safe_float((material or {}).get("blank_length_mm"))
+         or _safe_float(part.get("blank_length_mm")))
+        and (_safe_float((material or {}).get("blank_width_mm"))
+             or _safe_float(part.get("blank_width_mm"))))
     if ((_safe_float((labour.get("costs_gbp") or {}).get("powder_coating")) or 0.0) > 0
             and not (_safe_float(_pcd.get("coated_m2")) or 0.0)
+            and not _has_blank
             and not _pcd.get("powder_scope_question")
             and not part.get("_powder_members_coated_m2")):
         risk_flags.append("powder_charged_zero_coated_area")

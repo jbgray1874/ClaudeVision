@@ -333,3 +333,18 @@ def test_a_coated_part_with_a_blank_is_not_flagged():
                           "inferred_operations": ["laser_cutting", "powder_coating"]},
                          job_quantity=10)
     assert "powder_charged_zero_coated_area" not in (pe.get("risk_flags") or [])
+
+
+def test_a_sighted_part_with_a_blank_is_never_flagged_as_having_nothing_to_coat():
+    """The workbook's Powder Qty Calculator charges the area of any blank on the Sheet Steel
+    block (the 16:53 book: 6.1 m² from the sighted blanks), so only a part with no size at
+    all has nothing to coat."""
+    import estimator as E
+    ans = {"product": {"name": "FSDU"}, "parts": [
+        {"name": "SLOTTED POST", "kind": "fabricated", "quantity": 6,
+         "material_guess": "MILD STEEL",
+         "assumed_blank_mm": {"length": 1500, "width": 80, "thickness": 2},
+         "operations": ["laser_cutting", "folding", "powder_coating"]}]}
+    (part,) = cs.parts_from_concept(ans, "JOB")
+    pe = E.estimate_part(part, job_quantity=200)
+    assert "powder_charged_zero_coated_area" not in (pe.get("risk_flags") or [])
