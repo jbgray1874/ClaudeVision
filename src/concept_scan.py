@@ -60,7 +60,9 @@ from typing import Any, Dict, List, Mapping, Optional
 #   c2  the make list: an enclosure is its panels, and every made line names its work
 #   c3  banded edges must be NAMED before edging is charged — see EDGE_BASIS_FIELD
 #   c4  print is always its own graphic line, never folded into a board's material (D-365)
-CONCEPT_PROMPT_VERSION = "c4"
+#   c5  a folded part's folds, flange depth and blank basis (finished or flat), its internal
+#       cut-outs, and one line per size for a part that follows parts of different sizes (D-490)
+CONCEPT_PROMPT_VERSION = "c5"
 
 SOURCE = "vision_concept"
 
@@ -462,6 +464,16 @@ Rules:
   contain but the images cannot show goes in "not_visible" as words, for the estimator.
 - If the images are variants (different graphics, same build), say so in "variants" and list
   each graphic set once in "print_sets" — ONE build, not one per variant.
+- A FOLDED PART: give "folds" (how many press-brake folds) and "flange_mm" (the typical depth
+  of the flanges or returns those folds form), and say in "blank_basis" whether
+  assumed_blank_mm is the "finished" outside size or the "developed" flat blank before
+  folding. Never add flanges into a size you call finished. A flat part has folds 0.
+- CUT-OUTS ARE CUT TOO: list in "cutouts" every slot, opening, window or hole cut inside a
+  made part, as {{"what": "slot|opening|hole", "count": 0, "length_mm": 0, "width_mm": 0}}
+  per kind and size (a hole: its diameter as length and width).
+- A PART THAT RUNS ALONG OTHER PARTS (an edge strip, a trim, a lip) takes its length from the
+  part it runs along: where those parts differ in size, list one line per size, each with its
+  own count — never one count at a single length.
 
 Return ONLY valid JSON, no markdown, exactly this shape:
 {{
@@ -474,6 +486,8 @@ Return ONLY valid JSON, no markdown, exactly this shape:
       "assumed_blank_mm": {{"length": 0, "width": 0, "thickness": 0}},
       "quantity": 1, "quantity_basis": "<seen / implied by symmetry / per print set>",
       "operations": ["saw", "cnc_routing"],
+      "folds": 0, "flange_mm": 0, "blank_basis": "finished|developed",
+      "cutouts": [],
       "banded_edges": "<which edges are visibly finished, or empty if you cannot tell>",
       "seen": "<which image, where>", "why_size": "<the cue this was scaled from>"}}
   ],
@@ -484,7 +498,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "93eff7e3c858"
+_PROMPT_FINGERPRINT = "f8289cfa0392"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -623,6 +637,24 @@ YOUR FIRST MAKE LIST FOR THESE SHEETS DID NOT AGREE WITH WHAT THE SHEET STATES:
 {failures}
 Read the sheet again and return the whole make list, corrected, in the same JSON shape. Do not
 pad or trim lines to hit a figure: every line must be drawn on the sheet and sized from it."""
+
+# THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492). A re-read is asked when the
+# question changes (a new schema, a fresh read); the construction it already priced is put in
+# front of it so the next book shows better coverage, not a different guess. NOT HASHED: a
+# cached answer for the same question still replays, which is what an engine-only change wants.
+_PREVIOUS_SECTION = """
+
+A PREVIOUS READ OF THIS SAME PACK priced the make list below. It is a BASELINE, not evidence:
+- A value marked APPROVED was confirmed by SDI's estimator: keep it exactly.
+- Everything else is your own earlier PROVISIONAL assumption, not the customer's statement:
+  keep it where nothing better is available, and improve it where these pages, the brief, or a
+  question this request asks that the previous one did not (folds, flange depth, blank basis,
+  cut-outs, one line per size) supports a better figure.
+Where you change a part, a count or a size, give the old value, the new value and the reason
+in that part's why_size.
+<<<
+{bill}
+>>>"""
 
 # The sheet prompt's own hash (preamble + text, recheck and envelope sections), pinned beside
 # SHEET_PROMPT_VERSION as _PROMPT_FINGERPRINT is pinned beside the render prompt's version.
@@ -926,16 +958,39 @@ def split_not_visible(items: List[Any]) -> tuple:
     return cons, ship, unknown
 
 
-def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
+def consumable_lines(items: List[Any], stem: str,
+                     pieces_fitted: int = 0) -> List[Dict[str, Any]]:
     """Provisional bought-in lines for the consumables a render cannot show (D-468).
 
     "Not visible" must not mean unpriced: a flagged omission is an unresolved exception,
     not a passed gate. Each named consumable becomes a bought-in line of one assembly set
     per unit, down the SAME price chain as every bought-in (D-153) — SDI Live, research,
     then the flagged provisional allowance a refused research answer already earns — so
-    the book works towards a price and the line says exactly what it rests on."""
+    the book works towards a price and the line says exactly what it rests on.
+
+    SCALED TO THE UNIT IT GOES ON (D-487). The K-Wellness 12:31 book asked the market for
+    "fixings and fasteners for carcass assembly" — no answer, held at £0 — and priced "QR
+    component labels" at 3p for ONE label on a unit of about forty pieces. An item the read
+    says is per component is counted once per piece fitted; a set is asked about with the
+    size of the unit it fixes, and carries `consumable_allowance` — a count rule from
+    config, priced by a named reference item through the ordinary chain — for when the
+    market has no answer. Config holds the counts; the money comes from SDI's own sources."""
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
+    try:
+        import config                                               # noqa: WPS433
+        _rule = dict(getattr(config, "CONCEPT_CONSUMABLE_ALLOWANCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        _rule = {}
+    per_component = [str(w).strip().lower() for w in
+                     (_vocab("CONCEPT_PER_COMPONENT_WORDS", []) or []) if str(w).strip()]
+    applied_words = [str(w).strip().lower() for w in
+                     (_vocab("CONCEPT_APPLIED_ITEM_WORDS", []) or []) if str(w).strip()]
+    try:
+        _pc_rule = dict(getattr(config, "CONCEPT_PER_COMPONENT", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        _pc_rule = {}
+    pieces = max(0, int(pieces_fitted or 0))
     out: List[Dict[str, Any]] = []
     for n, it in enumerate((items or []), 1):
         said = str(it or "").strip()
@@ -947,12 +1002,46 @@ def consumable_lines(items: List[Any], stem: str) -> List[Dict[str, Any]]:
         record["concept_kind"] = "bought_in"
         record["concept_not_visible"] = True
         record["page_roles"] = ["render"]
-        apply_field(record, "quantity", 1, SOURCE,
-                    note="one assembly set per unit — provisional; the render cannot "
-                         "show a count")
+        _each = pieces > 1 and any(w in said.lower() for w in per_component)
+        if _each:
+            # PRICE PER ITEM, AND HOW MANY, KEPT APART (D-491). "Per unit" does not say how
+            # many a fixture needs: the count is items per component (config, an assumption to
+            # confirm) × the components the unit fits, and the price chain is asked for ONE.
+            _per_c = float((_pc_rule.get("items_per_component") or 1))
+            _n = max(1, int(round(_per_c * pieces)))
+            apply_field(record, "quantity", _n, SOURCE,
+                        note=(f"{_per_c:g} per component × {pieces} component(s) the unit fits — "
+                              f"the read says per component; how many each component carries "
+                              f"is an assumption to confirm ({_pc_rule.get('basis') or 'config'})"))
+            record["per_component"] = {"items_per_component": _per_c, "components": pieces}
+            record["research_description"] = (
+                f"{said} — price ONE item, each; the quantity is counted separately")
+            record["unit_of_measure"] = "each"
+            if any(w in said.lower() for w in applied_words):
+                # ITS APPLICATION AND CHECKING IS LABOUR, CHARGED ONCE, ON THE UNIT.
+                record["items_to_apply"] = _n
+        else:
+            apply_field(record, "quantity", 1, SOURCE,
+                        note="one assembly set per unit — provisional; the render cannot "
+                             "show a count")
         apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
                     note="a consumables set the render cannot show, named by the read")
         record["is_bought_in"] = True
+        if pieces > 1 and not _each:
+            record["research_description"] = (
+                f"{said} — one set for a fixture of {pieces} fitted pieces; price the set as "
+                f"a standard trade assortment of that size")
+            _per = _rule.get("per_piece_fitted")
+            _ref = str(_rule.get("reference_item") or "").strip()
+            try:
+                _per = float(_per)
+            except (TypeError, ValueError):
+                _per = 0.0
+            if _per > 0 and _ref:
+                record["consumable_allowance"] = {
+                    "count": round(_per * pieces, 2), "per_piece_fitted": _per,
+                    "pieces_fitted": pieces, "reference_item": _ref,
+                    "basis": str(_rule.get("basis") or "")}
         record["review_flags"].append(
             "CONCEPT: NOT VISIBLE ON THE RENDER — a provisional consumables allowance, "
             "priced by the ordinary bought-in chain; confirm the contents and the figure "
@@ -1044,7 +1133,8 @@ def _envelope_words(envelope: Any) -> str:
 def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool = False,
                         sheet_words: str = "", doc_words: str = "", standards_words: str = "",
                         recheck: str = "",
-                        envelope: Any = None, envelope_of: str = "") -> str:
+                        envelope: Any = None, envelope_of: str = "",
+                        previous: str = "") -> str:
     """The words put to the model: the make-list prompt, the text-only preamble where there
     is no image, the sheet preamble and the sheet's own text where the pages are drawing
     sheets, the document's own words where they are not (D-462), the brief section where
@@ -1059,8 +1149,9 @@ def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool 
         # BEFORE the brief, so the brief's own "overrides anything inferred" reads after the
         # document's words and covers them.
         _text += _DOC_TEXT_SECTION.format(text=doc_words)
-    if standards_words and not sheet:
-        # After the product's words, before the brief, for the same ordering reason.
+    if standards_words:
+        # After the product's words, before the brief, for the same ordering reason — on a
+        # drawing-sheet read too (D-483): the requirements apply whatever the pages are.
         _text += _STANDARDS_SECTION.format(text=standards_words)
     if brief:
         _text += _BRIEF_SECTION.format(brief=brief)
@@ -1068,6 +1159,8 @@ def concept_prompt_text(png_pages: List[bytes], brief: str = "", *, sheet: bool 
         _text += _SHEET_TEXT_SECTION.format(text=sheet_words)
     if sheet and _envelope_words(envelope):
         _text += _ENVELOPE_SECTION.format(of=envelope_of or "the design", dims=_envelope_words(envelope))
+    if previous:
+        _text += _PREVIOUS_SECTION.format(bill=previous)
     if recheck:
         _text += _RECHECK_SECTION.format(failures=recheck)
     return _text
@@ -1124,7 +1217,10 @@ def _cache_dir() -> Path:
 def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bool = False,
                sheet_words: str = "", doc_words: str = "", standards_words: str = "",
                recheck: str = "",
-               envelope: Any = None, envelope_of: str = "") -> str:
+               envelope: Any = None, envelope_of: str = "",
+               previous: str = "") -> str:
+    # `previous` is deliberately NOT hashed (D-492): it shapes a new answer, never which
+    # cached answer is the same question's.
     h = hashlib.sha256()
     for png in png_pages:
         h.update(png)
@@ -1146,9 +1242,10 @@ def _cache_key(png_pages: List[bytes], model: str, brief: str = "", *, sheet: bo
         h.update(DOC_TEXT_PROMPT_VERSION.encode("utf-8"))
         h.update(b"\x00")
         h.update(doc_words.encode("utf-8"))
-    if standards_words and not sheet:
+    if standards_words:
         # A DECLARED STANDARDS DOCUMENT IS A NEW QUESTION (D-474), and only a read that sends
-        # one hashes it: every run without one keeps the key, and the answer, it has.
+        # one hashes it: every run without one keeps the key, and the answer, it has. A sheet
+        # read sends it too (D-483), hashed the same way.
         h.update(b"\x00standards\x00")
         h.update(STANDARDS_PROMPT_VERSION.encode("utf-8"))
         h.update(b"\x00")
@@ -1173,7 +1270,8 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
                  refresh: bool = False, brief: str = "", sheet: bool = False,
                  reference_pack: Optional[List[str]] = None,
                  recheck: str = "", envelope: Any = None,
-                 envelope_of: str = "") -> Dict[str, Any]:
+                 envelope_of: str = "", previous: str = "",
+                 previous_base_key: str = "", previous_read_key: str = "") -> Dict[str, Any]:
     """One concept read of a whole pack. Returns {'parsed', 'raw_response', 'cache_hit'}, and
     'sheet_text' for a sheet read.
 
@@ -1209,26 +1307,30 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
     # A DECLARED STANDARDS DOCUMENT RIDES AS WORDS ONLY (D-474): none of its pages is
     # rendered — its examples are reference, never the product — and its text goes under
     # its own section asking for the requirements that apply, nothing else.
+    # A DRAWING-SHEET READ CARRIES THEM TOO (D-483): the K-Wellness pages were classed as
+    # design-intent sheets, and the sheet read was never given the manual — no test, no
+    # documentation, no project cost reached the model, though the hand-off had worked.
     _refs = [str(p) for p in (reference_pack or [])]
     _std_words = ""
     _std_cov: Dict[str, Any] = {}
-    if _refs and not sheet:
+    if _refs:
         _std_words, _std_cov = sheet_text_with_coverage(_refs)
     _sheet_kw: Dict[str, Any] = (
         dict({"sheet": True, "sheet_words": _words, "recheck": recheck},
+             **({"standards_words": _std_words} if _std_words else {}),
              **({"envelope": list(envelope), "envelope_of": envelope_of}
                 if _envelope_words(envelope) else {})) if sheet
         else dict(**({"doc_words": _words} if _words else {}),
                   **({"standards_words": _std_words} if _std_words else {}),
                   **({"recheck": recheck} if recheck else {})))
-    key = _cache_key(pngs, model, brief, **_sheet_kw)
-    path = _cache_dir() / (key + ".json")
+    base_key = _cache_key(pngs, model, brief, **_sheet_kw)
+    key = base_key
     _extra = ({"sheet_text": _words} if sheet
               else ({"document_text_chars": len(_words)} if _words else {}))
     if _words and _coverage.get("pages_trimmed"):
         # A CUT IS SAID (D-466): on the record and, through the caller, in the run log.
         _extra = dict(_extra, text_coverage=dict(_coverage))
-    if _refs and not sheet:
+    if _refs:
         # The declared documents and what of them was readable, on the record: a scanned
         # manual with no text layer sends nothing, and that is a fact the caller flags.
         _extra = dict(_extra, reference_documents=[Path(p).name for p in _refs],
@@ -1238,6 +1340,37 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
             # so a trimmed page's diagram-only requirement may be missed — the caller puts
             # that on the book, not in a log.
             _extra = dict(_extra, standards_coverage=dict(_std_cov))
+    _extra = dict(_extra, base_key=base_key)
+    # ── AN UNCHANGED READ IS REUSED; A NEW BASELINE IS A NEW QUESTION (review of D-492) ──
+    # The previous bill changes what the model is shown, so a cached answer must never
+    # silently ignore it. Two cases, kept apart:
+    #   - the baseline IS the bill this same question already produced (its base_key matches
+    #     and its answer is cached): nothing new to interpret — that answer is replayed;
+    #   - any other baseline (seeded, edited, from a different question): a NEW
+    #     interpretation, its text hashed into the key, so the same baseline replays and a
+    #     different one is asked.
+    if previous:
+        _prev_path = (_cache_dir() / (previous_read_key + ".json")) if previous_read_key else None
+        if (not refresh and previous_base_key and previous_base_key == base_key
+                and _prev_path is not None and _prev_path.is_file()):
+            try:
+                entry = json.loads(_prev_path.read_text(encoding="utf-8"))
+                raw = entry.get("raw_response", "")
+                parsed = parse_concept_response(raw)
+                if parsed is not None:
+                    return dict({"parsed": parsed, "raw_response": raw, "cache_hit": True,
+                                 "read_key": previous_read_key,
+                                 "baseline": "unchanged read reused"}, **_extra)
+            except (OSError, ValueError):
+                pass
+        h = hashlib.sha256()
+        h.update(base_key.encode("utf-8"))
+        h.update(b"\x00baseline\x00")
+        h.update(previous.encode("utf-8"))
+        key = h.hexdigest()
+        _extra = dict(_extra, baseline="new interpretation with the previous bill")
+    path = _cache_dir() / (key + ".json")
+    _extra = dict(_extra, read_key=key)
     if not refresh and path.is_file():
         try:
             entry = json.loads(path.read_text(encoding="utf-8"))
@@ -1248,8 +1381,10 @@ def read_concept(pdf_paths: List[str], *, model: Optional[str] = None,
         except (OSError, ValueError):
             pass                                     # corrupt entry → re-fetch
 
-    # A render read calls exactly as it always has; only a sheet read or a re-ask says more.
-    raw = (_call_vision_llm(pngs, model, brief, **_sheet_kw) if _sheet_kw
+    # A render read calls exactly as it always has; only a sheet read or a re-ask says more —
+    # and a re-read is given the previous read's bill to keep (D-492), outside the key.
+    _call_kw = dict(_sheet_kw, **({"previous": previous} if previous else {}))
+    raw = (_call_vision_llm(pngs, model, brief, **_call_kw) if _call_kw
            else _call_vision_llm(pngs, model, brief))
     parsed = parse_concept_response(raw)
     try:
@@ -1582,10 +1717,15 @@ def sheet_labels(words: str, facts: Optional[Mapping[str, Any]] = None) -> List[
             seen.add(head)
             out.append({"label": label, "head": head})
 
+    prose = {str(w).upper() for w in (_vocab("CONCEPT_LABEL_PROSE_WORDS", ()) or ())}
     for line in str(words or "").splitlines():
         line = " ".join(line.split())
         tokens = re.findall(r"[A-Za-z]+", line)
         if not tokens or len(line.split()) > max_words or re.search(r"\d+\s*[xX×]\s", line):
+            continue
+        # A wrapped fragment of a sentence is not a callout (D-482).
+        if re.search(r"[.!?;]\s+\S", line) or tokens[0].upper() in prose \
+                or tokens[-1].upper() in prose:
             continue
         heads = [_singular(t) for t in tokens if _singular(t) in components]
         if heads:
@@ -1755,6 +1895,24 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
 
     failures: List[str] = []
     breaches: List[Dict[str, Any]] = []
+
+    # A PART WE MAKE WITH NO SIZE IS NOT YET A BILL (D-484). The K-Wellness 12:31 read gave
+    # every made part a count, a material and a route and every size as 0: nothing could be
+    # nested, so each fell to a market price for a finished item with our own labour charged
+    # on top. Each one is a failure, so the read is put back once naming them.
+    sizeless: List[str] = []
+    for p in made:
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        if _num(blank.get("length")) or _num(blank.get("width")):
+            continue
+        name = str(p.get("name") or "a part").strip()
+        sizeless.append(name)
+        failures.append(
+            f"{name} is a part SDI makes and the bill gives it no size — give its blank length, "
+            f"width and gauge from the dimensions that bound it, the body or footprint the "
+            f"pages state and the brief, and write \"not dimensioned\" in why_size where it is "
+            f"estimated")
+
     body_checked = len(dims) >= 2 and bool(made)
     if body_checked:
         _body_words = " × ".join(f"{d:g}" for d in dims)
@@ -1980,7 +2138,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         unverified.append("no body size to hold the parts to")
 
     checked = body_checked or weight_checked or goods_checked or bool(required) \
-        or gauge_checked or finish_checked
+        or gauge_checked or finish_checked or bool(sizeless)
     verdict = ("disagrees" if failures else "unchecked" if not checked
                else "unverified" if unverified else "agrees")
     return {"checked": checked, "agrees": verdict == "agrees", "verdict": verdict,
@@ -1998,6 +2156,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
             "ratio": round(ratio, 3) if ratio is not None else None,
             "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet,
+            "sizeless": sizeless,
             "read_gave_facts": read_gave_facts, "facts_from_sheet_text": from_text}
 
 
@@ -2086,19 +2245,27 @@ def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
 
 def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
                        brief: str = "", model: Optional[str] = None, envelope: Any = None,
-                       envelope_of: str = "") -> Dict[str, Any]:
+                       envelope_of: str = "",
+                       reference_pack: Optional[List[str]] = None,
+                       previous: str = "", previous_base_key: str = "",
+                       previous_read_key: str = "") -> Dict[str, Any]:
     """A concept read of drawing sheets: read, held against the sheet, put back once with what
     broke, and the undrawn fittings set aside. Returns {'read', 'answer', 'check', 'set_aside'}.
 
     THE BETTER OF TWO, NEVER A THIRD. The second read is taken only where it agrees with the
     sheet more closely than the first; a bill that still does not agree is costed as sighted
     and the book says so — a concept budget to walk against the sheet, not a price."""
-    _env = {"envelope": list(envelope or []), "envelope_of": envelope_of}
-    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True, **_env)
+    _env = {"envelope": list(envelope or []), "envelope_of": envelope_of,
+            "reference_pack": list(reference_pack or []), "previous": previous}
+    read = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
+                        previous_base_key=previous_base_key,
+                        previous_read_key=previous_read_key, **_env)
+    first_base_key = str(read.get("base_key") or "")
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
     check = sheet_check(answer, words, envelope=envelope)
-    if check.get("failures"):
+    # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
+    if check.get("failures") and read.get("baseline") != "unchanged read reused":
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
                              recheck=recheck_text(check), **_env)
@@ -2113,7 +2280,8 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
         check["first_read_failures"] = first
     answer, aside = set_aside_undrawn(answer)
     check["sheet_text_chars"] = len(words)
-    return {"read": read, "answer": answer, "check": check, "set_aside": aside}
+    return {"read": read, "answer": answer, "check": check, "set_aside": aside,
+            "base_key": first_base_key}
 
 
 def apply_sheet_notes_to_unit(unit: Optional[Dict[str, Any]],
@@ -2222,6 +2390,216 @@ def bill_lines(parts: List[Dict[str, Any]], limit: int = 60) -> List[str]:
     if len(parts) > limit:
         out.append(f"... and {len(parts) - limit} more line(s) — the full bill is in the book")
     return out
+
+
+def _bill_path(folder: Any, job: str) -> Optional[Path]:
+    if folder is None:
+        return None
+    safe = re.sub(r"[^\w\-. ]", "", str(job or "concept")).strip() or "concept"
+    return Path(folder) / f"{safe}_concept_bill.json"
+
+
+def _bill_rows(answer: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for p in (answer.get("parts") or []):
+        if not isinstance(p, Mapping):
+            continue
+        b = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        rows.append({"name": str(p.get("name") or "").strip(), "kind": _concept_kind(p.get("kind")),
+                     "quantity": _num(p.get("quantity")) or 0,
+                     "material": str(p.get("material_guess") or "").strip(),
+                     "length": _num(b.get("length")), "width": _num(b.get("width")),
+                     "thickness": _num(b.get("thickness")),
+                     "blank_basis": str(p.get("blank_basis") or "").strip(),
+                     "folds": _num(p.get("folds")),
+                     "why": str(p.get("why_size") or "").strip()[:200]})
+    return [r for r in rows if r["name"]]
+
+
+# The sources an estimator's answers file writes (estimator_confirmed): a value carrying one
+# was APPROVED by a person, and a baseline must say so (review of D-492).
+_APPROVED_SOURCES = {"estimator_confirmed", "estimator_read_drawing", "estimator_inferred"}
+_APPROVABLE = {"quantity": "count", "blank_length_mm": "size", "blank_width_mm": "size",
+               "normalized_thickness_mm": "gauge", "normalized_material": "material"}
+
+
+def _approved_fields(record: Mapping[str, Any]) -> List[str]:
+    try:
+        from source_precedence import source_of                       # noqa: WPS433
+    except Exception:                                                  # noqa: BLE001
+        return []
+    out: List[str] = []
+    for field, label in _APPROVABLE.items():
+        if source_of(dict(record), field) in _APPROVED_SOURCES and label not in out:
+            out.append(label)
+    return out
+
+
+def _runner_bill_path(folder: Any, job: str) -> Optional[Path]:
+    """The runner's own copy, outside anything staging clears (review of D-492): keyed by the
+    staged folder's client and job, under the engine's cache beside the read cache itself."""
+    if folder is None:
+        return None
+    f = Path(folder)
+    client = re.sub(r"[^\w\-. ]", "", f.parent.name or "").strip() or "job"
+    name = re.sub(r"[^\w\-. ]", "", str(job or f.name)).strip() or "concept"
+    return _cache_dir().parent / "concept_bills" / f"{client}__{name}.json"
+
+
+def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
+              records: Optional[List[Mapping[str, Any]]] = None,
+              base_key: str = "", read_key: str = "") -> Optional[Path]:
+    """The read's bill, saved for the next read (D-492): beside the job AND in the runner's
+    own store, so a re-stage that empties the job folder cannot lose it. Machine-owned and
+    overwritten each read — the estimator's own answers file is never touched. Each line
+    carries which of its values an estimator APPROVED (from the costed records), and the bill
+    carries the question it answered (base_key) and the answer it came from (read_key), so
+    the next run can tell an unchanged read from a new one."""
+    rows = _bill_rows(answer or {})
+    if not rows:
+        return None
+    by_name = {re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(): r
+               for r in (records or []) if isinstance(r, Mapping)}
+    for row in rows:
+        rec = by_name.get(re.sub(r"[^a-z0-9]+", " ", row["name"].lower()).strip())
+        row["approved"] = _approved_fields(rec) if rec else []
+    payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
+                          "base_key": base_key, "read_key": read_key, "parts": rows}, indent=1)
+    written = None
+    for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
+        if path is None:
+            continue
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload, encoding="utf-8")
+            written = written or path
+        except OSError:
+            continue
+    return written
+
+
+def load_previous_bill(folder: Any, job: str) -> Dict[str, Any]:
+    """The previous bill: the job folder's copy first, else the runner's own."""
+    for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")) if path and path.is_file() else {}
+        except (OSError, ValueError):
+            data = {}
+        if isinstance(data, dict) and data.get("parts"):
+            return data
+    return {}
+
+
+def previous_bill_text(bill: Mapping[str, Any]) -> str:
+    """The previous bill, one line a part, as the re-read is shown it. A part the previous read
+    could not size says so, never a size of 0 to keep."""
+    lines = []
+    for r in (bill or {}).get("parts") or []:
+        size = (f"{r['length']:g} × {r['width']:g}" + (f" × {r['thickness']:g}" if r.get("thickness") else "")
+                + " mm" + (f" ({r['blank_basis']})" if r.get("blank_basis") else "")
+                if r.get("length") and r.get("width") else "no size")
+        _ok = [a for a in (r.get("approved") or [])]
+        status = (f"APPROVED by the estimator: {', '.join(_ok)} — keep exactly; the rest provisional"
+                  if _ok else "provisional AI assumption")
+        lines.append(f"- {r['name']} ({r['kind']}) x{r['quantity']:g}, {r.get('material') or 'material not given'}, "
+                     f"{size}" + (f", {r['folds']:g} fold(s)" if r.get("folds") else "")
+                     + f" [{status}]")
+    return "\n".join(lines)
+
+
+def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List[str]:
+    """What this read changed against the previous one: parts added or dropped, counts and sizes
+    moved. Matched by name, case and spacing ignored."""
+    if not previous or not previous.get("parts"):
+        return []
+    key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n).lower()).strip()
+    before = {key(r["name"]): r for r in previous.get("parts") or []}
+    after = {key(r["name"]): r for r in _bill_rows(answer or {})}
+    out: List[str] = []
+    for k, r in after.items():
+        p = before.get(k)
+        if p is None:
+            out.append(f"added: {r['name']} x{r['quantity']:g}")
+            continue
+        _why = f" (why: {r['why']})" if r.get("why") else " (no reason given)"
+        _ok = set(p.get("approved") or [])
+        if (p.get("quantity") or 0) != (r.get("quantity") or 0):
+            out.append(f"{r['name']}: count {p.get('quantity'):g} → {r.get('quantity'):g}"
+                       + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "count" in _ok else "")
+                       + _why)
+        if (p.get("length"), p.get("width")) != (r.get("length"), r.get("width")):
+            out.append(f"{r['name']}: size {p.get('length') or 0:g} × {p.get('width') or 0:g} → "
+                       f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm"
+                       + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "size" in _ok else "")
+                       + _why)
+    for k, p in before.items():
+        if k not in after:
+            out.append(f"dropped: {p['name']} x{p.get('quantity') or 0:g}")
+    return out
+
+
+def developed_blank(blank: Mapping[str, Any], sighted: Mapping[str, Any]) -> Dict[str, Any]:
+    """The flat blank of a sighted folded part, from what the read said its size is (D-490).
+
+    FINISHED IS NOT DEVELOPED. The 16:53 K-Wellness read sized the plinth and top cap at the
+    500 x 500 footprint and the trays at their finished faces, with nothing for the flanges
+    their folds form — material and powder understated. The read now says whether its size is
+    the "finished" outside size or the "developed" flat blank, with the fold count and flange
+    depth. Only a finished size with both is developed here, and a developed one is never
+    developed again. The first two flanges go on the shorter side (folds run along the long
+    edges), the next two on the longer, and so on — a provisional flat blank with its working,
+    never a measurement. Anything else is priced as given and said."""
+    length, width = _num(blank.get("length")), _num(blank.get("width"))
+    folds = int(_num(sighted.get("folds")) or 0)
+    flange = _num(sighted.get("flange_mm"))
+    basis = str(sighted.get("blank_basis") or "").strip().lower()
+    out: Dict[str, Any] = {"length": length, "width": width, "folds": folds, "flange_mm": flange,
+                           "basis": basis or "not stated", "changed": False, "working": "",
+                           "note": ""}
+    if not (length and width) or folds <= 0:
+        return out
+    if basis.startswith(("dev", "flat")):
+        out["working"] = (f"the read gives {length:g} × {width:g} mm as the flat blank before its "
+                          f"{folds} fold(s) — used as given, no flange added")
+        return out
+    if basis.startswith("fin") and flange > 0:
+        short_axis, long_axis = (("length", "width") if length < width else ("width", "length"))
+        added = {"length": 0, "width": 0}
+        for i in range(folds):
+            added[short_axis if i % 4 < 2 else long_axis] += 1
+        out.update(length=length + added["length"] * flange, width=width + added["width"] * flange,
+                   changed=True,
+                   working=(f"developed from the finished {length:g} × {width:g} mm: {folds} fold(s) "
+                            f"of about {flange:g} mm flange — {added['width']} on the width, "
+                            f"{added['length']} on the length — a provisional flat blank, not a "
+                            f"measurement"))
+        return out
+    out["note"] = (f"CONCEPT: {folds} fold(s), and the read did not say whether {length:g} × "
+                   f"{width:g} mm is the finished size or the flat blank"
+                   + ("" if flange > 0 else ", nor how deep its flanges are")
+                   + " — priced as given; confirm the blank")
+    return out
+
+
+def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
+    """Internal cut length and pierce count of the slots, openings and holes a read lists.
+
+    A slot or opening is cut round its perimeter; a hole round its circumference. Each is a
+    pierce. The outer blank's own perimeter is not included — the caller adds it."""
+    internal, pierces, said = 0.0, 0, []
+    for c in (sighted.get("cutouts") or []):
+        if not isinstance(c, Mapping):
+            continue
+        n = int(_num(c.get("count")) or 0)
+        a, b = _num(c.get("length_mm")), _num(c.get("width_mm"))
+        if n <= 0 or not (a or b):
+            continue
+        what = str(c.get("what") or "cut-out").strip().lower()
+        each = (3.14159 * max(a, b)) if what.startswith("hole") else 2.0 * (a + (b or a))
+        internal += n * each
+        pierces += n
+        said.append(f"{n} × {what} {a:g}" + (f" × {b:g}" if b and what != "hole" else "") + " mm")
+    return {"internal_mm": round(internal, 1), "pierces": pierces, "said": said}
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
@@ -2404,6 +2782,26 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         why = str(sighted.get("why_size") or "scaled from the render")
         _sized_by_brief = _from_brief(sighted, "size")
         _ssrc = BRIEF_SOURCE if _sized_by_brief else SOURCE
+        # ── FOLDS, FLANGES AND CUT-OUTS (D-490) ─────────────────────────────────────
+        # The flat blank, the fold count and the internal cutting, each with its working.
+        _cuts: Dict[str, Any] = {}
+        if kind == "fabricated" and not unclassified:
+            _dev = developed_blank(blank, sighted)
+            record["concept_blank_basis"] = _dev["basis"]
+            if _dev["changed"]:
+                record["concept_finished_mm"] = {"length": _num(blank.get("length")),
+                                                 "width": _num(blank.get("width"))}
+                blank = dict(blank, length=_dev["length"], width=_dev["width"])
+                why = f"{why}; {_dev['working']}"
+            elif _dev["working"]:
+                why = f"{why}; {_dev['working']}"
+            if _dev["note"]:
+                record["review_flags"].append(_dev["note"])
+            if _dev["folds"] > 0:
+                record["concept_fold_count"] = _dev["folds"]
+                _assume("", _dev["folds"], "folds given by the concept read — provisional, not "
+                        "counted off a drawing", field="fold count")
+            _cuts = cutout_geometry(sighted)
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):
             try:
@@ -2421,6 +2819,24 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         if thickness > 0:
             apply_field(record, "normalized_thickness_mm", thickness, _ssrc, note=why)
             _assume("thickness_mm", thickness, why)
+        if _cuts.get("pierces") and wrote_size:
+            # INTERNAL CUTTING IS CUTTING (D-490): the slots and openings go to the laser as a
+            # cut length beyond the blank's own perimeter and a pierce each — the inputs the
+            # workbook's Laser Rate Calculator already reads (holes, internal cut distance).
+            _L, _W = _num(blank.get("length")), _num(blank.get("width"))
+            _total = round(2.0 * (_L + _W) + _cuts["internal_mm"], 1)
+            _mf = record.setdefault("manufacturing_features", {})
+            _mf["cut_length_mm"] = _total
+            _mf["hole_count"] = int(_cuts["pierces"])
+            _gr = record.setdefault("geometry_rollup", {})
+            _gr["estimated_cut_length_mm"] = _total
+            _gr["estimated_hole_count"] = int(_cuts["pierces"])
+            _gr["estimated_pierce_count"] = int(_cuts["pierces"])
+            record["concept_cutouts"] = list(_cuts["said"])
+            _assume("", ", ".join(_cuts["said"]),
+                    f"internal cut-outs given by the concept read — {_cuts['internal_mm']:g} mm "
+                    f"of internal cutting and {_cuts['pierces']} pierce(s), provisional",
+                    field="cut-outs")
 
         # ── THE WORK, OR THE LINE COSTS NOTHING ─────────────────────────────────────
         #
@@ -2799,6 +3215,21 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
         f"that is most of what it is made of ({_mix or 'no material sighted'}); set "
         f"`estimator_decisions.throughput_per_hour` for the bench department to time it "
         f"yourself")
+    # EVERY PIECE IT FITS, COUNTED (D-486), and EVERY LINE IT HOLDS, OWNED (D-487). The
+    # pieces are the parts' quantities added up — ten side trays are ten pieces to fit, not
+    # one line — and the bought and printed lines hang under the unit for the hierarchy, in
+    # a field of their own: assembly_children stays the made parts the weld and powder
+    # rules read as members.
+    def _qty(p: Mapping[str, Any]) -> int:
+        try:
+            return max(1, int(p.get("quantity") or 1))
+        except (TypeError, ValueError):
+            return 1
+    fitted = [p for p in (parts or []) if isinstance(p, dict)
+              and p.get("concept_kind") != "assembly" and str(p.get("part_number") or "")]
+    record["pieces_fitted"] = sum(_qty(p) for p in fitted)
+    record["assembly_fitted_items"] = [str(p.get("part_number")) for p in fitted
+                                       if p.get("concept_kind") != "fabricated"]
     return record
 
 

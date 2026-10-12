@@ -4908,49 +4908,78 @@ def _finalize_scan_summary(
             _sheet_read = bool(_design_intent_pages)
             _sheet_check: Dict[str, Any] = {}
             _set_aside: List[Dict[str, Any]] = []
+            # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked
+            # because the question changed is shown the bill it priced last time; a cached
+            # answer to the same question still replays untouched.
+            _bill_job = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            _prev_bill = concept_scan.load_previous_bill(job_folder, _bill_job)
+            _prev_text = concept_scan.previous_bill_text(_prev_bill)
+            if _prev_text:
+                print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
+                      f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
+                      f"new read, to keep unless the pages say otherwise", flush=True)
             if _sheet_read:
                 _door_rec = (summary.get("model_takeoff_door")
                              if isinstance(summary.get("model_takeoff_door"), dict) else {})
+                # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
+                # apply whatever the product's pages are, and only the render read was given
+                # them — the K-Wellness 12:31 book priced no test, documentation or project row.
                 _sr = concept_scan.read_sheet_concept(
                     _pack, refresh=_fresh, brief=_brief,
                     envelope=list(_door_rec.get("model_envelope_mm") or []),
-                    envelope_of=str(_door_rec.get("model_envelope_of") or ""))
+                    envelope_of=str(_door_rec.get("model_envelope_of") or ""),
+                    reference_pack=_ref_pack, previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _read, _answer = _sr["read"], _sr["answer"]
                 _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
-                if _ref_pack:
-                    summary.setdefault("review_flags", []).append(
-                        "CONCEPT: the declared reference document(s) do not ride on a "
-                        "design-sheet read — the standards remain the estimator's own list "
-                        "this run")
             else:
-                _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief,
-                                                  reference_pack=_ref_pack)
-                if _ref_pack and not _read.get("standards_text_chars"):
-                    summary.setdefault("review_flags", []).append(
-                        "CONCEPT: the declared reference document(s) have no readable text "
-                        "layer, so no requirement reached the model — the standards remain "
-                        "the estimator's own list this run")
-                _sc = (_read.get("standards_coverage")
-                       if isinstance(_read.get("standards_coverage"), dict) else None)
-                if _sc:
-                    # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
-                    # words only, so a trimmed page's diagram-only requirement may be missed.
-                    _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
-                                f"{_sc.get('total')} extracted character(s) of the reference "
-                                f"document(s) went to the model; its pages are not read as "
-                                f"images, so a requirement carried only by a trimmed page's "
-                                f"diagram may be missed — walk the manual's checklist "
-                                f"sections against the requirement lines before issue")
-                    summary.setdefault("review_flags", []).append(_sc_note)
-                    print(f"   [concept] {_sc_note}", flush=True)
+                _read = concept_scan.read_concept(
+                    _pack, refresh=_fresh, brief=_brief, reference_pack=_ref_pack,
+                    previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _answer = _read.get("parsed") or {}
-                if _read.get("document_text_chars"):
-                    # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
-                    # stated footprint, construction and counts are facts, not visual cues.
-                    summary["concept_document_text_chars"] = int(_read["document_text_chars"])
-                    print(f"   [concept] the pack's own words went to the model with its "
-                          f"pages ({_read['document_text_chars']} chars) — a figure, material "
-                          f"or count stated in them is a fact, not a visual cue", flush=True)
+            # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
+            # moved against the previous read — on the book, not only in the log.
+            _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []
+            if _changes:
+                _ch = ("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(_changes[:20])
+                       + (f"; and {len(_changes) - 20} more" if len(_changes) > 20 else ""))
+                summary.setdefault("review_flags", []).append(_ch)
+                print(f"   [concept] {_ch}", flush=True)
+            elif _prev_bill and _answer:
+                print("   [concept] the bill is unchanged from the previous read", flush=True)
+            if _read.get("baseline"):
+                print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
+                                 or "")
+            if _ref_pack and not _read.get("standards_text_chars"):
+                summary.setdefault("review_flags", []).append(
+                    "CONCEPT: the declared reference document(s) have no readable text "
+                    "layer, so no requirement reached the model — the standards remain "
+                    "the estimator's own list this run")
+            _sc = (_read.get("standards_coverage")
+                   if isinstance(_read.get("standards_coverage"), dict) else None)
+            if _sc:
+                # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
+                # words only, so a trimmed page's diagram-only requirement may be missed.
+                _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
+                            f"{_sc.get('total')} extracted character(s) of the reference "
+                            f"document(s) went to the model; its pages are not read as "
+                            f"images, so a requirement carried only by a trimmed page's "
+                            f"diagram may be missed — walk the manual's checklist "
+                            f"sections against the requirement lines before issue")
+                summary.setdefault("review_flags", []).append(_sc_note)
+                print(f"   [concept] {_sc_note}", flush=True)
+            if not _sheet_read and _read.get("document_text_chars"):
+                # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
+                # stated footprint, construction and counts are facts, not visual cues.
+                summary["concept_document_text_chars"] = int(_read["document_text_chars"])
+                print(f"   [concept] the pack's own words went to the model with its "
+                      f"pages ({_read['document_text_chars']} chars) — a figure, material "
+                      f"or count stated in them is a fact, not a visual cue", flush=True)
             # A REQUIREMENT THE STANDARDS DOCUMENT STATES IS A NAMED ALLOWANCE (D-474):
             # design development, testing, assessments and documentation are project costs
             # the estimator prices SEPARATELY, never parts and never silently buried in the
@@ -5008,6 +5037,13 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+            # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
+            # values an estimator APPROVED, and the bill names the question and the answer it
+            # came from, so the next read can tell an unchanged read from a new one.
+            if _answer:
+                concept_scan.save_bill(job_folder, _bill_job, _answer, records=_sighted,
+                                       base_key=_bill_base_key,
+                                       read_key=str(_read.get("read_key") or ""))
             _welded = concept_scan.brief_stated_welds(_sighted)
             if _welded:
                 # A WELD THE BRIEF STATES IS A STATED WELD (D-467), on the parts the model
@@ -5122,9 +5158,20 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
-            _nv_lines = concept_scan.consumable_lines(_nv_cons, _job_name)
+            _nv_lines = concept_scan.consumable_lines(
+                _nv_cons, _job_name,
+                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0))
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
+                if _unit:
+                    # THE CONSUMABLES GO ON THE UNIT (D-487): owned in the hierarchy, not
+                    # orphans the consistency check blocks on.
+                    _unit.setdefault("assembly_fitted_items", []).extend(
+                        str(_l.get("part_number")) for _l in _nv_lines)
+                    # AND APPLYING THEM IS THE UNIT'S WORK, ONCE (D-491).
+                    _to_apply = sum(int(_l.get("items_to_apply") or 0) for _l in _nv_lines)
+                    if _to_apply:
+                        _unit["items_to_apply"] = _to_apply
                 print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
                       f"from the read's not-visible list — priced by the ordinary bought-in "
                       f"chain, flagged for confirmation", flush=True)

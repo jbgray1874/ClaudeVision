@@ -7337,11 +7337,19 @@ def _is_special_bought_in_item(part: Dict[str, Any]) -> bool:
     # -X suffix above is SDI's own purchasing convention and still does.
     try:
         from bought_in_policy import own_sheet_states_a_stock_material as _own_stock
-        if _own_stock(part):
+        from bought_in_policy import read_states_a_made_part as _read_made
+        # OR THE CONCEPT READ STATES IT, WITH EVIDENCE (D-489): made, in a stock SDI cuts,
+        # with a sighted blank and a fabrication route — a sighted part has no sheet of its own.
+        _by_sheet = _own_stock(part)
+        if _by_sheet or _read_made(part):
             part.setdefault("review_flags", [])
+            _mat_said = str(part.get('normalized_material') or (part.get('materials') or [''])[0]).replace('_', ' ')
             _msg = (f"named '{part.get('description')}' — read as what it holds, not what it "
-                    f"is made of: its own sheet states {str(part.get('normalized_material') or (part.get('materials') or [''])[0]).replace('_', ' ')}, "
-                    f"a stock SDI cuts, so it is made here and not bought")
+                    f"is made of: its own sheet states {_mat_said}, a stock SDI cuts, so it is "
+                    f"made here and not bought" if _by_sheet else
+                    f"named '{part.get('description')}' — read as what it holds, not what it "
+                    f"is made of: the concept read classes it as made, in {_mat_said}, with a "
+                    f"sighted blank and its own route, so it is made here and not bought")
             if _msg not in part["review_flags"]:
                 part["review_flags"].append(_msg)
             return False
@@ -7995,7 +8003,20 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # Recognise on the geometry pierce/hole count (DXF truth, e.g. 386), not the
     # manufacturing "hole_count" field, which can collapse to distinct-size count.
     _punch_hole_signal = int(max(holes or 0, pierces or 0))
-    if (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
+    # A SIGHTED CUT-OUT DOES NOT ESTABLISH PUNCH TOOLING (D-493). The punch time charges each
+    # hole as one hit, which assumes a tool of that size and shape; a measured flat or a
+    # stated punch can say so, a slot sighted off a brief cannot. Sighted cut-outs stay on the
+    # laser — each cut round its perimeter with a pierce — and the line says why.
+    _sighted_cuts = bool(part.get("concept_cutouts"))
+    if (_mat_u in _SHEET_METALS) and "punch" not in ops and _sighted_cuts \
+            and _is_punch_part(part, _punch_hole_signal, _punch_blob):
+        part.setdefault("review_flags", []).append(
+            f"PUNCH NOT ASSUMED: {_punch_hole_signal} cut-out(s) here are sighted, not measured "
+            f"({'; '.join(part.get('concept_cutouts') or [])}), so punch tooling to suit them "
+            f"is not established — costed as laser profile cutting, each cut-out round its "
+            f"perimeter with a pierce. If SDI punches these on standard tooling, say so and the "
+            f"time follows")
+    elif (_mat_u in _SHEET_METALS) and "punch" not in ops and _is_punch_part(part, _punch_hole_signal, _punch_blob):
         ops = [o for o in ops if o != "laser_cutting"] + ["punch"]
         record_operation(part, "punch", "inference")
 
@@ -8368,7 +8389,25 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     if "folding" in ops:
         rule = LABOUR_RULES["folding"]
         setup_times_min["folding"] = round(rule["setup_min"], 2)
-        run_times_min["folding"] = round((bends * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
+        # A FOLDED PART IS NEVER FOLDED IN NO TIME (D-490). With no bend counted the run time
+        # came to 0.00 minutes, so the workbook's per-part rate was the part's pieces over the
+        # set-up alone — "CPT01 36,036/hr; CPT08 60,060/hr" on the K-Wellness fold rows — and
+        # the floor guard swapped the row for the department median. A part routed through
+        # folding that nothing has counted (and no model has measured flat) is charged the
+        # stated minimum, and the line says so.
+        _bends_charged = bends
+        if not bends and not _model_measured_zero_bends(part):
+            _assumed_folds = int(getattr(config, "FOLDS_ASSUMED_WHEN_UNCOUNTED", 1) or 0)
+            if _assumed_folds > 0:
+                _bends_charged = _assumed_folds
+                part["fold_count_assumed"] = _assumed_folds
+                part.setdefault("review_flags", []).append(
+                    f"FOLD ALLOWANCE: folding is charged on an allowance of {_assumed_folds} "
+                    f"fold(s) — the part is routed through folding and nothing counted its "
+                    f"bends, so this is the minimum for a folded part (config "
+                    f"FOLDS_ASSUMED_WHEN_UNCOUNTED), an allowance and not a count. Give the "
+                    f"fold count and the time follows it")
+        run_times_min["folding"] = round((_bends_charged * rule["sec_per_bend"] + bend_length_mm * rule["sec_per_mm_bend_length"]) / 60.0, 2)
         # ── WHERE THE FOLD COUNT CAME FROM, ON THE LINE THAT CHARGES IT ──────────────
         #
         # James Gray, 401912-02: "why are we getting this incorrect ever?"
@@ -8436,6 +8475,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{bends:g} fold(s) charged, counted by {_fr.get('source_label')}; the "
                 f"SolidWorks model's bend features agree. No DXF bend lines reached this run, "
                 f"so the flat pattern did not count them.")
+        elif part.get("fold_count_assumed") and not bends:
+            # AN ALLOWANCE IS NOT A COUNT (D-493): the sentence says what was charged and why.
+            part.setdefault("review_flags", []).append(
+                f"{part['fold_count_assumed']} fold(s) charged as an ALLOWANCE, not a count — "
+                f"nothing that can see the part counted its bends")
+        elif str(_fr.get("source") or "") == "concept_read_fold_count":
+            part.setdefault("review_flags", []).append(
+                f"{bends:g} fold(s) charged from the concept read's provisional count — sighted "
+                f"off the brief or pages, not measured; confirm against a drawing")
         else:
             _ng_fold = part.get("normalized_geometry") or {}
             _layers_seen = bool(_ng_fold.get("layers") or part.get("dxf_layers"))
@@ -8759,6 +8807,40 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
 
     if "handling" in ops:
         run_times_min["handling"] = round(LABOUR_RULES["handling"]["min_per_part"], 2)
+        # A SIGHTED UNIT IS FITTED PIECE BY PIECE (D-486). The K-Wellness unit — about forty
+        # posts, trays, strips and panels — was timed as ONE part handled: 0.8 minutes to
+        # build a floor-standing fixture. The per-part handling minutes now count every piece
+        # the unit fits (unit_assembly_part adds up its parts' quantities). A board unit is
+        # left to the bench-fitting rule below, which already times each part fitted.
+        _pieces = _safe_int(part.get("pieces_fitted")) or 0
+        _mat_fit = str(part.get("normalized_material") or "").upper().replace("_", " ")
+        _board_unit = any(_w in _mat_fit for _w in ("MDF", "MFMDF", "MFC", "CHIPBOARD", "PLYWOOD",
+                                                     "PLY", "TIMBER", "BIRCH", "VENEER",
+                                                     "LAMINATE"))
+        if _pieces > 1 and not _board_unit and (part.get("is_assembly_parent")
+                                                or part.get("assembly_children")):
+            _per = float(LABOUR_RULES["handling"]["min_per_part"])
+            run_times_min["handling"] = round(_per * _pieces, 2)
+            part["unit_fitting_applied"] = True
+            part.setdefault("review_flags", []).append(
+                f"unit fitting: {run_times_min['handling']:g} min of Assemble/pack on this unit "
+                f"— {_per:g} min (LABOUR_RULES handling, per part) for each of {_pieces} piece(s) "
+                f"it fits, counted from its parts' quantities, not one unit at a department "
+                f"rate. Confirm it suits a unit this size")
+        # APPLYING AND CHECKING THE PER-COMPONENT ITEMS, ONCE, ON THE UNIT (D-491): the labels'
+        # line carries their price per item; their application is this unit's time, here only.
+        _apply_n = _safe_int(part.get("items_to_apply")) or 0
+        if _apply_n > 0 and (part.get("is_assembly_parent") or part.get("assembly_children")):
+            _apply_min = float(getattr(config, "CONCEPT_APPLY_MIN_PER_ITEM", 0.25) or 0.0)
+            if _apply_min > 0:
+                _added = round(_apply_n * _apply_min, 2)
+                run_times_min["handling"] = round(run_times_min.get("handling", 0.0) + _added, 2)
+                part["unit_fitting_applied"] = True
+                part.setdefault("review_flags", []).append(
+                    f"applying and checking {_apply_n} per-component item(s): {_added:g} min "
+                    f"added to this unit's Assemble/pack — {_apply_min:g} min each "
+                    f"(config CONCEPT_APPLY_MIN_PER_ITEM, an assumption to confirm), charged "
+                    f"once here and nowhere else")
         # A PART THAT LEAVES THE BUILDING IS PACKED TWICE.
         #
         # "There would be consideration for two ops for Packing — to and from Plater & Final
@@ -10170,6 +10252,32 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     for op in sorted(labour.get("missing_rate_operations") or []):
         risk_flags.append(f"missing_labour_rate:{op}")
 
+    # P.COAT CHARGED WITH NOTHING TO COAT IS SAID (D-488). The K-Wellness 12:31 book charged
+    # booth time on six parts with a coated area of 0.0 — no blank, so no area — and no
+    # powder material at all: the material line is computed from area, and a zero area
+    # writes no line. A coat charged without its powder is flagged on the part, never left
+    # as a silent zero. A parent coated over its members, or asked about its scope, is not —
+    # and nor is a part with a blank: whatever the engine's own area figure, the workbook's
+    # Powder Qty Calculator charges the area of that blank on the Sheet Steel block. Only a
+    # part with no size at all has nothing for either to coat.
+    _pcd = (process.get("powder_coating_detail")
+            if isinstance(process.get("powder_coating_detail"), dict) else {})
+    _has_blank = bool(
+        (_safe_float((material or {}).get("blank_length_mm"))
+         or _safe_float(part.get("blank_length_mm")))
+        and (_safe_float((material or {}).get("blank_width_mm"))
+             or _safe_float(part.get("blank_width_mm"))))
+    if ((_safe_float((labour.get("costs_gbp") or {}).get("powder_coating")) or 0.0) > 0
+            and not (_safe_float(_pcd.get("coated_m2")) or 0.0)
+            and not _has_blank
+            and not _pcd.get("powder_scope_question")
+            and not part.get("_powder_members_coated_m2")):
+        risk_flags.append("powder_charged_zero_coated_area")
+        part.setdefault("review_flags", []).append(
+            "P.COAT CHARGED WITH NO COATED AREA: booth time is charged on this part at its "
+            "minimum, but nothing gave it a size, so its coated area is 0 and NO powder material "
+            "is charged for it. Give the part its blank and the coat and its powder both follow.")
+
     # THE GAUGE CHARGED SAYS WHICH READING GAVE IT. The source spread below copies the raw
     # record's thickness_source, so a gauge this costing pass took from the part's
     # thicknesses list (or its DXF name) over a refused raw reading went out labelled with
@@ -11532,6 +11640,8 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
         except Exception:                                        # noqa: BLE001
             unit = None
         if unit is None or unit <= 0:
+            pe.pop("_made_part_material_allowance", None)
+            pe.pop("_consumable_allowance_basis", None)
             continue
         qty = _safe_int(pe.get("quantity")) or 1
         _unit = _round_money(unit)
@@ -11576,18 +11686,148 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
         # list printed "NOT PRICED — … refused" against a hinge the sheet was charging £3.25.
         pe["review_flags"] = [f for f in (pe.get("review_flags") or [])
                               if "NOT PRICED —" not in str(f)]
-        pe.setdefault("review_flags", []).append(
-            "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
-            "indicative market figure is shown rather than a blank that reads as free. NON-FIRM "
-            "— verify or replace with a supplier rate before quoting.")
+        _cons_basis = pe.pop("_consumable_allowance_basis", None)
+        if _cons_basis:
+            # A COUNT TIMES A PRICED REFERENCE ITEM (D-487), said in full on the line.
+            _me["consumable_allowance"] = True
+            pe.setdefault("review_flags", []).append(
+                f"PROVISIONAL CONSUMABLES ALLOWANCE: the market had no answer for this set, so "
+                f"it is costed as {_cons_basis}. NON-FIRM — confirm the contents and the count "
+                f"before release.")
+        elif pe.pop("_made_part_material_allowance", False):
+            # MATERIAL ONLY, AND SAID SO (D-485): the route charges the work; this is the stock.
+            _me["material_allowance_only"] = True
+            pe.setdefault("review_flags", []).append(
+                "PROVISIONAL MATERIAL ALLOWANCE: a part SDI makes, with no size to nest, so the "
+                "market was asked for its RAW MATERIAL ONLY — never the finished part, whose "
+                "cutting, forming, joining and finishing the route charges. NON-FIRM — give the "
+                "blank length × width × gauge and it costs as a nested part.")
+        else:
+            pe.setdefault("review_flags", []).append(
+                "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
+                "indicative market figure is shown rather than a blank that reads as free. "
+                "NON-FIRM — verify or replace with a supplier rate before quoting.")
         n += 1
     return n
+
+
+def apply_consumable_allowances(part_estimates: List[Dict[str, Any]],
+                                parts: List[Dict[str, Any]],
+                                reference_lookup=None) -> int:
+    """A CONSUMABLES SET THE MARKET COULD NOT PRICE IS NEVER £0 (D-487).
+
+    The K-Wellness 12:31 book held its fixings line at £0 because research had no answer for
+    "fixings and fasteners for carcass assembly". A set the concept read minted carries
+    `consumable_allowance` — a count from config (fixings per piece fitted) and a named
+    reference item. The reference item is priced by the ordinary chain, SDI's own sources
+    first; the set is that price times the count, flagged as a provisional allowance with
+    its working. A line already priced is not touched; no reference price leaves it a gap."""
+    lookup = reference_lookup or _last_resort_lookup
+    rules = {str(p.get("part_number") or "").strip().upper(): p.get("consumable_allowance")
+             for p in (parts or []) if isinstance(p, dict)
+             and isinstance(p.get("consumable_allowance"), dict)}
+    n = 0
+    for pe in part_estimates or []:
+        if not isinstance(pe, dict):
+            continue
+        rule = rules.get(str(pe.get("part_number") or "").strip().upper())
+        if not rule or not _last_resort_price_is_needed(pe):
+            continue
+        count = _safe_float(rule.get("count")) or 0.0
+        ref = str(rule.get("reference_item") or "").strip()
+        if count <= 0 or not ref:
+            continue
+        ref_line = {"part_number": "", "description": ref, "quantity": 1,
+                    "page_roles": ["bought_in"], "is_bought_in": True,
+                    "job_quantity": pe.get("job_quantity"), "run_date": pe.get("run_date")}
+
+        def _priced(line: Dict[str, Any], _ref=ref_line, _count=count, _rule=rule,
+                    _name=ref) -> Optional[float]:
+            each = _safe_float(lookup(_ref))
+            if each is None or each <= 0:
+                return None
+            line["_last_resort_result"] = _ref.pop("_last_resort_result", None) or {}
+            qty = _safe_int(line.get("quantity")) or 1
+            line["_consumable_allowance_basis"] = (
+                f"{_count:g} × '{_name}' at £{each:,.2f} each "
+                f"({_rule.get('per_piece_fitted')} per piece × {_rule.get('pieces_fitted')} "
+                f"piece(s) fitted — {_rule.get('basis') or 'an assumption to confirm'})")
+            return each * _count / qty
+
+        n += apply_last_resort_prices([pe], _priced)
+    return n
+
+
+def _is_made_line(pe: Dict[str, Any]) -> bool:
+    """Does this costed line carry a route SDI works itself, on a part the make/buy authority
+    does not rule bought? Read from the line's own fields and its route_context (D-485)."""
+    try:
+        from bought_in_policy import FABRICATION_OPS, is_bought_in
+    except Exception:                                            # noqa: BLE001
+        return False
+    _rc = pe.get("route_context") if isinstance(pe.get("route_context"), dict) else {}
+    _ops = {str(o).strip().lower() for o in
+            (list(pe.get("textual_operations") or []) + list(pe.get("inferred_operations") or [])
+             + list(_rc.get("textual_operations") or []) + list(_rc.get("inferred_operations") or []))}
+    return bool(_ops & FABRICATION_OPS) and not is_bought_in(pe)
+
+
+def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
+    """A PART WE MAKE IS NEVER PRICED AS A FINISHED ITEM (D-485).
+
+    The K-Wellness 12:31 book had no size on any made part, so nothing nested and the rescue
+    priced each by its description: "Side shelf tray (mirrored, with welded hooks)" came back
+    £420 as a finished tray, and the route then charged our own laser, fold, weld, dress and
+    powder on top of it — the work paid for twice. The market is asked here for the one thing
+    it can price on a part we make with no size: the raw stock for one of it, material only.
+    The figure is marked a provisional material allowance; None leaves the line an honest gap."""
+    me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+    material = str(pe.get("normalized_material") or me.get("material") or "").strip()
+    gauge = _safe_float(me.get("thickness_mm") or pe.get("normalized_thickness_mm"))
+    what = str(pe.get("description") or pe.get("part_number") or "").strip()
+    if not what:
+        return None
+    stock = " ".join(x for x in (material.replace("_", " ").lower(),
+                                 f"{gauge:g} mm" if gauge else "") if x) or "sheet"
+    question = (f"{stock} stock — the RAW MATERIAL ONLY for one '{what}'. SDI makes this part "
+                f"and charges its own cutting, forming, joining and finishing separately, so "
+                f"price the stock it is cut from and nothing else; its size is not known, so "
+                f"allow for a typical blank for such a part")
+    pe["_made_part_material_allowance"] = True
+    try:
+        from indicative_price import resolve_indicative as _rung4
+        _ind = _rung4({"code": "", "description": question, "quantity": pe.get("quantity"),
+                       "unit_of_measure": "each",
+                       "input_origins": dict(pe.get("input_origins") or {})},
+                      order_qty=int(_safe_float(pe.get("job_quantity")) or 1),
+                      as_of=str(pe.get("run_date") or ""), ask=_rung4_researcher)
+    except Exception:                                            # noqa: BLE001
+        _ind = {}
+    price = _safe_float((_ind or {}).get("price_gbp"))
+    if price is None or price <= 0:
+        pe.setdefault("review_flags", []).append(
+            f"{pe.get('part_number') or what}: NOT PRICED — a part SDI makes with no size, so "
+            f"there is no blank to nest, and no material allowance could be researched "
+            f"({(_ind or {}).get('missing') or 'no answer'}). It is never priced as a finished "
+            f"item; give its blank length × width × gauge and it costs as a nested part")
+        return None
+    pe["_last_resort_result"] = {"selected": {
+        "source": ((_ind.get("evidence") or {}).get("source")), "price": price,
+        "review_required": True, "review_reason": _ind.get("status"),
+        "price_is_reproducible": bool(_ind.get("price_is_reproducible")),
+        "metadata": {"pricing_mode": "llm_indicative", "evidence": _ind.get("evidence"),
+                     "calculation": _ind.get("calculation"), "label": _ind.get("label"),
+                     "item_priced": _ind.get("item_priced")}}}
+    return price
 
 
 def _last_resort_lookup(pe: Dict[str, Any]) -> Optional[float]:
     """The per-each price for a 'reads as free' line: the same UDEF/RAG/catalogue/LLM chain the
     system-cost path uses, run as a guaranteed last resort for a line the normal path left
-    unpriced (a bought-in the classifier skipped, a code the first pass did not look up)."""
+    unpriced (a bought-in the classifier skipped, a code the first pass did not look up).
+    A part we make is asked for its raw material only (D-485)."""
+    if _is_made_line(pe):
+        return _made_part_material_allowance(pe)
     try:
         _r = _resolve_part_system_cost(pe)
     except Exception:                                            # noqa: BLE001
@@ -13041,6 +13281,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                   f"non-firm market/LLM indicative so no real part shows a blank price")
     except Exception as _e_lr:                                   # noqa: BLE001
         print(f"   [always-a-number] last-resort pricing skipped: {_e_lr}")
+    try:
+        _allowed = apply_consumable_allowances(part_estimates, estimable_parts)
+        if _allowed:
+            print(f"   [always-a-number] {_allowed} consumables set(s) the market could not "
+                  f"price costed as a provisional allowance — a count times a priced "
+                  f"reference item", flush=True)
+    except Exception as _e_ca:                                   # noqa: BLE001
+        print(f"   [always-a-number] consumables allowance skipped: {_e_ca}", flush=True)
     # Price the subcontract plating line(s) now that every member has a costed mass, so the
     # plated-mass figure agrees with the sheet. Runs before the totals below so the plating cost
     # is in them.
@@ -13104,6 +13352,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             f"Powder coating: £{_round_money(powder_material_total_raw):.2f} material + "
             f"£{_round_money(powder_labour_total_raw):.2f} labour"
         ),
+        # THE COATS CHARGED WITH NO POWDER, named on the job (D-488).
+        "charged_with_zero_coated_area": [
+            str(p.get("part_number")) for p in part_estimates
+            if "powder_charged_zero_coated_area" in (p.get("risk_flags") or [])],
         "by_part": [
             {
                 "part_number": p.get("part_number"),
@@ -13119,6 +13371,14 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             if _part_powder_material_extended_gbp(p) > 0 or _part_powder_labour_gbp(p) > 0
         ],
     }
+    _zero_coat = powder_coating_summary["charged_with_zero_coated_area"]
+    if _zero_coat and summary is not None:
+        # ON THE CONFIRM LIST, not only on the parts (D-488).
+        summary.setdefault("review_flags", []).append(
+            f"P.COAT CHARGED WITH NO COATED AREA on {len(_zero_coat)} part(s): "
+            f"{', '.join(_zero_coat[:8])}{' …' if len(_zero_coat) > 8 else ''} — booth time is "
+            f"charged at its minimum and no powder material is, because nothing gave these "
+            f"parts a size. Size them and the coat and its powder both follow.")
 
     workbook_equivalent_pricing = _build_workbook_equivalent_pricing(
         part_estimates, material_total=material_total, labour_total=labour_total,

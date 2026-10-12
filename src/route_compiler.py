@@ -1517,7 +1517,8 @@ def build_part_graph(
     _claimed_codes |= {
         clean_part_number(_k)
         for _p in (parts or []) if isinstance(_p, Mapping)
-        for _k in (_p.get("assembly_children") or [])
+        for _k in (list(_p.get("assembly_children") or [])
+                   + list(_p.get("assembly_fitted_items") or []))
     }
     _claimed_codes.discard("")
     aliases = _raw_identity_aliases(raw_original, extracted, claimed=_claimed_codes)
@@ -1747,8 +1748,12 @@ def build_part_graph(
     for part in parts or []:
         if not isinstance(part, Mapping):
             continue
-        _kids = part.get("assembly_children")
-        if not isinstance(_kids, list) or not _kids:
+        # A UNIT'S FITTED BOUGHT AND PRINTED LINES ARE ITS CHILDREN IN THE HIERARCHY TOO
+        # (D-487), read from their own field so the member rules never see them.
+        _kids = (list(part.get("assembly_children") or [])
+                 if isinstance(part.get("assembly_children"), list) else []) + \
+            list(part.get("assembly_fitted_items") or [])
+        if not _kids:
             continue
         _pid = clean_part_number(part.get("part_number"))
         _pid = aliases.get(_pid, _pid)

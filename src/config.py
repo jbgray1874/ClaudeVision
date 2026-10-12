@@ -683,6 +683,38 @@ CONCEPT_CONSUMABLE_WORDS = [
     "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
     "tape", "velcro", "label", "clip", "plug", "foot", "feet", "glide",
 ]
+# A PART ROUTED THROUGH FOLDING THAT NOTHING COUNTED IS FOLDED AT LEAST ONCE (D-490). A count,
+# never a time: the minutes come from LABOUR_RULES["folding"]. Without it the run time was 0
+# and the workbook's per-part fold rate was pieces over set-up alone (36,036/hr).
+FOLDS_ASSUMED_WHEN_UNCOUNTED = 1
+# A consumable the read says is PER COMPONENT is counted once per piece the unit fits
+# (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
+# Vocabulary, not logic.
+CONCEPT_PER_COMPONENT_WORDS = ["component", "per part", "each part", "every part", "per piece",
+                               "each piece", "every piece"]
+# HOW MANY EACH COMPONENT CARRIES (D-491): a COUNT, never a price — the line is priced per
+# item by the ordinary chain and counted as this × the components the unit fits. AN
+# ASSUMPTION TO CONFIRM: the customer's own labelling rule decides.
+CONCEPT_PER_COMPONENT = {
+    "items_per_component": 1,
+    "basis": "an assumption to confirm — one per component",
+}
+# Per-component items that are APPLIED to the product, whose application and checking is
+# labour charged once on the unit (D-491). Vocabulary, not logic.
+CONCEPT_APPLIED_ITEM_WORDS = ["label", "sticker", "decal", "tag"]
+# Minutes to apply and check ONE such item — a time, an assumption to confirm (15 seconds:
+# peel, place, scan to verify). Charged once, on the unit's Assemble/pack time.
+CONCEPT_APPLY_MIN_PER_ITEM = 0.25
+# THE ALLOWANCE FOR A CONSUMABLES SET THE MARKET COULD NOT PRICE (D-487): a COUNT, never a
+# price. The set is costed as this many of the reference item per piece the unit fits, and
+# the reference item is priced by the ordinary chain (SDI's own sources first, then
+# research) at run time — so nothing here can go stale invisibly. AN ASSUMPTION TO CONFIRM:
+# estimating to state the real fixings count for a fixture of this kind.
+CONCEPT_CONSUMABLE_ALLOWANCE = {
+    "per_piece_fitted": 4,
+    "reference_item": "M6 x 16 pan head machine screw, zinc plated, with nut and washer",
+    "basis": "an assumption to confirm — four fixings for each piece the unit fits",
+}
 # Items in SHIPMENT scope are already carried by the commercial PACKAGING and DELIVERY
 # lines every run prices — never duplicated as a parts line, and never one per fixture
 # (D-469). Checked BEFORE the consumable words, so "packing tape" lands here.
@@ -2001,6 +2033,18 @@ CONCEPT_COMPONENT_WORDS = (
 CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "CASTOR",
                                 "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
 CONCEPT_LABEL_MAX_WORDS = 4
+# A short line is a CALLOUT only if it reads like a label, not a wrapped fragment of a sentence
+# (D-482). A tech brief is paragraph text, and PDF extraction breaks paragraphs into lines: the
+# K-Wellness brief's "uprights. These could" was three words carrying UPRIGHT, so it was taken
+# as a printed part, the bill "missed" it, and a corrective second read was spent on prose.
+# A line with a sentence break inside it, or that starts or ends on one of these words, is
+# prose — a label never begins or ends on an article, conjunction, pronoun or modal verb.
+CONCEPT_LABEL_PROSE_WORDS = (
+    "A", "AN", "THE", "AND", "OR", "BUT", "OF", "TO", "IN", "ON", "AT", "BY", "FOR", "WITH",
+    "FROM", "AS", "THAT", "THIS", "THESE", "THOSE", "IT", "ITS", "THEY", "THEIR", "WHICH",
+    "IS", "ARE", "BE", "BEEN", "WAS", "WERE", "CAN", "COULD", "WILL", "WOULD", "SHOULD",
+    "MAY", "MIGHT", "MUST", "ALSO", "THEN", "SO", "IF",
+)
 
 # A short "<gauge>mm <material>" note on a design sheet ("2mm STEEL CONSTRUCTION", D-419), and
 # the stock material it names. Plain STEEL on a design sheet is mild steel unless it says

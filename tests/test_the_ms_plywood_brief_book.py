@@ -205,7 +205,8 @@ def test_the_minted_print_is_a_graphic_record_flagged_as_assumed():
 
 
 def test_the_prompt_asks_for_print_as_its_own_line():
-    assert concept_scan.CONCEPT_PROMPT_VERSION == "c4"
+    # c4 brought the rule (D-365); later versions keep it (c5: D-490's folds and cut-outs).
+    assert int(concept_scan.CONCEPT_PROMPT_VERSION.lstrip("c")) >= 4
     assert "PRINT IS ALWAYS ITS OWN LINE" in concept_scan._PROMPT
 
 

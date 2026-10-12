@@ -391,8 +391,15 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     # stay as a second net for records that arrive without either.
     try:
         from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence, is_bought_in
+        # THE COSTED RECORD KEEPS ITS ROUTE UNDER route_context (D-485). The last-resort rescue
+        # asks this of the costed line, not the raw part, so the top-level fields were empty and
+        # the K-Wellness trays, posts and spine — laser, fold, weld and powder on every one —
+        # read as things to buy: £6,163 of finished-item market figures with our own labour
+        # charged on top. Both places are read.
+        _rc = part.get("route_context") if isinstance(part.get("route_context"), dict) else {}
         _ops = {str(o).strip().lower() for o in
-                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or []))}
+                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
+                 + (_rc.get("textual_operations") or []) + (_rc.get("inferred_operations") or []))}
         if has_fabrication_evidence(part):
             return False
         # AN OPERATION READ ONTO A PURCHASED ITEM IS A MIS-READ, NOT A MAKE. MAGNET21 sat on
@@ -1421,10 +1428,13 @@ class PricingService:
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             from bought_in_policy import is_bought_in as _bought
+            from bought_in_policy import read_states_a_made_part as _read_made
             _is_purchase = bool(_bought(part))
             # The service's own word heuristic (NUT, PIN, SPRING, WHEEL...) must not turn a
-            # made part with a measured flat into a purchase and lose it its material row.
-            if not _is_purchase and self._is_bought_in_heuristic(part) and not _measured(part):
+            # made part with a measured flat into a purchase and lose it its material row —
+            # nor one the concept read states it makes, with evidence (D-489).
+            if (not _is_purchase and self._is_bought_in_heuristic(part)
+                    and not _measured(part) and not _read_made(part)):
                 _is_purchase = True
         except Exception:                                        # noqa: BLE001
             _is_purchase = bool(self._is_bought_in_heuristic(part))

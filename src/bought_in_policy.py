@@ -369,6 +369,39 @@ def own_sheet_states_a_stock_material(part: Dict[str, Any]) -> bool:
     return False
 
 
+def read_states_a_made_part(part: Dict[str, Any]) -> bool:
+    """Does the concept read state, with evidence, that SDI makes this part? (D-489)
+
+    The concept-read sibling of own_sheet_states_a_stock_material. A part sighted off a brief
+    or render has no sheet of its own, so that test can never pass for it — and the K-Wellness
+    rear graphic panel (mild steel, 1500 x 500 x 2, laser, fold, powder) lost its whole route
+    to the word GRAPHIC in its name, where an identical part named "Rear panel" kept it. Three
+    things together, never the name and never the material alone:
+      - the make/buy status: the read classed the line as made (concept_kind "fabricated"),
+        and no estimator ruling says buy;
+      - the material: a stock SDI cuts (config's density table);
+      - the manufacturing evidence: at least one fabrication operation on the line.
+    A SIZE IS NOT REQUIRED (review of D-489): an explicitly made part the read could not size
+    stays made — its route kept, its material a provisional raw-material allowance (D-485) —
+    and never reverts to a finished-item purchase because of a word in its name. A steel item
+    the read called bought-in or a graphic, or one with no fabrication route, is not covered."""
+    if not isinstance(part, dict) or part.get("concept_kind") != "fabricated":
+        return False
+    if make_or_buy_ruling(part) == "buy":
+        return False
+    try:
+        import config as _cfg
+        dens = getattr(_cfg, "MATERIAL_DENSITY_KG_PER_M3", None) or {}
+    except Exception:                                                # noqa: BLE001
+        dens = {}
+    mat = _upper(part.get("normalized_material")).replace("_", " ").strip()
+    if not mat or mat == "BOUGHT IN" or not (mat in dens or mat.replace(" ", "_") in dens):
+        return False
+    ops = {str(o).strip().lower() for o in
+           (list(part.get("inferred_operations") or []) + list(part.get("textual_operations") or []))}
+    return bool(ops & FABRICATION_OPS)
+
+
 def bought_in_reason(part: Dict[str, Any]) -> str:
     """WHICH rule decided, in words, or "" for a part we make.
 

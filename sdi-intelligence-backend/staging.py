@@ -68,6 +68,20 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
 # any one drawing.
 SIDECAR_NAMES = ("_sw_native_extract.json",)
 
+# THE JOB'S OWN DATA, WHICH A RE-STAGE MUST NOT DELETE (review of D-492). The folder is emptied
+# so a removed drawing is not inherited — but these are not drawings: the estimator's answers
+# file (their approvals, read beside the job by estimator_confirmed) and the concept read's
+# saved bill (the baseline the next read keeps). A re-stage deleted both, so every submission
+# started without the estimator's approvals and without the previous read. Carried across the
+# clear exactly as the SolidWorks extract is; a file of the same name in the new selection wins.
+JOB_DATA_SUFFIXES = ("_estimator_dimensions.json", "_confirmed.json", "_concept_bill.json")
+JOB_DATA_NAMES = ("estimator_dimensions.json",)
+
+
+def _is_job_data(name: str) -> bool:
+    low = name.lower()
+    return low in JOB_DATA_NAMES or any(low.endswith(s) for s in JOB_DATA_SUFFIXES)
+
 # The three extensions the engine counts as a native model. Kept here rather than imported
 # because this service does not import the engine, and they must not drift: source_connectors
 # .solidworks._NATIVE_EXTS is the other copy and a fixture compares the two.
@@ -452,6 +466,15 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
     # machine, whose queue this service cannot see — so clearing it hit a locked drawing, and
     # the page got a bare 502 six times while the button looked ready. Said as what it is,
     # with the file and the usual holders, so the next press is the right one.
+    _job_data: Dict[str, bytes] = {}
+    if folder.is_dir():
+        for _entry in folder.iterdir():
+            if _entry.is_file() and _is_job_data(_entry.name):
+                try:
+                    _job_data[_entry.name] = _entry.read_bytes()
+                except OSError:
+                    continue
+
     try:
         replaced = _clear_folder(folder)
         copied: List[str] = []
@@ -476,6 +499,16 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
             sidecars.append(sc.name)
         except OSError:
             skipped.append((str(sc), "could not be copied"))
+
+    job_data_kept: List[str] = []
+    for _name, _data in sorted(_job_data.items()):
+        if (folder / _name).exists():
+            continue                          # the new selection brought its own — it wins
+        try:
+            (folder / _name).write_bytes(_data)
+            job_data_kept.append(_name)
+        except OSError:
+            skipped.append((_name, "the job's own data file could not be carried across"))
 
     carried_forward = False
     if not sidecars and _previous_extract is not None:
@@ -522,6 +555,7 @@ def stage(paths: Iterable[str], *, client: str, drawing: str) -> Dict[str, Any]:
         "sidecars": sidecars,
         "sidecars_count": len(sidecars),
         "extract_carried_forward": carried_forward,
+        "job_data_kept": job_data_kept,
         "native_staged": native_staged,
         "native_unselected_count": len(unselected),
         "native_unselected_folders": sorted({str(p.parent) for p in unselected})[:3],
