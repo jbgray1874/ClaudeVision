@@ -4984,7 +4984,7 @@ def _finalize_scan_summary(
             # design development, testing, assessments and documentation are project costs
             # the estimator prices SEPARATELY, never parts and never silently buried in the
             # unit — each lands on the confirm list with the manual's own words and place.
-            _reqs = concept_scan.standards_requirements(_answer)
+            _reqs = concept_scan.standards_requirements(_answer, brief=_brief or "")
             if _reqs:
                 summary["standards_requirements"] = [dict(r) for r in _reqs]
                 for _rf in concept_scan.requirement_flags(_reqs):
@@ -5037,6 +5037,10 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+                _kept_strip = concept_scan.keep_approved_strip_lines(_sighted)
+                if _kept_strip:
+                    print(f"   [confirmed] an approved edging line stands whole — per-host "
+                          f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
             # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
             # values an estimator APPROVED, and the bill names the question and the answer it
             # came from, so the next read can tell an unchanged read from a new one.
@@ -5158,9 +5162,23 @@ def _finalize_scan_summary(
                 summary.setdefault("review_flags", []).append(
                     f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
                     f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
+            _mech = concept_scan.mechanically_fitted(_sighted)
             _nv_lines = concept_scan.consumable_lines(
                 _nv_cons, _job_name,
-                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0))
+                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),
+                fixed_pieces=(_mech["pieces"] if _unit else None),
+                components=((_unit or {}).get("components_labelled") if _unit else None))
+            # THE FIXINGS THE READ DID NOT NAME (D-499): a unit with pieces fitted by hand gets
+            # a provisional fixings line counted per mechanically fitted piece — never a silent
+            # £0, and never a fixing for a welded or hung joint.
+            if _unit and not concept_scan.read_names_fixings(_nv_cons, _sighted):
+                _fx = concept_scan.fixings_allowance_line(_sighted, _job_name,
+                                                          len(_nv_lines) + 1)
+                if _fx:
+                    _nv_lines = list(_nv_lines) + [_fx]
+                    print(f"   [concept] the read named no fixings — a provisional allowance "
+                          f"of {_fx.get('quantity')} × the reference fixing for "
+                          f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
                 if _unit:

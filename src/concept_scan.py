@@ -44,7 +44,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 # ── BUMP THIS WHENEVER THE PROMPT CHANGES ───────────────────────────────────────────
 #
@@ -133,9 +133,107 @@ def reference_documents_declared(folders: List[Any]) -> List[str]:
     return []
 
 
-def standards_requirements(answer: Any) -> List[Dict[str, str]]:
+_SCOPE_WORDS = {"per_order": "per order", "per_batch": "per batch", "per_unit": "per unit"}
+
+
+def _scope_rule() -> Dict[str, Any]:
+    try:
+        import config                                               # noqa: WPS433
+        return dict(getattr(config, "PROJECT_SCOPE_EVIDENCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        return {}
+
+
+def _phrase_said(text: str, phrase: str) -> bool:
+    """The phrase is in the text and not negated earlier in its own clause — "QC is batch
+    setup plus sampled and unit checks, not full inspection per unit" does not say per unit."""
+    low, p = text.lower(), phrase.lower()
+    start = 0
+    while True:
+        i = low.find(p, start)
+        if i < 0:
+            return False
+        before = re.split(r"[,;:.()\-–—]", low[:i])[-1]
+        if p.startswith(("not ", "no ")) or not re.search(r"\b(not|no|never)\b", before):
+            return True
+        start = i + len(p)
+
+
+def _categories_in(text: str, rule: Mapping[str, Any]) -> set:
+    low = f" {text.lower()} "
+    return {cat for cat, words in (rule.get("categories") or {}).items()
+            if any(re.search(rf"(?<![a-z]){re.escape(str(w).lower())}(?![a-z])", low)
+                   for w in words)}
+
+
+def _frequency_in(text: str, rule: Mapping[str, Any]) -> str:
+    for scope in ("per_order", "per_batch", "per_unit"):
+        if any(_phrase_said(text, p) for p in (rule.get(scope) or [])):
+            return scope
+    return ""
+
+
+def project_scope_evidence(req: Mapping[str, Any], brief: str = "") -> Dict[str, str]:
+    """How often a project requirement happens, and the evidence that says so (D-497).
+
+    The 18:17 K-Wellness book charged the topple/tilt/bump tests (£450) and the shelf
+    deflection pair (£380) on EACH of 200 units because the read classed them per unit —
+    though the brief says testing is "NOT in the unit price" and the read's own basis was "3
+    hours test rig + report". A keyword shortcut is not the answer either: a test can be per
+    design, per batch, per unit, or repeated after a design change. So the scope is the
+    strongest evidence available, said with its source:
+
+      1. the brief's own sentence about that kind of requirement (it outranks the manual);
+      2. the requirement's own words (type test, per batch, every unit, re-test on change);
+      3. otherwise the read's classification, labelled unconfirmed.
+
+    The estimator's answer outranks all three and is applied in `project_cost_plan`."""
+    rule = _scope_rule()
+    read_scope = str(req.get("scope") or "").strip().lower()
+    read_scope = read_scope if read_scope in _SCOPE_WORDS else "per_order"
+    name = str(req.get("name") or "")
+    what = " ".join(str(req.get(k) or "") for k in ("name", "requirement", "provisional_basis"))
+    cats = _categories_in(what, rule)
+    _repeat = any(_phrase_said(what, p) for p in (rule.get("repeat_on_change") or []))
+    _again = (" — a design change brings it back" if _repeat else "")
+    if brief and cats:
+        # Sentences, not lines: a typed brief wraps mid-sentence. The BEST sentence wins, not
+        # the first: one that names the requirement itself ("QC is batch setup…" for a QC
+        # line) beats one that only shares its kind ("…application and verification" of the
+        # labels), and more shared kinds beat fewer.
+        _name_roots = {w for w in re.findall(r"[a-z][a-z\-]{2,}", name.lower())}
+        best: Tuple[Tuple[int, int], str, str] = ((-1, -1), "", "")
+        for sentence in re.split(r"(?<=[.!?])\s+|\n\s*\n", str(brief)):
+            if not sentence.strip():
+                continue
+            scope = _frequency_in(sentence, rule)
+            shared = cats & _categories_in(sentence, rule)
+            if not (scope and shared):
+                continue
+            _named = int(bool(_name_roots & set(re.findall(r"[a-z][a-z\-]{2,}",
+                                                            sentence.lower()))))
+            score = (_named, len(shared))
+            if score > best[0]:
+                best = (score, scope, sentence)
+        if best[1]:
+            return {"scope": best[1], "source": "brief", "read_scope": read_scope,
+                    "basis": f"the brief: \"{' '.join(best[2].split())[:220]}\"{_again}"}
+    scope = ("per_order" if _repeat else "") or _frequency_in(
+        " ".join(str(req.get(k) or "") for k in ("name", "requirement")), rule)
+    if scope:
+        return {"scope": scope, "source": "requirement", "read_scope": read_scope,
+                "basis": (f"the requirement's own words: \"{str(req.get('requirement') or name)[:220]}\""
+                          f"{_again}")}
+    return {"scope": read_scope, "source": "read", "read_scope": read_scope,
+            "basis": (f"the read's own classification ({_SCOPE_WORDS[read_scope]}) — neither the "
+                      f"brief nor the requirement's words say how often; an assumption to "
+                      f"confirm")}
+
+
+def standards_requirements(answer: Any, brief: str = "") -> List[Dict[str, str]]:
     """The model's `applicable_requirements`, normalised — each a requirement of the
-    customer's standards document that applies to THIS product (D-474)."""
+    customer's standards document that applies to THIS product (D-474), with how often it
+    happens decided by the evidence, not by the read alone (D-497)."""
     out: List[Dict[str, str]] = []
     for req in ((answer or {}).get("applicable_requirements") or []):
         if not isinstance(req, Mapping):
@@ -148,38 +246,78 @@ def standards_requirements(answer: Any) -> List[Dict[str, str]]:
             _pg = float(req.get("provisional_gbp"))
         except (TypeError, ValueError):
             _pg = None
-        out.append({"name": name[:120],
-                    "requirement": str(req.get("requirement") or "").strip()[:300],
-                    "scope": scope if scope in {"per_order", "per_unit"} else "per_order",
-                    "where": str(req.get("where") or "").strip()[:80],
-                    # The model's own one-off allowance (D-476): an indication to be
-                    # replaced, never a quotation — and never a silent £0 in its place.
-                    "provisional_gbp": (_pg if _pg and _pg > 0 else None),
-                    "provisional_basis": str(req.get("provisional_basis") or "").strip()[:200]})
+        rec = {"name": name[:120],
+               "requirement": str(req.get("requirement") or "").strip()[:300],
+               "scope": scope if scope in _SCOPE_WORDS else "per_order",
+               "where": str(req.get("where") or "").strip()[:80],
+               # The model's own one-off allowance (D-476): an indication to be
+               # replaced, never a quotation — and never a silent £0 in its place.
+               "provisional_gbp": (_pg if _pg and _pg > 0 else None),
+               "provisional_basis": str(req.get("provisional_basis") or "").strip()[:200]}
+        _ev = project_scope_evidence(rec, brief)
+        rec.update(scope=_ev["scope"], scope_source=_ev["source"],
+                   scope_basis=_ev["basis"], read_scope=_ev["read_scope"])
+        out.append(rec)
     return out
 
 
 def requirement_flags(reqs: List[Dict[str, str]]) -> List[str]:
     """One confirm-list line per applicable requirement: a named allowance the estimator
     prices SEPARATELY (design development, testing, documentation are project costs, never
-    buried in the unit price), with the manual's own words and place on the line."""
+    buried in the unit price), with the manual's own words and place on the line — and how
+    often it happens, with the evidence for that (D-497)."""
     scope_words = {"per_order": "a per-order project cost, priced as its own allowance "
+                                "beside the unit price",
+                   "per_batch": "a per-batch cost, charged once for each production batch "
                                 "beside the unit price",
                    "per_unit": "a per-unit production requirement, priced into each unit"}
     out: List[str] = []
     for r in reqs or []:
+        _moved = (r.get("read_scope") and r.get("read_scope") != r.get("scope")
+                  and r.get("scope_source") in ("brief", "requirement"))
         out.append("STANDARDS: " + r["name"]
                    + " applies to this product per the customer's standards document"
                    + (f" ({r['where']})" if r.get("where") else "")
                    + " — " + scope_words.get(r.get("scope") or "per_order",
                                              scope_words["per_order"])
+                   + (f" (scope: {r['scope_basis']}"
+                      + (f"; the read had it {_SCOPE_WORDS.get(r['read_scope'], r['read_scope'])}"
+                         if _moved else "") + ")"
+                      if r.get("scope_basis") else "")
                    + (f". The manual: {r['requirement']}" if r.get("requirement") else "")
                    + ". Confirm it applies and set the allowance")
     return out
 
 
+def batches_at(quantity: Any, batch_size: Optional[int]) -> int:
+    """How many production batches an order of this quantity is: ceil(quantity ÷ batch size),
+    or one where no batch size is stated."""
+    try:
+        q = max(1, int(float(quantity or 1)))
+    except (TypeError, ValueError):
+        q = 1
+    if not batch_size or batch_size <= 0:
+        return 1
+    return -(-q // int(batch_size))
+
+
+def project_costs_at(project_costs: Any, quantity: Any) -> float:
+    """The order's project costs at THIS quantity (D-497, reviewed): a per-order cost once; a
+    per-batch cost once for each batch the quantity makes — so a quantity break is recalculated,
+    not given the order quantity's figure."""
+    total = 0.0
+    for ln in ((project_costs or {}).get("lines") or []) if isinstance(project_costs, Mapping) else []:
+        if not isinstance(ln, Mapping) or ln.get("state") not in ("charged", "provisional"):
+            continue
+        if ln.get("scope") == "per_batch" and ln.get("per_batch_gbp") is not None:
+            total += float(ln["per_batch_gbp"]) * batches_at(quantity, ln.get("batch_size"))
+        else:
+            total += float(ln.get("order_gbp") or 0.0)
+    return round(total, 2)
+
+
 def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
-                      order_qty: Any) -> List[Dict[str, Any]]:
+                      order_qty: Any, brief: str = "") -> List[Dict[str, Any]]:
     """Every applicable requirement becomes ONE workbook line, and the first book arrives
     substantially PRICED (D-475, corrected by D-476 to the reviewer's four points).
 
@@ -209,12 +347,33 @@ def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
         stated = {" ".join(str(k).lower().split()): v
                   for k, v in decisions["project_costs"].items() if str(k).strip()}
 
-    def _figure_for(name: str) -> Any:
+    def _figure_for(name: str, table: Optional[Mapping[str, Any]] = None) -> Any:
         n = " ".join(name.lower().split())
-        for k, v in stated.items():
+        for k, v in (stated if table is None else table).items():
             if k in n or n in k:
                 return v
         return None
+
+    # THE ESTIMATOR'S SCOPE OUTRANKS EVERY OTHER SOURCE (D-497): answers-file
+    # estimator_decisions.project_scope {name words: per_order | per_batch | per_unit}, and
+    # project_batch_size — the units in one production batch, so a per-batch cost is counted
+    # afresh at every quantity break (ceil(quantity ÷ size) batches); or project_batches — the
+    # batch count at the order quantity, from which the size is taken. Neither stated: one
+    # batch per order at every quantity, and the line says so.
+    _scope_said: Dict[str, Any] = {}
+    if isinstance(decisions, Mapping) and isinstance(decisions.get("project_scope"), Mapping):
+        _scope_said = {" ".join(str(k).lower().split()): str(v or "").strip().lower()
+                       for k, v in decisions["project_scope"].items() if str(k).strip()}
+    batch_size: Optional[int] = None
+    _dec = decisions if isinstance(decisions, Mapping) else {}
+    try:
+        if _dec.get("project_batch_size"):
+            batch_size = max(1, int(float(_dec["project_batch_size"])))
+        elif _dec.get("project_batches"):
+            batch_size = max(1, -(-oq // max(1, int(float(_dec["project_batches"])))))
+    except (TypeError, ValueError):
+        batch_size = None
+    batches = batches_at(oq, batch_size)
 
     out: List[Dict[str, Any]] = []
     for i, r in enumerate(reqs or [], start=1):
@@ -222,11 +381,28 @@ def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
         name = str(r.get("name") or "").strip()
         if not name:
             continue
-        scope = "per_unit" if str(r.get("scope")) == "per_unit" else "per_order"
+        if not r.get("scope_source"):
+            # A record saved before D-497 (a replayed job) is resolved here, from the brief.
+            _ev = project_scope_evidence(r, brief)
+            r = dict(r, scope=_ev["scope"], read_scope=_ev["read_scope"],
+                     scope_source=_ev["source"], scope_basis=_ev["basis"])
+        scope = str(r.get("scope") or "")
+        scope = scope if scope in _SCOPE_WORDS else "per_order"
+        _sbasis = str(r.get("scope_basis") or "")
+        _said_scope = _figure_for(name, _scope_said) if _scope_said else None
+        if _said_scope in _SCOPE_WORDS:
+            scope, _sbasis = _said_scope, "the estimator's answer (estimator_decisions.project_scope)"
+        _n_b = batches if scope == "per_batch" else 1
+        _b_txt = ((f" × {_n_b} batch(es) of up to {batch_size} unit(s) at {oq} off"
+                   if batch_size else " × 1 batch") if scope == "per_batch" else "")
+        _b_ask = (" — the batch size is not stated, so ONE batch is taken at every quantity; "
+                  "set estimator_decisions.project_batch_size and each quantity break counts "
+                  "its own batches" if scope == "per_batch" and not batch_size else "")
+        _scope_note = (f". Scope {_SCOPE_WORDS[scope]}: {_sbasis}{_b_ask}" if _sbasis else "")
         where = str(r.get("where") or "").strip()
         _at = f" ({where})" if where else ""
-        _kind = ("per-order project cost" if scope == "per_order"
-                 else "per-unit production requirement")
+        _kind = ("per-unit production requirement" if scope == "per_unit"
+                 else ("per-batch cost" if scope == "per_batch" else "per-order project cost"))
         fig = _figure_for(name)
         words = str(fig).lower() if isinstance(fig, str) else ""
         gbp: Optional[float] = None
@@ -239,8 +415,10 @@ def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
             if gbp is not None and gbp <= 0:
                 gbp, zero_stated = 0.0, True
         plan: Dict[str, Any] = {"code": f"PROJECT-{i:02d}", "name": name, "scope": scope,
-                                "where": where,
-                                "requirement": str(r.get("requirement") or "")}
+                                "where": where, "scope_basis": _sbasis,
+                                "requirement": str(r.get("requirement") or ""),
+                                "batch_size": batch_size if scope == "per_batch" else None}
+        _once = scope != "per_unit"
         if any(w in words for w in ("not required", "excluded")):
             plan.update(
                 state="excluded", unit_gbp=0.0, order_gbp=None,
@@ -259,34 +437,36 @@ def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
             _z = (" — a zero figure: if this means not required or included elsewhere, "
                   "write that in estimator_decisions.project_costs instead; a genuine "
                   "zero stands" if zero_stated else "")
-            if scope == "per_order":
+            if _once:
                 plan.update(
-                    state="charged", unit_gbp=0.0, order_gbp=float(gbp),
-                    description=f"{name} — per-order project cost £{gbp:,.2f}, charged "
+                    state="charged", unit_gbp=0.0, order_gbp=float(gbp) * _n_b,
+                    per_batch_gbp=(float(gbp) if scope == "per_batch" else None),
+                    description=f"{name} — {_kind} £{gbp:,.2f}{_b_txt}, charged "
                                 f"once (the estimator's figure; not in the unit price)",
                     flag=f"PROJECT: {name} charged once for the order at the estimator's "
-                         f"£{gbp:,.2f}{_at} — kept out of the unit price; the Quantity "
-                         f"Breaks tab shows the combined order total{_z}")
+                         f"£{gbp:,.2f}{_b_txt}{_at} — kept out of the unit price; the "
+                         f"Quantity Breaks tab shows the combined order total{_z}{_scope_note}")
             else:
                 plan.update(
                     state="charged", unit_gbp=float(gbp), order_gbp=None,
                     description=f"{name} — per-unit production requirement at the "
                                 f"estimator's £{gbp:,.2f} each",
                     flag=f"PROJECT: {name} charged on every unit at the estimator's "
-                         f"£{gbp:,.2f}{_at}{_z}")
+                         f"£{gbp:,.2f}{_at}{_z}{_scope_note}")
         elif r.get("provisional_gbp"):
             _pg = float(r["provisional_gbp"])
             _basis = str(r.get("provisional_basis") or "").strip() or "the read's own estimate"
-            if scope == "per_order":
+            if _once:
                 plan.update(
-                    state="provisional", unit_gbp=0.0, order_gbp=_pg,
-                    description=f"{name} — per-order project cost, PROVISIONAL £{_pg:,.2f} "
+                    state="provisional", unit_gbp=0.0, order_gbp=_pg * _n_b,
+                    per_batch_gbp=(_pg if scope == "per_batch" else None),
+                    description=f"{name} — {_kind}, PROVISIONAL £{_pg:,.2f}{_b_txt} "
                                 f"(AI allowance — estimator to confirm; not in the unit "
                                 f"price)",
                     flag=f"PROJECT: {name}{_at} carries an AI PROVISIONAL allowance of "
-                         f"£{_pg:,.2f} the order — basis: {_basis}. An indication, not a "
-                         f"quotation: confirm or replace it in "
-                         f"estimator_decisions.project_costs[{name!r}]")
+                         f"£{_pg:,.2f}{_b_txt} the order — basis: {_basis}. An indication, "
+                         f"not a quotation: confirm or replace it in "
+                         f"estimator_decisions.project_costs[{name!r}]{_scope_note}")
             else:
                 plan.update(
                     state="provisional", unit_gbp=_pg, order_gbp=None,
@@ -295,14 +475,15 @@ def project_cost_plan(reqs: List[Dict[str, str]], decisions: Any,
                     flag=f"PROJECT: {name}{_at} carries an AI PROVISIONAL allowance of "
                          f"£{_pg:,.2f} each unit — basis: {_basis}. An indication, not a "
                          f"quotation: confirm or replace it in "
-                         f"estimator_decisions.project_costs[{name!r}]")
+                         f"estimator_decisions.project_costs[{name!r}]{_scope_note}")
         else:
             plan.update(
                 state="to_price", unit_gbp=0.0, order_gbp=None,
                 description=f"{name} — {_kind}, estimator to price",
                 flag=f"PROJECT: {name} applies per the customer's standards{_at} — set the "
                      f"figure in estimator_decisions.project_costs[{name!r}] and the line "
-                     f"prices itself; until then the £0 is an open allowance, not an answer")
+                     f"prices itself; until then the £0 is an open allowance, not an "
+                     f"answer{_scope_note}")
         out.append(plan)
     return out
 
@@ -959,7 +1140,9 @@ def split_not_visible(items: List[Any]) -> tuple:
 
 
 def consumable_lines(items: List[Any], stem: str,
-                     pieces_fitted: int = 0) -> List[Dict[str, Any]]:
+                     pieces_fitted: int = 0,
+                     fixed_pieces: Optional[int] = None,
+                     components: Optional[int] = None) -> List[Dict[str, Any]]:
     """Provisional bought-in lines for the consumables a render cannot show (D-468).
 
     "Not visible" must not mean unpriced: a flagged omission is an unresolved exception,
@@ -1002,18 +1185,23 @@ def consumable_lines(items: List[Any], stem: str,
         record["concept_kind"] = "bought_in"
         record["concept_not_visible"] = True
         record["page_roles"] = ["render"]
-        _each = pieces > 1 and any(w in said.lower() for w in per_component)
+        # A PER-COMPONENT ITEM COUNTS LABELLED COMPONENTS, not pieces handled (D-499): the
+        # caller passes the unit's components where it knows them.
+        _comps = pieces if components is None else max(0, int(components))
+        _each = _comps > 1 and any(w in said.lower() for w in per_component)
         if _each:
             # PRICE PER ITEM, AND HOW MANY, KEPT APART (D-491). "Per unit" does not say how
             # many a fixture needs: the count is items per component (config, an assumption to
             # confirm) × the components the unit fits, and the price chain is asked for ONE.
             _per_c = float((_pc_rule.get("items_per_component") or 1))
-            _n = max(1, int(round(_per_c * pieces)))
+            _n = max(1, int(round(_per_c * _comps)))
             apply_field(record, "quantity", _n, SOURCE,
-                        note=(f"{_per_c:g} per component × {pieces} component(s) the unit fits — "
+                        note=(f"{_per_c:g} per component × {_comps} component(s) the unit fits — "
                               f"the read says per component; how many each component carries "
                               f"is an assumption to confirm ({_pc_rule.get('basis') or 'config'})"))
-            record["per_component"] = {"items_per_component": _per_c, "components": pieces}
+            record["per_component"] = {"items_per_component": _per_c, "components": _comps}
+            record["quantity_counted"] = {
+                "count": _n, "basis": f"{_per_c:g} per component × {_comps} component(s)"}
             record["research_description"] = (
                 f"{said} — price ONE item, each; the quantity is counted separately")
             record["unit_of_measure"] = "each"
@@ -1037,10 +1225,13 @@ def consumable_lines(items: List[Any], stem: str,
                 _per = float(_per)
             except (TypeError, ValueError):
                 _per = 0.0
-            if _per > 0 and _ref:
+            # A SET IS COUNTED ON THE PIECES IT FIXES (D-499): a welded or hung piece takes no
+            # fixings, so the caller passes the mechanically fitted count where it knows it.
+            _fixed = pieces if fixed_pieces is None else max(0, int(fixed_pieces))
+            if _per > 0 and _ref and _fixed > 0:
                 record["consumable_allowance"] = {
-                    "count": round(_per * pieces, 2), "per_piece_fitted": _per,
-                    "pieces_fitted": pieces, "reference_item": _ref,
+                    "count": round(_per * _fixed, 2), "per_piece_fitted": _per,
+                    "pieces_fitted": _fixed, "reference_item": _ref,
                     "basis": str(_rule.get("basis") or "")}
         record["review_flags"].append(
             "CONCEPT: NOT VISIBLE ON THE RENDER — a provisional consumables allowance, "
@@ -1048,6 +1239,100 @@ def consumable_lines(items: List[Any], stem: str,
             "before release")
         out.append(record)
     return out
+
+
+def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
+    """The made pieces a sighted unit fixes with fasteners, and why each other one is not (D-499).
+
+    Counted: every made piece the unit fits. Not counted: a welded piece (its joint is its weld
+    — never a fixing as well), a piece welded to a host (it is part of that host), and a piece
+    that hangs or clips — its own words say so (config CONCEPT_FIXING_FREE_WORDS), or a piece
+    welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets)."""
+    free = _vocab_list("CONCEPT_FIXING_FREE_WORDS")
+    made = [p for p in (parts or []) if isinstance(p, dict)
+            and p.get("concept_kind") == "fabricated"]
+
+    def _says_free(p: Mapping[str, Any]) -> bool:
+        low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
+        return any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in free)
+    hung_by: Dict[str, str] = {}
+    for p in made:
+        if p.get("welded_to_hosts") and _says_free(p):
+            for h in p["welded_to_hosts"]:
+                hung_by.setdefault(str(h), str(p.get("part_number")))
+    counted: Dict[str, int] = {}
+    excluded: Dict[str, str] = {}
+    for p in made:
+        pn = str(p.get("part_number") or "")
+        if p.get("welded_to_hosts"):
+            excluded[pn] = "welded to its host"
+        elif "welding" in _ops_of(p):
+            excluded[pn] = "welded — its joint is the weld"
+        elif _says_free(p):
+            excluded[pn] = "hangs or clips — fitted without fixings"
+        elif pn in hung_by:
+            excluded[pn] = f"hangs on {hung_by[pn]} welded to it"
+        else:
+            counted[pn] = _qty_of(p)
+    return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded}
+
+
+def read_names_fixings(items: List[Any], parts: List[Any]) -> bool:
+    """Did the read itself name fixings — as a not-visible item or as a line of its own?"""
+    words = _vocab_list("CONCEPT_FIXING_WORDS")
+    texts = [str(i or "") for i in (items or [])] + [
+        str(p.get("description") or "") for p in (parts or []) if isinstance(p, dict)]
+    return any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", t.lower())
+               for t in texts for w in words)
+
+
+def fixings_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict[str, Any]]:
+    """The provisional fixings a sighted unit needs where the read named none (D-499).
+
+    Not visible must not mean unpriced. The count is config CONCEPT_CONSUMABLE_ALLOWANCE's
+    fixings per piece × the pieces fitted mechanically (`mechanically_fitted`), priced ONE
+    reference item each down the ordinary chain, and every piece counted or left out is named
+    on the line. An assumption to confirm, never a measurement."""
+    from document_builder import _empty_part_record                 # noqa: WPS433
+    from source_precedence import apply_field                       # noqa: WPS433
+    try:
+        import config                                               # noqa: WPS433
+        _rule = dict(getattr(config, "CONCEPT_CONSUMABLE_ALLOWANCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        _rule = {}
+    try:
+        per = float(_rule.get("per_piece_fitted") or 0)
+    except (TypeError, ValueError):
+        per = 0.0
+    ref = str(_rule.get("reference_item") or "").strip()
+    mech = mechanically_fitted(parts)
+    if per <= 0 or not ref or mech["pieces"] <= 0:
+        return None
+    count = int(round(per * mech["pieces"]))
+    basis = (f"{per:g} per mechanically fitted piece × {mech['pieces']} piece(s) "
+             f"({_rule.get('basis') or 'config'})")
+    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}", item_number=None,
+                                description=f"Fixings allowance — {ref}", quantity=None)
+    record["concept"] = True
+    record["concept_kind"] = "bought_in"
+    record["concept_not_visible"] = True
+    record["page_roles"] = ["render"]
+    apply_field(record, "quantity", count, SOURCE,
+                note=f"PROVISIONAL — {basis}; the read named no fixings")
+    record["quantity_counted"] = {"count": count, "basis": basis}
+    apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
+                note="a fixings allowance the read did not name, counted per fitted piece")
+    record["is_bought_in"] = True
+    record["research_description"] = f"{ref} — price ONE item, each; the quantity is counted separately"
+    record["unit_of_measure"] = "each"
+    record["fixings_allowance"] = mech
+    _in = ", ".join(f"{k} ×{v}" for k, v in mech["counted"].items())
+    _out = "; ".join(f"{k} ({why})" for k, why in mech["excluded"].items())
+    record["review_flags"].append(
+        f"CONCEPT: NOT NAMED BY THE READ — a provisional fixings allowance of {count} × {ref}: "
+        f"{basis}. Counted: {_in}." + (f" Not counted: {_out}." if _out else "")
+        + " Confirm the fixings and the count before release")
+    return record
 
 
 def sheet_text_with_coverage(pdf_paths: List[Any]) -> tuple:
@@ -2458,8 +2743,13 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
     rows = _bill_rows(answer or {})
     if not rows:
         return None
-    by_name = {re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(): r
-               for r in (records or []) if isinstance(r, Mapping)}
+    # The FIRST record of a name is the read's own line (an edging split per host keeps the
+    # read's code on its first line, D-499), so its approvals are the line's approvals.
+    by_name: Dict[str, Mapping[str, Any]] = {}
+    for r in (records or []):
+        if isinstance(r, Mapping):
+            by_name.setdefault(
+                re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(), r)
     for row in rows:
         rec = by_name.get(re.sub(r"[^a-z0-9]+", " ", row["name"].lower()).strip())
         row["approved"] = _approved_fields(rec) if rec else []
@@ -2538,41 +2828,98 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     return out
 
 
-def developed_blank(blank: Mapping[str, Any], sighted: Mapping[str, Any]) -> Dict[str, Any]:
+def _flange_allowance_mm() -> float:
+    try:
+        import config                                               # noqa: WPS433
+        return float(getattr(config, "CONCEPT_FLANGE_ALLOWANCE_MM", 0) or 0)
+    except Exception:                                               # noqa: BLE001
+        return 0.0
+
+
+def _is_footprint(length: float, width: float, envelope: Optional[Mapping[str, Any]]) -> str:
+    """'W x D' when length x width is the product's own overall plan size, else ''."""
+    env = envelope if isinstance(envelope, Mapping) else {}
+    w, d = _num(env.get("width")), _num(env.get("depth"))
+    if not (w and d and length and width):
+        return ""
+
+    def _same(a: float, b: float) -> bool:
+        return abs(a - b) <= max(2.0, 0.01 * b)
+    if (_same(length, w) and _same(width, d)) or (_same(length, d) and _same(width, w)):
+        return f"{w:g} × {d:g}"
+    return ""
+
+
+def _develop(length: float, width: float, folds: int, flange: float) -> Tuple[float, float, Dict[str, int]]:
+    short_axis, long_axis = (("length", "width") if length < width else ("width", "length"))
+    added = {"length": 0, "width": 0}
+    for i in range(folds):
+        added[short_axis if i % 4 < 2 else long_axis] += 1
+    return length + added["length"] * flange, width + added["width"] * flange, added
+
+
+def developed_blank(blank: Mapping[str, Any], sighted: Mapping[str, Any],
+                    envelope: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """The flat blank of a sighted folded part, from what the read said its size is (D-490).
 
     FINISHED IS NOT DEVELOPED. The 16:53 K-Wellness read sized the plinth and top cap at the
     500 x 500 footprint and the trays at their finished faces, with nothing for the flanges
     their folds form — material and powder understated. The read now says whether its size is
     the "finished" outside size or the "developed" flat blank, with the fold count and flange
-    depth. Only a finished size with both is developed here, and a developed one is never
-    developed again. The first two flanges go on the shorter side (folds run along the long
-    edges), the next two on the longer, and so on — a provisional flat blank with its working,
-    never a measurement. Anything else is priced as given and said."""
+    depth. Only a finished size is developed here, and a developed one is never developed
+    again. The first two flanges go on the shorter side (folds run along the long edges), the
+    next two on the longer, and so on — a provisional flat blank with its working, never a
+    measurement.
+
+    A CLAIM THAT CONTRADICTS THE PRODUCT IS A WARNING, AND THE PRICE TAKES A REASONED
+    ALLOWANCE (D-499). The 18:17 read called the plinth's and top cap's 500 x 500 the FLAT
+    blank — the product's own overall footprint. A blank that size folds smaller than the unit
+    it is the outside of. That is not proof of the finished size, so the read's figure is kept
+    on the record and the warning says why; for this concept estimate the folds are taken to
+    turn down from the footprint's edges and their flanges are priced. Where the read gave no
+    flange depth, the house allowance (config CONCEPT_FLANGE_ALLOWANCE_MM) is used and said.
+    Only concept-read sizes pass through here: a measured or approved flat blank never does."""
     length, width = _num(blank.get("length")), _num(blank.get("width"))
     folds = int(_num(sighted.get("folds")) or 0)
     flange = _num(sighted.get("flange_mm"))
     basis = str(sighted.get("blank_basis") or "").strip().lower()
     out: Dict[str, Any] = {"length": length, "width": width, "folds": folds, "flange_mm": flange,
                            "basis": basis or "not stated", "changed": False, "working": "",
-                           "note": ""}
+                           "note": "", "read_blank": None}
     if not (length and width) or folds <= 0:
         return out
+    _house = _flange_allowance_mm()
+    _fl, _fl_said = ((flange, "the read's flange depth") if flange > 0 else
+                     (_house, f"the house allowance of {_house:g} mm (config "
+                              f"CONCEPT_FLANGE_ALLOWANCE_MM) — the read gave no flange depth"))
     if basis.startswith(("dev", "flat")):
+        _fp = _is_footprint(length, width, envelope)
+        if _fp and _fl > 0:
+            L2, W2, added = _develop(length, width, folds, _fl)
+            out.update(length=L2, width=W2, changed=True, basis="finished (by consistency)",
+                       read_blank={"length": length, "width": width, "basis": basis},
+                       working=(f"the read called {length:g} × {width:g} mm the flat blank, but "
+                                f"that is the product's own overall footprint ({_fp} mm), and a "
+                                f"blank that size folds smaller than the unit — taken as the "
+                                f"FINISHED outside size: its {folds} fold(s) turn down from the "
+                                f"edges, {_fl:g} mm each ({_fl_said}) — {added['width']} on the "
+                                f"width, {added['length']} on the length — a provisional flat "
+                                f"blank of {L2:g} × {W2:g} mm, not a measurement"),
+                       note=(f"CONCEPT CONSISTENCY: the read's flat blank {length:g} × {width:g} "
+                             f"mm equals the product footprint ({_fp} mm) — priced as the "
+                             f"finished size with its flanges; the read's figure is kept on the "
+                             f"record. Confirm the blank from the design"))
+            return out
         out["working"] = (f"the read gives {length:g} × {width:g} mm as the flat blank before its "
                           f"{folds} fold(s) — used as given, no flange added")
         return out
-    if basis.startswith("fin") and flange > 0:
-        short_axis, long_axis = (("length", "width") if length < width else ("width", "length"))
-        added = {"length": 0, "width": 0}
-        for i in range(folds):
-            added[short_axis if i % 4 < 2 else long_axis] += 1
-        out.update(length=length + added["length"] * flange, width=width + added["width"] * flange,
-                   changed=True,
-                   working=(f"developed from the finished {length:g} × {width:g} mm: {folds} fold(s) "
-                            f"of about {flange:g} mm flange — {added['width']} on the width, "
-                            f"{added['length']} on the length — a provisional flat blank, not a "
-                            f"measurement"))
+    if basis.startswith("fin") and _fl > 0:
+        L2, W2, added = _develop(length, width, folds, _fl)
+        out.update(length=L2, width=W2, changed=True,
+                   working=(f"developed from the finished {length:g} × {width:g} mm: {folds} "
+                            f"fold(s) of about {_fl:g} mm flange ({_fl_said}) — "
+                            f"{added['width']} on the width, {added['length']} on the length — a "
+                            f"provisional flat blank, not a measurement"))
         return out
     out["note"] = (f"CONCEPT: {folds} fold(s), and the read did not say whether {length:g} × "
                    f"{width:g} mm is the finished size or the flat blank"
@@ -2786,8 +3133,11 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         # The flat blank, the fold count and the internal cutting, each with its working.
         _cuts: Dict[str, Any] = {}
         if kind == "fabricated" and not unclassified:
-            _dev = developed_blank(blank, sighted)
+            _dev = developed_blank(blank, sighted,
+                                   envelope=(answer.get("product") or {}).get("assumed_overall_mm"))
             record["concept_blank_basis"] = _dev["basis"]
+            if _dev.get("read_blank"):
+                record["concept_read_blank_mm"] = dict(_dev["read_blank"])
             if _dev["changed"]:
                 record["concept_finished_mm"] = {"length": _num(blank.get("length")),
                                                  "width": _num(blank.get("width"))}
@@ -2802,6 +3152,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                 _assume("", _dev["folds"], "folds given by the concept read — provisional, not "
                         "counted off a drawing", field="fold count")
             _cuts = cutout_geometry(sighted)
+        # What the read said its size came from — the words a strip names its host in (D-499).
+        record["concept_why_size"] = str(sighted.get("why_size") or "")
         wrote_size = False
         for field, key in (("blank_length_mm", "length"), ("blank_width_mm", "width")):
             try:
@@ -2984,7 +3336,259 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                         f"({fit.get('_fitting_per_part'):g} per part is the house assumption) and "
                         f"add it as a bought-in line",
                         "concept_sheet_check")
+    # THE CONSTRUCTION THE READ DESCRIBED, APPLIED TO ITS OWN LINES (D-499): a piece welded to
+    # a named host joins that host's component, and an edging counted across hosts of
+    # different sizes is one line per host at each host's own length.
+    mark_welded_to_hosts(parts)
+    parts = split_strips_per_host(parts)
     return parts
+
+
+# ── THE SIGHTED CONSTRUCTION, READ OFF THE BILL'S OWN WORDS (D-499) ─────────────────────
+#
+# The 18:17 K-Wellness book: thirty hooked brackets "WELDED TO TRAY" counted as thirty pieces
+# fitted, labelled and (had there been a fixings line) screwed at the unit, with their coated
+# area missing; fifteen shelf-edge strips "one per shelf" at the front tray's 460 mm though ten
+# of the shelves are 300 mm side trays; and no fixings at all. Each rule below reads only the
+# read's own words and the other lines' names and counts — never a part code or a job.
+
+_HOST_STOP = {"one", "per", "each", "every", "from", "with", "the", "and", "for", "all",
+              "length", "width", "depth", "height", "size", "overall", "page", "view",
+              "note", "notes", "sighted", "render", "brief", "provision", "requirement",
+              "objectives", "detail", "section", "sectional", "exploded", "typical"}
+
+
+def _word_root(word: str) -> str:
+    w = word.lower()
+    if w.endswith("ves") and len(w) > 4:
+        return w[:-3] + "f"
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def _roots(text: str) -> set:
+    return {_word_root(t) for t in re.findall(r"[a-z][a-z\-]{2,}", str(text or "").lower())}
+
+
+def _vocab_list(name: str) -> List[str]:
+    try:
+        import config                                               # noqa: WPS433
+        return [str(w).strip().lower() for w in (getattr(config, name, []) or [])
+                if str(w).strip()]
+    except Exception:                                               # noqa: BLE001
+        return []
+
+
+def _ops_of(p: Mapping[str, Any]) -> set:
+    return {str(o).strip().lower() for o in (p.get("inferred_operations") or [])}
+
+
+def _qty_of(p: Mapping[str, Any]) -> int:
+    try:
+        return max(1, int(p.get("quantity") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def mark_welded_to_hosts(parts: List[Dict[str, Any]]) -> List[str]:
+    """A welded piece whose own words name what it is welded to joins that host's component.
+
+    "HOOKED BRACKET (WELDED TO TRAY)": the brackets are welded at fabrication — the weld and
+    dress rows charge that — so at the unit they are part of each tray, not thirty more pieces
+    to fit, label or fix. Where a host is coated and the piece carries no coat of its own, the
+    piece is coated WITH the host: its area is added to the powder, no P.Coat piece of its own.
+    The host is found by the word after "welded to" in the piece's own name or note, matched to
+    the other made lines' names. No host found, nothing changes."""
+    joins = _vocab_list("CONCEPT_WELDED_TO_WORDS")
+    made = [p for p in (parts or []) if isinstance(p, dict)
+            and p.get("concept_kind") == "fabricated"]
+    notes: List[str] = []
+    for p in made:
+        if "welding" not in _ops_of(p):
+            continue
+        text = f"{p.get('description') or ''} {p.get('concept_seen') or ''}".lower()
+        host_word = ""
+        for j in joins:
+            m = re.search(re.escape(j) + r"\s+(?:the\s+|each\s+|every\s+|its\s+|a\s+|an\s+)?"
+                          r"([a-z][a-z\-]{2,})", text)
+            if m:
+                host_word = _word_root(m.group(1))
+                break
+        if not host_word:
+            continue
+        hosts = [h for h in made if h is not p and host_word in _roots(h.get("description"))]
+        if not hosts:
+            continue
+        p["welded_to_hosts"] = [str(h.get("part_number")) for h in hosts]
+        coated_hosts = [str(h.get("part_number")) for h in hosts
+                        if "powder_coating" in _ops_of(h)]
+        _coat = ""
+        if coated_hosts and "powder_coating" not in _ops_of(p):
+            p["coated_with_host"] = coated_hosts
+            _coat = (" Coated with its host: its area is added to the powder, with no P.Coat "
+                     "piece of its own")
+        p.setdefault("review_flags", []).append(
+            f"CONCEPT: welded to its host ({', '.join(p['welded_to_hosts'])}) — part of that "
+            f"component at the unit: not fitted, labelled or fixed there on its own; the weld "
+            f"and dress rows charge its joint.{_coat}")
+        notes.append(f"{p.get('part_number')} → {', '.join(p['welded_to_hosts'])}")
+    return notes
+
+
+def split_strips_per_host(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One edging line per host, at the host's own length and count.
+
+    The read gave "35MM SHELF EDGE STRIP" once — 15 at 460 mm, "one per shelf x15 shelves",
+    "length from shelf width" — while the shelves are five 460 mm front trays and ten 300 mm
+    side trays. An edging line (config CONCEPT_EDGE_STRIP_WORDS) whose own words name a host
+    (a word of its name, note or size reason found in other made lines' names), whose count is
+    exactly those hosts' total, and whose length is one of theirs, is split: each host gets a
+    line of its count at its own length on the same axis. Anything less certain is left as the
+    read gave it."""
+    edge_words = set(_vocab_list("CONCEPT_EDGE_STRIP_WORDS"))
+    made = [p for p in (parts or []) if isinstance(p, dict)
+            and p.get("concept_kind") == "fabricated"]
+    out: List[Dict[str, Any]] = []
+    _made_ids = {id(m) for m in made}
+    for p in parts or []:
+        if not (isinstance(p, dict) and id(p) in _made_ids):
+            out.append(p)
+            continue
+        own = _roots(p.get("description"))
+        if not (own & {_word_root(w) for w in edge_words}):
+            out.append(p)
+            continue
+        L = _num(p.get("blank_length_mm"))
+        text = " ".join(str(p.get(k) or "") for k in ("description", "concept_seen",
+                                                      "concept_why_size"))
+        candidates = [w for w in _roots(text)
+                      if w not in _HOST_STOP and w not in {_word_root(e) for e in edge_words}]
+        hosts: List[Dict[str, Any]] = []
+        for w in candidates:
+            hs = [h for h in made if h is not p and w in _roots(h.get("description"))
+                  and not (_roots(h.get("description")) & {_word_root(e) for e in edge_words})]
+            if len(hs) >= 2 and sum(_qty_of(h) for h in hs) == _qty_of(p):
+                hosts = hs
+                break
+        if not hosts or not L:
+            out.append(p)
+            continue
+
+        def _dims(h: Mapping[str, Any]) -> Tuple[float, float]:
+            fin = h.get("concept_finished_mm") if isinstance(h.get("concept_finished_mm"),
+                                                             Mapping) else {}
+            return (_num(fin.get("length")) or _num(h.get("blank_length_mm")),
+                    _num(fin.get("width")) or _num(h.get("blank_width_mm")))
+        axis = None
+        for h in hosts:
+            hl, hw = _dims(h)
+            if hl and abs(hl - L) <= 1:
+                axis = 0
+                break
+            if hw and abs(hw - L) <= 1:
+                axis = 1
+                break
+        lengths = {_dims(h)[axis] for h in hosts} if axis is not None else set()
+        if axis is None or len(lengths) < 2 or not all(lengths):
+            out.append(p)
+            continue
+        split = _strip_lines(p, hosts, axis, _dims, L)
+        out.extend(split)
+    return out
+
+
+def keep_approved_strip_lines(parts: List[Dict[str, Any]]) -> List[str]:
+    """An estimator's figure for a split edging line stands for the whole line (D-499).
+
+    The split keeps the read's own code on its first line, so an answers-file entry for that
+    code still lands. The other hosts' copies come off ONLY when the approved COUNT covers the
+    whole line the read gave (its total across every host) — then the approval is about that
+    whole line and the copies would count twice. An approved length alone, or a count short of
+    the total, says nothing about the other hosts' strips: every line stays, and the question is
+    asked, so ten strips are never lost to an approval of five."""
+    from source_precedence import source_of                         # noqa: WPS433
+    dropped: List[str] = []
+    for base in [p for p in parts if isinstance(p, dict) and p.get("concept_read_strip")
+                 and p.get("strip_host")]:
+        code = str(base.get("part_number") or "")
+        sibs = [p for p in parts if p is not base and p.get("strip_host")
+                and str(p.get("part_number") or "").startswith(code + "-")]
+        if not sibs:
+            continue
+        _q_ok = str(source_of(base, "quantity") or "") in _APPROVED_SOURCES
+        _l_ok = str(source_of(base, "blank_length_mm") or "") in _APPROVED_SOURCES
+        if not (_q_ok or _l_ok):
+            continue
+        whole = int((base.get("concept_read_strip") or {}).get("quantity") or 0)
+        if _q_ok and whole and _qty_of(base) >= whole:
+            _gone = [str(s.get("part_number")) for s in sibs]
+            for s in sibs:
+                parts.remove(s)
+            dropped.extend(_gone)
+            base["review_flags"].append(
+                f"CONCEPT: the estimator's count for {code} ({_qty_of(base)}) covers the whole "
+                f"edging line the read gave ({whole}) — the per-host lines {', '.join(_gone)} "
+                f"are withdrawn so it is not counted twice")
+        else:
+            _all = _qty_of(base) + sum(_qty_of(s) for s in sibs)
+            base["review_flags"].append(
+                f"CONCEPT: the estimator approved {code}'s "
+                + ("count" if _q_ok else "length")
+                + f" for this host only — the other hosts' lines "
+                  f"({', '.join(str(s.get('part_number')) for s in sibs)}) are kept, {_all} strip(s) "
+                  f"in all against the read's {whole}. If the approval meant the whole line, "
+                  f"approve its full count")
+    return dropped
+
+
+def _strip_lines(p: Dict[str, Any], hosts: List[Dict[str, Any]], axis: int,
+                 dims: Any, read_len: float) -> List[Dict[str, Any]]:
+    import copy
+    from source_precedence import apply_field                       # noqa: WPS433
+    W = _num(p.get("blank_width_mm"))
+    code = str(p.get("part_number") or "")
+    lines: List[Dict[str, Any]] = []
+    first_taken = False
+    # The host whose length the read used keeps the read's own code, so an approval keyed on it
+    # still lands; every other host's line is named after its host.
+    ordered = sorted(hosts, key=lambda h: (abs(dims(h)[axis] - read_len) > 1,
+                                           str(h.get("part_number"))))
+    for h in ordered:
+        hlen = dims(h)[axis]
+        q = _qty_of(h)
+        rec = copy.deepcopy(p)
+        hpn = str(h.get("part_number") or "")
+        if not first_taken:
+            first_taken = True
+        else:
+            rec["part_number"] = f"{code}-{hpn.split('-')[-1]}"
+        why = (f"one per {str(h.get('description') or hpn).lower()} — {q} at that line's own "
+               f"{hlen:g} mm (the read gave one line of {_qty_of(p)} at {read_len:g} mm across "
+               f"hosts of different sizes)")
+        # A NEW LINE, NOT A SECOND OPINION ON THE OLD ONE: its count and length are this host's,
+        # so the copied values are cleared before the read's own rank writes them.
+        from source_precedence import _source_key                   # noqa: WPS433
+        for _fld in ("quantity", "blank_length_mm"):
+            rec.pop(_fld, None)
+            rec.pop(_source_key(_fld), None)
+        apply_field(rec, "quantity", q, SOURCE, note=why)
+        apply_field(rec, "blank_length_mm", hlen, SOURCE, note=why)
+        rec["strip_host"] = hpn
+        rec["concept_read_strip"] = {"quantity": _qty_of(p), "length_mm": read_len}
+        for a in rec.get("concept_assumptions") or []:
+            if a.get("file_key") == "quantity":
+                a["value"], a["cue"] = q, why
+            elif a.get("file_key") == "blank_length_mm":
+                a["value"], a["cue"] = hlen, why
+        _old = [f"{read_len:g} × {W:g}", f"{read_len:g} x {W:g}"]
+        rec["review_flags"] = [
+            (str(f).replace(_old[0], f"{hlen:g} × {W:g}").replace(_old[1], f"{hlen:g} x {W:g}")
+             if isinstance(f, str) else f) for f in (rec.get("review_flags") or [])]
+        rec["review_flags"].append(f"CONCEPT: edging split per host — {why}; confirm the edge "
+                                   f"it runs along")
+        lines.append(rec)
+    return lines
 
 
 # ── THE CONCEPT BUDGET'S OWN PAPERWORK ──────────────────────────────────────────────
@@ -3227,7 +3831,40 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
             return 1
     fitted = [p for p in (parts or []) if isinstance(p, dict)
               and p.get("concept_kind") != "assembly" and str(p.get("part_number") or "")]
-    record["pieces_fitted"] = sum(_qty(p) for p in fitted)
+    # A PIECE WELDED TO ITS HOST IS FITTED WITH IT (D-499): thirty brackets welded to fifteen
+    # trays are fifteen trays to fit, label and fix, not forty-five pieces.
+    joined = [p for p in fitted if p.get("welded_to_hosts")]
+    record["pieces_fitted"] = sum(_qty(p) for p in fitted if not p.get("welded_to_hosts"))
+    if joined:
+        record["pieces_joined_to_hosts"] = {str(p.get("part_number")): _qty(p) for p in joined}
+    # THREE COUNTS, NOT ONE (D-499, reviewed). Pieces HANDLED at the unit (its fitting time),
+    # COMPONENTS LABELLED (a per-component item's count) and parts FASTENED (the fixings) are
+    # different things, each with its own basis — a welded bracket is none of them at the
+    # unit, a magnetic graphic is handled but not a labelled component, a hooked tray is
+    # handled and labelled but never screwed.
+    record["components_labelled"] = sum(
+        _qty(p) for p in fitted
+        if p.get("concept_kind") == "fabricated" and not p.get("welded_to_hosts"))
+    _mech = mechanically_fitted(parts)
+    record["fitting_counts"] = {
+        "handled": {"count": record["pieces_fitted"],
+                    "basis": "every piece fitted at the unit, a piece welded to its host "
+                             "counted with that host"},
+        "labelled": {"count": record["components_labelled"],
+                     "basis": "every MADE component fitted at the unit — not a bought or "
+                              "printed line, not a piece welded to its host"},
+        "fastened": {"count": _mech["pieces"],
+                     "basis": "made pieces not welded, not welded to a host and not hung or "
+                              "clipped — the pieces a fixing allowance may count"},
+    }
+    _fc = record["fitting_counts"]
+    record["review_flags"].append(
+        f"CONCEPT: the unit's three counts — {_fc['handled']['count']} piece(s) handled at "
+        f"assembly ({_fc['handled']['basis']}); {_fc['labelled']['count']} component(s) "
+        f"labelled ({_fc['labelled']['basis']}); {_fc['fastened']['count']} part(s) fastened "
+        f"({_fc['fastened']['basis']})"
+        + (". Welded to a host at fabrication: "
+           + ", ".join(f"{p.get('part_number')} ×{_qty(p)}" for p in joined) if joined else ""))
     record["assembly_fitted_items"] = [str(p.get("part_number")) for p in fitted
                                        if p.get("concept_kind") != "fabricated"]
     return record
