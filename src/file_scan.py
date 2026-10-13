@@ -5041,6 +5041,13 @@ def _finalize_scan_summary(
                 if _kept_strip:
                     print(f"   [confirmed] an approved edging line stands whole — per-host "
                           f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
+            # A COMPONENT STILL FOLDED INTO ANOTHER LINE IS A QUESTION ON THAT LINE (D-500), with
+            # the material at stake said and the previous read's line named as information.
+            _inside_q = concept_scan.question_components_inside(_sighted, _prev_bill)
+            if _inside_q:
+                print(f"   [concept] named inside another line and costed by none: "
+                      f"{'; '.join(_inside_q)} — a question on the line, no money moved",
+                      flush=True)
             # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
             # values an estimator APPROVED, and the bill names the question and the answer it
             # came from, so the next read can tell an unchanged read from a new one.
@@ -5056,6 +5063,12 @@ def _finalize_scan_summary(
                       f"{', '.join(_welded)} — the stated joint is charged on the parts "
                       f"the brief names, not spread across the pack", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
+            # WHAT THIS READ CHANGED, ON THE BOOK (D-500): the unit carries the change list,
+            # each dropped line as its own decision, and whether the read was a replay.
+            _chg_host = _unit or (_sighted[0] if _sighted else None)
+            if _chg_host is not None and (_changes or _prev_bill):
+                _chg_host.setdefault("review_flags", []).extend(concept_scan.change_flags(
+                    _changes, str(_read.get("baseline") or "") if _prev_bill else ""))
             if _sheet_read and _unit:
                 # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
                 # is a stated weld on the product the sheet draws, not an inference.

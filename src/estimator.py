@@ -2934,6 +2934,8 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  # brief asked for a price "per each" on a material sold by the metre —
                  # a fact recorded under one name and read under another, again.
                  "unit_of_measure": part.get("unit_of_measure"),
+                 # A COUNTED LINE IS ASKED AT THE JOB'S VOLUME (D-500).
+                 "quantity_counted": part.get("quantity_counted"),
                  "mass_kg": part.get("normalized_weight_kg"),
                  # THE ORIGIN IS THE TRUE ONE, so the guard judges the brief on what it
                  # actually is. A sighted description is not a drawing's reading and must
@@ -10449,6 +10451,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         **({"coated_with_host": list(part.get("coated_with_host"))}
            if isinstance(part.get("coated_with_host"), (list, tuple))
            and part.get("coated_with_host") else {}),
+        # THE OPEN AREA OF ITS SIGHTED CUT-OUTS (D-500): the coat covers metal, not holes.
+        **({"concept_open_area_mm2": float(part.get("concept_open_area_mm2"))}
+           if part.get("concept_open_area_mm2") else {}),
         # What the part's own sheet showed of its welds (weld_symbols), carried so the costed
         # record can say it joins members — the envelope sweep reads it.
         "weld_symbols": (dict(part["weld_symbols"])

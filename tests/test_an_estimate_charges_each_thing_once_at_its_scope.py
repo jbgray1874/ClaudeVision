@@ -521,3 +521,148 @@ def test_the_new_vocabulary_lives_in_config_and_holds_no_job():
         "CONCEPT_EDGE_STRIP_WORDS", "PROJECT_SCOPE_EVIDENCE")]).lower()
     for job_word in ("boots", "wellness", "btc", "kwellness"):
         assert job_word not in blob
+
+
+# ── D-500: the 20:49 book — volume pricing, the read's changes on the book, components named
+#    inside another line, and the reviewer's four queued refinements ────────────────────────
+
+def test_a_counted_item_is_asked_its_price_at_the_jobs_volume():
+    import indicative_price as ip
+    counted = {"description": "QR component label 20x20mm", "quantity": 48,
+               "unit_of_measure": "each",
+               "quantity_counted": {"count": 48, "basis": "1 per component × 48"}}
+    b = ip.research_brief(counted, order_qty=200)
+    assert b["volume_needed"] == 9600
+    assert "= 9600 in all" in b["ask"] and "never a single-item retail listing" in b["ask"]
+    plain = ip.research_brief({"description": "castor 75mm", "quantity": 4}, order_qty=200)
+    assert "volume_needed" not in plain and "in all" not in plain["ask"]
+
+
+def test_the_researcher_is_given_the_lines_count_basis():
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert '"quantity_counted": part.get("quantity_counted"),' in src
+    fx = cs.fixings_allowance_line(cs.parts_from_concept(_fsdu(), "J"), "J", 2)
+    assert "at this job's volume" in fx["research_description"]
+
+
+def test_the_reads_changes_are_on_the_book_and_each_dropped_line_is_a_decision():
+    flags = cs.change_flags(["added: TRAY x5", "dropped: HOOKED BRACKET (WELDED TO TRAY) x30",
+                             "HEADER: count 3 → 6 (no reason given)"],
+                            baseline="new interpretation with the previous bill")
+    assert flags[0].startswith("CONCEPT READ: new interpretation")
+    assert "a different read" in flags[0]
+    assert any(f.startswith("CONCEPT READ CHANGED") and "HEADER: count 3 → 6" in f
+               and "dropped" not in f for f in flags)
+    (drop,) = [f for f in flags if f.startswith("DROPPED FROM THE PREVIOUS READ")]
+    assert "HOOKED BRACKET (WELDED TO TRAY) x30" in drop and "material" in drop
+    same = cs.change_flags([], baseline="unchanged read reused")
+    assert same == ["CONCEPT READ: unchanged read reused — the same read as the previous "
+                    "book; differences are the engine's"]
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    at = src[src.index("_unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)"):]
+    assert "concept_scan.change_flags(" in at[:900]
+
+
+def test_a_component_named_inside_another_line_is_found_unless_listed_or_a_feature():
+    lines = [{"name": "FRONT SHELF TRAY (with welded hooked brackets)"},
+             {"name": "TOP CAP with graphic pass-through cut-out"},
+             {"name": "SIDE PANEL with welded seams"},
+             {"name": "HEADER"}]
+    (hit,) = cs.components_named_inside(lines)
+    assert hit["component"] == "bracket" and "welded hooked brackets" in hit["phrase"]
+    listed = lines + [{"name": "HOOKED BRACKET"}]
+    assert cs.components_named_inside(listed) == []
+
+
+def test_the_sheet_check_puts_the_read_back_naming_the_folded_component():
+    ans = {"product": {"name": "FSDU"}, "parts": [
+        {"name": "FRONT SHELF TRAY (with welded hooked brackets)", "kind": "fabricated",
+         "quantity": 5, "assumed_blank_mm": {"length": 460, "width": 300, "thickness": 1.5}}]}
+    chk = cs.sheet_check(ans)
+    assert chk["components_inside"] and not chk["agrees"]
+    assert any("names welded hooked brackets but no line lists them" in f
+               for f in chk["failures"])
+
+
+def test_a_component_still_folded_in_is_a_question_with_the_previous_line_as_information():
+    ans = _fsdu()
+    ans["parts"] = [p for p in ans["parts"] if "BRACKET" not in p["name"]]
+    for p in ans["parts"]:
+        if p["name"] == "FRONT SHELF TRAY":
+            p["name"] = "FRONT SHELF TRAY (with welded hooked brackets)"
+    parts = cs.parts_from_concept(ans, "J")
+    prev = {"parts": [{"name": "HOOKED BRACKET (WELDED TO TRAY)", "quantity": 30,
+                       "length": 40, "width": 30}]}
+    asked = cs.question_components_inside(parts, prev)
+    assert len(asked) == 1
+    tray = [p for p in parts if p["description"].startswith("FRONT SHELF TRAY")][0]
+    (q,) = tray["manufacturing_questions"]
+    text = str(q)
+    assert "no line of the bill costs" in text and "not costed" in text
+    assert "previous read listed HOOKED BRACKET (WELDED TO TRAY) x30 at 40 × 30 mm" in text
+    assert "information only" in text
+    assert not any(p["description"].startswith("HOOKED") for p in parts)   # nothing minted
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "concept_scan.question_components_inside(_sighted, _prev_bill)" in src
+
+
+def test_a_bonded_piece_takes_no_screws_and_hung_pieces_carry_the_retainer_note():
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if "STRIP" in p["name"]:
+            p["name"] = "35MM SHELF EDGE STRIP (bonded)"
+    parts = cs.parts_from_concept(ans, "J")
+    mech = cs.mechanically_fitted(parts)
+    assert mech["pieces"] == 1 + 6                       # top cap and headers only
+    assert any("bonded" in why for why in mech["excluded"].values())
+    fx = cs.fixings_allowance_line(parts, "J", 2)
+    assert "retainers or anti-lift clips" in fx["review_flags"][-1]
+
+
+def test_the_label_scope_states_its_too_small_exception(monkeypatch):
+    parts = cs.parts_from_concept(_fsdu(), "J")
+    unit = cs.unit_assembly_part(parts, _fsdu(), "J")
+    assert "no too-small exception applied" in unit["fitting_counts"]["labelled"]["basis"]
+    monkeypatch.setattr(config, "CONCEPT_LABEL_MIN_FACE_MM", 40, raising=False)
+    unit2 = cs.unit_assembly_part(parts, _fsdu(), "J")
+    assert unit2["components_labelled"] == unit["components_labelled"] - 15   # 35 mm strips
+    assert "too small to carry one" in unit2["fitting_counts"]["labelled"]["basis"]
+
+
+def test_the_quantity_breaks_tab_says_when_one_batch_is_assumed(tmp_path):
+    import openpyxl
+    from quantity_breaks_tab import write_quantity_breaks_tab, SHEET_NAME
+    swept = {"rows": [{"quantity": 1, "material": 10, "labour": 5, "unit": 20.0},
+                      {"quantity": 200, "material": 10, "labour": 3, "unit": 16.0}]}
+
+    def _tab(batch_size):
+        p = tmp_path / f"b{batch_size}.xlsx"
+        openpyxl.Workbook().save(p)
+        pc = {"total_gbp": 450.0, "lines": [
+            {"code": "PROJECT-05", "scope": "per_batch", "state": "provisional",
+             "order_gbp": 450.0, "per_batch_gbp": 450.0, "batch_size": batch_size}]}
+        write_quantity_breaks_tab(p, swept, requested=[200], project_costs=pc)
+        ws = openpyxl.load_workbook(p)[SHEET_NAME]
+        return " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value)
+    assert "ONE batch is taken at every quantity" in _tab(None)
+    assert "ONE batch is taken" not in _tab(50)
+
+
+def test_the_coat_is_net_of_the_openings_cut_through_it():
+    import estimator as E
+    import wb_populate as W
+    g = cs.cutout_geometry({"cutouts": [{"what": "opening", "count": 1, "length_mm": 200,
+                                         "width_mm": 110},
+                                        {"what": "hole", "count": 4, "length_mm": 10}]})
+    assert abs(g["open_area_mm2"] - (200 * 110 + 4 * 3.14159 / 4 * 100)) < 0.2
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if p["name"] == "TOP CAP":
+            p["cutouts"] = [{"what": "opening", "count": 1, "length_mm": 200, "width_mm": 110}]
+    cap = [p for p in cs.parts_from_concept(ans, "J") if p["description"] == "TOP CAP"][0]
+    assert cap["concept_open_area_mm2"] == 22000.0
+    pe = E.estimate_part(dict(cap), job_quantity=10)
+    assert pe["concept_open_area_mm2"] == 22000.0
+    L, Wd = pe["material_estimate"]["blank_length_mm"], pe["material_estimate"]["blank_width_mm"]
+    area = W.coated_sheet_area_m2([pe], W.route_coated_membership(None))
+    assert abs(area - ((L / 1000) * (Wd / 1000) - 0.022) * 2) < 1e-9

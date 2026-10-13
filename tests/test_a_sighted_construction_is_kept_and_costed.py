@@ -186,7 +186,9 @@ def test_labels_are_priced_each_and_counted_per_component():
     per = config.CONCEPT_PER_COMPONENT["items_per_component"]
     assert labels["quantity"] == round(per * 41)
     assert labels["per_component"] == {"items_per_component": float(per), "components": 41}
-    assert "price ONE item" in labels["research_description"]
+    # Priced per item AT THE JOB'S VOLUME (D-500), never a single-item retail listing.
+    assert "at this job's volume" in labels["research_description"]
+    assert "never a single-item retail listing" in labels["research_description"]
     assert labels["items_to_apply"] == labels["quantity"]
 
 

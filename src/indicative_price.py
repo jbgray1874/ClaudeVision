@@ -188,6 +188,19 @@ def research_brief(line: Any, *, order_qty: int = 1) -> Dict[str, Any]:
                f"pack or coil must be divided down to one {_unit} and the division shown."))
         brief["wanted_unit"] = _unit
         brief["quantity_needed"] = _num(line.get("quantity")) or 1
+        # A COUNTED ITEM IS PRICED AT THE JOB'S VOLUME (D-500). The K-Wellness 20:49 book asked
+        # for "ONE item" of a 20 x 20 mm label and got a single-label retail listing — £5.76,
+        # where the 18:17 book had found 12p — multiplied by 48 labels a unit. A line whose
+        # count the engine worked out says how many the job needs in all, and asks the price
+        # of one AT THAT VOLUME.
+        if isinstance(line.get("quantity_counted"), dict):
+            _total = brief["quantity_needed"] * brief["order_quantity"]
+            brief["volume_needed"] = _total
+            brief["ask"] += (
+                f" This job needs {brief['quantity_needed']:g} a unit × "
+                f"{brief['order_quantity']} unit(s) = {_total:g} in all: give the price of ONE "
+                f"{_unit} when bought at that volume (a roll, sheet, box or trade break), with "
+                f"the pack size it comes in — never a single-item retail listing.")
     elif kind == COMMERCIAL:
         brief["ask"] = (
             f"Current UK trade cost for: {desc}, priced FOR THE WHOLE ORDER of "
