@@ -321,15 +321,35 @@ def test_stated_flange_depths_are_used_before_the_allowance(tmp_path):
     assert "the drawing states" in blank["working"] and "house allowance" not in blank["working"]
 
 
-def test_a_stated_weight_that_disagrees_refuses_the_blank(tmp_path):
+def test_the_weight_checks_the_blank_it_does_not_decide_it(tmp_path):
+    """Review of D-508: a blank legitimately weighs MORE than its finished part (cut-outs are
+    bought and thrown away), so heavier is kept and asked; only a blank LIGHTER than the part
+    cut from it — impossible — is refused."""
     import detail_page_geometry as dpg
     page = _sheet(tmp_path, [((200, 200), "1500", 0), ((150, 400), "400", 90)])
+    heavier = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
+               "normalized_thickness_mm": 1.5, "stated_weight_g": 1500}     # ~0.13 m² of steel
+    kept = dpg.provisional_blank_from_sheets(heavier, [page])
+    assert kept is not None and "cut-outs" in kept["working"] and "asked" in kept["working"]
+    lighter = dict(heavier, stated_weight_g=14000)                         # ~1.19 m² of steel
+    assert dpg.provisional_blank_from_sheets(lighter, [page]) is None
+    assert "LESS than the finished part" in lighter["_provisional_blank_refused"]
+    ok = dict(heavier, stated_weight_g=7000)                                # ~0.59 m²
+    assert "agrees" in dpg.provisional_blank_from_sheets(ok, [page])["working"]
+
+
+def test_the_weight_is_read_where_the_title_block_puts_it(tmp_path):
+    """D-506 read only stated_weight_g/kg; 12665's sheets carry WEIGHT as text in `weights`
+    ("70g", "2.9kg"), so the check never ran. Both units, and the title-block copy, count."""
+    import detail_page_geometry as dpg
+    assert dpg._stated_weight_kg({"weights": ["70g"]}) == pytest.approx(0.07)
+    assert dpg._stated_weight_kg({"weights": "2.9 KG"}) == pytest.approx(2.9)
+    assert dpg._stated_weight_kg({"title_block": {"weights": ["1.99kg"]}}) == pytest.approx(1.99)
+    assert dpg._stated_weight_kg({"weights": ["9000kg"]}) is None
+    page = _sheet(tmp_path, [((200, 200), "1500", 0), ((150, 400), "400", 90)])
     part = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
-            "normalized_thickness_mm": 1.5, "stated_weight_g": 1500}       # ~0.13 m² of steel
+            "normalized_thickness_mm": 1.5, "weights": ["14kg"]}
     assert dpg.provisional_blank_from_sheets(part, [page]) is None
-    assert "stated" in part["_provisional_blank_refused"]
-    ok = dict(part, stated_weight_g=7000)                                   # ~0.59 m²
-    assert dpg.provisional_blank_from_sheets(ok, [page]) is not None
 
 
 def test_a_refused_overall_is_replaced_by_the_provisional_blank(tmp_path):

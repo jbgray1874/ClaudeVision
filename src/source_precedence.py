@@ -158,6 +158,11 @@ SOURCE_RANK: Dict[str, int] = {
     # the sheet beats a parser looking at the sheet — and below every measurement. An
     # estimator who knows a DXF is stale says so explicitly and gets rank 100 for it.
     "estimator_read_drawing": 72,
+    # A PART READ LARGER THAN THE ASSEMBLY IT SITS IN (D-508), costed on that assembly's
+    # outline developed for its folds. Above the drawing readings the assembly contradicts
+    # (title block 70, printed overall 65), below a person reading the sheet (72) and
+    # everything measured — so the part's own blank, a DXF or a model displaces it at once.
+    "assembly_envelope_allowance": 71,
     # ── AN OPEN QUESTION, DELIBERATELY NOT SETTLED HERE (raised 11 Sep 2026) ──────────
     #
     # The order below is MODEL FIRST: solidworks_api 90, dxf 80. The review position is the
@@ -525,6 +530,8 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
+    "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
+    "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
     #

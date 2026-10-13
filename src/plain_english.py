@@ -173,6 +173,15 @@ _PREFIXED = {
         "The route needs {p} and there is no rate for it in SDILive, so that operation is "
         "costing nothing. The time is in the estimate; the money is not.",
         "Add the {p} rate in SDILive, or price that operation by hand."),
+    # A CATALOGUE MATCH HELD FOR REVIEW (D-508). The ceiling is a trigger for a person, not a
+    # verdict on the price, and the held figure is never charged by any later pass.
+    "implausible_system_cost_rejected_price_manually": (
+        "Catalogue match held for review ({p})",
+        "A catalogue row matched this bought-in line at {p}, above the ceiling a bought-in item "
+        "is allowed before a person looks at it. It is held, not charged, by every pricing "
+        "pass; the line is priced from the next source, or asked.",
+        "Confirm the catalogue row really is this item at that price (then enter it), or "
+        "replace it with a supplier quote."),
 }
 
 

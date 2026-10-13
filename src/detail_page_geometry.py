@@ -181,7 +181,8 @@ def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
 
 
 def _cfg() -> Dict[str, Any]:
-    base = {"flange_allowance_mm": 25, "weight_ratio_bounds": (0.6, 1.6),
+    base = {"flange_allowance_mm": 25, "min_blank_to_part_weight_ratio": 0.9,
+            "weight_question_above_ratio": 1.6,
             "density_kg_m3": {"STEEL": 7850, "MILD": 7850, "STAINLESS": 8000,
                               "ALUMIN": 2700, "ACRYLIC": 1190},
             "developed_words": r"FLAT\s*PATTERN|DEVELOPED|BLANK\s*SIZE|FLAT\s*BLANK|UNFOLDED"}
@@ -270,12 +271,100 @@ def _stated_flanges(part: Mapping[str, Any]) -> List[float]:
     return out
 
 
+_WEIGHT_TEXT = re.compile(r"^([0-9]+(?:\.[0-9]+)?)\s*(KG|G)$")
+
+
 def _stated_weight_kg(part: Mapping[str, Any]) -> Optional[float]:
+    """The FINISHED part's weight its own sheet states, in kg — from every place the readers
+    put it, in either unit, or None.
+
+    D-506 read only stated_weight_g / stated_weight_kg / weight_kg, and 12665's sheets carry
+    their WEIGHT: box as text in `weights` ("2.9kg", "70g") — so the check never saw a weight
+    and never ran (D-508). Read here as the estimator reads it; a figure outside 1 g to 500 kg
+    is not a part's weight."""
+    def _ok(kg: Optional[float]) -> Optional[float]:
+        return kg if kg is not None and 0.001 <= kg <= 500.0 else None
+
     g = _num(part.get("stated_weight_g"))
-    if g:
+    if g and _ok(g / 1000.0):
         return g / 1000.0
-    kg = _num(part.get("stated_weight_kg") or part.get("weight_kg"))
-    return kg
+    kg = _ok(_num(part.get("stated_weight_kg") or part.get("weight_kg")))
+    if kg:
+        return kg
+    tb = part.get("title_block") if isinstance(part.get("title_block"), Mapping) else {}
+    weights = part.get("weights") or tb.get("weights") or []
+    if isinstance(weights, str):
+        weights = [weights]
+    for w in weights if isinstance(weights, (list, tuple)) else []:
+        m = _WEIGHT_TEXT.match(str(w).strip().upper().replace(",", ""))
+        if not m:
+            continue
+        val = float(m.group(1)) / (1000.0 if m.group(2) == "G" else 1.0)
+        if _ok(val):
+            return val
+    return None
+
+
+def made_children(part: Mapping[str, Any], parts: Sequence[Any],
+                  summary: Mapping[str, Any]) -> List[str]:
+    """The parts this record's own parts list holds that SDI MAKES — or [] (D-508).
+
+    An assembly of made parts has no blank of its own: its members carry the material. A
+    parts list alone does not say so — a fabricated panel can list the PEM nuts pressed into
+    it and still be cut from one blank — so only a child that is itself cut (its code's
+    material letter, M/A/T, or a record carrying a fabrication route) counts, and a record
+    whose OWN code carries that letter is a cut part whatever it lists."""
+    try:
+        from part_code_conventions import bare_code, material_suffix
+    except Exception:                                                # noqa: BLE001
+        return []
+    pn = str(part.get("part_number") or "").strip()
+    if not pn or material_suffix(pn):
+        return []
+    me = bare_code(pn)
+    try:
+        from bought_in_policy import is_bought_in
+    except Exception:                                                # noqa: BLE001
+        def is_bought_in(_r: Any) -> bool:                           # type: ignore
+            return False
+    by_code = {bare_code(str(p.get("part_number") or "")): p
+               for p in parts or [] if isinstance(p, dict)}
+    kids: List[str] = []
+    rows = list(((summary.get("document_analysis") or {}).get("bom_rows") or [])
+                if isinstance(summary, Mapping) else [])
+    for rec in rows + [p for p in parts or [] if isinstance(p, dict)]:
+        if not isinstance(rec, Mapping):
+            continue
+        if bare_code(str(rec.get("bom_parent") or "")) != me:
+            continue
+        code = str(rec.get("part_number") or "").strip()
+        if not code or bare_code(code) == me or code in kids:
+            continue
+        full = by_code.get(bare_code(code)) or dict(rec)
+        try:
+            bought = bool(is_bought_in(dict(full)))
+        except Exception:                                            # noqa: BLE001
+            bought = False
+        if bought:
+            continue
+        if material_suffix(code) or _is_folded(full) or full.get("blank_length_mm"):
+            kids.append(code)
+    return kids
+
+
+def sheet_envelope(sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The largest figure printed along each axis of these sheets — an assembly's outline,
+    kept as a SIZE CHECK on its members (never as a blank)."""
+    figures: List[Any] = []
+    for sheet in sheets:
+        figures.extend(read_sheet_figures(sheet)["figures"])
+    hs = [v for v, a in figures if a == "h"]
+    vs = [v for v, a in figures if a == "v"]
+    if not hs or not vs:
+        return None
+    a, b = max(hs), max(vs)
+    return {"length": max(a, b), "width": min(a, b),
+            "pages": [s.get("page_number") for s in sheets]}
 
 
 def provisional_blank_from_sheets(part: Mapping[str, Any],
@@ -353,6 +442,13 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
             return None
     except Exception:                                                # noqa: BLE001
         pass
+    # THE WEIGHT CHECKS THE BLANK, IT DOES NOT DECIDE IT (review of D-508). The stated weight is
+    # the FINISHED part; the blank is the stock it is cut from, so a blank legitimately weighs
+    # MORE — a window or a slot is paid for and thrown away — and a threshold on that side
+    # cannot say which of the two figures is wrong. Only the impossible side is refused: a
+    # blank LIGHTER than the part cut from it is too small, so the figures read are not its
+    # size. Heavier is kept, with the factor written into the working, and the estimator's
+    # WEIGHT CHECK on the costed blank puts the gauge question.
     weight = _stated_weight_kg(part)
     t = _num(part.get("normalized_thickness_mm") or part.get("thickness_mm"))
     weight_note = ""
@@ -363,15 +459,21 @@ def provisional_blank_from_sheets(part: Mapping[str, Any],
         if dens:
             implied_m2 = weight / (t / 1000.0 * dens)
             ratio = (length * width / 1e6) / implied_m2 if implied_m2 else None
-            lo, hi = cfg.get("weight_ratio_bounds") or (0.6, 1.6)
-            if ratio is not None and not (lo <= ratio <= hi):
+            lo = float(cfg.get("min_blank_to_part_weight_ratio") or 0.9)
+            hi = float(cfg.get("weight_question_above_ratio") or 1.6)
+            if ratio is not None and ratio < lo:
                 if isinstance(part, dict):
                     part["_provisional_blank_refused"] = (
-                        f"{length:g} x {width:g} mm is {ratio:.2f}x the area its stated "
-                        f"{weight:g} kg implies at {t:g} mm — the figures do not describe its "
-                        f"blank")
+                        f"{length:g} x {width:g} mm at {t:g} mm would weigh "
+                        f"{ratio:.2f}x the stated {weight:g} kg — LESS than the finished part "
+                        f"cut from it, which a blank cannot, so the figures read are not its "
+                        f"size")
                 return None
-            if ratio is not None:
+            if ratio is not None and ratio > hi:
+                weight_note = (f"; it weighs {ratio:.2f}x the stated finished {weight:g} kg — "
+                               f"consistent with cut-outs, or with a thinner gauge than "
+                               f"{t:g} mm; the gauge and the blank are asked")
+            elif ratio is not None:
                 weight_note = (f"; it agrees with the stated {weight:g} kg ({ratio:.2f}x the "
                                f"area that weight implies)")
     pages = [p.get("page_number") for p in sheets]
@@ -448,6 +550,27 @@ def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
         # and rail — both cut from their own DXFs — were told their size was "a fallback
         # envelope".
         if has_measured_flat(part):
+            continue
+
+        # AN ASSEMBLY OF MADE PARTS HAS NO BLANK OF ITS OWN (D-508). 12665-04-201 NEW FASCIA
+        # ASSEMBLY was given a 550 x 451.5 "provisional blank" and the estimator was asked to
+        # confirm the flat of something that is never cut: its fascia and back plate carry
+        # the material. Its sheet's outline is kept instead — as a size check on its members.
+        _kids = made_children(part, parts, summary)
+        if _kids:
+            _env = sheet_envelope([pages[b] for b in sorted(bound) if b in pages])
+            if _env:
+                part["_sheet_envelope_mm"] = _env
+            part["_assembly_of_made_parts"] = list(_kids)
+            # Said only where the record would otherwise have been sized as a part; a GA is an
+            # assembly already and needs no sentence about it.
+            if not not_cut_from_a_blank(part):
+                part.setdefault("review_flags", []).append(
+                    f"{pn or 'this record'}: no blank of its own — it is an assembly of parts "
+                    f"SDI makes ({', '.join(_kids[:4])}{', …' if len(_kids) > 4 else ''}), "
+                    f"and they carry the material"
+                    + (f"; its own sheet's outline, {_env['length']:g} x {_env['width']:g} "
+                       f"mm, is kept as a size check on them" if _env else ""))
             continue
 
         if len(bound) != 1:
@@ -527,6 +650,177 @@ def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
                 + (f" (was a {before:g} mm fallback envelope)" if before else "")
                 + " — inferred from the drawing's printed overall, confirm before a firm quote")
     return stamped
+
+
+def _blank_pair(part: Mapping[str, Any]) -> tuple:
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"),
+                                                        Mapping) else {}
+    return (_num(ng.get("blank_length_mm")) or _num(part.get("blank_length_mm")),
+            _num(ng.get("blank_width_mm")) or _num(part.get("blank_width_mm")))
+
+
+def _write_blank(part: Dict[str, Any], length: float, width: float, source: str) -> None:
+    """Both places a blank is read from carry it, under one source — or the resolver and the
+    sheet would disagree about one part."""
+    ng = part.setdefault("normalized_geometry", {})
+    if not isinstance(ng, dict):
+        ng = {}
+        part["normalized_geometry"] = ng
+    for holder in (ng, part):
+        holder["blank_length_mm"], holder["blank_width_mm"] = round(length, 1), round(width, 1)
+        holder["blank_length_mm_source"] = holder["blank_width_mm_source"] = source
+
+
+def mirror_provisional_blanks(parts: Any) -> List[str]:
+    """THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK, AND SAYS SO (D-508).
+
+    12665-03-01M-H, the side wing built the other way round, was charged its laser and its fold
+    and no steel: the mirror rule runs at merge time, before 03-01M had any blank, and it
+    deliberately refuses an unmeasured base (inheriting a guess at a measured rank is the one
+    thing it must never do). So the hand reached costing with nothing to nest.
+
+    A hand develops the same flat as its base. Where the base was given a PROVISIONAL blank
+    and the hand holds no size of its own (nothing, or only an engine inference), the hand
+    takes it at the same provisional standing — labelled as mirrored, asked like the base —
+    and its material, gauge and finish where it states none. A hand that states its own size
+    or its own stock keeps them: its handed differences are the drawing's. Returns the hands
+    filled."""
+    if not isinstance(parts, Sequence):
+        return []
+    try:
+        from part_code_conventions import carries_assembly_role, mirror_base
+    except Exception:                                                # noqa: BLE001
+        return []
+    import source_precedence as sp
+
+    def _key(pn: Any) -> str:
+        return re.sub(r"\s+", "", str(pn or "")).upper()
+
+    by_key = {_key(p.get("part_number")): p for p in parts if isinstance(p, dict)}
+    filled: List[str] = []
+    for hand in parts:
+        if not isinstance(hand, dict):
+            continue
+        hpn = str(hand.get("part_number") or "")
+        base_pn = mirror_base(hpn) or str(hand.get("mirror_of") or "").strip()
+        base = by_key.get(_key(base_pn)) if base_pn else None
+        if base is None or base is hand or not isinstance(base.get("_blank_provisional"), dict):
+            continue
+        if carries_assembly_role(hpn) or not_cut_from_a_blank(hand) or has_measured_flat(hand):
+            continue
+        _src = str(hand.get("blank_length_mm_source") or "")
+        if _blank_pair(hand) != (None, None) and all(_blank_pair(hand)) \
+                and sp.rank(_src) > sp.rank("geometry_inference"):
+            continue                                  # its own size, whatever its standing
+        bl, bw = _blank_pair(base)
+        if not (bl and bw):
+            continue
+        _write_blank(hand, bl, bw, PROVISIONAL_SOURCE)
+        for field in ("normalized_material", "normalized_thickness_mm", "normalized_finish"):
+            if sp.value_of(hand, field) is sp.MISSING and sp.value_of(base, field) is not sp.MISSING:
+                sp.apply_field(hand, field, sp.value_of(base, field), "mirror_of_provisional")
+        hand["_blank_provisional"] = dict(base["_blank_provisional"],
+                                          mirrored_from=str(base.get("part_number") or base_pn))
+        hand["blank_is_inferred"] = True
+        why = (f"PROVISIONAL BLANK, MIRRORED — {hpn} is the other hand of "
+               f"{base.get('part_number')} and develops the same flat, so it takes that part's "
+               f"provisional {bl:g} x {bw:g} mm ({base['_blank_provisional'].get('working') or 'its own sheet'}). "
+               f"Confirm {base.get('part_number')}'s flat blank and both hands follow it.")
+        hand["blank_inferred_reason"] = why
+        hand.setdefault("review_flags", []).append(why)
+        sp.raise_manufacturing_question(
+            hand, f"Blank of {hpn}: provisional {bl:g} x {bw:g} mm, mirrored from "
+                  f"{base.get('part_number')}", why,
+            f"confirm {base.get('part_number')}'s flat blank; this hand follows it",
+            "detail_page_geometry.mirror_provisional_blanks")
+        filled.append(hpn)
+    return filled
+
+
+ASSEMBLY_ALLOWANCE_SOURCE = "assembly_envelope_allowance"
+
+
+def check_parts_against_their_assembly(parts: Any, summary: Mapping[str, Any]) -> List[str]:
+    """A PART READ LARGER THAN THE ASSEMBLY IT SITS IN IS ASKED, AND COSTED ON THAT ASSEMBLY
+    (D-508).
+
+    12665-04-03A NEW BACK PLATE was costed at 1737 x 1684.7 mm — a whole 3050 x 2050 sheet of
+    acrylic, £128.75, twice — inside a fascia assembly whose own sheet is 400 x 251.5 mm. A
+    part can legitimately exceed its assembly's outline (a developed flange, an angled or
+    projecting piece), so the outline is developed for the part's own folds at the flange
+    allowance and given a tolerance before anything is said. Past that, the reading is not
+    the part's size: the part is costed on the assembly's developed outline — a labelled,
+    provisional allowance, never left unpriced — and the estimator is asked, with both
+    figures. Only a size READ off a drawing is checked; a DXF, a model or a person is not.
+    Returns the parts re-sized."""
+    if not isinstance(parts, Sequence) or not isinstance(summary, Mapping):
+        return []
+    try:
+        from part_code_conventions import bare_code
+    except Exception:                                                # noqa: BLE001
+        return []
+    import source_precedence as sp
+    cfg = _cfg()
+    tol = float(cfg.get("assembly_envelope_tolerance") or 0.10)
+    allowance = float(cfg.get("flange_allowance_mm") or 25)
+    by_code = {bare_code(str(p.get("part_number") or "")): p
+               for p in parts if isinstance(p, dict)}
+    parent_of: Dict[str, str] = {}
+    for row in ((summary.get("document_analysis") or {}).get("bom_rows") or []):
+        if isinstance(row, Mapping) and row.get("bom_parent") and row.get("part_number"):
+            parent_of.setdefault(bare_code(str(row["part_number"])), str(row["bom_parent"]))
+    resized: List[str] = []
+    for part in parts:
+        if not isinstance(part, dict) or not_cut_from_a_blank(part) or has_measured_flat(part):
+            continue
+        pl, pw = _blank_pair(part)
+        if not (pl and pw):
+            continue
+        src = str(part.get("blank_length_mm_source")
+                  or (part.get("normalized_geometry") or {}).get("blank_length_mm_source") or "")
+        if sp.rank(src) >= sp.rank("estimator_read_drawing") or src == ASSEMBLY_ALLOWANCE_SOURCE:
+            continue
+        pn = str(part.get("part_number") or "")
+        parent_pn = str(part.get("bom_parent") or parent_of.get(bare_code(pn)) or "")
+        parent = by_code.get(bare_code(parent_pn)) if parent_pn else None
+        if parent is None or parent is part:
+            continue
+        env = parent.get("_sheet_envelope_mm") if isinstance(parent.get("_sheet_envelope_mm"),
+                                                             Mapping) else None
+        if env is None:
+            el, ew = _blank_pair(parent)
+            env = {"length": max(el, ew), "width": min(el, ew)} if el and ew else None
+        if not env:
+            continue
+        folds = _fold_count(part)
+        cap_l = float(env["length"]) + folds * allowance
+        cap_w = float(env["width"]) + folds * allowance
+        big, small = max(pl, pw), min(pl, pw)
+        if big <= cap_l * (1 + tol) and small <= cap_w * (1 + tol):
+            continue
+        new_l, new_w = min(big, cap_l), min(small, cap_w)
+        part["_blank_capped_to_assembly"] = {
+            "read_mm": [round(big, 1), round(small, 1)], "read_source": src or "unrecorded",
+            "assembly": parent_pn, "assembly_outline_mm": [env["length"], env["width"]],
+            "folds": folds, "costed_mm": [round(new_l, 1), round(new_w, 1)]}
+        _write_blank(part, new_l, new_w, ASSEMBLY_ALLOWANCE_SOURCE)
+        part["blank_is_inferred"] = True
+        why = (f"SIZE LARGER THAN ITS ASSEMBLY — {pn} read as {big:g} x {small:g} mm "
+               f"({sp.display_name(src) or 'an unrecorded reading'}), but it sits in "
+               f"{parent_pn}, whose own outline is {float(env['length']):g} x "
+               f"{float(env['width']):g} mm — {cap_l:g} x {cap_w:g} mm even allowing "
+               f"{folds} fold(s) at {allowance:g} mm. The reading is not taken as its size: it "
+               f"is costed PROVISIONALLY on {new_l:g} x {new_w:g} mm, the assembly's developed "
+               f"outline, until its own size is confirmed.")
+        part["blank_inferred_reason"] = why
+        part.setdefault("review_flags", []).append(why)
+        sp.raise_manufacturing_question(
+            part, f"Size of {pn}: read {big:g} x {small:g} mm, larger than {parent_pn} "
+                  f"({float(env['length']):g} x {float(env['width']):g} mm) it sits in", why,
+            "confirm the part's own size (its blank, or the DXF) — material, cutting and "
+            "shipment follow it", "detail_page_geometry.check_parts_against_their_assembly")
+        resized.append(pn)
+    return resized
 
 
 def isolate_dimension_text(parts: Any, summary: Mapping[str, Any]) -> int:

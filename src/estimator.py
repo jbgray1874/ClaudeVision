@@ -2678,7 +2678,56 @@ def _resolve_labour_rate(operation: str) -> Dict[str, Any]:
     return {"result": result, "applied_hourly_rate": None, "applied_basis": None}
 
 
+_REJECTED_FLAG_RE = re.compile(r"implausible_system_cost_rejected\w*:GBP(\d+(?:\.\d+)?)")
+
+
+def rejected_system_costs(part: Dict[str, Any]) -> List[float]:
+    """The catalogue figures the plausibility guard refused for this line (D-508) — exact where
+    the guard recorded them, else read back off its flag (rounded to the pound)."""
+    out: List[float] = []
+    for v in (part.get("_rejected_system_costs") or []) if isinstance(part, dict) else []:
+        f = _safe_float(v)
+        if f:
+            out.append(float(f))
+    for flag in (part.get("risk_flags") or []) if isinstance(part, dict) else []:
+        m = _REJECTED_FLAG_RE.search(str(flag))
+        if m:
+            out.append(float(m.group(1)))
+    return out
+
+
+def _is_a_rejected_figure(price: Any, rejected: List[float]) -> bool:
+    """A candidate the guard has already refused. Matched to the pound, because the flag form
+    is rounded; two different items at prices within a pound of a four-figure refusal is not a
+    case worth the risk of re-charging the refused one."""
+    p = _safe_float(price)
+    return bool(p) and any(abs(float(p) - r) <= 0.5 or round(float(p)) == round(r)
+                           for r in rejected)
+
+
+class _PassedOver(list):
+    """The refused figures a lookup passed over, recorded on the part as they happen — so
+    every exit of the resolver leaves the record, however it returns (D-508)."""
+
+    def __init__(self, part: Dict[str, Any]):
+        super().__init__()
+        self._part = part
+
+    def append(self, value: float) -> None:                          # type: ignore[override]
+        super().append(round(float(value), 2))
+        if isinstance(self._part, dict):
+            self._part["_held_price_passed_over"] = sorted(set(self))
+
+
 def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
+    """The bought-in price chain for a line — catalogue by code, then the pricing service,
+    then a stated commodity rate, then evidenced research.
+
+    A REFUSED FIGURE STAYS REFUSED (D-508). Where the plausibility guard has held a catalogue
+    figure for this line, every rung passes over that figure and the chain carries on to the
+    next source — it never comes back as a "market indication" from a later pass."""
+    _rejected = rejected_system_costs(part)
+    _passed = _PassedOver(part)
     part_number = str(part.get("part_number") or "").strip()
     item_number = str(part.get("item_number") or "").strip()
     part_code = part_number or item_number
@@ -2748,6 +2797,9 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         )
         selected = _extract_selected_price(result)
         price = _selected_price_value(selected)
+        if price is not None and price > 0 and _is_a_rejected_figure(price, _rejected):
+            _passed.append(float(price))
+            continue
         if price is not None and price > 0:
             return {"result": result, "applied_unit_cost": price, "matched_part_code": code}
         if price is not None and not zero_result:
@@ -2783,6 +2835,10 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
             ps_price = _safe_float(anchor.get("unit_price_gbp")) if anchor else None
+            if ps_price is not None and ps_price > 0 and _is_a_rejected_figure(ps_price,
+                                                                               _rejected):
+                _passed.append(float(ps_price))
+                ps_price = None
             if ps_price is not None and ps_price > 0:
                 if (anchor or {}).get("item_priced"):
                     part.setdefault("review_flags", []).append(
@@ -2855,6 +2911,9 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:                                        # noqa: BLE001
             _com = None
         _com_price = _safe_float(_com.get("unit_price_gbp")) if _com else None
+        if _com_price is not None and _is_a_rejected_figure(_com_price, _rejected):
+            _passed.append(float(_com_price))
+            _com_price = None
         if _com_price is not None and _com_price > 0:
             return {
                 "result": {"selected": {
@@ -2971,6 +3030,9 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             if _set.get("result"):
                 return _set
             _ind = dict(_ind, missing=_set["missing"])
+            _ind_price = None
+        if _ind_price is not None and _is_a_rejected_figure(_ind_price, _rejected):
+            _passed.append(float(_ind_price))
             _ind_price = None
         if _ind_price is not None and _ind_price > 0:
             # PRICED AT THE JOB'S VOLUME, AND SAID FOR EVERY QUANTITY (D-501). A counted line
@@ -6907,12 +6969,18 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                     "factor": round(_factor, 1),
                     "blank_is_inferred": _inferred_blank,
                 }
+                # WHICH FIGURE THE SHEET CHARGES, SAID TRUTHFULLY (D-508). The engine's own
+                # material figure uses the printed weight; a nested Sheet Steel row on the
+                # workbook buys the blank's share of a sheet. "The MATERIAL is costed from the
+                # printed weight" was read as the charge, and on a nested line it is not.
                 part.setdefault("review_flags", []).append(
                     f"blank {blank_length:g}x{blank_width:g}mm implies {_area_mass:.2f}kg "
                     f"against a stated {round(stated_weight_kg * 1000)}g — a factor of "
-                    f"{_factor:.0f}. The MATERIAL is costed from the printed weight; the BLANK "
-                    f"is left as it stands because a weight gives an area, not a shape or a cut "
-                    f"length. "
+                    f"{_factor:.0f}. The engine's own material figure uses the printed "
+                    f"weight; where the part is nested on a Sheet Steel row the sheet charges "
+                    f"the BLANK's share of a sheet, so the blank sets the money there. The "
+                    f"blank is left as it stands because a weight gives an area, not a shape or "
+                    f"a cut length. "
                     + ("That blank is an inferred fallback envelope, so the nest, the laser "
                        "time and the coated area on this part are provisional and probably "
                        "wrong: read the real size off the part's detail page."
@@ -6977,9 +7045,10 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
                    f"it is — the two differ by "
                    f"{abs(_chk_blank - float(stated_weight_kg)):.2f} kg."
                    if _dxf_blank else
-                   f"the STATED {float(stated_weight_kg):g} kg, because there is no "
-                   f"measured flat pattern and a blank read off a drawing image is the "
-                   f"weaker of the two.")
+                   f"the STATED {float(stated_weight_kg):g} kg in the engine's own figure, "
+                   f"because there is no measured flat pattern — but where the part is nested "
+                   f"on a Sheet Steel row the sheet charges the blank's share of a sheet, so "
+                   f"the blank sets the money there: confirm it.")
                 + (" A part with cut-outs weighs less than its blank, which is the ordinary "
                    "reason for a gap this way round."
                    if stated_weight_kg < _chk_blank else
@@ -10375,6 +10444,28 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
             part.setdefault("risk_flags", []).append(
                 f"implausible_system_cost_rejected_price_manually:GBP{float(system_unit_cost):.0f}"
             )
+            # HELD THROUGH EVERY LATER PASS (D-508). 12665's two LIGHTING lines were refused
+            # here at £1,086.34 and charged that figure anyway: the last-resort pass re-ran the
+            # same chain, found the same row, and wrote it as a "market indication". The exact
+            # figure is kept so _resolve_part_system_cost can pass over it; the ceiling is a
+            # trigger for a person, so the question names the row and the figure.
+            _held = part.setdefault("_rejected_system_costs", [])
+            if round(float(system_unit_cost), 2) not in _held:
+                _held.append(round(float(system_unit_cost), 2))
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_held
+                _ask_held(part,
+                          f"{part.get('part_number') or 'This line'}: a catalogue row matched "
+                          f"at £{float(system_unit_cost):,.2f}, above the "
+                          f"£{_max_plausible:,.0f} a bought-in item may carry before a person "
+                          f"looks at it",
+                          "the row is HELD, not charged, by every pricing pass; the line is "
+                          "priced from the next source, or left asked",
+                          "confirm the row really is this item at that price (then enter it), "
+                          "or replace it with a supplier quote",
+                          "estimator.bought_in_plausibility")
+            except Exception:                                        # noqa: BLE001
+                pass
             bought_in_candidate = False
             system_unit_cost = None
 
@@ -10810,6 +10901,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "part_provenance": part.get("provenance", {}),
         "part_confidence": part.get("confidence", {}),
         "risk_flags": risk_flags,
+        # A catalogue figure refused by the plausibility guard (D-508): every later pricing
+        # pass over this line reads it and passes over that figure.
+        "_rejected_system_costs": list(part.get("_rejected_system_costs") or []) or None,
         # Stamped during process costing — Basis & Provisos reads these from the part record.
         "punch_calibration": part.get("punch_calibration"),
         "section_costing_adjustment": part.get("section_costing_adjustment"),
@@ -12032,6 +12126,64 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
                 "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
                 "indicative market figure is shown rather than a blank that reads as free. "
                 "NON-FIRM — verify or replace with a supplier rate before quoting.")
+        n += 1
+    return n
+
+
+def question_divergent_hands(part_estimates: List[Dict[str, Any]]) -> int:
+    """ONE ITEM IN TWO HANDS SHOULD COST ABOUT THE SAME — WHERE IT DOES NOT, ASK (D-508).
+
+    12665's side-wing lighting was £1,086.34 on one hand and £42.00 on the other: two sources
+    answered two lines for what the pack draws as one item handed. The figures are NOT made to
+    agree here — the hands may differ in specification or unit of sale, and a price is never
+    copied across on a code's shape alone. Both lines get the same question naming both
+    figures and both sources, so a person aligns them or says why they differ. Returns the
+    number of pairs asked about."""
+    try:
+        from part_code_conventions import mirror_base, bare_code
+    except Exception:                                                # noqa: BLE001
+        return 0
+    from source_precedence import raise_manufacturing_question
+    factor = float(getattr(config, "HANDED_PRICE_DIVERGENCE_FACTOR", 3.0) or 3.0)
+    by_code = {bare_code(str(pe.get("part_number") or "")): pe
+               for pe in part_estimates or [] if isinstance(pe, dict)}
+
+    def _unit(pe: Dict[str, Any]) -> Optional[float]:
+        me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+        return (_safe_float(me.get("unit_material_cost_gbp"))
+                or _safe_float(me.get("cost_per_part_gbp")))
+
+    def _source(pe: Dict[str, Any]) -> str:
+        me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+        try:
+            from price_provenance import stamp_source_name
+            name = stamp_source_name(me.get("price_source"))
+        except Exception:                                            # noqa: BLE001
+            name = ""
+        return name or str(me.get("cost_method") or "unrecorded source")
+
+    n = 0
+    for pe in part_estimates or []:
+        if not isinstance(pe, dict):
+            continue
+        hand = str(pe.get("part_number") or "")
+        base = mirror_base(hand)
+        other = by_code.get(bare_code(base)) if base else None
+        if not other or other is pe:
+            continue
+        a, b = _unit(other), _unit(pe)
+        if not a or not b or max(a, b) < factor * min(a, b):
+            continue
+        issue = (f"{base} is priced £{a:,.2f} ({_source(other)}) and its other hand {hand} "
+                 f"£{b:,.2f} ({_source(pe)}) — one item handed should cost about the same")
+        for target in (other, pe):
+            if target.get("manufacturing_questions") is None:
+                target["manufacturing_questions"] = []
+            raise_manufacturing_question(
+                target, issue,
+                "each hand is costed at its own figure; neither is copied to the other",
+                "confirm the two hands are the same item and unit of sale, then align them — or "
+                "record why they differ", "estimator.question_divergent_hands")
         n += 1
     return n
 
@@ -13625,6 +13777,13 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                   f"reference item", flush=True)
     except Exception as _e_ca:                                   # noqa: BLE001
         print(f"   [always-a-number] consumables allowance skipped: {_e_ca}", flush=True)
+    try:
+        _hands = question_divergent_hands(part_estimates)
+        if _hands:
+            print(f"   [hands] {_hands} handed pair(s) priced far apart — asked, not aligned",
+                  flush=True)
+    except Exception as _e_hd:                                   # noqa: BLE001
+        print(f"   [hands] handed-price check skipped: {_e_hd}", flush=True)
     # Price the subcontract plating line(s) now that every member has a costed mass, so the
     # plated-mass figure agrees with the sheet. Runs before the totals below so the plating cost
     # is in them.

@@ -4279,6 +4279,19 @@ def _finalize_scan_summary(
         if _n_dg:
             print(f"   [detail-geometry] {_n_dg} part(s) sized from their own detail sheet "
                   f"(pdf_overall_dims rank — a measured blank still wins)", flush=True)
+        # THE OTHER HAND TAKES ITS BASE'S PROVISIONAL BLANK (D-508), now that the base has one,
+        # and THEN every part read off a drawing is held against the assembly it sits in.
+        from detail_page_geometry import (check_parts_against_their_assembly,
+                                          mirror_provisional_blanks)
+        _mirrored = mirror_provisional_blanks(_parts_dg)
+        if _mirrored:
+            print(f"   [detail-geometry] {', '.join(_mirrored)} take their other hand's "
+                  f"provisional blank — the same flat, labelled and asked", flush=True)
+        _capped = check_parts_against_their_assembly(_parts_dg, summary)
+        if _capped:
+            print(f"   [detail-geometry] {', '.join(_capped)} read larger than the assembly "
+                  f"each sits in — costed on that assembly's developed outline and asked",
+                  flush=True)
     except Exception as _dg_err:
         print(f"   [detail-geometry] not applied: "
               f"{type(_dg_err).__name__}: {_dg_err}", flush=True)
