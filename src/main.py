@@ -2062,8 +2062,11 @@ def main() -> None:
             # and price_not_reproducible blocked the job for it anyway, because the
             # declaration existed only in memory. Carried across explicitly rather than left
             # to whichever pass happens to serialise last.
+            # The quantity sweep and the project costs ride across too (D-504): the quotation's
+            # cost-by-quantity page is generated from this file, and so is every regeneration
+            # after an estimator has amended the sheet.
             if _target is not summary:
-                for _carry in ("withheld_price_lines",):
+                for _carry in ("withheld_price_lines", "quantity_sweep", "project_costs"):
                     _val = summary.get(_carry)
                     if _val and not _target.get(_carry):
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val

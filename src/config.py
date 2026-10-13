@@ -512,6 +512,26 @@ PACKING_METHOD = {
 # tab and the report both read; this setting governs only whether extra FILES are written.
 QUANTITY_VARIANT_WORKBOOKS = None       # None | True | False
 
+# ── THE QUOTATION'S PAGES AFTER THE PRICE (D-504) ─────────────────────────────────────
+# James Gray, 13 Oct 2026: the quotation should look like the K-Wellness showcase —
+# "auto-generated as part of the general process, with as much detail as possible, two or
+# three pages". quote_story builds them from the run's own record for every job; the price
+# page is unchanged.
+#   story_pages          the two pages at all
+#   show_cost_structure  the price at each quantity split into material, set-up, running work
+#                        and overheads (it shows the shape of SDI's costs); off = unit price
+#                        and order value per quantity only
+#   evidence_cards       how many "your words → what we concluded → on the bill" cards
+#   page_thumbnails      the pack page each quote came from, shown beside it
+QUOTE_DOCUMENT = {
+    "story_pages": True,
+    "show_cost_structure": True,
+    "evidence_cards": 4,
+    "page_thumbnails": True,
+    "thumbnail_zoom": 0.55,
+    "max_pages_read": 60,
+}
+
 MATERIAL_PRICE_BREAK = {
     "enabled": True,
     "sheet": "Material Price Break",

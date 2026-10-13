@@ -1781,6 +1781,30 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             f"{_esc(product)} — manufactured to drawing {_esc(job_number)}"
             f"{(' ' + _esc(rev)) if rev else ''}. ")
 
+    # ── THE PAGES AFTER THE PRICE (D-504) ───────────────────────────────────────────
+    #
+    # James Gray, 13 Oct 2026, of the one-off K-Wellness showcase: "can we massively improve
+    # it so it much more closely represents [it]... auto-generated as part of the general
+    # process, with as much detail as possible... two or three pages." quote_story builds them
+    # from the run's own record — the pack's words beside what was concluded, one part
+    # followed to its priced line, the price at each quantity — and appends them. THIS PAGE
+    # IS UNCHANGED: price, release gate, naming and print block are decided above, and the
+    # story pages carry the same figure (the workbook's, at the same markup) or none.
+    _story_css = _story_html = ""
+    try:
+        from quote_story import story_pages as _story_pages
+        _story_price = unit_price
+        if _story_price is None and _internal and isinstance(_workbook_only, (int, float)):
+            _story_price = _workbook_only * MARKUP_FACTOR
+        _story_css, _story_html = _story_pages(
+            summary, parts, customer=customer, product=product, job_number=job_number,
+            qty=qty, unit_price=_story_price, markup=MARKUP_FACTOR,
+            basis=(_basis if (_concept_pack or _llm) else ""),
+            sdi_logo=sdi_logo, cust_header=cust_header)
+    except Exception as _st_exc:                                     # noqa: BLE001
+        print(f"   [quote] the pages after the price were not built "
+              f"({type(_st_exc).__name__}: {_st_exc}) — the price page stands.", flush=True)
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1866,6 +1890,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
            font-size:12px; display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }}
   .foot .terms b {{ color:var(--ink); }}
   @media print {{ body {{ background:#fff; }} .sheet {{ border:none; box-shadow:none; margin:0; max-width:100%; }} }}
+{_story_css}
 </style>
 </head>
 <body>
@@ -1933,7 +1958,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         wearesdi is the trading name of SDI Displays Ltd.{_run_foot}
       </div>
     </div>
-  </div>
+  </div>{_story_html}
 </body>
 </html>"""
 
