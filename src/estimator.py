@@ -2918,7 +2918,7 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
             # confident figure for a code nobody has. The description on the sheet does
             # not change; only the question asked of the market does.
             _sighted_desc = str(part.get("research_description") or "").strip()
-            _ind = _rung4(
+            _rung4_line = (
                 # NO CODE ON A SIGHTED LINE. The code is one this engine minted from a
                 # render; putting it in the brief invites an answer about a part number
                 # no supplier has ever listed.
@@ -2944,13 +2944,15 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  # not travel as one.
                  "input_origins": dict(part.get("input_origins") or {},
                                        **({"description": "vision_concept_sighted"}
-                                          if _sighted_desc else {}))},
+                                          if _sighted_desc else {}))})
+            _ind = _rung4(
+                _rung4_line,
                 order_qty=_order_qty_of(part),
                 as_of=str(part.get("run_date") or ""),
                 ask=_researcher,
             )
         except Exception:                                        # noqa: BLE001
-            _ind = {}
+            _ind, _rung4_line = {}, {}
         _ind_price = _safe_float((_ind or {}).get("price_gbp"))
         # THE ITEM'S PRICE, NOT THE LINE'S TOTAL (D-501). A bought-in line is charged as its
         # item price × its quantity downstream; the researched `price_gbp` already carries
@@ -2964,10 +2966,11 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
         # single panel, card or piece is refused here, the figure named on the line.
         _scope_gap = _set_priced_as_one_piece(part, _ind) if _ind_price else ""
         if _scope_gap:
-            _ind = dict(_ind, missing=(
-                f"PRICE SCOPE MISMATCH — this line is a set and the researched answer priced "
-                f"{_scope_gap} (£{_ind_price:,.2f}); a piece's price is not the set's, so it is not "
-                f"used. Ask for the price of the complete set and what it contains"))
+            _set = _price_the_whole_set(part, _ind, _ind_price, _scope_gap, _rung4_line,
+                                        _researcher)
+            if _set.get("result"):
+                return _set
+            _ind = dict(_ind, missing=_set["missing"])
             _ind_price = None
         if _ind_price is not None and _ind_price > 0:
             # PRICED AT THE JOB'S VOLUME, AND SAID FOR EVERY QUANTITY (D-501). A counted line
@@ -3059,6 +3062,80 @@ def _set_priced_as_one_piece(part: Dict[str, Any], ind: Any) -> str:
     said = str(ind.get("item_priced") or "")
     hit = _words_in(said, getattr(config, "PRICE_SINGLE_PIECE_WORDS", []))
     return f"'{said}'" if hit else ""
+
+
+def _price_the_whole_set(part: Dict[str, Any], ind: Dict[str, Any], piece: float,
+                         said: str, line: Dict[str, Any], researcher: Any) -> Dict[str, Any]:
+    """A SET PRICED AS ONE PIECE IS RE-ASKED, THEN ALLOWED FOR — NEVER LEFT AT NOTHING (D-502).
+
+    Refusing the 20:49 graphics set's "single panel" £18 was right; leaving the set NOT PRICED
+    was not. So: (1) the set is asked again ONCE, as "COMPLETE SET: …" with the refused answer
+    named — a new description, so the price cache cannot hand back the same one-panel answer;
+    an answer that now prices the set is used. (2) Otherwise the set is a PROVISIONAL ALLOWANCE:
+    the one piece's price × the pieces in the set (`set_pieces`, worked out from the bill by
+    concept_scan.set_pieces_for), the £18 kept as the evidence for ONE piece, never silently
+    the set's price. (3) Only with no count anywhere is it left unpriced, saying what is needed.
+    Returns a rung result ({"result", "applied_unit_cost", ...}) or {"missing": reason}."""
+    first = (f"the first answer priced {said} (£{piece:,.2f}) — one piece of the set, not the "
+             f"set")
+    again: Dict[str, Any] = {}
+    if line:
+        try:
+            from indicative_price import resolve_indicative as _rung4   # noqa: PLC0415
+            again = _rung4(dict(line, description=f"COMPLETE SET: {line.get('description')}",
+                                sold_as_set=True,
+                                set_previous_answer=f"{ind.get('item_priced')} at GBP {piece:,.2f}"),
+                           order_qty=_order_qty_of(part), as_of=str(part.get("run_date") or ""),
+                           ask=researcher) or {}
+        except Exception:                                            # noqa: BLE001
+            again = {}
+    p2 = _safe_float(again.get("unit_price_gbp") if again.get("applies_per_item")
+                     else again.get("price_gbp"))
+    gap2 = _set_priced_as_one_piece(part, again) if p2 else ""
+    flags = part.setdefault("review_flags", [])
+    if p2 and p2 > 0 and not gap2:
+        flags.append(f"PRICE SCOPE: {first}; re-asked for the COMPLETE set — £{p2:,.2f}, priced "
+                     f"as {again.get('item_priced') or 'the complete set'}")
+        return _rung4_result(again, p2, mode="llm_indicative_set_reask")
+    sp = part.get("set_pieces") if isinstance(part.get("set_pieces"), dict) else {}
+    n = _safe_float(sp.get("count"))
+    again_said = (f"the re-ask priced {gap2} (£{p2:,.2f})" if gap2 else
+                  "the re-ask returned no usable set price" if line else "no re-ask was possible")
+    if n and n > 0:
+        total = round(piece * n, 4)
+        flags.append(
+            f"PROVISIONAL SET ALLOWANCE: {first}; {again_said}. The set is taken as {n:g} "
+            f"piece(s) ({sp.get('basis') or 'the bill'}) × £{piece:,.2f} = £{total:,.2f}. The "
+            f"£{piece:,.2f} is the evidence for ONE piece only — replace this with a supplier's "
+            f"price for the complete set")
+        return _rung4_result(dict(ind, item_priced=f"{n:g} × {ind.get('item_priced')}"), total,
+                             mode="set_allowance_from_one_piece")
+    return {"missing": (f"PRICE SCOPE MISMATCH — this line is a set; {first}; {again_said}, and "
+                        f"nothing states how many pieces the set holds. State the set's pieces "
+                        f"(or a set price) in the answers file")}
+
+
+def _rung4_result(ind: Dict[str, Any], price: float, mode: str = "llm_indicative") -> Dict[str, Any]:
+    """A researched figure as the rung's result block — the same shape the main branch returns."""
+    return {
+        "result": {"selected": {
+            "source": (ind.get("evidence") or {}).get("source"),
+            "price": price,
+            "review_required": True,
+            "review_reason": ind.get("status"),
+            "price_is_reproducible": bool(ind.get("price_is_reproducible")),
+            "metadata": {
+                "pricing_mode": mode,
+                "evidence": ind.get("evidence"),
+                "calculation": ind.get("calculation"),
+                "label": ind.get("label"),
+                "price_first_taken": ind.get("price_first_taken"),
+                "item_priced": ind.get("item_priced"),
+            },
+        }},
+        "applied_unit_cost": price,
+        "matched_part_code": None,
+    }
 
 
 def _model_bends_agree(part: Dict[str, Any], count: Any) -> bool:

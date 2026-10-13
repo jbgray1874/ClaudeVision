@@ -5041,6 +5041,21 @@ def _finalize_scan_summary(
                 if _kept_strip:
                     print(f"   [confirmed] an approved edging line stands whole — per-host "
                           f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
+            # A COUNT THE BRIEF STATES OUTRANKS THE READ'S (D-502), after the answers file so an
+            # estimator's figure still stands above it, and before anything counts from the
+            # lines; a count no source states that moved between reads is asked on its line.
+            _bc = concept_scan.apply_brief_counts(_sighted, _brief or "")
+            for _a in _bc["applied"]:
+                print(f"   [concept] count stated by the enquiry brief: {_a} — the read's figure "
+                      f"is disclosed on the line", flush=True)
+            if _bc["asked"]:
+                print(f"   [concept] brief count not matched to one line: "
+                      f"{'; '.join(_bc['asked'])} — a question on the lines", flush=True)
+            _drift = concept_scan.question_unstated_count_changes(_sighted, _changes,
+                                                                  _brief or "")
+            if _drift:
+                print(f"   [concept] count moved between reads and no source states it: "
+                      f"{'; '.join(_drift)} — a question on the line", flush=True)
             # A COMPONENT STILL FOLDED INTO ANOTHER LINE (D-500, D-501): priced once as a
             # provisional allowance where the previous read sized it, else a question on the line.
             _inside = concept_scan.allow_components_inside(_sighted, _prev_bill, _job_name,
@@ -5055,6 +5070,10 @@ def _finalize_scan_summary(
                 print(f"   [concept] named inside another line, costed by none and with nothing "
                       f"to size it: {'; '.join(_inside['asked'])} — a question on the line",
                       flush=True)
+            # HOW MANY PIECES A SET HOLDS (D-502), from the bill, so a set the research prices
+            # one piece of is a reasoned allowance rather than nothing.
+            for _sp in concept_scan.set_pieces_for(_sighted, _brief or ""):
+                print(f"   [concept] set line: {_sp}", flush=True)
             # A CUT-OUT READ AT A STATED PITCH IS ASKED (D-501): a spacing is not a size.
             _pitch_q = concept_scan.pitch_as_size_questions(_sighted, _brief or "")
             if _pitch_q:
@@ -5206,15 +5225,15 @@ def _finalize_scan_summary(
                     print(f"   [concept] the read named no fixings — a provisional allowance "
                           f"of {_fx.get('quantity')} × the reference fixing for "
                           f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
-            # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws.
+            # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws, by a method
+            # suited to the joint (D-502).
             if _unit:
-                _adh = concept_scan.adhesive_allowance_line(_sighted, _job_name,
-                                                            len(_nv_lines) + 1)
-                if _adh:
+                for _adh in concept_scan.adhesive_allowance_lines(_sighted, _job_name,
+                                                                  len(_nv_lines) + 1):
                     _nv_lines = list(_nv_lines) + [_adh]
-                    print(f"   [concept] bonded piece(s): a provisional adhesive allowance of "
-                          f"{_adh.get('quantity')} {_adh.get('unit_of_measure')} of the reference "
-                          f"tape", flush=True)
+                    print(f"   [concept] bonded piece(s): a provisional {_adh.get('joining_method')}"
+                          f" allowance of {_adh.get('quantity')} {_adh.get('unit_of_measure')}",
+                          flush=True)
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
                 if _unit:

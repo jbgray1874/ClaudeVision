@@ -728,13 +728,27 @@ CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung",
 # A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
 # different consumable, named on the line as not in the fixings allowance.
 CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
-# THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501):
-# a run of the reference tape along the bonded piece's length, once. A COUNT RULE AND AN ITEM,
-# never a price — the item is priced per metre by the ordinary chain. AN ASSUMPTION TO CONFIRM.
+# THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501),
+# BY A METHOD SUITED TO THE JOINT (D-502): "bonded" is not always tape. The read's own words
+# choose the method (taped/VHB -> tape; glued/epoxy/structural -> structural adhesive); where
+# they only say "bonded", a narrow strip is taped along its length and anything wider takes a
+# structural adhesive bead round its perimeter. COUNT RULES AND ITEMS, never prices — each item
+# is priced by the ordinary chain. AN ASSUMPTION TO CONFIRM, said on the line.
 CONCEPT_ADHESIVE_ALLOWANCE = {
-    "reference_item": "double-sided acrylic foam mounting tape, 12 mm wide",
-    "unit_of_measure": "m",
-    "basis": "an assumption to confirm — one run along each bonded piece's length",
+    "methods": {
+        "tape": {"words": ["tape", "taped", "vhb", "double-sided", "double sided"],
+                 "reference_item": "double-sided acrylic foam mounting tape, 12 mm wide",
+                 "unit_of_measure": "m", "metres_per_unit": 1.0},
+        "structural adhesive": {"words": ["glue", "glued", "epoxy", "structural",
+                                          "methacrylate", "adhesive-bonded"],
+                                "reference_item": "two-part methacrylate structural adhesive, "
+                                                  "50 ml cartridge",
+                                "unit_of_measure": "each", "metres_per_unit": 6.0},
+    },
+    "strip_max_width_mm": 50,
+    "strip_method": "tape",
+    "default_method": "structural adhesive",
+    "basis": "an assumption to confirm — the method from the read's words or the piece's shape",
 }
 # A LINE THAT IS A SET IS PRICED AS THE WHOLE SET (D-501). Words that make a line a set, and
 # words in a price answer that say it priced one piece of it. Vocabulary, not logic. ("pack"

@@ -1286,10 +1286,15 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
     return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded}
 
 
-def adhesive_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict[str, Any]]:
+def adhesive_allowance_lines(parts: List[Any], stem: str, n: int) -> List[Dict[str, Any]]:
     """The adhesive a bonded piece needs, priced — excluding its screws must not leave the joint
-    unpriced (D-501). Metres of the reference tape (config CONCEPT_ADHESIVE_ALLOWANCE) along each
-    bonded piece's length, once, priced per metre by the ordinary chain; every piece named."""
+    unpriced (D-501) — by a method suited to the joint (D-502, config CONCEPT_ADHESIVE_ALLOWANCE).
+
+    The read's own words choose the method; where they only say "bonded", the piece's shape
+    does: a strip no wider than strip_max_width_mm is taped along its length, anything wider
+    takes a structural bead round its perimeter. One line per method, every piece, its run and
+    the method's reason named; the quantity is the run in the method's unit of sale (metres of
+    tape, cartridges of adhesive at metres_per_unit)."""
     from document_builder import _empty_part_record                 # noqa: WPS433
     from source_precedence import apply_field                       # noqa: WPS433
     try:
@@ -1297,42 +1302,81 @@ def adhesive_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dic
         rule = dict(getattr(config, "CONCEPT_ADHESIVE_ALLOWANCE", {}) or {})
     except Exception:                                               # noqa: BLE001
         rule = {}
-    ref = str(rule.get("reference_item") or "").strip()
-    unit = str(rule.get("unit_of_measure") or "m").strip()
+    methods = dict(rule.get("methods") or {})
+    if not methods:
+        return []
     bonded = _vocab_list("CONCEPT_BONDED_WORDS")
-    pieces = []
+    _has = lambda text, words: any(                                 # noqa: E731
+        re.search(rf"(?<![a-z]){re.escape(str(w).lower())}(?![a-z])", text) for w in words)
+    strip_w = _num(rule.get("strip_max_width_mm")) or 0.0
+    by_method: Dict[str, List[Tuple[str, int, float, str]]] = {}
     for p in parts or []:
         if not (isinstance(p, dict) and p.get("concept_kind") == "fabricated"):
             continue
         low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
-        if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in bonded):
-            length = max(_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm")))
-            if length:
-                pieces.append((str(p.get("part_number")), _qty_of(p), length))
-    if not ref or not pieces:
-        return None
-    metres = round(sum(q * L for _, q, L in pieces) / 1000.0, 2)
-    basis = (" + ".join(f"{pn} {q} × {L:g} mm" for pn, q, L in pieces)
-             + f" = {metres:g} m ({rule.get('basis') or 'config'})")
-    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}", item_number=None,
-                                description=f"Adhesive allowance — {ref}", quantity=None)
-    record["concept"] = True
-    record["concept_kind"] = "bought_in"
-    record["concept_not_visible"] = True
-    record["page_roles"] = ["render"]
-    apply_field(record, "quantity", metres, SOURCE,
-                note=f"PROVISIONAL — {basis}; the bonded pieces take no screws")
-    record["quantity_counted"] = {"count": metres, "basis": basis}
-    apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
-                note="an adhesive allowance for the pieces the read says are bonded")
-    record["is_bought_in"] = True
-    record["unit_of_measure"] = unit
-    record["research_description"] = (f"{ref} — the price per {unit} at this job's volume, "
-                                      f"bought by the roll at trade price")
-    record["review_flags"].append(
-        f"CONCEPT: a provisional adhesive allowance for the bonded piece(s): {basis}. Confirm the "
-        f"bonding method and the quantity before release")
-    return record
+        if not _has(low, bonded):
+            continue
+        L, W = _num(p.get("blank_length_mm")), _num(p.get("blank_width_mm"))
+        if not (L or W):
+            continue
+        said, word = "", ""
+        for m, spec in methods.items():
+            word = next((w for w in (spec.get("words") or []) if _has(low, [w])), "")
+            if word:
+                said = m
+                break
+        narrow = bool(strip_w) and 0 < min(L or W, W or L) <= strip_w
+        method = said or (rule.get("strip_method") if narrow else rule.get("default_method"))
+        if method not in methods:
+            continue
+        run = max(L, W) if narrow else 2.0 * (L + W)
+        why = (f"'{word}' in the read's words" if said else
+               ("a strip no wider than " f"{strip_w:g} mm" if narrow else
+                "only 'bonded' said, and wider than a strip"))
+        how = "along its length" if narrow else "round its perimeter"
+        by_method.setdefault(method, []).append(
+            (str(p.get("part_number")), _qty_of(p), run, f"{why}; {how}"))
+    out: List[Dict[str, Any]] = []
+    for method, pieces in by_method.items():
+        spec = methods[method]
+        ref = str(spec.get("reference_item") or "").strip()
+        unit = str(spec.get("unit_of_measure") or "m").strip()
+        per = _num(spec.get("metres_per_unit")) or 1.0
+        metres = sum(q * r for _, q, r, _ in pieces) / 1000.0
+        qty = round(metres / per, 2)
+        basis = (" + ".join(f"{pn} {q} × {r:g} mm ({why})" for pn, q, r, why in pieces)
+                 + f" = {metres:g} m" + (f" ÷ {per:g} m per {'item' if unit == 'each' else unit}"
+                                          f" = {qty:g}" if per != 1.0 else "")
+                 + f" ({rule.get('basis') or 'config'})")
+        record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n + len(out):02d}",
+                                    item_number=None,
+                                    description=f"Adhesive allowance ({method}) — {ref}",
+                                    quantity=None)
+        record["concept"] = True
+        record["concept_kind"] = "bought_in"
+        record["concept_not_visible"] = True
+        record["page_roles"] = ["render"]
+        apply_field(record, "quantity", qty, SOURCE,
+                    note=f"PROVISIONAL — {basis}; the bonded pieces take no screws")
+        record["quantity_counted"] = {"count": qty, "basis": basis}
+        apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
+                    note="an adhesive allowance for the pieces the read says are bonded")
+        record["is_bought_in"] = True
+        record["unit_of_measure"] = unit
+        record["joining_method"] = method
+        record["research_description"] = (f"{ref} — the price per {unit} at this job's volume, "
+                                          f"at trade price")
+        record["review_flags"].append(
+            f"CONCEPT: a provisional adhesive allowance ({method}) for the bonded piece(s): "
+            f"{basis}. Confirm the bonding method and the quantity before release")
+        out.append(record)
+    return out
+
+
+def adhesive_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict[str, Any]]:
+    """The first adhesive allowance line, or None (D-501's single-line form)."""
+    lines = adhesive_allowance_lines(parts, stem, n)
+    return lines[0] if lines else None
 
 
 def read_names_fixings(items: List[Any], parts: List[Any]) -> bool:
@@ -3575,21 +3619,29 @@ _COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, 
 
 
 def _count_per_host(noun: str, phrase: str, brief: str = "") -> tuple:
-    """How many of a folded component each host carries, and the words that say so: the read's
-    own phrase first, then the brief ("with two hooked brackets"), else the plural as an
-    assumption (2) or the singular (1)."""
+    """How many of a folded component there are, and the words that say so: the read's own
+    phrase first, then the brief ("with two hooked brackets"), else the plural as an assumption
+    (2 a host) or the singular (1). Returns (count, how, per_host): a number is PER HOST only
+    where its sentence says so (each / per / its / every); otherwise it is the total — "30
+    hooked brackets" is thirty, not thirty on every tray (D-502)."""
     words = "|".join(list(_COUNT_WORDS) + [r"\d+"])
     for text, where in ((phrase, "the read's own words"), (brief, "the enquiry brief")):
         flat = " ".join(str(text or "").lower().split())
-        m = re.search(rf"\b({words})\s+(?:of\s+)?(?:[a-z\-]+\s+){{0,2}}{re.escape(noun)}s?\b", flat)
-        if m:
+        for sentence in re.split(r"(?<=[.;])\s+", flat):
+            m = re.search(rf"\b({words})\s+(?:of\s+)?(?:[a-z\-]+\s+){{0,2}}"
+                          rf"{re.escape(noun)}s?\b", sentence)
+            if not m:
+                continue
             n = int(m.group(1)) if m.group(1).isdigit() else _COUNT_WORDS[m.group(1)]
-            if n > 0:
-                return n, f"{n} per host from {where} ('{m.group(0)}')"
+            if n <= 0:
+                continue
+            per_host = bool(re.search(r"\b(?:each|per|its|every)\b", sentence))
+            return (n, f"{n} {'per host' if per_host else 'in all'} from {where} "
+                       f"('{m.group(0)}')", per_host)
     if re.search(rf"\b{re.escape(noun)}s\b", str(phrase or "").lower()):
         return 2, ("2 per host — the read names them in the plural and nothing states a count; "
-                   "an assumption to confirm")
-    return 1, "1 per host — named in the singular; an assumption to confirm"
+                   "an assumption to confirm"), True
+    return 1, "1 per host — named in the singular; an assumption to confirm", True
 
 
 def allow_components_inside(records: List[Dict[str, Any]],
@@ -3643,20 +3695,40 @@ def allow_components_inside(records: List[Dict[str, Any]],
                              if comp in _own_roots(r.get("name"))), None)
         _from = ("the previous read's" if row is not None and row in prev_rows
                  else "an earlier read's (dropped since, kept in the bill's history)")
+        # A COUNT THE WORDS STATE OUTRANKS ONE A READ GAVE, AND AN EARLIER READ'S SIZE IS
+        # HISTORY, USED ONLY WHERE IT FITS ITS HOST (D-502). The previous bill is a baseline,
+        # not evidence: "two hooked brackets" per tray in the brief beats a remembered 30, and
+        # a remembered bracket bigger than the tray it hangs on is not a bracket of this tray.
+        per, how, per_host = _count_per_host(comp, g["phrase"], brief)
+        _stated = not how.startswith(("2 per host — the read names", "1 per host — named"))
+        _host_total = sum(_qty_of(h) for h in hosts)
+        _count = per * _host_total if per_host else per
+        _count_said = (f"{how} × {_host_total} host piece(s) = {_count:g}" if per_host
+                       else how)
+        _notes: List[str] = []
+        if row is not None:
+            _cL, _cW = sorted((_num(row.get("length")), _num(row.get("width"))), reverse=True)
+            _hL = max(max(_num(h.get("blank_length_mm")), _num(h.get("blank_width_mm")))
+                      for h in hosts)
+            _hW = max(min(_num(h.get("blank_length_mm")), _num(h.get("blank_width_mm")))
+                      for h in hosts)
+            if _hL and (_cL > _hL or _cW > _hW):
+                _notes.append(f"{_from} line '{row.get('name')}' gave {_cL:g} × {_cW:g} mm, "
+                              f"which does not fit its host ({_hL:g} × {_hW:g} mm) — not used")
+                row = None
         if row is None and comp in small and (house.get("blank_mm") or {}).get("length"):
             # A REASONED ALLOWANCE, NOT A BLANK (D-501): the count from the words, the size a
             # house allowance at the host's gauge, every figure said.
-            per, how = _count_per_host(comp, g["phrase"], brief)
             _gauge = max((_num(h.get("normalized_thickness_mm")) for h in hosts), default=0.0)
             _mat = next((str(h.get("normalized_material")) for h in hosts
                          if h.get("normalized_material")), "")
             _bm = house["blank_mm"]
             row = {"name": f"{comp.upper()} ({g['phrase']})", "kind": "fabricated",
-                   "quantity": sum(per * _qty_of(h) for h in hosts),
+                   "quantity": _count,
                    "material": _mat.replace("_", " "), "length": _num(_bm.get("length")),
                    "width": _num(_bm.get("width")), "thickness": _gauge,
                    "folds": _num(house.get("folds")), "blank_basis": "developed",
-                   "_house": f"{how}; each {_num(_bm.get('length')):g} × "
+                   "_house": f"{_count_said}; each {_num(_bm.get('length')):g} × "
                              f"{_num(_bm.get('width')):g} mm at the host's {_gauge:g} mm gauge — "
                              f"{house.get('basis') or 'a house allowance'}"}
             _from = "a house allowance (no read sized it)"
@@ -3675,16 +3747,42 @@ def allow_components_inside(records: List[Dict[str, Any]],
                 out["asked"].append(f"{host.get('part_number')}: {g['phrase']}")
             continue
         n += 1
-        _welded = "welded" in g["phrase"]
-        _host_welds = any("welding" in _ops_of(h) for h in hosts)
-        _ops = ["laser_cutting"] + (["folding"] if _num(row.get("folds")) else []) + (
-            ["welding"] if _welded and not _host_welds else [])     # dressing follows the weld
+        if _stated and not row.get("_house"):
+            _notes.append(
+                (f"{_from} count {_num(row.get('quantity')):g} is not used: " if
+                 _count != _num(row.get("quantity")) else "the count agrees: ")
+                + _count_said)
+            row = dict(row, quantity=_count)
+        # THE JOINT IS THE HOST'S, CHARGED ONCE THERE (D-502). The 20:49 trays already carry
+        # the 1.5 mm Weld and Dress rows; a weld on the allowance as well would charge the
+        # bracket-to-tray joint twice. So the allowance never welds: a host whose own name
+        # says the component is welded on carries the weld (added where the read left it
+        # off), and the allowance names the rows its joint sits on.
+        _welded = bool(re.search(r"\bweld", g["phrase"]))
+        _ops = ["laser_cutting"] + (["folding"] if _num(row.get("folds")) else [])
+        _weld_added: List[str] = []
+        if _welded:
+            for h in hosts:
+                if not ({"welding", "spot_welding"} & _ops_of(h)):
+                    h["inferred_operations"] = list(h.get("inferred_operations") or []) + [
+                        "welding"]
+                    h.setdefault("operation_sources", {})["welding"] = SOURCE
+                    h.setdefault("review_flags", []).append(
+                        f"CONCEPT: welding added — this line's own name says it carries "
+                        f"{g['phrase']}; the welds joining them are charged here, once")
+                    _weld_added.append(str(h.get("part_number")))
         _hosts_said = ", ".join(str(h.get("part_number")) for h in hosts)
+        _joint = (f"the joint is welded to {_hosts_said}: its weld and dress time sit on those "
+                  f"lines' Weld and Dress rows, NOT on this line"
+                  + (f" (welding added to {', '.join(_weld_added)}, whose names state it)"
+                     if _weld_added else "") if _welded else
+                  f"the joint ('{g['phrase']}') is not charged on this line")
         _basis = (f"PROVISIONAL ALLOWANCE — this read named {g['phrase']} inside {_hosts_said} and "
                   f"listed no line; "
                   + (f"{row['_house']}" if row.get("_house") else
-                     f"{_from} line '{row.get('name')}' gives the size and count (not confirmed "
-                     f"by this read)"))
+                     f"{_from} line '{row.get('name')}' gives the size"
+                     + ("" if _stated else " and count") + " (not confirmed by this read)")
+                  + "".join(f"; {x}" for x in _notes))
         sighted = {"name": str(row.get("name")), "kind": "fabricated",
                    "quantity": _num(row.get("quantity")),
                    "material_guess": str(row.get("material") or ""),
@@ -3711,11 +3809,10 @@ def allow_components_inside(records: List[Dict[str, Any]],
             f"{_basis}. Charged ONCE here: {_num(row.get('quantity')):g} × "
             f"{_num(row.get('length')):g} × {_num(row.get('width')):g} × "
             f"{_num(row.get('thickness')):g} mm {row.get('material') or ''}, "
-            f"{' + '.join(_ops)}"
-            + ("; the joint is charged on the host, which carries the weld" if _welded
-               and _host_welds else "")
+            f"{' + '.join(_ops)}; {_joint}"
             + ("; coated with its host" if rec.get("coated_with_host") else "")
             + ". Confirm or correct it in the answers file")
+        rec["provisional_allowance"]["joint_on"] = rec["welded_to_hosts"] if _welded else []
         for h in hosts:
             h.setdefault("review_flags", []).append(
                 f"CONCEPT: the {g['phrase']} this line names are charged on {rec['part_number']} "
@@ -3735,6 +3832,218 @@ def question_components_inside(records: List[Dict[str, Any]],
     records.extend(res["minted"])
     return ([f"{r['part_number']}: provisional allowance ({r['description']})"
              for r in res["minted"]] + res["asked"])
+
+
+_COUNT_STOP = {"is", "are", "and", "or", "with", "to", "of", "for", "at", "in", "on", "the",
+               "a", "an", "as", "from", "by", "be", "into", "that", "which", "not", "per",
+               "each", "all", "its", "their", "any", "also"}
+_COUNT_UNITS = {"mm", "cm", "m", "kg", "g", "off", "pcs", "pc", "x", "year", "years", "hour",
+                "hours", "min", "mins", "page", "pages", "units", "unit", "day", "days", "week",
+                "weeks", "percent"}
+_HAND_WORDS = {"left", "right", "lh", "rh", "mirrored", "handed", "hand"}
+
+
+def _head_and_mods(words: List[str]) -> Tuple[str, set]:
+    """A noun phrase's head (its last word that is not a hand) and its modifiers, as roots."""
+    roots = [_word_root(w) for w in words if w and w not in _HAND_WORDS]
+    return (roots[-1], set(roots[:-1])) if roots else ("", set())
+
+
+def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
+    """The counts an enquiry brief STATES for named parts (D-502): "headers x3", "6 slotted corner
+    posts", "five front shelves". A count in a sentence that says each / per (other than per
+    unit) is a count per something else, not a part's count, and is skipped."""
+    out: List[Dict[str, Any]] = []
+    flat = " ".join(str(brief or "").split())
+    _per = r"\beach\b|\bevery\b|\bper (?!unit\b|product\b|fixture\b)"
+    for sentence in re.split(r"(?<=[.;:])\s+", flat):
+        low = sentence.lower()
+        if re.match(r"\s*(?:each|every)\b", low):
+            continue                          # the whole sentence is about one of something
+        for clause in re.split(r"[;,()]|\s+and\s+|\s+\+\s+", low):
+            clause = clause.strip(" .:")
+            if re.search(_per, clause):
+                continue
+            for m in re.finditer(r"([a-z][a-z\-]*(?:\s+[a-z][a-z\-]*){0,3})\s*[x×]\s?(\d+)\b"
+                                 r"(?!\s*(?:mm|cm|x|×|\d))", clause):
+                words = [w for w in m.group(1).split() if w not in _COUNT_STOP]
+                n = int(m.group(2))
+                if words and n > 0:
+                    out.append({"count": n, "words": words, "said": m.group(0).strip()})
+            num = "|".join(list(_COUNT_WORDS) + [r"\d+"])
+            for m in re.finditer(rf"(?<![\d.\-])\b({num})\b(?![\d.%\-])\s+"
+                                 rf"([a-z][a-z\-]*(?:\s+[a-z][a-z\-]*){{0,3}})", clause):
+                n = int(m.group(1)) if m.group(1).isdigit() else _COUNT_WORDS[m.group(1)]
+                words = []
+                for w in m.group(2).split():
+                    if w in _COUNT_STOP or w in _COUNT_UNITS:
+                        break
+                    words.append(w)
+                if words and n > 0 and m.group(2).split()[0] not in _COUNT_UNITS:
+                    out.append({"count": n, "words": words, "said": m.group(0).strip()})
+    return out
+
+
+def apply_brief_counts(records: List[Dict[str, Any]], brief: str = "") -> Dict[str, List[str]]:
+    """A COUNT THE BRIEF STATES OUTRANKS ONE THE READ INFERRED (D-502). The 20:49 read gave six
+    headers; where a brief names a part's count, that count is costed (at the brief's rank, so
+    an estimator's approved figure still stands above it) and the read's figure is disclosed on
+    the line. A stated count is matched to the lines whose own name has its head noun (hands
+    ignored) and every modifier; several matching lines (handed pairs) must total it. Where they
+    do not, or the match is not one line, the line carries a question — never a guess at which
+    hand gets the difference. Per-host edging strips follow a host whose count changed.
+    Returns {"applied": [...], "asked": [...]}."""
+    from source_precedence import apply_field, raise_manufacturing_question, source_of  # noqa
+    out: Dict[str, List[str]] = {"applied": [], "asked": []}
+    made = [r for r in records or [] if isinstance(r, dict)
+            and r.get("concept_kind") in ("fabricated", "bought_in", "graphic")
+            and not r.get("strip_host") and not r.get("provisional_allowance")]
+    seen: set = set()
+    for st in brief_stated_counts(brief):
+        head, mods = _head_and_mods(st["words"])
+        if not head:
+            continue
+        hits = []
+        for r in made:
+            own = re.sub(_WITH_PHRASE, " ", str(r.get("description") or "").lower())
+            own = re.sub(r"\([^)]*\)", " ", own)
+            words = re.findall(r"[a-z][a-z\-]{2,}", own)
+            r_head, r_mods = _head_and_mods(words)
+            r_all = r_mods | {r_head}
+            # Its head is the line's head ("headers" → HEADER), or it names the line by more
+            # than one word, all of them the line's ("front shelves" → FRONT SHELF TRAY).
+            if (r_head == head and mods <= r_all) or (mods and (mods | {head}) <= r_all):
+                hits.append(r)
+        if not hits or id(hits[0]) in seen:
+            continue
+        seen.update(id(h) for h in hits)
+        total = sum(_qty_of(h) for h in hits)
+        if total == st["count"]:
+            continue
+        if len(hits) == 1:
+            r = hits[0]
+            if str(source_of(r, "quantity") or "") in _APPROVED_SOURCES:
+                continue                      # an estimator's figure stands above the brief
+            old = _qty_of(r)
+            apply_field(r, "quantity", st["count"], BRIEF_SOURCE,
+                        note=f"the enquiry brief states '{st['said']}'; the read gave {old}")
+            r.setdefault("review_flags", []).append(
+                f"BRIEF COUNT OVER THE READ: the enquiry brief states '{st['said']}' — costed at "
+                f"{st['count']}; the read gave {old}"
+                + (f" ({r.get('concept_why_size')})" if r.get("concept_why_size") else "")
+                + ". If they are different components, say so in the answers file")
+            for s in records or []:
+                if (isinstance(s, dict) and s.get("strip_host") == r.get("part_number")
+                        and _qty_of(s) == old):
+                    apply_field(s, "quantity", st["count"], BRIEF_SOURCE,
+                                note=f"one per {r.get('description')}, whose count the brief "
+                                     f"states")
+            out["applied"].append(f"{r.get('part_number')}: {old} → {st['count']} "
+                                  f"('{st['said']}')")
+        else:
+            _lines = ", ".join(f"{h.get('description')} x{_qty_of(h)}" for h in hits)
+            for r in hits:
+                raise_manufacturing_question(
+                    r,
+                    f"{r.get('description')}: the enquiry brief states '{st['said']}', and the "
+                    f"read's matching lines total {total}",
+                    f"costed as read ({_lines})",
+                    "state each line's count in the answers file",
+                    "concept_bill_check")
+            out["asked"].append(f"'{st['said']}' vs {total} over {len(hits)} lines")
+    return out
+
+
+def question_unstated_count_changes(records: List[Dict[str, Any]], changes: List[str],
+                                    brief: str = "") -> List[str]:
+    """A COUNT NO SOURCE STATES, WHICH MOVED BETWEEN READS, IS A QUESTION ON ITS LINE (D-502).
+    The K-Wellness header count went 1, 4, 2 and 6 across reads; neither the brief nor the pack
+    states it. The read's count is costed — there is nothing better — and the line says it is
+    unstable, so the estimator fixes it once in the brief or the answers file."""
+    from source_precedence import raise_manufacturing_question, source_of  # noqa: WPS433
+    stated_heads = {_head_and_mods(st["words"])[0] for st in brief_stated_counts(brief)}
+    by_key = {re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(): r
+              for r in records or [] if isinstance(r, dict)}
+    asked: List[str] = []
+    for c in changes or []:
+        m = re.match(r"(.+?): count ([\d.]+) → ([\d.]+)(.*)$", str(c))
+        if not m or "APPROVED" in m.group(4):
+            continue
+        r = by_key.get(re.sub(r"[^a-z0-9]+", " ", m.group(1).lower()).strip())
+        if r is None or str(source_of(r, "quantity") or "") in (BRIEF_SOURCE, *_APPROVED_SOURCES):
+            continue
+        words = re.findall(r"[a-z][a-z\-]{2,}",
+                           re.sub(r"\([^)]*\)", " ", str(r.get("description") or "").lower()))
+        if _head_and_mods(words)[0] in stated_heads:
+            continue
+        if raise_manufacturing_question(
+                r,
+                f"{r.get('description')}: count {m.group(2)} → {m.group(3)} between reads, and "
+                f"neither the enquiry brief nor the pack states it",
+                f"costed at this read's {m.group(3)}{m.group(4).strip() and ' ' + m.group(4).strip()}",
+                "state the count in the enquiry brief or the answers file, so the next read "
+                "cannot move it",
+                "concept_bill_check"):
+            asked.append(f"{r.get('part_number')}: {m.group(2)} → {m.group(3)}")
+    return asked
+
+
+def set_pieces_for(records: List[Dict[str, Any]], brief: str = "") -> List[str]:
+    """How many pieces a SET line holds, worked out from the bill and said (D-502) — so a set the
+    research priced one piece of becomes a reasoned allowance (piece × pieces), not £0.
+
+    First the set's own words ("set of 6", "6-piece"); else its POSITIONS: what a set is made of
+    is the noun before the set word in each of its alternatives ("REPLACEABLE CARD / MAGNETIC
+    GRAPHIC SET" → card, graphic), and every made line whose own name carries one of those
+    nouns, or whose clause of the brief does ("headers x3 (metal, to take a magnetic graphic"),
+    is a position holding one piece per item. Stamps `set_pieces` {count, basis} on the line."""
+    set_words = {_word_root(w) for w in _vocab_list("CONCEPT_SET_WORDS")}
+    said: List[str] = []
+    for r in records or []:
+        if not (isinstance(r, dict) and r.get("concept_kind") in ("bought_in", "graphic")):
+            continue
+        name = str(r.get("description") or "").lower()
+        if not (_roots(name) & set_words):
+            continue
+        m = re.search(r"\bset of (\d+)\b|\b(\d+)[\s-]*(?:piece|part|panel|card)s?\b", name)
+        if m:
+            n = int(m.group(1) or m.group(2))
+            r["set_pieces"] = {"count": n, "basis": f"the line's own words ('{m.group(0)}')"}
+            said.append(f"{r.get('part_number')}: {n} (its own words)")
+            continue
+        subjects = set()
+        for alt in re.split(r"/|\bor\b|&", name):
+            ws = [w for w in re.findall(r"[a-z][a-z\-]{2,}", alt) if _word_root(w) not in set_words]
+            if ws:
+                subjects.add(_word_root(ws[-1]))
+        if not subjects:
+            continue
+        clauses = [c for c in re.split(r"[;\n]|(?<=[.])\s+", str(brief or "").lower()) if c]
+        positions = []
+        for h in records or []:
+            if not (isinstance(h, dict) and h.get("concept_kind") == "fabricated") or h is r:
+                continue
+            if h.get("strip_host") or h.get("provisional_allowance"):
+                continue
+            own_words = re.findall(r"[a-z][a-z\-]{2,}", re.sub(
+                _WITH_PHRASE, " ", str(h.get("description") or "").lower()))
+            head = _head_and_mods(own_words)[0]
+            by_name = bool(_roots(" ".join(own_words)) & subjects)
+            by_brief = bool(head) and any(
+                re.search(rf"\b{re.escape(head)}s?\b", c) and (_roots(c) & subjects)
+                and not re.search(rf"\b{re.escape(head)}s?\b[^,]*\band\b", c)
+                for c in clauses)
+            if by_name or by_brief:
+                positions.append((h, "its name" if by_name else "the brief"))
+        if not positions:
+            continue
+        n = sum(_qty_of(h) for h, _ in positions)
+        basis = (" + ".join(f"{h.get('description')} ×{_qty_of(h)} ({why})"
+                            for h, why in positions)
+                 + f" = {n} position(s) holding a {'/'.join(sorted(subjects))}, one piece each")
+        r["set_pieces"] = {"count": n, "basis": basis}
+        said.append(f"{r.get('part_number')}: {n} — {basis}")
+    return said
 
 
 def _pitch_figures(text: str) -> List[Dict[str, Any]]:
