@@ -33,6 +33,7 @@ a numbered suffix rather than clobbering what is there.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import hashlib
 import io
@@ -40,13 +41,14 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from delivery_note_reader import REGIONS, group_into_notes, read_page  # noqa: E402
@@ -62,6 +64,23 @@ REGION_SCALE = 2
 UNSORTED = "_Unsorted"
 LEDGER = ".splitscan-done.json"
 LOGS = "_logs"
+# The job's own notes, kept in the ledger beside the per-scan records: how far it has got.
+META = "_meta"
+# One run at a time: the service, the page's button and an old laptop task share one ledger.
+LOCK = ".splitscan.lock"
+# What the service last saw, rewritten every check - the answer to "is it running?".
+STATUS = "service-status.txt"
+# Where a job with no record at all starts, when nobody says otherwise.
+FIRST_RUN_DAYS = 7
+# Each run re-checks a day before the point the last complete run reached. Costs a ledger
+# lookup per scan; covers a clock that is a few minutes out, or a copy that lands late.
+OVERLAP = 86400
+# A lock not touched for this long belongs to a run that died (the machine went off).
+LOCK_STALE = 30 * 60
+# In service mode, a scan still being written is left for the next check, and a scan that
+# failed is tried again hourly rather than OCR'd every few minutes.
+SETTLE = 3 * 60
+RETRY_AFTER = 60 * 60
 
 # ── THE FOLDERS COME FROM CONFIG, AND THERE IS NO GUESS BEHIND THEM ─────────────────
 #
@@ -95,7 +114,6 @@ def _configured(name: str) -> str:
 
 DEFAULT_SOURCE = _configured("SCAN_SOURCE_DIR")
 DEFAULT_OUT = _configured("SCAN_SPLIT_DIR")
-DEFAULT_FROM = _configured("SCAN_FROM")
 
 
 def from_cutoff(text: str) -> Optional[float]:
@@ -271,6 +289,21 @@ def _fingerprint(path: Path) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
+_PDF_ID = re.compile(rb"/ID\s*\[[^\]]*\]")
+
+
+def _same_pdf(a: bytes, b: bytes) -> bool:
+    """The same pages, ignoring the file's /ID - which used to be new on every save.
+
+    ── "IDENTICAL CONTENT" NEVER WAS ────────────────────────────────────────────────
+    A page carved twice from the same scan came out with a different /ID each time, so the
+    check below never found a match: a scan read a second time put "scan p3 (2).pdf" into
+    _Unsorted beside the first. Notes with a number were safe (matched by number first);
+    pages without one were not. New files are saved without a fresh ID, and files already on
+    the share (which have one) are compared with it taken out."""
+    return a == b or _PDF_ID.sub(b"", a) == _PDF_ID.sub(b"", b)
+
+
 def _unique(target: Path, payload: bytes) -> Optional[Path]:
     """Where to write, or None when this exact note is already filed there.
 
@@ -282,7 +315,7 @@ def _unique(target: Path, payload: bytes) -> Optional[Path]:
     if not target.exists():
         return target
     try:
-        if target.read_bytes() == payload:
+        if _same_pdf(target.read_bytes(), payload):
             return None
     except OSError:
         pass
@@ -291,7 +324,7 @@ def _unique(target: Path, payload: bytes) -> Optional[Path]:
         if not candidate.exists():
             return candidate
         try:
-            if candidate.read_bytes() == payload:
+            if _same_pdf(candidate.read_bytes(), payload):
                 return None
         except OSError:
             continue
@@ -313,7 +346,7 @@ def split_pdf(pdf_path: Path, out_dir: Path, *, dry_run: bool = False) -> Dict[s
         out = pymupdf.open()
         for i in indexes:
             out.insert_pdf(source, from_page=i, to_page=i)
-        payload = out.tobytes()
+        payload = out.tobytes(no_new_id=True)          # the same page, the same bytes
         out.close()
         where = _unique(target, payload)
         if where is None:
@@ -577,6 +610,154 @@ def recent(pdfs: List[Path], *, since_days: int = 0,
     return kept
 
 
+def _arrived(st: os.stat_result) -> float:
+    """When a scan reached the folder: the later of last written and (on Windows) created.
+
+    A copy keeps the original's modified time, so a scan copied in today from a USB stick
+    reads as last month by that alone. Its created time is today. Only Windows has a created
+    time here - elsewhere st_ctime is a metadata change, and the job runs on Windows."""
+    times = [st.st_mtime]
+    if os.name == "nt":
+        times.append(getattr(st, "st_birthtime", None) or st.st_ctime)
+    return max(times)
+
+
+def arrival(path: Path) -> float:
+    return _arrived(path.stat())
+
+
+def _record(ledger: Dict[str, Any], pdf: Path, source_dir: Path) -> Any:
+    return ledger.get(_ledger_key(pdf, source_dir)) or ledger.get(pdf.name)
+
+
+def _when(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+
+
+def scope_start(ledger: Dict[str, Any], every: List[Path], source_dir: Path,
+                asked: Optional[float] = None,
+                asked_as: str = "the date asked for") -> Tuple[float, str]:
+    """Where this run starts looking: (timestamp, why), WORKED OUT FROM THE JOB'S OWN RECORD.
+
+    ── NOTHING TO SET, AND NOTHING THAT CAN BE SET WRONG ─────────────────────────────
+
+    James Gray, 13 October 2026: "I don't have time to manually do re runs because of a bug /
+    mis timing" - and of a start date in .env: "looks like a hard coded hack". It was. So:
+
+      * After a run that dealt with every scan in scope, the ledger records when that run
+        STARTED. The next run looks at everything that arrived since then, less a day. A
+        machine off for a fortnight just has a longer next run; nothing ages out.
+      * With no such record yet (the first run of this version), it starts at the earliest
+        scan the ledger has a record of - where the job's responsibility began - so whatever
+        the old rolling window let slip since then is picked up once.
+      * With no ledger at all, the last FIRST_RUN_DAYS days, unless --since / --from says.
+
+    A scan that FAILED is in scope whatever its age, until it splits (see `in_scope`).
+
+    `asked` (--since / --from) can only move the start EARLIER - to take on older scans by
+    hand. It can never narrow a run: that is how BARDON DELIVERY NOTES 7-10-2026 was missed.
+    """
+    meta = ledger.get(META) if isinstance(ledger.get(META), dict) else {}
+    covered = meta.get("covered_to")
+    if isinstance(covered, (int, float)):
+        start, why = covered - OVERLAP, f"the last complete run, {_when(covered)}, less a day"
+    else:
+        recorded = []
+        for pdf in every:
+            if isinstance(_record(ledger, pdf, source_dir), dict):
+                try:
+                    recorded.append(arrival(pdf))
+                except OSError:
+                    continue
+        if recorded:
+            start, why = min(recorded), "the first scan this job has a record of"
+        elif asked is not None:
+            return asked, f"{asked_as} (no record yet)"
+        else:
+            start = time.time() - FIRST_RUN_DAYS * 86400
+            why = f"no record yet, so the last {FIRST_RUN_DAYS} days"
+    if asked is not None and asked < start:
+        return asked, f"{asked_as}, further back than the job's own record"
+    return start, why
+
+
+def in_scope(every: List[Path], start: float, ledger: Dict[str, Any], source_dir: Path, *,
+             settle: float = 0) -> Tuple[List[Path], List[Tuple[Path, float]]]:
+    """(scans to deal with, scans left for next time because they are still being written).
+
+    In scope: arrived at or after `start`, or recorded as failing - however old."""
+    now = time.time()
+    chosen: List[Path] = []
+    waiting: List[Tuple[Path, float]] = []
+    for pdf in every:
+        record = _record(ledger, pdf, source_dir)
+        failing = isinstance(record, dict) and record.get("failed")
+        try:
+            st = pdf.stat()
+        except OSError:
+            continue
+        came = _arrived(st)
+        if came < start and not failing:
+            continue
+        if settle and now - st.st_mtime < settle:
+            waiting.append((pdf, came))
+            continue
+        chosen.append(pdf)
+    return chosen, waiting
+
+
+class Busy(RuntimeError):
+    """Another run holds the lock."""
+
+
+@contextlib.contextmanager
+def run_lock(out_dir: Path):
+    """One run at a time over one ledger.
+
+    The service checks every few minutes, the page has a button, and the laptop's old task
+    may still fire: two runs at once would OCR the same scan twice and each write the ledger
+    over the other. The lock is a file in the output folder, created only if absent (atomic on
+    the share), refreshed before every scan, and treated as abandoned once it has not been
+    touched for LOCK_STALE - so a run killed with the machine does not block the next for
+    ever."""
+    path = out_dir / LOCK
+    me = f"{socket.gethostname()} (pid {os.getpid()}), started {datetime.now():%Y-%m-%d %H:%M}"
+    for _ in range(3):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+                holder = path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue                                           # released meanwhile
+            if age < LOCK_STALE:
+                raise Busy(holder or "another run")
+            try:
+                path.unlink()                                      # abandoned
+            except OSError:
+                pass
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(me)
+        try:
+            yield path
+        finally:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return
+    raise Busy("another run")
+
+
+def _beat(out_dir: Path) -> None:
+    try:
+        os.utime(out_dir / LOCK)
+    except OSError:
+        pass
+
+
 def prepare_out(out_dir: Path) -> None:
     """Make the output folder — and never the tree above it.
 
@@ -607,7 +788,8 @@ def prepare_out(out_dir: Path) -> None:
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         force: bool = False, since_days: int = 0, recurse: bool = False,
         pdfs: Optional[List[Path]] = None, progress=None,
-        from_ts: Optional[float] = None) -> Dict[str, Any]:
+        from_ts: Optional[float] = None, covers: Optional[float] = None,
+        retry_after: float = 0) -> Dict[str, Any]:
     """One day's run over a folder of scans.
 
     `pdfs` is the listing when the caller already has one — the front door lists the folder
@@ -618,14 +800,25 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
     post and silent while it works, and a run that prints its count line and then nothing
     for ninety seconds is indistinguishable from one that has hung — which is what the
     person watching it concluded, twice.
+
+    `covers`: everything that arrived before this moment is dealt with once the run gets
+    through `pdfs` - recorded in the ledger as how far the job has got (see `scope_start`).
+    Defaults to when the run started. Not recorded if any scan could not even be looked at.
+
+    `retry_after` (seconds): a scan whose last attempt failed is left alone until then.
     """
+    started = time.time()
     prepare_out(out_dir)
     done = _ledger(out_dir)
     names = _names_in(out_dir)
     results, skipped = [], []
     if pdfs is None:
-        pdfs = recent(scans_to_read(source_dir, out_dir, recurse=recurse),
-                      since_days=since_days, from_ts=from_ts)
+        every = scans_to_read(source_dir, out_dir, recurse=recurse)
+        asked = from_ts if from_ts is not None else (
+            started - since_days * 86400 if since_days and since_days > 0 else None)
+        start, _ = scope_start(done, every, source_dir, asked)
+        pdfs, _waiting = in_scope(every, start, done, source_dir)
+    complete = True
     for n, pdf in enumerate(pdfs, start=1):
         # A scan caught half-written by the scanner is no loss: when it finishes, its size
         # and time change, so does this mark, and the next run reads it again in full.
@@ -633,6 +826,7 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
             mark = _fingerprint(pdf)
         except OSError as exc:
             results.append({"source": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
+            complete = False
             continue
         # Keyed on the path within the scan folder, not the bare name: with --recurse two
         # date folders can each hold a "scan001.pdf" and one would otherwise mask the other.
@@ -648,8 +842,13 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         if not force and is_done(record, mark, out_dir, names):
             skipped.append(pdf.name)
             continue
+        if (retry_after and isinstance(record, dict) and record.get("failed")
+                and record.get("mark") == mark
+                and time.time() - float(record.get("last_failed_ts") or 0) < retry_after):
+            continue                                   # failing; its next attempt is due later
         if progress:
             progress(f"  reading {pdf.name} ({n} of {len(pdfs)}) ...")
+        _beat(out_dir)
         try:
             result = split_pdf(pdf, out_dir, dry_run=dry_run)
             results.append(result)
@@ -673,7 +872,7 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
                             "first_failed": first})
             if not dry_run:
                 done[key] = {"mark": mark, "failed": failed, "error": error[:300],
-                             "first_failed": first}
+                             "first_failed": first, "last_failed_ts": time.time()}
                 _save_ledger(out_dir, done)
             continue
         if not dry_run:
@@ -684,6 +883,10 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
             if names is not None:
                 names.update(n["file"].lower() for n in result["notes"] if n["file"])
     if not dry_run:
+        if complete:
+            reached = started if covers is None else covers
+            meta = done.get(META) if isinstance(done.get(META), dict) else {}
+            done[META] = {**meta, "covered_to": reached, "covered_to_text": _when(reached)}
         _save_ledger(out_dir, done)
     return {"when": datetime.now().isoformat(timespec="seconds"),
             "source": str(source_dir), "out": str(out_dir),
@@ -755,41 +958,116 @@ def _write_log(out: Optional[str], text: str, code: int) -> None:
 
 def main() -> int:
     """Runs the job and keeps a copy of everything it says in the day's log."""
-    peek = argparse.ArgumentParser(add_help=False)
-    peek.add_argument("--out", default=DEFAULT_OUT)
-    known, _ = peek.parse_known_args()
+    a = _args()
+    if a.watch:
+        return watch(a)
+    code, _ = _logged(a)
+    return code
+
+
+def _logged(a, *, keep=None) -> Tuple[int, str]:
+    """One pass, with what it said kept in the day's log - always, or when `keep(text)`."""
     captured, real = io.StringIO(), sys.stdout
     sys.stdout = _Tee(real, captured)
     code = 2
     try:
-        code = _main()
-        return code
+        code = _main(a)
     finally:
         sys.stdout = real
-        _write_log(known.out, captured.getvalue(), code)
+        text = captured.getvalue()
+        if keep is None or keep(text):
+            _write_log(a.out, text, code)
+    return code, text
 
 
-def _main() -> int:
+def _write_status(out: str, text: str) -> None:
+    if not out or not Path(out).is_dir():
+        return
+    try:
+        logs = Path(out) / LOGS
+        logs.mkdir(exist_ok=True)
+        tmp = logs / (STATUS + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, logs / STATUS)
+    except OSError:
+        pass
+
+
+def watch(a) -> int:
+    """THE SERVICE: check the scan folder every `--watch` minutes, for ever.
+
+    James Gray, 13 October 2026: "can we have this running on the server instead? then it's
+    always up as a windows service." A daily task on a laptop runs when the laptop is on and
+    somebody is logged on; this runs on SDI-App01 under NSSM, restarts with the machine, and
+    files a scan a few minutes after it lands.
+
+    A quiet check (nothing new) is not written to the day's log - 288 of them a day would
+    bury the ones that matter - but every check rewrites `_logs\\service-status.txt`, so
+    "is it running?" is answered by the time on that file. A check that read something, or
+    has something to say ("!!"), goes in the day's log as before. A problem that persists
+    (the share down overnight) is logged once an hour, not every check.
+
+    Nothing short of the service being stopped ends this: a missing share, a missing
+    tesseract or a crash in one check is said, and the next check tries again.
+    """
+    every = max(1.0, float(a.watch)) * 60
+    print(f"  splitscan service: checking every {a.watch:g} minute(s); "
+          f"source {a.source}, out {a.out}", flush=True)
+    last_logged, last_logged_at = "", 0.0
+    while True:
+        began = datetime.now()
+        # Said BEFORE the check as well as after: a check that is filing a backlog can take
+        # a while, and "is it running?" should not wait for it to finish.
+        _write_status(a.out, f"Checking now: started {began:%Y-%m-%d %H:%M:%S} on "
+                             f"{socket.gethostname()}\n")
+        try:
+            code, text = _logged(a, keep=lambda s: False)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:                                   # noqa: BLE001
+            code, text = 2, f"  !! the check failed: {type(exc).__name__}: {exc}\n"
+        said = [line for line in text.splitlines() if line.strip()]
+        worth = any("reading " in line or "!!" in line or "written" in line for line in said)
+        trouble = "\n".join(line for line in said if "!!" in line)
+        if worth and (trouble != last_logged or time.time() - last_logged_at > 3600
+                      or any("reading " in line for line in said)):
+            _write_log(a.out, text, code)
+            last_logged, last_logged_at = trouble, time.time()
+        nxt = began.timestamp() + every
+        _write_status(a.out, (
+            f"Last check: {began:%Y-%m-%d %H:%M:%S} on {socket.gethostname()}"
+            f" (exit {code})\nNext check: about {_when(nxt)}\n\n" + "\n".join(said[-25:])
+            + "\n"))
+        time.sleep(max(5.0, nxt - time.time()))
+
+
+def _args(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--source", default=DEFAULT_SOURCE,
                     help="Folder the scanner writes into")
     ap.add_argument("--since", type=int, default=0, metavar="DAYS",
-                    help="Only scans modified in the last DAYS days. The scan folder holds "
-                         "months of them, so the first run is the long one; after it, a "
-                         "day's work is a handful of files.")
+                    help="Also take on scans from the last DAYS days. The job keeps its own "
+                         "record of how far it has got, so this is only needed to reach "
+                         "further back; it can never make a run look at less.")
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="Folder to write one PDF per delivery note into")
-    ap.add_argument("--from", dest="from_date", default=DEFAULT_FROM, metavar="YYYY-MM-DD",
-                    help="Split every scan modified on or after this date that is not "
-                         "split yet, however late the run (SDI_SCAN_FROM). Takes the place "
-                         "of --since: nothing in scope can age out of it.")
+    ap.add_argument("--from", dest="from_date", default="", metavar="YYYY-MM-DD",
+                    help="Also take on scans from this date on (by hand, once). Like "
+                         "--since, it can only reach further back.")
+    ap.add_argument("--watch", type=float, default=0, metavar="MINUTES",
+                    help="Run as a service: check every MINUTES minutes until stopped.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Read and report, write nothing")
     ap.add_argument("--force", action="store_true",
                     help="Re-split scans this has already done")
     ap.add_argument("--recurse", action="store_true",
                     help="Also read scans in subfolders of the source folder")
-    a = ap.parse_args()
+    return ap.parse_args(argv)
+
+
+def _main(a=None) -> int:
+    if a is None:
+        a = _args()
     try:
         from_ts = from_cutoff(a.from_date)
     except ValueError:
@@ -860,9 +1138,8 @@ def _main() -> int:
         return 2
 
     try:
-        # Listed ONCE. The window is a filter on the listing, not a second listing.
+        # Listed ONCE. What is in scope is a filter on the listing, not a second listing.
         every = scans_to_read(source, out, recurse=a.recurse)
-        chosen = recent(every, since_days=a.since, from_ts=from_ts)
     except RuntimeError as exc:
         # The folder is there and cannot be listed — a permissions problem, or a share that
         # answers Test-Path and refuses enumeration. Said out loud, because the alternative
@@ -870,9 +1147,23 @@ def _main() -> int:
         print(f"  !! {exc}")
         return 2
 
+    # ── WHAT IS IN SCOPE COMES FROM THE JOB'S OWN RECORD, NOT FROM THE CLOCK ─────────
+    #
+    # See `scope_start`. --since / --from can only reach further back.
+    started = time.time()
+    ledger = _ledger(out) if out.is_dir() else {}
+    asked = from_ts if from_ts is not None else (
+        started - a.since * 86400 if a.since and a.since > 0 else None)
+    asked_as = (f"from {a.from_date}, as asked" if from_ts is not None else
+                f"the last {a.since} day(s), as asked")
+    start, why = scope_start(ledger, every, source, asked, asked_as)
+    chosen, waiting = in_scope(every, start, ledger, source,
+                               settle=SETTLE if a.watch else 0)
+    # Everything that arrived before the earliest scan still being written is dealt with.
+    covers = min([started] + [came for _, came in waiting])
+
     # How many of those are already split, from the ledger and ONE listing of the output
     # folder - so "nothing new" and "nothing in scope" are different sentences.
-    ledger = _ledger(out) if out.is_dir() else {}
     names = _names_in(out) if out.is_dir() else None
     already = 0
     for pdf in chosen:
@@ -882,13 +1173,13 @@ def _main() -> int:
                 already += 1
         except OSError:
             pass
-    scope = (f", {len(chosen)} from {a.from_date} on" if from_ts is not None else
-             f", {len(chosen)} modified in the last {a.since} day(s)" if a.since else "")
-    print(f"  {len(every)} PDF(s) in the folder" + scope
+    print(f"  {len(every)} PDF(s) in the folder, {len(chosen)} in scope (arrived since "
+          f"{_when(start)}: {why}; or still failing)"
           + (" — nothing to do" if not chosen else
              f": {already} already split, {len(chosen) - already} to read"))
-    if every and not chosen and a.since:
-        print(f"     (run without --since, or with a larger number, to reach the rest)")
+    if waiting:
+        print(f"  {len(waiting)} still being written, left for the next check: "
+              + ", ".join(p.name for p, _ in waiting))
 
     # ── NO PDFs IS A FINDING, NOT A RESULT ──────────────────────────────────────────
     #
@@ -939,9 +1230,18 @@ def _main() -> int:
         return 2
 
     try:
-        report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                     recurse=a.recurse, pdfs=chosen, from_ts=from_ts,
-                     progress=lambda text: print(text, flush=True))
+        # A dry run writes nothing, so it does not need the lock and does not hold up a real one.
+        guard = contextlib.nullcontext() if a.dry_run else run_lock(out)
+        with guard:
+            report = run(source, out, dry_run=a.dry_run, force=a.force, recurse=a.recurse,
+                         pdfs=chosen, covers=covers,
+                         retry_after=RETRY_AFTER if a.watch else 0,
+                         progress=lambda text: print(text, flush=True))
+    except Busy as exc:
+        # Not a failure: somebody else's run is doing this work right now.
+        print(f"  another run is already splitting ({exc}); this one did nothing and the "
+              "other will file what is in scope")
+        return 0
     except NoOCR as exc:
         # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
         # times, and not with an exit code that says the day went fine.

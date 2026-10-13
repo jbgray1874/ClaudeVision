@@ -11,7 +11,8 @@
          where Claude pushes - when the laptop has it, otherwise from origin).
       3. Copies only the AM CRM files that differ from the server's copies.
       4. Restarts the SDIIntelligence service if a Python file changed, and waits for it;
-         also the SDITrackerConnector service (ChatGPT / Claude connector) once it exists.
+         also the SDITrackerConnector service (ChatGPT / Claude connector) once it exists,
+         and the SDISplitScan service (delivery-note splitter) if its code changed.
       5. Checks the server's files now match the laptop's, byte for byte.
 
     Why: deploying by hand went wrong in the ways hands do - a dropped VPN left robocopy
@@ -28,6 +29,7 @@ param(
     [string]$Branch = "claude/app-portal-main-2026",
     [string]$Service = "SDIIntelligence",
     [string]$ConnectorService = "SDITrackerConnector",
+    [string]$SplitScanService = "SDISplitScan",
     # Which git remote to pull from. Default: "jbg" if the laptop has it, else "origin".
     [string]$Remote = "",
     # The server's backend folder; normally worked out from -Server. Set it only to
@@ -50,10 +52,23 @@ $Files = @(
     "connector_cards.py",
     "connector_oauth.py"
 )
+# The delivery-note splitter, which runs on the server as the SDISplitScan service. Paths
+# from the repository root; they land in C:\ClaudeVision\tools\logistics on the server.
+$ToolFiles = @(
+    "tools/logistics/split_delivery_notes.py",
+    "tools/logistics/delivery_note_reader.py",
+    "tools/logistics/Install-SplitScanService.ps1"
+)
 
 $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)      # C:\ClaudeVision
 $src  = Join-Path $repo "sdi-intelligence-backend"
 $dest = if ($Destination) { $Destination } else { "\\$Server\c$\ClaudeVision\sdi-intelligence-backend" }
+$destRoot = Split-Path -Parent $dest                                   # \\server\c$\ClaudeVision
+
+# Every file this deploys, as laptop path -> server path.
+$Items = @()
+foreach ($f in $Files) { $Items += [pscustomobject]@{ Name = $f; Src = (Join-Path $src $f); Dst = (Join-Path $dest $f) } }
+foreach ($f in $ToolFiles) { $Items += [pscustomobject]@{ Name = $f; Src = (Join-Path $repo $f); Dst = (Join-Path $destRoot $f) } }
 
 function Say([string]$Text, [string]$Colour = "Gray") { Write-Host "  $Text" -ForegroundColor $Colour }
 function Stop-Deploy([string]$Text) {
@@ -121,10 +136,9 @@ Say "Latest code: commit $commit (from $Remote)." Green
 
 # -- 3. What differs? ------------------------------------------------------------------------
 $changed = @()
-foreach ($f in $Files) {
-    $s = Join-Path $src $f
-    if (-not (Test-Path -LiteralPath $s)) { Stop-Deploy "Missing on the laptop: $s" }
-    if ((Get-Sha $s) -ne (Get-Sha (Join-Path $dest $f))) { $changed += $f }
+foreach ($i in $Items) {
+    if (-not (Test-Path -LiteralPath $i.Src)) { Stop-Deploy "Missing on the laptop: $($i.Src)" }
+    if ((Get-Sha $i.Src) -ne (Get-Sha $i.Dst)) { $changed += $i }
 }
 if ($changed.Count -eq 0) {
     Say "The server already has this version of the AM CRM. Nothing to do." Green
@@ -132,7 +146,7 @@ if ($changed.Count -eq 0) {
     exit 0
 }
 Say "To update on the server:"
-$changed | ForEach-Object { Say "    $_" White }
+$changed | ForEach-Object { Say "    $($_.Name)" White }
 if ($Check) {
     Say "Check only: nothing copied. Run again without -Check to deploy." Yellow
     Write-Host ""
@@ -140,19 +154,22 @@ if ($Check) {
 }
 
 # -- 4. Copy ---------------------------------------------------------------------------------
-foreach ($f in $changed) {
+foreach ($i in $changed) {
     try {
-        Copy-Item -LiteralPath (Join-Path $src $f) -Destination (Join-Path $dest $f) -Force -ErrorAction Stop
+        $folder = Split-Path -Parent $i.Dst
+        if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null }
+        Copy-Item -LiteralPath $i.Src -Destination $i.Dst -Force -ErrorAction Stop
     } catch {
-        Stop-Deploy "Copying $f failed: $($_.Exception.Message). Check the VPN and run this again; it only copies what still differs."
+        Stop-Deploy "Copying $($i.Name) failed: $($_.Exception.Message). Check the VPN and run this again; it only copies what still differs."
     }
 }
-$bad = @($changed | Where-Object { (Get-Sha (Join-Path $src $_)) -ne (Get-Sha (Join-Path $dest $_)) })
-if ($bad.Count -gt 0) { Stop-Deploy ("These didn't arrive intact: " + ($bad -join ", ") + ". Run this again.") }
+$bad = @($changed | Where-Object { (Get-Sha $_.Src) -ne (Get-Sha $_.Dst) })
+if ($bad.Count -gt 0) { Stop-Deploy ("These didn't arrive intact: " + (($bad | ForEach-Object { $_.Name }) -join ", ") + ". Run this again.") }
 Say ("Copied {0} file(s), checked byte for byte." -f $changed.Count) Green
 
 # -- 5. Restart, if the server code changed ----------------------------------------------
-$pyChanged = @($changed | Where-Object { $_ -like "*.py" })
+$toolChanged = @($changed | Where-Object { $_.Name -like "tools/*.py" })
+$pyChanged = @($changed | Where-Object { $_.Name -like "*.py" -and $_.Name -notlike "tools/*" })
 $restarted = $false
 if ($pyChanged.Count -gt 0) {
     Say "Restarting $Service (Python files changed)..."
@@ -174,14 +191,28 @@ if ($pyChanged.Count -gt 0) {
     } elseif ($cState -ne "MISSING") {
         Say "$ConnectorService is $cState - left as it is." Gray
     }
-} else {
+} elseif ($toolChanged.Count -eq 0) {
     Say "Only the page changed: no restart needed." Green
+}
+# The splitter service: restarted when its code changed. Not installed yet is normal until
+# Install-SplitScanService.ps1 has been run on the server.
+if ($toolChanged.Count -gt 0) {
+    $sState = Get-ServiceState $SplitScanService
+    if ($sState -eq "RUNNING") {
+        Say "Restarting $SplitScanService (splitter code changed)..."
+        if (Restart-One $SplitScanService) { Say "$SplitScanService is running the new code." Green }
+    } elseif ($sState -eq "MISSING") {
+        Say "$SplitScanService is not installed yet. On the server, as admin:" Yellow
+        Say "    C:\ClaudeVision\tools\logistics\Install-SplitScanService.ps1 -Source <UNC> -Out <UNC>" White
+    } else {
+        Say "$SplitScanService is $sState - left as it is." Gray
+    }
 }
 
 # -- Done -------------------------------------------------------------------------------------
 Write-Host ""
 Write-Host ("DONE  -  commit {0}" -f $commit) -ForegroundColor Cyan
-if ($changed -contains "appportal/voice-crm.html") {
+if (@($changed | Where-Object { $_.Name -eq "appportal/voice-crm.html" }).Count -gt 0) {
     Say "Ask users to close the app fully and reopen it to pick up the new page."
 }
 if ($pyChanged.Count -gt 0 -and -not $restarted) {
