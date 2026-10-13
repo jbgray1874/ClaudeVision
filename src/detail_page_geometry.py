@@ -737,6 +737,93 @@ def mirror_provisional_blanks(parts: Any) -> List[str]:
     return filled
 
 
+def mint_missing_hand_records(parts: Any, graph: Any) -> List[str]:
+    """A HANDED BOM ROW THE PACK NEVER DREW BECOMES A RECORD OF ITS OWN (D-509).
+
+    12665's GA lists 12665-03-01M-H — the side wing built the other way round — and the pack
+    holds no sheet for it, so no reader ever made it a part record. The route compiler still
+    charged its laser and its fold (route rows come from the BOM graph, not from records),
+    the coat covered it, and its steel was £0 in silence until the missing-price check caught
+    it AFTER costing. mirror_provisional_blanks (D-508) fills a hand's geometry, but it walks
+    the part records: a hand with no record is invisible to it.
+
+    So the record is minted where the graph proves the row: a BOM-stated leaf, reached under
+    a parent, whose code mirrors an existing cut part's and which no record answers to under
+    any of its spellings, gets a record of its own — the base's material, gauge and finish at
+    the mirror's gap-fill standing, the row's own quantity, and NO geometry of its own: the
+    mirror pass that runs next fills the blank at provisional standing, labelled and asked,
+    exactly as for a hand that was drawn. A hand of an assembly, a bought-in row, and a code
+    a record already answers to are left alone. Returns the codes minted."""
+    if not isinstance(parts, list) or not isinstance(graph, Mapping):
+        return []
+    try:
+        from part_code_conventions import carries_assembly_role, mirror_base
+    except Exception:                                                # noqa: BLE001
+        return []
+    import source_precedence as sp
+
+    def _key(pn: Any) -> str:
+        return re.sub(r"\s+", "", str(pn or "")).upper()
+
+    def _nv(node: Any, name: str, default: Any = None) -> Any:
+        if isinstance(node, Mapping):
+            return node.get(name, default)
+        return getattr(node, name, default)
+
+    by_key = {_key(p.get("part_number")): p for p in parts if isinstance(p, dict)}
+    minted: List[str] = []
+    for node in (graph.get("nodes") or []):
+        pn = str(_nv(node, "part_number") or "").strip()
+        if not pn or str(_nv(node, "kind") or "") != "leaf" or not _nv(node, "parents"):
+            continue
+        evidence = _nv(node, "evidence") or {}
+        if not (isinstance(evidence, Mapping) and evidence.get("bom_stated")):
+            continue                           # a name the tree inferred is not a stated row
+        spellings = [pn] + [str(a) for a in (evidence.get("raw_aliases") or [])]
+        if any(_key(s) in by_key for s in spellings):
+            continue                           # a record already answers to this row
+        if carries_assembly_role(pn):
+            continue                           # a handed ASSEMBLY mirrors as a route, not a blank
+        base = by_key.get(_key(mirror_base(pn)))
+        if base is None or not_cut_from_a_blank(base):
+            continue                           # nothing to be the other hand OF
+        base_pn = str(base.get("part_number") or "")
+        qty = _nv(node, "qty_own")
+        try:
+            qty = float(qty) if qty else 1.0
+        except (TypeError, ValueError):
+            qty = 1.0
+        rec: Dict[str, Any] = {
+            "part_number": pn,
+            "description": (str(_nv(node, "description") or "").strip()
+                            or f"{str(base.get('description') or base_pn).strip()} (opposite hand)"),
+            "quantity": qty,
+            "mirror_of": base_pn,
+            "is_assembly_parent": False,
+            "manufacturing_questions": [],
+            "normalized_geometry": {},
+            "_minted_hand_record": True,
+        }
+        for field in ("normalized_material", "normalized_thickness_mm", "normalized_finish"):
+            value = sp.value_of(base, field)
+            if value is not sp.MISSING:
+                sp.apply_field(rec, field, value, "mirror_of_provisional")
+        why = (f"RECORD MINTED FOR A HANDED ROW — {pn} is on the bill as the other hand of "
+               f"{base_pn} and the pack holds no sheet for it, so no reader made it a record "
+               f"and its material was heading for a silent £0 beside a charged route. It "
+               f"takes that part's material, gauge and finish; its blank follows the mirror "
+               f"rule (provisional, asked).")
+        rec["review_flags"] = [why]
+        sp.raise_manufacturing_question(
+            rec, f"{pn}: no sheet of its own — record minted as the other hand of {base_pn}",
+            why, f"confirm {pn} is {base_pn} made the opposite hand; its stock and blank "
+                 f"follow that part", "detail_page_geometry.mint_missing_hand_records")
+        parts.append(rec)
+        by_key[_key(pn)] = rec
+        minted.append(pn)
+    return minted
+
+
 ASSEMBLY_ALLOWANCE_SOURCE = "assembly_envelope_allowance"
 
 
