@@ -544,6 +544,18 @@ def _load_logo_markup(customer: str) -> str:
     list somebody has to maintain.
     """
     key = _normalise_key(customer)
+    # THE CUSTOMER'S DOCUMENTS CARRY A BRAND MARK (config.CUSTOMER_LOGO_BRANDS): TTI's
+    # quotes carry Milwaukee. Mapped HERE, at the file lookup, so every heading still
+    # prints the customer's own name — only the mark changes. Both sides normalised, so
+    # the config can say "TTI": "Milwaukee" in plain words.
+    try:
+        import config as _cfg
+        for _cust, _brand in (getattr(_cfg, "CUSTOMER_LOGO_BRANDS", {}) or {}).items():
+            if _normalise_key(_cust) == key:
+                key = _normalise_key(_brand)
+                break
+    except Exception:                                                # noqa: BLE001
+        pass
     if not key or not os.path.isdir(ASSETS_LOGOS):
         return ""
     # ── ONE KEY, TWO FILES, AND WHICHEVER THE FILESYSTEM HANDED BACK FIRST ──────────

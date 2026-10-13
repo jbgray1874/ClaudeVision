@@ -36,6 +36,9 @@ _CUSTOMER = re.compile(r"\b(M&S|MARKS\s*&|SPENCER|HARRODS|TESCO|BOOTS|TTI)\b")
 # standards (`customer term`), and the folder-name aliases that say which customer a folder is.
 _SCOPED_TABLES = {("config.py", "JOB_DECISIONS"), ("config.py", "CUSTOMER_FINISH_STANDARDS"),
                   ("config.py", "CUSTOMER_COMMERCIAL_TERMS"),
+                  # The brand mark a customer's documents carry (D-510): the same kind of
+                  # customer fact as the finish standards — a table, read by one lookup.
+                  ("config.py", "CUSTOMER_LOGO_BRANDS"),
                   ("live_enquiry_collector.py", "DEFAULT_CUSTOMER_ALIASES")}
 _ENTRY_POINTS = ("main.py", "file_scan.py")
 

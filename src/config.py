@@ -1624,6 +1624,23 @@ CUSTOMER_FINISH_STANDARDS = {
             "statement": "TTI none (no weld dressing)"},
 }
 
+# ── THE BRAND MARK A CUSTOMER'S DOCUMENTS CARRY ──────────────────────────────────────────
+#
+# "The TTI job should use the Milwaukee logo" — James Gray, 13 Oct 2026. TTI (Techtronic
+# Industries) is the customer SDI invoices; Milwaukee is the brand on the product, and the
+# mark their quotes and reports should carry. A fact about the CUSTOMER, not about any one
+# job, so it lives here beside CUSTOMER_FINISH_STANDARDS and never in logic.
+#
+# Key: the customer name the job header resolves. Value: the logo file stem looked up in
+# assets/customer_logos (whatever format is saved there). Both sides are matched normalised
+# — case, spaces and punctuation ignored — so "TTI" and "T.T.I." are one key. Only the MARK
+# is mapped: the quote's heading still prints the customer's own name. A customer not
+# listed keeps today's behaviour exactly (logo file named after the customer, else text).
+CUSTOMER_LOGO_BRANDS = {
+    "TTI": "Milwaukee",
+    "TECHTRONIC INDUSTRIES": "Milwaukee",
+}
+
 # ── PRODUCTION SUBSTITUTES A GAUGE THE SHOP DOES NOT STOCK ──────────────────────────────
 #
 # "Line 67 / Line 100 – 0.9mm Steel Production use 1mm in Lieu" — raised as TBC on 9 Sep
