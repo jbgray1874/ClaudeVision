@@ -285,6 +285,7 @@
     <a href="#start"><b>Start here</b><span>The one rule</span></a>
     <a href="#ninety"><b>90 seconds</b><span>Three questions, three places</span></a>
     <a href="#run"><b>Running a job</b><span>Units, drawings, go</span></a>
+    <a href="#overrides"><b>Telling it more</b><span>Materials, customer changes, brief</span></a>
     <a href="#tabs"><b>The five tabs</b><span>What lives where now</span></a>
     <a href="#estimate"><b>Estimate sheet</b><span>The workbook you edit</span></a>
     <a href="#explanation"><b>AI Explanation tab</b><span>The answers, decisions first</span></a>
@@ -401,6 +402,96 @@
     — so a drawing you took off the list cannot come back and be priced a second time. It also means
     the folder is a permanent record of exactly which drawings produced a given estimate, which is
     what you want when somebody asks about a number six weeks later.</p>
+  </div>
+
+  <h2 id="overrides">Telling the engine more than the drawings say</h2>
+  <p class="lead">Three optional inputs sit on the estimating page between the drawing list and
+  the run button. All three exist for the same reason: sometimes you know something the pack
+  does not say, and typing it here beats hand-editing the sheet afterwards — because what you
+  type travels with the run, lands on the book with your name on it, and shows up in the
+  provenance like any other piece of evidence. None of them is ever a price.</p>
+  <table>
+    <tr><th>Panel</th><th>What it is for</th><th>When</th></tr>
+    <tr><td class="k">Materials — confirm before the run</td>
+      <td>Press <b>Read materials from the drawings</b> and the engine lists what each part's
+      sheet and DXF name state — material, thickness, finish — with the questions the wording
+      raises. You answer from lists, put your name in <b>Confirmed by</b>, tick
+      <b>Use this confirmation</b>, and the answers become this job's answers file.
+      The <b>job default</b> fills only parts whose drawings state nothing; a part whose sheet
+      states a material keeps it unless you change that part's own row.</td>
+      <td>The pack's wording is ambiguous — "ZINTEC?", a DXF named one thing and a sheet
+      another — and you can settle it before the run instead of on the decisions list
+      after.</td></tr>
+    <tr><td class="k">Customer changes since the drawings</td>
+      <td>Paste the customer's e-mail and press <b>Read the changes from the e-mail</b>, or
+      <b>Add a change by hand</b> (a hand-typed row needs a reason — who asked, and how). Each
+      proposed change shows the drawn value, the new value and the e-mail's own words. Only the
+      rows you <b>tick</b> are costed, under the name in <b>Accepted by</b>. See the panel
+      below for exactly what it can and cannot change.</td>
+      <td>The customer asks for a different thickness, finish, size or quantity and there is
+      no time to revise the drawing pack.</td></tr>
+    <tr><td class="k">Enquiry brief</td>
+      <td>Free text put to the model as stated facts that outrank what a picture suggests:
+      overall sizes, material, construction, parts not visible. <b>LLM reads only</b> — on a
+      drawing-pack run the drawings are the facts and this box is not read. One option per
+      run: for "plywood <i>or</i> steel", run twice with each brief. Prices typed here are
+      ignored.</td>
+      <td>Pricing from a render, a concept PDF or a written enquiry rather than a measured
+      pack.</td></tr>
+    <tr><td class="k">Reference / standards tick</td>
+      <td>Tick any added file that states <b>requirements rather than the product</b> — a
+      design-standards manual, a test specification. Its words reach the model under their own
+      section; none of its illustrated examples can become a part on the bill. Applicable
+      requirements come back as named allowances to price separately. A run where <em>every</em>
+      file is ticked reference is refused — there would be no product to cost.</td>
+      <td>The pack includes a customer's standards manual or spec alongside the product
+      drawings.</td></tr>
+  </table>
+
+  <div class="panel">
+    <p style="margin:0 0 6px 0"><b>What a customer change actually overrides — and what it
+    cannot.</b></p>
+    <p style="margin:0">A ticked change outranks every reading from the drawings, including a
+    confirmed materials answer — it is the customer's instruction, dated after the pack. It can
+    change: <b>material, thickness, finish, quantity per assembly, overall size, blank length
+    and width, an operation taken off, make or buy, and the order quantity</b>. It matches
+    against <b>all parts the pack produces</b> — it is independent of the Materials panel, and
+    does not need a materials read first.</p>
+    <p style="margin:6px 0 0 0">The drawings are never altered. The book shows the drawn value
+    <em>beside</em> what was costed, with the e-mail's words or your reason, in a
+    "Changes the customer asked for since the drawings" block at the top of the job report —
+    marked <b>COSTED</b>, <b>already as drawn</b>, <b>NOT APPLIED</b> (with why) or
+    <b>declined by the estimator</b>. A request the engine cannot carry out — "make it look
+    more premium" — is never silently dropped: it becomes a question on the decisions list, so
+    the customer's ask is answered by a person, not lost.</p>
+    <p style="margin:6px 0 0 0"><span class="muted">The <b>Read the changes</b> and
+    <b>Read materials</b> buttons work only on the machine that runs estimates — the server
+    queues jobs but has no engine, so there it says so and you add changes by hand
+    instead.</span></p>
+  </div>
+
+  <div class="panel warn">
+    <p style="margin:0 0 6px 0"><b>New questions you may see on the book.</b> Recent checks
+    hold a doubtful figure for a person rather than letting it reach the sheet — so a few new
+    wordings appear on the decisions list:</p>
+    <p style="margin:0"><b>"Catalogue match held for review (£…)"</b> — a catalogue row matched
+    a bought-in line at a price above the plausibility ceiling. It is held, not charged, by
+    every pricing pass; the line is priced from the next source, or asked. The held figure is
+    a review trigger, never a cost.<br>
+    <b>A handed pair priced very differently</b> — a left and right hand of the same item
+    whose prices diverge by more than 3× are flagged: same spec and unit of sale should mean
+    similar money, so one of the two readings is probably wrong.<br>
+    <b>"Provisional — mirrored from its other hand"</b> — a handed part with no geometry of
+    its own borrows its mirror's provisional blank rather than going unpriced; the borrowing
+    is named on the line.<br>
+    <b>A part read larger than the assembly it sits in</b> — its size is replaced by a
+    labelled allowance from the assembly's own outline, flagged provisional, and asked.<br>
+    <b>"One code, two items"</b> — the same part code describing two incompatible things
+    (a stop lock and a pin, say) is not summed into one line; both stay separate and the clash
+    is asked.<br>
+    <b>A stated weight that disagrees with the blank</b> — the title-block weight checks the
+    blank: far too light refuses it, heavier than expected keeps it and asks. The weight is a
+    check on the reading, not a price — nested sheet steel is still charged by the nest.</p>
   </div>
 
     <h2 id="tabs">The workbook is five tabs — what lives where now</h2>
