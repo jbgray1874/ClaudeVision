@@ -61,6 +61,7 @@ REGION_SCALE = 2
 
 UNSORTED = "_Unsorted"
 LEDGER = ".splitscan-done.json"
+LOGS = "_logs"
 
 # ── THE FOLDERS COME FROM CONFIG, AND THERE IS NO GUESS BEHIND THEM ─────────────────
 #
@@ -94,6 +95,14 @@ def _configured(name: str) -> str:
 
 DEFAULT_SOURCE = _configured("SCAN_SOURCE_DIR")
 DEFAULT_OUT = _configured("SCAN_SPLIT_DIR")
+DEFAULT_FROM = _configured("SCAN_FROM")
+
+
+def from_cutoff(text: str) -> Optional[float]:
+    """`--from 2026-10-01` as a timestamp: local midnight at the start of that day."""
+    if not text:
+        return None
+    return datetime.strptime(text.strip(), "%Y-%m-%d").timestamp()
 
 
 def _where_settings_live() -> str:
@@ -349,6 +358,35 @@ def _ledger_key(pdf: Path, source_dir: Path) -> str:
         return pdf.name
 
 
+def _save_ledger(out_dir: Path, done: Dict[str, Any]) -> None:
+    """Written after EVERY scan, not once at the end: the task has a two-hour limit, and a
+    run stopped at 1h59 used to forget everything it had done and start again tomorrow."""
+    tmp = out_dir / (LEDGER + ".tmp")
+    tmp.write_text(json.dumps(done, indent=1), encoding="utf-8")
+    os.replace(tmp, out_dir / LEDGER)
+
+
+def _names_in(folder: Path) -> Optional[set]:
+    """Every file name in the output folder, lower-cased, from ONE listing - rather than a
+    round trip to the share for every note of every scan in scope. None if it can't be
+    listed, and the caller then asks file by file."""
+    try:
+        return {n.lower() for n in os.listdir(folder)}
+    except OSError:
+        return None
+
+
+def is_done(record: Any, mark: str, out_dir: Path, names: Optional[set] = None) -> bool:
+    """Split already, unchanged since, and every note it produced still on the share.
+    A scan whose last attempt FAILED is never done, however long ago that was."""
+    if not isinstance(record, dict) or record.get("mark") != mark or record.get("failed"):
+        return False
+    files = record.get("files") or []
+    if names is not None:
+        return all(f.lower() in names for f in files)
+    return all((out_dir / f).exists() for f in files)
+
+
 def _ledger(out_dir: Path) -> Dict[str, Any]:
     try:
         data = json.loads((out_dir / LEDGER).read_text(encoding="utf-8"))
@@ -509,11 +547,26 @@ def scans_to_read(source_dir: Path, out_dir: Path, *, since_days: int = 0,
     return recent(sorted(out, key=lambda p: p.name.lower()), since_days=since_days)
 
 
-def recent(pdfs: List[Path], *, since_days: int = 0) -> List[Path]:
-    """The scans modified inside the window; every one of them when there is no window."""
-    if not since_days or since_days <= 0:
+def recent(pdfs: List[Path], *, since_days: int = 0,
+           from_ts: Optional[float] = None) -> List[Path]:
+    """The scans in scope: modified on or after the start date when there is one, else
+    inside the rolling window, else every one of them.
+
+    ── A ROLLING WINDOW LOSES SCANS; A START DATE DOES NOT ─────────────────────────
+
+    BARDON DELIVERY NOTES 7-10-2026 was saved at 07:18 on a Thursday and never split.
+    The task ran `--since 1`, a window of 24 hours counted back from WHEN IT RAN, on a
+    laptop where it runs at logon - and Friday's run started after 07:18, so the file was
+    already too old for it and had been too new for Thursday's. Nothing failed and
+    nothing was said. With a start date, a scan stays in scope until the ledger records it
+    done, however late, seldom or interrupted the runs are.
+    """
+    if from_ts is not None:
+        cutoff = from_ts
+    elif since_days and since_days > 0:
+        cutoff = time.time() - (since_days * 86400)
+    else:
         return list(pdfs)
-    cutoff = time.time() - (since_days * 86400)
     kept = []
     for pdf in pdfs:
         try:
@@ -553,7 +606,8 @@ def prepare_out(out_dir: Path) -> None:
 
 def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         force: bool = False, since_days: int = 0, recurse: bool = False,
-        pdfs: Optional[List[Path]] = None, progress=None) -> Dict[str, Any]:
+        pdfs: Optional[List[Path]] = None, progress=None,
+        from_ts: Optional[float] = None) -> Dict[str, Any]:
     """One day's run over a folder of scans.
 
     `pdfs` is the listing when the caller already has one — the front door lists the folder
@@ -567,11 +621,19 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
     """
     prepare_out(out_dir)
     done = _ledger(out_dir)
+    names = _names_in(out_dir)
     results, skipped = [], []
     if pdfs is None:
-        pdfs = scans_to_read(source_dir, out_dir, since_days=since_days, recurse=recurse)
+        pdfs = recent(scans_to_read(source_dir, out_dir, recurse=recurse),
+                      since_days=since_days, from_ts=from_ts)
     for n, pdf in enumerate(pdfs, start=1):
-        mark = _fingerprint(pdf)
+        # A scan caught half-written by the scanner is no loss: when it finishes, its size
+        # and time change, so does this mark, and the next run reads it again in full.
+        try:
+            mark = _fingerprint(pdf)
+        except OSError as exc:
+            results.append({"source": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
+            continue
         # Keyed on the path within the scan folder, not the bare name: with --recurse two
         # date folders can each hold a "scan001.pdf" and one would otherwise mask the other.
         # Old ledgers are keyed on the name alone, so that is still honoured.
@@ -583,8 +645,7 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         # whose fingerprint matches is skipped — but ONLY while every note it produced is
         # still on the share. Delete one and the next run puts it back, because the claim
         # "I did this already" is verified against the folder rather than believed.
-        if (not force and isinstance(record, dict) and record.get("mark") == mark
-                and all((out_dir / name).exists() for name in record.get("files") or [])):
+        if not force and is_done(record, mark, out_dir, names):
             skipped.append(pdf.name)
             continue
         if progress:
@@ -600,13 +661,30 @@ def run(source_dir: Path, out_dir: Path, *, dry_run: bool = False,
         except Exception as exc:                                     # noqa: BLE001
             # ONE BAD SCAN DOES NOT COST THE DAY. A corrupt or password-protected PDF is
             # reported and the rest of the folder is still split.
-            results.append({"source": pdf.name, "error": f"{type(exc).__name__}: {exc}"})
+            #
+            # AND IT IS NOT FORGOTTEN. It is recorded as failing - never as done - so every
+            # run tries it again and says so, until it splits or somebody deals with it.
+            failed = (record.get("failed", 0) if isinstance(record, dict)
+                      and record.get("mark") == mark else 0) + 1
+            first = (record.get("first_failed") if isinstance(record, dict)
+                     and record.get("failed") else None) or datetime.now().isoformat(timespec="minutes")
+            error = f"{type(exc).__name__}: {exc}"
+            results.append({"source": pdf.name, "error": error, "failed": failed,
+                            "first_failed": first})
+            if not dry_run:
+                done[key] = {"mark": mark, "failed": failed, "error": error[:300],
+                             "first_failed": first}
+                _save_ledger(out_dir, done)
             continue
         if not dry_run:
             done[key] = {"mark": mark,
-                         "files": [n["file"] for n in result["notes"] if n["file"]]}
+                         "files": [n["file"] for n in result["notes"] if n["file"]],
+                         "when": datetime.now().isoformat(timespec="minutes")}
+            _save_ledger(out_dir, done)
+            if names is not None:
+                names.update(n["file"].lower() for n in result["notes"] if n["file"])
     if not dry_run:
-        (out_dir / LEDGER).write_text(json.dumps(done, indent=1), encoding="utf-8")
+        _save_ledger(out_dir, done)
     return {"when": datetime.now().isoformat(timespec="seconds"),
             "source": str(source_dir), "out": str(out_dir),
             "results": results, "skipped": skipped}
@@ -637,7 +715,61 @@ def _how_to_find_the_share(path: Path) -> None:
     print("     script, so an empty list there does not mean the drive is not mapped.")
 
 
+class _Tee(io.TextIOBase):
+    """Everything printed goes to the screen (or the task's nowhere) AND into the day's log."""
+    def __init__(self, *streams):
+        self.streams = streams
+
+    def write(self, text):
+        for s in self.streams:
+            try:
+                s.write(text)
+            except Exception:                                      # noqa: BLE001
+                pass
+        return len(text)
+
+    def flush(self):
+        for s in self.streams:
+            try:
+                s.flush()
+            except Exception:                                      # noqa: BLE001
+                pass
+
+
+def _write_log(out: Optional[str], text: str, code: int) -> None:
+    """THE DAILY RUN USED TO SAY NOTHING ANYWHERE. A scheduled task's output goes nowhere,
+    so "why was this scan not split?" had no answer short of re-running it. Each run now
+    appends what it said to SplitScan\\_logs\\splitscan-YYYY-MM-DD.log."""
+    if not out or not Path(out).is_dir():
+        return
+    try:
+        logs = Path(out) / LOGS
+        logs.mkdir(exist_ok=True)
+        stamp = datetime.now()
+        with open(logs / f"splitscan-{stamp:%Y-%m-%d}.log", "a", encoding="utf-8") as f:
+            f.write(f"==== {stamp:%Y-%m-%d %H:%M:%S}  exit {code}  {' '.join(sys.argv[1:])}\n")
+            f.write(text if text.endswith("\n") else text + "\n")
+    except OSError as exc:
+        print(f"  (could not write the log: {exc})", file=sys.stderr)
+
+
 def main() -> int:
+    """Runs the job and keeps a copy of everything it says in the day's log."""
+    peek = argparse.ArgumentParser(add_help=False)
+    peek.add_argument("--out", default=DEFAULT_OUT)
+    known, _ = peek.parse_known_args()
+    captured, real = io.StringIO(), sys.stdout
+    sys.stdout = _Tee(real, captured)
+    code = 2
+    try:
+        code = _main()
+        return code
+    finally:
+        sys.stdout = real
+        _write_log(known.out, captured.getvalue(), code)
+
+
+def _main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--source", default=DEFAULT_SOURCE,
                     help="Folder the scanner writes into")
@@ -647,6 +779,10 @@ def main() -> int:
                          "day's work is a handful of files.")
     ap.add_argument("--out", default=DEFAULT_OUT,
                     help="Folder to write one PDF per delivery note into")
+    ap.add_argument("--from", dest="from_date", default=DEFAULT_FROM, metavar="YYYY-MM-DD",
+                    help="Split every scan modified on or after this date that is not "
+                         "split yet, however late the run (SDI_SCAN_FROM). Takes the place "
+                         "of --since: nothing in scope can age out of it.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Read and report, write nothing")
     ap.add_argument("--force", action="store_true",
@@ -654,6 +790,11 @@ def main() -> int:
     ap.add_argument("--recurse", action="store_true",
                     help="Also read scans in subfolders of the source folder")
     a = ap.parse_args()
+    try:
+        from_ts = from_cutoff(a.from_date)
+    except ValueError:
+        print(f"  !! --from must be a date written YYYY-MM-DD, not {a.from_date!r}")
+        return 2
 
     # ── NOBODY HAS SAID WHERE THE SCANS ARE ─────────────────────────────────────────
     #
@@ -721,7 +862,7 @@ def main() -> int:
     try:
         # Listed ONCE. The window is a filter on the listing, not a second listing.
         every = scans_to_read(source, out, recurse=a.recurse)
-        chosen = recent(every, since_days=a.since)
+        chosen = recent(every, since_days=a.since, from_ts=from_ts)
     except RuntimeError as exc:
         # The folder is there and cannot be listed — a permissions problem, or a share that
         # answers Test-Path and refuses enumeration. Said out loud, because the alternative
@@ -729,9 +870,23 @@ def main() -> int:
         print(f"  !! {exc}")
         return 2
 
-    print(f"  {len(every)} PDF(s) in the folder"
-          + (f", {len(chosen)} modified in the last {a.since} day(s)" if a.since else "")
-          + (" — nothing to do" if not chosen else ""))
+    # How many of those are already split, from the ledger and ONE listing of the output
+    # folder - so "nothing new" and "nothing in scope" are different sentences.
+    ledger = _ledger(out) if out.is_dir() else {}
+    names = _names_in(out) if out.is_dir() else None
+    already = 0
+    for pdf in chosen:
+        try:
+            key = _ledger_key(pdf, source)
+            if is_done(ledger.get(key) or ledger.get(pdf.name), _fingerprint(pdf), out, names):
+                already += 1
+        except OSError:
+            pass
+    scope = (f", {len(chosen)} from {a.from_date} on" if from_ts is not None else
+             f", {len(chosen)} modified in the last {a.since} day(s)" if a.since else "")
+    print(f"  {len(every)} PDF(s) in the folder" + scope
+          + (" — nothing to do" if not chosen else
+             f": {already} already split, {len(chosen) - already} to read"))
     if every and not chosen and a.since:
         print(f"     (run without --since, or with a larger number, to reach the rest)")
 
@@ -785,7 +940,7 @@ def main() -> int:
 
     try:
         report = run(source, out, dry_run=a.dry_run, force=a.force, since_days=a.since,
-                     recurse=a.recurse, pdfs=chosen,
+                     recurse=a.recurse, pdfs=chosen, from_ts=from_ts,
                      progress=lambda text: print(text, flush=True))
     except NoOCR as exc:
         # Reachable if it vanishes mid-run (an update, a share going away). Once, not 947
@@ -809,6 +964,13 @@ def main() -> int:
             print(f"  {UNSORTED}: {result['source']} page {page} — not a delivery note")
     if report["skipped"]:
         print(f"  {len(report['skipped'])} scan(s) already done, skipped")
+    failing = [r for r in report["results"] if r.get("error")]
+    if failing:
+        print(f"  !! NEEDS ATTENTION: {len(failing)} scan(s) could not be split. They stay in "
+              "scope and are tried again every run until they split:")
+        for r in failing:
+            since = f", failing since {r['first_failed']}" if r.get("failed", 0) > 1 else ""
+            print(f"     {r['source']} (attempt {r.get('failed', 1)}{since}): {r['error']}")
     print(f"{notes} delivery note(s), {unsorted} page(s) to {UNSORTED}"
           + (" [dry run, nothing written]" if a.dry_run else ""))
     return 0

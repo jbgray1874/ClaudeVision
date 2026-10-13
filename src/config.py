@@ -1559,6 +1559,10 @@ MANUAL_OVERRIDE_XLSX_DIR = os.getenv("SDI_OVERRIDE_XLSX_DIR", MANUAL_OVERRIDE_QU
 # session again -- which is why `K:` is in Explorer and absent from an Administrator prompt.
 SCAN_SOURCE_DIR = os.getenv("SDI_SCAN_SOURCE_DIR", "").strip()
 SCAN_SPLIT_DIR = os.getenv("SDI_SCAN_SPLIT_DIR", "").strip()
+# The date the splitter is responsible from (YYYY-MM-DD). Every scan modified on or after it
+# is split once, however late or seldom the job runs; the ledger says which are done. Unset
+# keeps the old behaviour (a --since window, or the whole folder).
+SCAN_FROM = os.getenv("SDI_SCAN_FROM", "").strip()
 
 # Where tesseract.exe is, when it is not on PATH and not in the usual install folders. Leave
 # unset to auto-detect — PATH first, then C:\Program Files\Tesseract-OCR and the rest, the

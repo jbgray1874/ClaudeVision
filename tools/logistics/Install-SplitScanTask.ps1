@@ -44,6 +44,19 @@
     And not 0 (everything): the folder holds 947 scans going back months, and the first night
     would OCR the lot. Filing the back catalogue is a decision, taken by hand, once.
 
+.PARAMETER From
+    Split every scan modified on or after this date (YYYY-MM-DD) that is not split yet,
+    however late, seldom or interrupted the runs are. Replaces -SinceDays when given.
+
+    THIS IS THE ONE THAT CANNOT MISS A SCAN. A rolling window is counted back from when the
+    task fires, and on a machine where it fires at logon that moves: BARDON DELIVERY NOTES
+    7-10-2026 (saved 07:18 Thursday) was too new for Thursday's run and, because Friday's
+    started after 07:18, already too old for Friday's 24-hour window. With a start date a
+    scan stays in scope until the ledger records it split.
+
+    Better still, put it in .env as SDI_SCAN_FROM=YYYY-MM-DD: the splitter then uses it
+    whatever the task passes, so an old task with --since 1 is covered without reinstalling.
+
 .PARAMETER At
     Time of day, 24h. Defaults to 06:30 — before the office opens, after the night's scanning.
 
@@ -79,6 +92,7 @@ param(
     [string]$Source = '',
     [string]$Out = '',
     [int]$SinceDays = 7,
+    [string]$From = '',
     [string]$At = '06:30',
     [string]$RunAsUser = "$env:USERDOMAIN\$env:USERNAME",
     [switch]$RunWhenLoggedOff,
@@ -168,7 +182,13 @@ Write-Host "python    : $python"
 Write-Host "tesseract : $tess"
 Write-Host "source    : $(if ($Source) { $Source } else { 'from SDI_SCAN_SOURCE_DIR in .env' })"
 Write-Host "out       : $(if ($Out) { $Out } else { 'from SDI_SCAN_SPLIT_DIR in .env' })"
-Write-Host "window    : scans modified in the last $SinceDays day(s); older ones are left alone"
+if ($From) {
+    if ($From -notmatch '^\d{4}-\d{2}-\d{2}$') { throw "-From must be a date written YYYY-MM-DD, not '$From'" }
+    Write-Host "scope     : every scan modified on or after $From that is not split yet"
+} else {
+    Write-Host "window    : scans modified in the last $SinceDays day(s); older ones are left alone"
+    Write-Host "            (unless SDI_SCAN_FROM is set in .env, which then decides instead)"
+}
 Write-Host "runs at   : $At daily, as $RunAsUser"
 if ($RunWhenLoggedOff) {
     Write-Host "logon     : NOT required -- the password is stored with the task"
@@ -180,7 +200,8 @@ if ($RunWhenLoggedOff) {
 $arguments = '"{0}"' -f $script
 if ($Source) { $arguments += ' --source "{0}"' -f $Source }
 if ($Out) { $arguments += ' --out "{0}"' -f $Out }
-if ($SinceDays -gt 0) { $arguments += ' --since {0}' -f $SinceDays }
+if ($From) { $arguments += ' --from {0}' -f $From }
+elseif ($SinceDays -gt 0) { $arguments += ' --since {0}' -f $SinceDays }
 $action    = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $here
 $trigger   = New-ScheduledTaskTrigger -Daily -At $At
 # StartWhenAvailable so a machine that was off at 06:30 still does the day's scans when it
