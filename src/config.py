@@ -827,7 +827,15 @@ CONCEPT_FLANGE_ALLOWANCE_MM = 25
 # through the mass-implied allowance instead).
 PROVISIONAL_BLANK_FROM_SHEET = {
     "flange_allowance_mm": 25,
-    "weight_ratio_bounds": (0.6, 1.6),
+    # THE WEIGHT CHECKS, IT DOES NOT DECIDE (D-508). A blank lighter than this fraction of the
+    # finished part's stated weight is impossible and refused; one heavier than the upper
+    # figure is kept and the gauge/blank asked (cut-outs make a blank legitimately heavier).
+    "min_blank_to_part_weight_ratio": 0.9,
+    "weight_question_above_ratio": 1.6,
+    # A part read larger than the assembly it sits in (D-508): beyond the assembly's sheet
+    # envelope developed for the part's own folds at the flange allowance, by more than this
+    # fraction, it is asked and costed on that developed envelope, labelled.
+    "assembly_envelope_tolerance": 0.10,
     "density_kg_m3": {"STEEL": 7850, "MILD": 7850, "STAINLESS": 8000, "GALV": 7850,
                       "ZINTEC": 7850, "CR4": 7850, "ALUMIN": 2700, "ACRYLIC": 1190,
                       "PERSPEX": 1190, "POLYCARBONATE": 1200},
@@ -3179,6 +3187,13 @@ def hourly_rate(op: str):
 # Max unit cost applied silently to auto-detected bought-in lines (fuzzy catalogue match).
 # Above this → reject match and flag for manual pricing (prevents "BRACKET" -> £13k hits).
 BOUGHT_IN_MAX_PLAUSIBLE_GBP = 750.0
+# The ceiling is a REVIEW TRIGGER, not a verdict (D-508): a held figure is never charged by any
+# later pricing pass — the line is priced from the next source, or asked — and the question
+# names the row and the figure so a person can confirm it.
+# Two hands of one item priced more than this factor apart are asked about (both lines, both
+# figures, both sources). Never aligned automatically: the hands may differ in specification
+# or unit of sale.
+HANDED_PRICE_DIVERGENCE_FACTOR = 3.0
 
 # Bench fitting added to a bought-in's buy price, in minutes at the handling rate. 0 turns it
 # off everywhere. It applies to every bought-in charged at its bought-in price EXCEPT where the

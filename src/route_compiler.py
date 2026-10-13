@@ -1244,8 +1244,13 @@ def _bom_stated_edges(
     rejected: Optional[List[str]] = None,
     allow_placeholder_mint: bool = False,
     several_items: Optional[Set[tuple]] = None,
+    incompatible: Optional[List[Dict[str, Any]]] = None,
 ) -> List[tuple]:
     """(child, parent, qty) for every BOM row that names an owner we already know.
+
+    `incompatible`, when given, receives each code that one table lists at several item
+    numbers for things its own descriptions say are DIFFERENT (D-508) — not summed; a row
+    whose words name another part of the job is linked to that part instead.
 
     `several_items`, when given, receives each (child, parent) whose count was summed from
     more than one item number of the table — a count no code-keyed reader can have.
@@ -1378,26 +1383,112 @@ def _bom_stated_edges(
         if not child or not parent or child == parent:
             continue
         edges.append((child, parent, number(row.get("quantity") or row.get("qty"), 1.0) or 1.0,
-                      str(row.get("bom_item_no") or row.get("item_number") or "").strip()))
+                      str(row.get("bom_item_no") or row.get("item_number") or "").strip(),
+                      str(row.get("description") or "").strip()))
     # ONE CODE AT SEVERAL ITEM NUMBERS OF ONE TABLE IS SEVERAL LINES (D-335). The caller
     # writes children[parent][child] = qty, so a second row overwrote the first: 12173's
     # trough lists its handed SIDE PANEL at items 1 and 3 and would have had one. Different
     # item numbers add; the same item number, or none, is the same line and does not.
+    #
+    # BUT NOT TWO DIFFERENT THINGS WEARING ONE CODE (D-508). 12665-01-GA lists 3987-GA at two
+    # item numbers — HOOK SECURITY STOP LOCK - 6mm x9 and POWERTOOL PIN x10 — and the sum
+    # costed nineteen "POWERTOOL PIN"s while the job's own P/P-HOOK-SECURITY-STOP-LOCK hung
+    # "not linked". A handed pair (SIDE PANEL LH / RH) or a misspelling shares its words and
+    # still adds; rows whose descriptions share none are not summed. A row whose words name
+    # another part of the job is linked to that part; any other is reported for a person.
     combined: Dict[tuple, List[Any]] = {}
-    for child, parent, qty, item in edges:
-        held = combined.get((child, parent))
-        if held is None:
-            combined[(child, parent)] = [qty, {item} if item else set()]
-        elif item and held[1] and item not in held[1]:
-            held[0] += qty
-            held[1].add(item)
+
+    def _add(_key: tuple, _qty: float, _item: str, _desc: str) -> None:
+        _held = combined.get(_key)
+        if _held is None:
+            combined[_key] = [_qty, {_item} if _item else set(), _desc]
+        elif _item and _held[1] and _item not in _held[1]:
+            _held[0] += _qty
+            _held[1].add(_item)
         else:
-            held[0] = qty
-            if item:
-                held[1].add(item)
+            _held[0] = _qty
+            if _item:
+                _held[1].add(_item)
+
+    for child, parent, qty, item, desc in edges:
+        held = combined.get((child, parent))
+        if (held is not None and item and held[1] and item not in held[1]
+                and desc and held[2] and not same_item_described(held[2], desc)):
+            # EITHER ROW MAY BE THE ONE WEARING ANOTHER PART'S CODE: the table's order says
+            # nothing about which. The row whose words spell another known part goes there;
+            # the code stays with the other.
+            target = relink_by_words(desc, known, exclude=(child, parent))
+            kept_target = "" if target else relink_by_words(held[2], known,
+                                                            exclude=(child, parent))
+            if kept_target:
+                _moved_qty, _moved_items, _moved_desc = combined.pop((child, parent))
+                for _mi in sorted(_moved_items) or [""]:
+                    _add((kept_target, parent), _moved_qty, _mi, _moved_desc)
+                    _moved_qty = 0.0                     # the count moves once, not per item
+                _add((child, parent), qty, item, desc)
+                if incompatible is not None:
+                    incompatible.append({"code": child, "parent": parent, "kept": desc,
+                                         "other": _moved_desc, "other_qty": held[0],
+                                         "other_item": ",".join(sorted(_moved_items)),
+                                         "relinked_to": kept_target})
+                continue
+            if incompatible is not None:
+                incompatible.append({"code": child, "parent": parent, "kept": held[2],
+                                     "other": desc, "other_qty": qty, "other_item": item,
+                                     "relinked_to": target or ""})
+            if target:
+                _add((target, parent), qty, item, desc)
+            continue
+        _add((child, parent), qty, item, desc)
     if several_items is not None:
-        several_items.update(k for k, (_q, _items) in combined.items() if len(_items) > 1)
-    return [(c, p, q) for (c, p), (q, _items) in combined.items()]
+        several_items.update(k for k, (_q, _items, _d) in combined.items() if len(_items) > 1)
+    return [(c, p, q) for (c, p), (q, _items, _d) in combined.items()]
+
+
+# Words that say WHICH HAND or HOW MANY, not WHAT — two rows differing only in these are one
+# item described twice.
+_NOT_ITEM_WORDS = frozenset({
+    "LH", "RH", "LEFT", "RIGHT", "HAND", "HANDED", "MIRROR", "MIRRORED", "MIR", "OPPOSITE",
+    "MM", "OFF", "QTY", "PCS", "PC", "EACH", "AND", "THE", "FOR", "WITH", "OF", "TO",
+})
+
+
+def _item_words(text: Any) -> Set[str]:
+    return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
+            if w not in _NOT_ITEM_WORDS}
+
+
+def same_item_described(a: Any, b: Any) -> bool:
+    """Do two parts-list descriptions name ONE item? (D-508)
+
+    Yes where either says nothing comparable, or they share at least half the words of the
+    shorter — a handed pair and a misspelling both pass. No where they share no word at all:
+    HOOK SECURITY STOP LOCK and POWERTOOL PIN are two purchases whatever code they carry."""
+    wa, wb = _item_words(a), _item_words(b)
+    if not wa or not wb:
+        return True
+    shared = wa & wb
+    return bool(shared) and len(shared) / min(len(wa), len(wb)) >= 0.5
+
+
+def relink_by_words(description: Any, known: Any, exclude: Any = ()) -> str:
+    """The ONE known identity whose own code spells this description's words, or "" (D-508).
+
+    P/P-HOOK-SECURITY-STOP-LOCK spells HOOK SECURITY STOP LOCK; a row reading those words is
+    that part. At least two of the row's words, and most of them, must be in the code; two
+    candidates is no answer."""
+    words = _item_words(description)
+    if len(words) < 2:
+        return ""
+    hits = []
+    for code in known or ():
+        if code in exclude:
+            continue
+        cw = set(re.findall(r"[A-Z]{2,}", str(code).upper()))
+        shared = words & cw
+        if len(shared) >= 2 and len(shared) / len(words) >= 0.6:
+            hits.append(code)
+    return hits[0] if len(hits) == 1 else ""
 
 
 def _pdf_primary_stated_roots(
@@ -1855,10 +1946,25 @@ def build_part_graph(
     _claimed_before_bom = set(parents)
     _rejected_parents: List[str] = []
     _several_items: Set[tuple] = set()
+    _code_clashes: List[Dict[str, Any]] = []
     _bom_edges = _bom_stated_edges(
         bom_rows, aliases, set(raw) | set(extracted) | set(children) | _drawings,
         _rejected_parents, allow_placeholder_mint=(pack_mode == "pdf_primary"),
-        several_items=_several_items)
+        several_items=_several_items, incompatible=_code_clashes)
+    _clash_issues: List[Dict[str, Any]] = []
+    for _cl in _code_clashes:
+        print(f"   [bom] {_cl['code']} is listed under {_cl['parent']} for two different "
+              f"things — '{_cl['kept']}' and '{_cl['other']}' x{_cl['other_qty']:g} — not "
+              f"summed"
+              + (f"; the second row's words name {_cl['relinked_to']}, so it is linked there"
+                 if _cl.get("relinked_to") else "; the second is asked"), flush=True)
+        _clash_issues.append({
+            "code": "one_code_two_items", "severity": "review",
+            "part_code": _cl["code"], "parent": _cl["parent"], "kept": _cl["kept"],
+            "other": _cl["other"], "other_qty": _cl["other_qty"],
+            "relinked_to": _cl.get("relinked_to") or "",
+            "identities": [_cl["code"]] + ([_cl["relinked_to"]]
+                                           if _cl.get("relinked_to") else [])})
     if _rejected_parents:
         _unique = sorted({r for r in _rejected_parents if r})
         print(f"   [bom] {len(_rejected_parents)} row(s) name an owner this job does not "
@@ -3257,7 +3363,8 @@ def build_part_graph(
 
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
                     + list(_version_issues)
-                    + list(_product_issues) + list(_family_issues))
+                    + list(_product_issues) + list(_family_issues)
+                    + list(_clash_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -3442,11 +3549,43 @@ def apply_canonical_evidence_to_parts(
                     str(_iss.get("assembly") or ""),
                     float((_iss.get("counts") or {}).get(_m) or 1.0),
                     str((_iss.get("reasons") or {}).get(_m) or ""))
+    # ONE CODE, TWO ITEMS (D-508): said on both lines, and asked where nothing resolved it.
+    _clash_by: Dict[str, List[Mapping[str, Any]]] = {}
+    for _iss in graph.get("issues") or []:
+        if isinstance(_iss, Mapping) and _iss.get("code") == "one_code_two_items":
+            for _m in _iss.get("identities") or []:
+                _clash_by.setdefault(clean_part_number(_m), []).append(_iss)
     for part in parts or []:
         if not isinstance(part, dict):
             continue
         source_id = clean_part_number(part.get("part_number") or part.get("item_number"))
         identity = aliases.get(source_id, source_id)
+        for _cl in _clash_by.get(identity) or []:
+            _target = str(_cl.get("relinked_to") or "")
+            if identity == clean_part_number(_target):
+                _flag = (f"{identity} is linked under {_cl.get('parent')} x"
+                         f"{float(_cl.get('other_qty') or 1):g}: that table lists "
+                         f"'{_cl.get('other')}' under the code {_cl.get('part_code')}, which "
+                         f"it also uses for '{_cl.get('kept')}' — the row's words are this "
+                         f"part's own code; confirm against the parts list")
+                if _flag not in (part.get("review_flags") or []):
+                    part.setdefault("review_flags", []).append(_flag)
+                continue
+            _issue = (f"{_cl.get('part_code')} is listed under {_cl.get('parent')} for two "
+                      f"different things — '{_cl.get('kept')}' and '{_cl.get('other')}' x"
+                      f"{float(_cl.get('other_qty') or 1):g}")
+            try:
+                from source_precedence import raise_manufacturing_question as _ask_clash
+                _ask_clash(part, _issue,
+                           (f"costed as '{_cl.get('kept')}' only; the other row is linked to "
+                            f"{_target}" if _target else
+                            f"costed as '{_cl.get('kept')}' only; the other row is NOT "
+                            f"summed into it and carries no price yet"),
+                           "give the second item its own code (or confirm it is the same "
+                           "item) so each is priced at its own count",
+                           "route_compiler.one_code_two_items")
+            except Exception:                                        # noqa: BLE001
+                pass
         if identity in _adopted_by:
             _asm, _cnt, _why = _adopted_by[identity]
             _flag = (f"{identity} is costed under {_asm}, whose drawing is not in the pack: it "
