@@ -281,6 +281,11 @@ SOURCE_RANK: Dict[str, int] = {
     "llm_full_extract": 40,
     "inference": 20,
     "geometry_inference": 20,
+    # THE SHEET'S OWN LARGEST PRINTED DIMENSIONS, DEVELOPED FOR ITS FOLDS (D-505). Read off the
+    # part's own detail sheet when it prints no usable overall pair — above a category default
+    # (which knows nothing about this part) and below the printed overall (which names the
+    # overall). A provisional blank, labelled as one wherever it is shown.
+    "printed_extents_provisional": 30,
     # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
     # looks at a customer's visual — a photoreal render with no dimensions, no title block,
     # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
@@ -512,6 +517,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "llm_full_job":           "Grok (xAI)",
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
+    "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
     #

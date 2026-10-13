@@ -427,12 +427,21 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     if skip_rollup_parents:
         _pn = str(part.get("part_number") or "").upper()
         _desc = str(part.get("description") or "").upper()
+        # A "-GA" CODE THAT IS A LINE WE BUY IS NOT A ROLL-UP PARENT (D-505). 12665-01-GA
+        # lists "9370-66-GA 200mm Euro Hook" x9 — another job's drawing, no members in this
+        # pack, carried as a bought line — and the market was never asked because of the
+        # code's last two letters: nine hooks at £0. The code still refuses where the line has
+        # structure or an assembly flag; it no longer refuses a purchase on its spelling alone.
+        _roles = {str(r).strip().lower() for r in (part.get("page_roles") or [])}
+        _bought_line = (("bought_in" in _roles or bool(part.get("is_bought_in")))
+                        and not _structural
+                        and not (part.get("is_assembly_parent") or part.get("is_sub_assembly")))
         _is_parent = (
             (structure_decides
              and (bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))))
             or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
             or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
-            or _pn.endswith("-GA") or "-GA-" in _pn
+            or ((_pn.endswith("-GA") or "-GA-" in _pn) and not _bought_line)
             or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
         )
         if _is_parent:

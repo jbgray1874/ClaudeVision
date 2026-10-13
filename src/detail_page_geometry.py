@@ -30,6 +30,7 @@ does not.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 # The rank blank_from_drawing_overalls already returns, registered in source_precedence at 65:
@@ -150,6 +151,157 @@ def withdraw_stale_envelope_flags(parts: Any) -> int:
     return cleared
 
 
+# ── WHEN THE SHEET PRINTS NO OVERALL PAIR (D-505) ──────────────────────────────────────
+#
+# 12665's back panel, side wing, shelf pan and lock plate each have their own detail sheet,
+# and every one was refused a blank: the dimension reader keeps only figures printed with
+# "mm" after them, a SolidWorks sheet prints bare numbers, so one sheet "did not print both
+# an overall length and an overall width" and another offered a slot's 8 mm as the overall.
+# The parts were then costed on a category default (a "panel" is 400 x 300 whatever it is),
+# their coat on almost nothing. The sheet DID print the part's size — as dimension figures on
+# its views. The two largest figures printed in the drawing area (title block and revision
+# box left out) are its formed envelope; folded, it is developed one flange per fold at the
+# house flange allowance, as a concept blank is (D-499). A PROVISIONAL blank, labelled with
+# its working and put on the estimator's list — better than a default that knows nothing
+# about the part, and never ranked above a printed overall, a flat or a model.
+PROVISIONAL_SOURCE = "printed_extents_provisional"
+_NUMBER_WORD = re.compile(r"\d{2,4}(?:\.\d+)?")
+
+
+def _local_page_number(page: Mapping[str, Any]) -> Optional[int]:
+    for key in ("source_page_number", "pdf_page_number", "page_number"):
+        try:
+            if page.get(key) is not None:
+                return int(page.get(key))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def printed_dimension_values(page: Mapping[str, Any]) -> List[float]:
+    """The bare dimension figures printed in a sheet's drawing area, read with PyMuPDF (which
+    keeps rotated text). The title block and revision zones are left out — that is where a
+    date, a sheet size or a weight sits. Figures from 10 mm to 4 m only. [] when the page's
+    own PDF is not at hand."""
+    path = str(page.get("source_pdf_path") or "")
+    local = _local_page_number(page)
+    if not path or not local:
+        return []
+    try:
+        import fitz                                                  # noqa: WPS433
+        doc = fitz.open(path)
+    except Exception:                                                # noqa: BLE001
+        return []
+    try:
+        if not 0 < local <= doc.page_count:
+            return []
+        pg = doc.load_page(local - 1)
+        width, height = float(pg.rect.width), float(pg.rect.height)
+        words = pg.get_text("words") or []
+    except Exception:                                                # noqa: BLE001
+        return []
+    finally:
+        try:
+            doc.close()
+        except Exception:                                            # noqa: BLE001
+            pass
+    try:
+        from layout_zones import zone_boxes
+        zones = zone_boxes(width, height)
+        skip = [zones["title_block"], zones["revision"]]
+    except Exception:                                                # noqa: BLE001
+        skip = [(width * 0.58, height * 0.72, width, height)]
+    out: List[float] = []
+    for w in words:
+        if len(w) < 5:
+            continue
+        x0, y0, x1, y1, text = float(w[0]), float(w[1]), float(w[2]), float(w[3]), str(w[4])
+        if not _NUMBER_WORD.fullmatch(text.strip()):
+            continue
+        if any(x1 >= b[0] and x0 <= b[2] and y1 >= b[1] and y0 <= b[3] for b in skip):
+            continue
+        value = float(text)
+        if 10.0 <= value <= 4000.0:
+            out.append(value)
+    return out
+
+
+def _fold_count(part: Mapping[str, Any]) -> int:
+    try:
+        from fold_count import press_brake_folds
+        return int(press_brake_folds(dict(part)).get("count") or 0)
+    except Exception:                                                # noqa: BLE001
+        return 0
+
+
+def provisional_blank_from_sheets(part: Mapping[str, Any],
+                                  sheets: Sequence[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """{length, width, formed, folds, flange_mm, pages, working} — or None where the sheets
+    print fewer than two figures, or the result is not a size anything is cut to."""
+    values: List[float] = []
+    for sheet in sheets:
+        values.extend(printed_dimension_values(sheet))
+    distinct = sorted({round(v, 1) for v in values}, reverse=True)
+    if len(distinct) < 2:
+        return None
+    formed_l, formed_w = distinct[0], distinct[1]
+    folds = _fold_count(part) if _is_folded(part) or _fold_count(part) else 0
+    if _is_folded(part) and not folds:
+        folds = 2
+    flange = 0.0
+    length, width = formed_l, formed_w
+    if folds:
+        try:
+            from concept_scan import _develop, _flange_allowance_mm
+            flange = float(_flange_allowance_mm())
+            length, width, _added = _develop(formed_l, formed_w, folds, flange)
+        except Exception:                                            # noqa: BLE001
+            return None
+    try:
+        from blank_credibility import fits_a_stock_sheet, plausible_as_a_sheet_part
+        if not plausible_as_a_sheet_part(length, width):
+            return None
+        if fits_a_stock_sheet(length, width, part.get("normalized_material")) is False:
+            return None
+    except Exception:                                                # noqa: BLE001
+        pass
+    pages = [p.get("page_number") for p in sheets]
+    working = (f"formed envelope {formed_l:g} x {formed_w:g} mm — the two largest dimensions "
+               f"printed on its own sheet (page {', '.join(str(p) for p in pages)})"
+               + (f", developed for {folds} fold(s) at the house flange allowance of "
+                  f"{flange:g} mm (config CONCEPT_FLANGE_ALLOWANCE_MM): {length:g} x {width:g} mm"
+                  if folds else ", flat: no fold on the part"))
+    return {"length": length, "width": width, "formed": (formed_l, formed_w), "folds": folds,
+            "flange_mm": flange, "pages": pages, "working": working}
+
+
+def _stamp_provisional(part: Dict[str, Any], blank: Mapping[str, Any], why_refused: str) -> None:
+    pn = str(part.get("part_number") or "this part")
+    why = (f"PROVISIONAL BLANK, NOT A MEASURED ONE — {pn}: {why_refused}; sized from its own "
+           f"sheet instead: {blank['working']}. Material, cutting, coat and shipment follow "
+           f"it; give the flat blank (or the DXF) and it is replaced.")
+    ng = part.setdefault("normalized_geometry", {})
+    if not isinstance(ng, dict):
+        ng = {}
+        part["normalized_geometry"] = ng
+    for holder in (ng, part):
+        holder["blank_length_mm"], holder["blank_width_mm"] = blank["length"], blank["width"]
+        holder["blank_length_mm_source"] = holder["blank_width_mm_source"] = PROVISIONAL_SOURCE
+    ng.pop("_inferred", None)
+    part["_blank_provisional"] = {"basis": PROVISIONAL_SOURCE, **dict(blank)}
+    part["blank_is_inferred"] = True
+    part["blank_inferred_reason"] = why
+    part.setdefault("review_flags", []).append(why)
+    try:
+        from source_precedence import raise_manufacturing_question as _ask
+        _ask(part, f"Blank of {pn}: provisional {blank['length']:g} x {blank['width']:g} mm "
+                   f"from the dimensions printed on its own sheet", why,
+             "confirm the flat blank; the material, cut, coat and shipment follow it",
+             "detail_page_geometry.provisional_blank_from_sheets")
+    except Exception:                                                # noqa: BLE001
+        pass
+
+
 def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
     """Stamp each part's blank from the detail page it is bound to. Returns how many gained one.
 
@@ -192,10 +344,21 @@ def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
 
         if len(bound) != 1:
             if bound:
-                part.setdefault("review_flags", []).append(
-                    f"{pn or 'this part'} is bound to {len(bound)} pages "
-                    f"({', '.join(str(b) for b in sorted(bound))}) — no single sheet defines it, "
-                    f"so its blank is UNRESOLVED and the size used is a fallback envelope")
+                _why = (f"it is bound to {len(bound)} pages "
+                        f"({', '.join(str(b) for b in sorted(bound))}) and no single sheet "
+                        f"prints its overall size")
+                _sheets = [pages[b] for b in sorted(bound) if b in pages
+                           and not (b in bom_pages and b not in (owned.get(pn) or set()))]
+                _prov = (provisional_blank_from_sheets(part, _sheets)
+                         if _sheets and not not_cut_from_a_blank(part) else None)
+                if _prov:
+                    _stamp_provisional(part, _prov, _why)
+                    stamped += 1
+                else:
+                    part.setdefault("review_flags", []).append(
+                        f"{pn or 'this part'} is bound to {len(bound)} pages "
+                        f"({', '.join(str(b) for b in sorted(bound))}) — no single sheet defines it, "
+                        f"so its blank is UNRESOLVED and the size used is a fallback envelope")
             continue
 
         page_no = bound[0]
@@ -218,6 +381,14 @@ def apply_detail_page_geometry(parts: Any, summary: Mapping[str, Any]) -> int:
             bbox_mm=part.get("bbox_mm"),
         )
         if not verdict.get("usable"):
+            _why = (f"page {page_no} is its detail sheet but its printed overall could not be "
+                    f"used — {verdict.get('reason') or 'refused'}")
+            _prov = (provisional_blank_from_sheets(part, [page])
+                     if not not_cut_from_a_blank(part) else None)
+            if _prov:
+                _stamp_provisional(part, _prov, _why)
+                stamped += 1
+                continue
             part.setdefault("review_flags", []).append(
                 f"{pn or 'this part'}: page {page_no} is its detail sheet but its blank could "
                 f"not be taken from it — {verdict.get('reason') or 'refused'}. UNRESOLVED; the "

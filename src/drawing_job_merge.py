@@ -2823,6 +2823,15 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         base_pn = _mirror_base_of(part)
         if not base_pn:
             continue
+        # AN ASSEMBLY'S HAND HAS NO FLAT TO COPY (D-505). 12665-03-GA-H is the side-wing kit
+        # built the other way round; the graph gives it the base kit's members, each by its
+        # own hand. "MIRROR NOT APPLIED" on it read as a missing drawing when nothing was.
+        try:
+            from part_code_conventions import carries_assembly_role as _asm_role
+            if _asm_role(base_pn) or _asm_role(part.get("part_number")):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
         base = by_key.get(_own_number_key(base_pn))
         if base is None:
             _refuse(part, base_pn,

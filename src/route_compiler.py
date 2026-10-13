@@ -1993,6 +1993,56 @@ def build_part_graph(
             print(f"   [bom] '{_pid}' owned by '{_bp}' (qty {_q:g}) — the record carries "
                   f"the parent BOM whose table listed it", flush=True)
 
+    # ── THE OTHER HAND OF AN ASSEMBLY IS THAT ASSEMBLY, MIRRORED (D-505) ──────────────────
+    # 12665-01-GA lists 12665-03-GA-H, "NPI ZONE SIDE WING - HANDED", beside 12665-03-GA. The
+    # hand has no drawing of its own — it is the base kit built the other way round — so it
+    # had no children, read as a leaf, and was costed as a 400 x 300 acrylic panel; its own
+    # steel wing 12665-03-01M-H and lighting 12665-03-02X-H were in the pack and hung
+    # "not linked". A hand of an ASSEMBLY that states no members takes the base's members at
+    # the base's counts, each by its own hand where the pack has one (03-01M -> 03-01M-H) and
+    # as itself where it has none (a screw is a screw either way). A hand of a CUT part is the
+    # hardware pass below — it stays a part (D-280); this is only for a base that is an
+    # assembly by its role or by members that are not all hardware.
+    try:
+        from part_code_conventions import (carries_assembly_role as _role_asm,
+                                           mirror_base as _hand_base)
+    except Exception:                                                # noqa: BLE001
+        _role_asm = _hand_base = None
+    if _hand_base is not None:
+        _known_ids = set(raw) | set(extracted) | set(records)
+        _hand_of: Dict[str, str] = {}
+        for _hid in sorted(_known_ids):
+            _b = clean_part_number(_hand_base(_hid) or "")
+            _b = aliases.get(_b, _b)
+            if _b and _b != _hid:
+                _hand_of.setdefault(_b, _hid)
+        for _bid, _hid in sorted(_hand_of.items()):
+            _bkids = dict(children.get(_bid) or {})
+            if not _bkids or children.get(_hid):
+                continue
+
+            def _hardware(_c: str) -> bool:
+                _kr = dict(records.get(_c) or {})
+                _kr.setdefault("part_number", _c)
+                return bool(_bought_in_record(_kr) or str(_c).upper().startswith("BI-")
+                            or bought_in_policy.is_bought_in(_kr))
+
+            if not (_role_asm(_hid) or _role_asm(_bid)
+                    or not all(_hardware(_c) for _c in _bkids)):
+                continue
+            _taken = []
+            for _c, _q in _bkids.items():
+                _c2 = _hand_of.get(_c, _c)
+                children.setdefault(_hid, {})[_c2] = _q
+                parents.setdefault(_c2, set()).add(_hid)
+                _taken.append(f"{_c2} x{_q:g}")
+            records.setdefault(_hid, {})["is_sub_assembly"] = True
+            records[_hid]["hierarchy_source"] = "mirrored_base_assembly"
+            records[_hid]["mirrored_assembly_of"] = _bid
+            print(f"   [graph] {_hid} is the other hand of assembly {_bid} and takes its "
+                  f"members, each by its own hand where the pack has one: "
+                  + ", ".join(_taken), flush=True)
+
     # ── AND THE PAGE A PART WAS LISTED ON, when no reader gave it an owner ────────────
     # The last resort, and it exists because the readers above can all be empty at once.
     # On 12392 the deterministic BOM reader found no rows, so nothing carried bom_parent;
@@ -2174,6 +2224,82 @@ def build_part_graph(
               f"counts; it adds no second path"
               + (f"; linked {', '.join(_linked)}, which nothing else reached" if _linked
                  else ""), flush=True)
+
+    # ── AN ASSEMBLY WHOSE DRAWING IS MISSING TAKES ITS OWN NUMBERING'S DRAWINGS (D-505) ───
+    # 12665-01-GA lists 12665-04-GA, "ISLAND NEW / PACKOUT HEADER"; its drawing is not in the
+    # pack, but 12665-04-201, 12665-04-301 and 12665-04-01M — the header's fascias and frame
+    # — are. With no sheet to list them, the header had no members and those drawings had no
+    # parent: set aside, their material unpriced, while their laser and fold were still
+    # charged. An assembly something lists that states no members of its own, read with its
+    # role taken off ("12665-04"), takes the pack's drawings numbered under it that nothing
+    # else claims — each at its own record's count, else one — and the job says so as a
+    # question. Never a code another parent already owns; never across job numbers; never
+    # where it would make a loop; and a drawing numbered under two such assemblies goes to
+    # the longer numbering.
+    try:
+        from part_code_conventions import (carries_assembly_role as _fam_role,
+                                           mirror_base as _fam_hand,
+                                           strip_assembly_role as _fam_strip)
+    except Exception:                                                # noqa: BLE001
+        _fam_role = None
+    _family_adopted: Dict[str, List[str]] = {}
+    _family_issues: List[Dict[str, Any]] = []
+    if _fam_role is not None:
+        _fam_universe = set(raw) | set(extracted) | set(records) | set(children) | set(parents)
+        _hollow: Dict[str, str] = {}
+        for _h in sorted(_fam_universe):
+            if not _h or children.get(_h) or not parents.get(_h) or not _fam_role(_h):
+                continue
+            _fam = _fam_strip(_fam_hand(_h) or _h)
+            if _fam and _fam != _h:
+                _hollow[_h] = _fam.upper()
+
+        def _descendants(_n: str) -> Set[str]:
+            _seen: Set[str] = set()
+            _st = [_n]
+            while _st:
+                _x = _st.pop()
+                if _x in _seen:
+                    continue
+                _seen.add(_x)
+                _st.extend((children.get(_x) or {}).keys())
+            return _seen
+
+        for _o in sorted(_fam_universe):
+            if not _o or parents.get(_o) or _o in _hollow or _is_generated_line(
+                    _o, records.get(_o)):
+                continue
+            _matches = [(h, f) for h, f in _hollow.items()
+                        if _o.upper().startswith(f) and len(_o) > len(f)
+                        and _o[len(f)] in "-_ "]
+            if not _matches:
+                continue
+            _h, _f = max(_matches, key=lambda hf: len(hf[1]))
+            if _h in _descendants(_o):
+                continue
+            _rec = records.get(_o) or raw.get(_o) or extracted.get(_o) or {}
+            _q = number(_rec.get("quantity") if isinstance(_rec, Mapping) else None, 1.0) or 1.0
+            children.setdefault(_h, {})[_o] = _q
+            parents.setdefault(_o, set()).add(_h)
+            _family_adopted.setdefault(_h, []).append(_o)
+        for _h, _members in sorted(_family_adopted.items()):
+            records.setdefault(_h, {})["is_sub_assembly"] = True
+            records[_h]["hierarchy_source"] = "adopted_by_numbering"
+            records[_h]["adopted_members"] = list(_members)
+            print(f"   [graph] {_h} states no members (its drawing is not in the pack) — it "
+                  f"takes the pack's drawings numbered under it that nothing else claims: "
+                  f"{', '.join(_members)}. Provisional: confirm against its drawing.",
+                  flush=True)
+            _family_issues.append({
+                "code": "members_adopted_by_numbering",
+                "assembly": _h,
+                "identities": list(_members),
+                "counts": {m: children[_h][m] for m in _members},
+                "detail": (f"{_h} names no members of its own (its drawing is not in the "
+                           f"pack); it was given the pack's drawings numbered under it that "
+                           f"nothing else lists: {', '.join(_members)} — confirm against its "
+                           f"parts list"),
+            })
 
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
@@ -3058,7 +3184,7 @@ def build_part_graph(
 
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
                     + list(_version_issues)
-                    + list(_product_issues))
+                    + list(_product_issues) + list(_family_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -3233,11 +3359,28 @@ def apply_canonical_evidence_to_parts(
     set_aside_outside_product(parts, graph.get("issues"), summary=summary)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
+    # A MEMBERSHIP THE GRAPH INFERRED IS SAID ON THE LINE (D-505): the estimator confirms it
+    # against the missing parts list, the way every other provisional reading is confirmed.
+    _adopted_by: Dict[str, Tuple[str, float]] = {}
+    for _iss in graph.get("issues") or []:
+        if isinstance(_iss, Mapping) and _iss.get("code") == "members_adopted_by_numbering":
+            for _m in _iss.get("identities") or []:
+                _adopted_by[clean_part_number(_m)] = (
+                    str(_iss.get("assembly") or ""),
+                    float((_iss.get("counts") or {}).get(_m) or 1.0))
     for part in parts or []:
         if not isinstance(part, dict):
             continue
         source_id = clean_part_number(part.get("part_number") or part.get("item_number"))
         identity = aliases.get(source_id, source_id)
+        if identity in _adopted_by:
+            _asm, _cnt = _adopted_by[identity]
+            _flag = (f"{identity} is costed under {_asm}, whose drawing is not in the pack: it "
+                     f"is numbered under it and nothing else lists it, so it was taken as one "
+                     f"of its members at {_cnt:g} — confirm the membership and count against "
+                     f"{_asm}'s parts list")
+            if _flag not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_flag)
         node = nodes.get(identity) if identity else None
         if node is None:
             continue
@@ -4530,6 +4673,13 @@ def compile_job_route(
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
     explicit_assembly_events: Dict[str, List[Tuple[str, str]]] = {}
     issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
+    # ONE SCOPE FOR MATERIAL AND LABOUR (D-505). The graph sets a line aside when the declared
+    # product does not reach it, and its RECORD leaves the costed population — but a stated
+    # route naming it still became a required decision, so 12665-01-GA's sheet charged laser,
+    # fold and assembly on six parts its own header said were "set aside, not priced", with
+    # no material beside them. A route's participants are the graph's; one it does not carry
+    # is dropped here, and a route left with none is recorded rather than charged.
+    _outside = outside_product_identities(issues)
 
     def add_claim(event_id: str, claim: OperationClaim) -> None:
         claims_by_event.setdefault(event_id, []).append(claim)
@@ -4544,6 +4694,12 @@ def compile_job_route(
             for item in (route.get("part_numbers") or [])
             if clean_part_number(item)
         ]
+        _dropped = [item for item in participants if item in _outside]
+        if _dropped:
+            participants = [item for item in participants if item not in _outside]
+            issues.append({"code": "route_participant_outside_the_product",
+                           "operation": operation, "identities": _dropped,
+                           "kept": list(participants)})
         if not operation or not participants:
             continue
         stated_scope = str(route.get("scope") or "").strip().lower()

@@ -29,7 +29,7 @@ identity; declining one costs a merge an estimator can see and undo.
 from __future__ import annotations
 
 import re
-from typing import List, Tuple
+from typing import Any, List, Tuple
 
 __all__ = ["base_code", "alias_targets", "is_mirror_code", "mirror_base", "material_suffix",
            "purchased_suffix", "is_category_not_a_code"]
@@ -118,8 +118,16 @@ def material_suffix(identity: str) -> str:
     WEAK BY CONSTRUCTION, exactly as `base_code` treats it. A suffix is a naming convention,
     not an observation. Every caller must let a material the drawing actually STATES win.
     """
-    match = _MATERIAL_SUFFIX.match(str(identity or "").strip())
+    match = _MATERIAL_SUFFIX.match(_unhanded(identity))
     return match.group(2).upper() if match else ""
+
+
+def _unhanded(identity: Any) -> str:
+    """The code with a hand marker read through ("12665-03-02X-H" -> "12665-03-02X") — so the
+    other hand of a part we buy is bought, of one we cut is cut, of a GA is a GA (D-505). The
+    numbering conventions below speak about the BASE; a hand is the same thing, mirrored."""
+    text = str(identity or "").strip()
+    return mirror_base(text) or text
 
 
 def purchased_suffix(identity: str) -> str:
@@ -147,7 +155,7 @@ def purchased_suffix(identity: str) -> str:
     Returned as the LETTER, matching material_suffix, so a caller that wants to say WHICH
     convention fired can. The lexicon question — what "X" is bought AS — is not this module's.
     """
-    match = _PURCHASED_SUFFIX.match(str(identity or "").strip())
+    match = _PURCHASED_SUFFIX.match(_unhanded(identity))
     return match.group(2).upper() if match else ""
 
 
@@ -289,7 +297,14 @@ def carries_assembly_role(identity: str) -> bool:
     no is_assembly_parent flag and was weighed as a 53 x 20 sheet blank and counted into the
     shipment as a part."""
     text = str(identity or "").strip()
-    return bool(text) and strip_assembly_role(text) != text
+    if bool(text) and strip_assembly_role(text) != text:
+        return True
+    # THE OTHER HAND OF A GA IS A GA (D-505). 12665-03-GA-H, "NPI ZONE SIDE WING - HANDED",
+    # ends in a hand, not a role, so it read as a part and was costed as a 400 x 300 acrylic
+    # blank while its own steel wing and lighting hung unlinked. Read through the hand only —
+    # strip_assembly_role is unchanged, so a hand is never merged onto its base's spelling.
+    base = mirror_base(text)
+    return bool(base) and strip_assembly_role(base) != base
 
 
 def is_category_not_a_code(identity: str) -> bool:

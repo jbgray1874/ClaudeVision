@@ -5196,7 +5196,8 @@ def _blank_that_could_have_been_cut(
         # Unstamped, but it could be the size of something we cut and nothing contradicts
         # it. Keep it — refusing every unstamped blank stopped a 120 x 80 bracket costing
         # at all, on a part whose cut path fits it perfectly. Flagged, not trusted.
-        if "blank_source_not_recorded" not in _flags:
+        # A blank that NAMES its provisional source (D-505) has said what it is already.
+        if not _blank_src and "blank_source_not_recorded" not in _flags:
             _flags.append("blank_source_not_recorded")
         return blank_length, blank_width
     else:
@@ -7553,6 +7554,31 @@ _SPECIAL_ITEM_DESC_RE = re.compile(
     r"\b(TILE|TILES|MOSAIC|GRAPHIC\s+PANEL|GRAPHIC|VINYL|DECAL)\b",
     re.IGNORECASE,
 )
+
+
+def _acrylic_route_stands_down(part: Dict[str, Any]) -> bool:
+    """True for a line the acrylic route must not cut, bond or hand-finish (D-505): an
+    assembly — by flag, by graph kind, or by its code's role with hands read through — or a
+    purchase by the codebase's own make/buy rule."""
+    if not isinstance(part, dict):
+        return False
+    if (part.get("is_sub_assembly") or part.get("is_assembly_parent")
+            or str(part.get("canonical_kind") or part.get("_canonical_kind") or "").lower()
+            == "assembly"):
+        return True
+    try:
+        from part_code_conventions import carries_assembly_role, purchased_suffix
+        _pn = str(part.get("part_number") or "")
+        if carries_assembly_role(_pn) or purchased_suffix(_pn):
+            return True
+    except Exception:                                                # noqa: BLE001
+        pass
+    try:
+        from bought_in_policy import bought_in_reason
+        _why = bought_in_reason(part)
+        return bool(_why) and "no material was identified" not in _why
+    except Exception:                                                # noqa: BLE001
+        return False
 
 
 def _is_special_bought_in_item(part: Dict[str, Any]) -> bool:
@@ -9993,7 +10019,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     # assembly, attached to the FORMED (bent) body panel so a multi-panel tank isn't charged
     # per panel. All time-drivers in config.ACRYLIC_OP_DRIVERS.
     _mat_acr2 = str(part.get("normalized_material") or "").upper().replace("_", " ")
-    if _mat_acr2 in {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"} and not part.get("is_assembly_parent"):
+    # NOT AN ASSEMBLY OR A PURCHASE (D-505): a kit that reached here with an acrylic material
+    # (12665-03-GA-H took one from the drawing's general note) is fitted, not cut; a bought
+    # line is bought. The acrylic route puts laser, glue and hand work back AFTER the
+    # bought-in strips, so it has to ask the same question they did.
+    if _mat_acr2 in {"ACRYLIC", "HIGH IMPACT ACRYLIC", "PERSPEX", "PMMA", "POLYCARBONATE"} \
+            and not part.get("is_assembly_parent") and not _acrylic_route_stands_down(part):
         _drv = getattr(config, "ACRYLIC_OP_DRIVERS", {}) or {}
         _rt = process.setdefault("run_times_min_per_unit", {})
         _st = process.setdefault("setup_times_min", {})
@@ -13473,6 +13504,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             continue
         if any(re.search(r"FIX|SCREW|BOLT|NUT|RIVET|STUD|WASHER|^BI-",
                          str(m.get("part_number") or "").upper()) for m in _members):
+            continue
+        # A BOUGHT MEMBER IS NOT A PLASTIC PART WE BOND (D-505). 12665-06-GA's JST cable
+        # splitter carried "acrylic" from the drawing's general note and was made the host
+        # of a glue event. Purchases are fitted; the members we bond are the ones we cut.
+        if any(_acrylic_route_stands_down(m) for m in _members):
             continue
         if any(m.get("acrylic_bonded") or "welding" in (m.get("textual_operations") or [])
                for m in _members):

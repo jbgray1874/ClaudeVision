@@ -46,6 +46,7 @@ DASHED_PROXY = "inferred_dashed_lines"
 CONCEPT_READ = "concept_read_fold_count"
 NO_EVIDENCE = "no_bend_evidence"
 CALLOUTS_AND_MODEL = "drawing_callouts_agreeing_with_model"
+CALLOUTS_ONLY = "drawing_bend_callouts"
 
 _MEASURED = {FLAT_PATTERN, MODEL_FEATURES, CALLOUTS_AND_MODEL}
 
@@ -57,6 +58,7 @@ _LABEL = {
     CONCEPT_READ: "the concept read's provisional fold count (sighted, not measured)",
     NO_EVIDENCE: "nothing on this part",
     CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model confirms",
+    CALLOUTS_ONLY: "the UP/DOWN bend callouts on its own sheet (no model to confirm them)",
 }
 # Not a rung: the UP/DOWN callouts counted off the part's own sheet. They decide only with the
 # model's confirmation (CALLOUTS_AND_MODEL); where they do not decide, they are still a reading.
@@ -195,6 +197,15 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
             and (source == FLAT_PATTERN
                  or (source == DRAWING_NOTE and _note_is_angle_list_only(part)))):
         count, source = _callouts, CALLOUTS_AND_MODEL
+    # AND WITH NO MODEL AT ALL, THE FULL LIST BEATS ITS DE-DUPLICATED SHADOW (D-505). 12665's
+    # side wing prints seven UP/DOWN callouts on its own sheet; the note rung read lists that
+    # are de-duplicated by value (one "90°" for five 90° bends) and charged two folds. Where no
+    # flat pattern and no model exist, and the drawing office wrote no fold COUNT, the sheet's
+    # own per-bend callouts are the fuller count of the same printed statements — charged, not
+    # measured, and still asked.
+    elif (_callouts and not _model and _callouts > count and source == DRAWING_NOTE
+          and not _int(part.get("fold_count_textual"))):
+        count, source = _callouts, CALLOUTS_ONLY
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is
     # a sentence an estimator should read: on 401912-02 the model carried three bend features
@@ -207,7 +218,7 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # THE CALLOUTS ARE A READING TOO. They were not a rung, so a note that beat them — or a
     # flat pattern the model did not let them correct — left them out of the sentence, and a
     # sheet's own UP/DOWN count could disagree with the charge without anyone being told.
-    if _callouts and source != CALLOUTS_AND_MODEL and _callouts != count:
+    if _callouts and source not in (CALLOUTS_AND_MODEL, CALLOUTS_ONLY) and _callouts != count:
         _others.append((_CALLOUTS_LABEL, _callouts))
     disagreement = None
     if _others:

@@ -3178,6 +3178,21 @@ def canonical_labour_groups(
         str(item).strip().upper() for item in (skipped_part_numbers or [])
         if str(item).strip()
     }
+    # The lines the declared product does not reach — the graph's set-aside issues and the
+    # ledger of records taken out (D-505). The out-of-scope set, not a node allowlist, so
+    # synthetic targets (@ROUTE-n) and generated lines are never caught by it.
+    _out_of_scope: Set[str] = set()
+    try:
+        from route_compiler import outside_product_identities as _outside, \
+            clean_part_number as _cpn
+        _out_of_scope = {k.upper() for k in _outside(payload.get("issues"))}
+        _out_of_scope |= {
+            _cpn(e.get("part_number")).upper()
+            for e in (summary.get("set_aside_outside_product") or [])
+            if isinstance(e, dict) and e.get("part_number")}
+        _out_of_scope.discard("")
+    except Exception:                                                # noqa: BLE001
+        _out_of_scope = set()
     tube_pns = tube_part_numbers(summary)
     groups: Dict[Any, Dict[str, Any]] = {}
 
@@ -3275,6 +3290,13 @@ def canonical_labour_groups(
             continue
         if target_id in skipped or any(item in skipped for item in participants):
             continue
+        # THE SAME SCOPE AS THE MATERIAL (D-505), at the place a row is made. A line the
+        # declared product does not reach left the material blocks; it leaves the labour
+        # block too. A shared row keeps its in-scope parts; one with none left is not made.
+        if _out_of_scope:
+            if target_id in _out_of_scope:
+                continue
+            participants = [p for p in participants if p not in _out_of_scope]
 
         candidate_ids = list(dict.fromkeys(
             [target_id] + participants))
