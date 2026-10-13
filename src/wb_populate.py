@@ -2820,7 +2820,7 @@ def canonicalise_part_estimates_for_workbook(
             _bi_com = None
         _bi_unit = _safe(_bi_com.get("unit_price_gbp")) if _bi_com else None
         if _bi_unit is not None and _bi_unit > 0:
-            _bi_unit = round(float(_bi_unit), 2)
+            _bi_unit = round(float(_bi_unit), 4)              # sub-penny items (D-503)
             _bi_ext = round(_bi_unit * int(_bi_qty or 1), 2)
             normalised[identity] = {
                 "part_number": identity,

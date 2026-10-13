@@ -748,7 +748,15 @@ CONCEPT_ADHESIVE_ALLOWANCE = {
     "strip_max_width_mm": 50,
     "strip_method": "tape",
     "default_method": "structural adhesive",
-    "basis": "an assumption to confirm — the method from the read's words or the piece's shape",
+    # A PROVISIONAL METHOD, NOT A CONSTRUCTION RULE (D-503): materials usually taped rather than
+    # glued, and the words that make a bonded piece load-bearing — a bonded load path is always
+    # asked, never assumed sound.
+    "tape_materials": ["acrylic", "pvc", "polycarbonate", "abs", "glass", "foam", "printed",
+                       "paper", "card", "magnetic"],
+    "load_bearing_words": ["shelf", "tray", "bracket", "post", "frame", "base", "plinth",
+                           "spine", "leg", "support", "upright", "rail"],
+    "basis": "a provisional method to confirm — from the read's words, else the piece's shape "
+             "and material",
 }
 # A LINE THAT IS A SET IS PRICED AS THE WHOLE SET (D-501). Words that make a line a set, and
 # words in a price answer that say it priced one piece of it. Vocabulary, not logic. ("pack"

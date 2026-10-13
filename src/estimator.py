@@ -3102,17 +3102,112 @@ def _price_the_whole_set(part: Dict[str, Any], ind: Dict[str, Any], piece: float
     again_said = (f"the re-ask priced {gap2} (£{p2:,.2f})" if gap2 else
                   "the re-ask returned no usable set price" if line else "no re-ask was possible")
     if n and n > 0:
-        total = round(piece * n, 4)
+        total, working, rate_said = _set_extrapolation(piece, str(ind.get("item_priced") or ""), sp)
         flags.append(
-            f"PROVISIONAL SET ALLOWANCE: {first}; {again_said}. The set is taken as {n:g} "
-            f"piece(s) ({sp.get('basis') or 'the bill'}) × £{piece:,.2f} = £{total:,.2f}. The "
-            f"£{piece:,.2f} is the evidence for ONE piece only — replace this with a supplier's "
-            f"price for the complete set")
-        return _rung4_result(dict(ind, item_priced=f"{n:g} × {ind.get('item_priced')}"), total,
+            f"PROVISIONAL SET ALLOWANCE — an extrapolation from ONE piece, not a set price: "
+            f"{first}{rate_said}; {again_said}. Positions assumed: {working} = £{total:,.2f}. "
+            f"Every graphic is taken at the priced piece's material ('{ind.get('item_priced')}'); "
+            f"card inserts or smaller formats may cost differently. Confirm the set's graphics, "
+            f"their sizes and material, or replace this with a supplier's price for the set")
+        return _rung4_result(dict(ind, item_priced=f"set allowance from one piece: "
+                                                   f"{ind.get('item_priced')}"), total,
                              mode="set_allowance_from_one_piece")
     return {"missing": (f"PRICE SCOPE MISMATCH — this line is a set; {first}; {again_said}, and "
                         f"nothing states how many pieces the set holds. State the set's pieces "
                         f"(or a set price) in the answers file")}
+
+
+def prove_joint_on_hosts(parts: List[Any], part_estimates: List[Any],
+                         route: Optional[Dict[str, Any]] = None) -> List[str]:
+    """A COMPONENT ALLOWANCE THAT LEAVES ITS JOINT ON ITS HOSTS IS PROVEN TO BE CHARGED THERE
+    (D-503). The reviewer: charging the bracket welds on the trays is right only if the trays
+    actually carry Weld and Dress time — a note on the allowance is not a charge. For each
+    allowance with `joint_on` hosts, every host must have a REQUIRED welding and dressing
+    decision in the priced route and time on its own estimate; the minutes per joint are shown
+    so an estimator can judge them. A missing charge is a counted question on the allowance —
+    the joint would otherwise cost nothing. Returns the lines written, for the log."""
+    pes = {str(p.get("part_number")): p for p in part_estimates or [] if isinstance(p, dict)}
+    decisions = [d for d in ((route or {}).get("decisions") or []) if isinstance(d, dict)]
+
+    def _required(ops: set, pn: str) -> bool:
+        return any(str(d.get("operation")) in ops and str(d.get("status")) == "required"
+                   and (pn in {str(x) for x in (d.get("participants") or [])}
+                        or str(d.get("target_id")) == pn) for d in decisions)
+    out: List[str] = []
+    for raw in parts or []:
+        pa = raw.get("provisional_allowance") if isinstance(raw, dict) else None
+        if not (isinstance(pa, dict) and pa.get("joint_on")):
+            continue
+        comp = str(pa.get("component") or "component")
+        per = _safe_float(pa.get("per_host_piece")) or 0.0
+        said, missing = [], []
+        for h in pa["joint_on"]:
+            rh = ((pes.get(str(h)) or {}).get("labour_estimate") or {}).get("run_hours_per_unit") or {}
+            w = (_safe_float(rh.get("welding")) or 0.0) + (_safe_float(rh.get("spot_welding")) or 0.0)
+            d = _safe_float(rh.get("dress_welds")) or 0.0
+            if not (w > 0 and (not decisions or _required({"welding", "spot_welding"}, str(h)))):
+                missing.append(f"{h} weld")
+            if not (d > 0 and (not decisions or _required({"dress_welds"}, str(h)))):
+                missing.append(f"{h} dress")
+            said.append(f"{h} weld {w * 60:.2f} + dress {d * 60:.2f} min a piece"
+                        + (f" = {w * 60 / per:.2f} + {d * 60 / per:.2f} min per {comp} joint "
+                           f"({per:g} a piece)" if per else ""))
+        code = str(raw.get("part_number") or "")
+        pe = pes.get(code) or {}
+        if missing:
+            msg = (f"JOINT NOT CHARGED ON ITS HOST: this line leaves the {comp} joint to "
+                   f"{', '.join(map(str, pa['joint_on']))}, but {', '.join(missing)} is not "
+                   f"charged there — as it stands the joint costs nothing")
+            try:
+                from source_precedence import raise_manufacturing_question  # noqa: PLC0415
+                for target in (raw, pe):
+                    if isinstance(target, dict) and target:
+                        raise_manufacturing_question(
+                            target, msg, "; ".join(said),
+                            "restore the weld/dress on the host line, or charge the joint on "
+                            "this allowance", "concept_bill_check")
+            except Exception:                                        # noqa: BLE001
+                pass
+        else:
+            msg = ("JOINT ON THE HOST, PROVEN: the " + comp + " joint is charged on the hosts' "
+                   "Weld and Dress rows — " + "; ".join(said) + ". Judge whether those minutes "
+                   "cover the joints")
+        for target in (raw, pe):
+            if isinstance(target, dict) and target and msg not in (target.get("review_flags") or []):
+                target.setdefault("review_flags", []).append(msg)
+        out.append(f"{code}: {msg}")
+    return out
+
+
+def _set_extrapolation(piece: float, item_priced: str, sp: Dict[str, Any]) -> tuple:
+    """The set allowance, position by position (D-503): where the priced piece states its size
+    ("approx 1400x460 mm"), a rate per m² from it, applied to each position's own face; a
+    position with no size of its own, or a piece with none stated, at the piece's price.
+    Returns (total, working, rate_said) — every step written out."""
+    m = re.search(r"(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*mm", item_priced or "", re.I)
+    area = (float(m.group(1)) * float(m.group(2)) / 1e6) if m else 0.0
+    rate = piece / area if area > 0 else None
+    rate_said = (f" — £{rate:,.2f}/m² over its {float(m.group(1)):g} × {float(m.group(2)):g} mm"
+                 if rate else " — no size stated for it, so each graphic is taken at its price")
+    total, parts = 0.0, []
+    for pos in sp.get("positions") or []:
+        q = int(pos.get("qty") or 1)
+        size = pos.get("size_mm")
+        if rate and size:
+            a = float(size[0]) * float(size[1]) / 1e6
+            each = rate * a
+            parts.append(f"{pos.get('line')} ×{q}, {float(size[0]):g} × {float(size[1]):g} mm "
+                         f"(its face, an upper bound) = {a:.3f} m² × £{rate:,.2f} = £{each:,.2f} each")
+        else:
+            each = piece
+            parts.append(f"{pos.get('line')} ×{q}, size not known ({pos.get('by')}) — at the "
+                         f"priced piece's £{piece:,.2f}")
+        total += each * q
+    if not parts:
+        n = _safe_float(sp.get("count")) or 0
+        total = piece * n
+        parts.append(f"{n:g} piece(s) ({sp.get('basis') or 'the bill'}) × £{piece:,.2f}")
+    return round(total, 4), "; ".join(parts), rate_said
 
 
 def _rung4_result(ind: Dict[str, Any], price: float, mode: str = "llm_indicative") -> Dict[str, Any]:
@@ -10594,6 +10689,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         # THE OPEN AREA OF ITS SIGHTED CUT-OUTS (D-500): the coat covers metal, not holes.
         **({"concept_open_area_mm2": float(part.get("concept_open_area_mm2"))}
            if part.get("concept_open_area_mm2") else {}),
+        # WHERE A COMPONENT ALLOWANCE'S JOINT IS CHARGED (D-503), for the check that proves it.
+        **({"provisional_allowance": dict(part.get("provisional_allowance"))}
+           if isinstance(part.get("provisional_allowance"), dict) else {}),
         # What the part's own sheet showed of its welds (weld_symbols), carried so the costed
         # record can say it joins members — the envelope sweep reads it.
         "weld_symbols": (dict(part["weld_symbols"])
@@ -10640,7 +10738,10 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
                 "rate_sources": labour.get("rate_sources", {}),
             },
             "system_cost": {
-                "unit_cost_gbp": round(system_unit_cost, 2) if system_unit_cost is not None else None,
+                # FOUR PLACES, NOT TWO (D-503): this is the figure the sheet's price cell takes
+                # for a bought-in. Rounded to the penny, the K-Wellness labels' researched 1.8p
+                # went on the sheet as 2p — 11% over, and up to ±50% on any sub-penny item.
+                "unit_cost_gbp": round(system_unit_cost, 4) if system_unit_cost is not None else None,
                 "extended_cost_gbp": round((system_unit_cost or 0.0) * quantity, 2) if system_unit_cost is not None else None,
                 "matched_part_code": matched_part_code,
                 "part_description": part.get("description"),
@@ -13637,6 +13738,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         canonical_route_shadow = project_priced_route(
             _route_graph, part_estimates)
         _reword_folds_the_route_rules_off(_route_graph, parts, part_estimates)
+        # THE JOINT A COMPONENT ALLOWANCE LEAVES ON ITS HOSTS IS PROVEN THERE (D-503).
+        prove_joint_on_hosts(parts, part_estimates, canonical_route_shadow)
     except Exception as route_error:
         # A shadow diagnostic must never turn an executable estimate into a fallback sheet.
         # The failure is stamped for review and will become blocking before cutover.

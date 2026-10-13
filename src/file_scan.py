@@ -5052,7 +5052,8 @@ def _finalize_scan_summary(
                 print(f"   [concept] brief count not matched to one line: "
                       f"{'; '.join(_bc['asked'])} — a question on the lines", flush=True)
             _drift = concept_scan.question_unstated_count_changes(_sighted, _changes,
-                                                                  _brief or "")
+                                                                  _brief or "",
+                                                                  previous=_prev_bill)
             if _drift:
                 print(f"   [concept] count moved between reads and no source states it: "
                       f"{'; '.join(_drift)} — a question on the line", flush=True)

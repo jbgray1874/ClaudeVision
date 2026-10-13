@@ -1326,14 +1326,35 @@ def adhesive_allowance_lines(parts: List[Any], stem: str, n: int) -> List[Dict[s
                 said = m
                 break
         narrow = bool(strip_w) and 0 < min(L or W, W or L) <= strip_w
-        method = said or (rule.get("strip_method") if narrow else rule.get("default_method"))
+        mat = str(p.get("normalized_material") or "").replace("_", " ").lower()
+        taped_mat = next((m for m in (rule.get("tape_materials") or [])
+                          if re.search(rf"(?<![a-z]){re.escape(str(m).lower())}", mat)), "")
+        method = said or (rule.get("strip_method") if (narrow or taped_mat)
+                          else rule.get("default_method"))
         if method not in methods:
             continue
         run = max(L, W) if narrow else 2.0 * (L + W)
         why = (f"'{word}' in the read's words" if said else
-               ("a strip no wider than " f"{strip_w:g} mm" if narrow else
-                "only 'bonded' said, and wider than a strip"))
+               ("a strip no wider than " f"{strip_w:g} mm — PROVISIONAL" if narrow else
+                f"{taped_mat} is usually taped — PROVISIONAL" if taped_mat else
+                "only 'bonded' said — PROVISIONAL, wider than a strip"))
         how = "along its length" if narrow else "round its perimeter"
+        # THE METHOD NOT STATED IS ASKED (D-503): shape and material support an assumption,
+        # not a construction rule — compatibility, load and connection type decide a bond.
+        if not said:
+            _load = next((w for w in (rule.get("load_bearing_words") or [])
+                          if re.search(rf"(?<![a-z]){re.escape(str(w))}s?(?![a-z])", low)), "")
+            from source_precedence import raise_manufacturing_question  # noqa: WPS433
+            raise_manufacturing_question(
+                p,
+                f"{p.get('description')}: bonded, and the joining method is not stated",
+                f"provisionally {method} {how} ({why}); material "
+                f"{mat or 'not stated'}; "
+                + (f"LOAD-BEARING by its name ('{_load}') — a bonded load path must be "
+                   f"confirmed, not assumed" if _load else "not load-bearing by its name"),
+                "state the joining method (tape, structural adhesive, or a mechanical fixing) "
+                "in the answers file",
+                "concept_bill_check")
         by_method.setdefault(method, []).append(
             (str(p.get("part_number")), _qty_of(p), run, f"{why}; {how}"))
     out: List[Dict[str, Any]] = []
@@ -1367,8 +1388,9 @@ def adhesive_allowance_lines(parts: List[Any], stem: str, n: int) -> List[Dict[s
         record["research_description"] = (f"{ref} — the price per {unit} at this job's volume, "
                                           f"at trade price")
         record["review_flags"].append(
-            f"CONCEPT: a provisional adhesive allowance ({method}) for the bonded piece(s): "
-            f"{basis}. Confirm the bonding method and the quantity before release")
+            f"CONCEPT: a provisional adhesive allowance ({method} — a PROVISIONAL method, not a "
+            f"construction rule) for the bonded piece(s): {basis}. Confirm the bonding method "
+            f"and the quantity before release")
         out.append(record)
     return out
 
@@ -2878,6 +2900,18 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
     _key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n or "").lower()).strip()      # noqa: E731
     _now = {_key(r["name"]) for r in rows}
     _old = load_previous_bill(folder, job)
+    # EVERY COUNT A LINE HAS BEEN GIVEN, KEPT (D-503). The K-Wellness header went 1, 4, 2 and 6
+    # across reads; a bill that keeps only the last read cannot say so on a replay, where
+    # nothing changes between this read and the last. Each row carries the counts it has had.
+    _was = {_key(r.get("name")): r for r in list(_old.get("parts") or [])
+            + list(_old.get("history") or []) if isinstance(r, Mapping)}
+    for row in rows:
+        prev = _was.get(_key(row["name"]))
+        seen = [float(c) for c in ((prev or {}).get("counts_seen")
+                                   or ([prev.get("quantity")] if prev else [])) if c is not None]
+        if not seen or seen[-1] != float(row.get("quantity") or 0):
+            seen.append(float(row.get("quantity") or 0))
+        row["counts_seen"] = seen[-12:]
     history: List[Dict[str, Any]] = []
     for r in list(_old.get("parts") or []) + list(_old.get("history") or []):
         if (isinstance(r, Mapping) and _key(r.get("name")) not in _now
@@ -3813,6 +3847,9 @@ def allow_components_inside(records: List[Dict[str, Any]],
             + ("; coated with its host" if rec.get("coated_with_host") else "")
             + ". Confirm or correct it in the answers file")
         rec["provisional_allowance"]["joint_on"] = rec["welded_to_hosts"] if _welded else []
+        rec["provisional_allowance"]["component"] = comp
+        rec["provisional_allowance"]["per_host_piece"] = round(
+            _num(row.get("quantity")) / max(1, _host_total), 4)
         for h in hosts:
             h.setdefault("review_flags", []).append(
                 f"CONCEPT: the {g['phrase']} this line names are charged on {rec['part_number']} "
@@ -3955,36 +3992,64 @@ def apply_brief_counts(records: List[Dict[str, Any]], brief: str = "") -> Dict[s
 
 
 def question_unstated_count_changes(records: List[Dict[str, Any]], changes: List[str],
-                                    brief: str = "") -> List[str]:
+                                    brief: str = "",
+                                    previous: Optional[Mapping[str, Any]] = None) -> List[str]:
     """A COUNT NO SOURCE STATES, WHICH MOVED BETWEEN READS, IS A QUESTION ON ITS LINE (D-502).
     The K-Wellness header count went 1, 4, 2 and 6 across reads; neither the brief nor the pack
     states it. The read's count is costed — there is nothing better — and the line says it is
     unstable, so the estimator fixes it once in the brief or the answers file."""
     from source_precedence import raise_manufacturing_question, source_of  # noqa: WPS433
     stated_heads = {_head_and_mods(st["words"])[0] for st in brief_stated_counts(brief)}
+    # THE READ'S OWN LINES ONLY: an edging split per host keeps the read's name on every copy
+    # (5 + 5 + 5 of the read's 15), and an allowance is not a line the read gave — neither has
+    # a count the read can have moved.
     by_key = {re.sub(r"[^a-z0-9]+", " ", str(r.get("description") or "").lower()).strip(): r
-              for r in records or [] if isinstance(r, dict)}
+              for r in records or [] if isinstance(r, dict)
+              and not r.get("strip_host") and not r.get("provisional_allowance")}
     asked: List[str] = []
+
+    def _ask(r: Dict[str, Any], seen: List[str], why: str = "") -> None:
+        if str(source_of(r, "quantity") or "") in (BRIEF_SOURCE, *_APPROVED_SOURCES):
+            return
+        words = re.findall(r"[a-z][a-z\-]{2,}",
+                           re.sub(r"\([^)]*\)", " ", str(r.get("description") or "").lower()))
+        if _head_and_mods(words)[0] in stated_heads:
+            return
+        if raise_manufacturing_question(
+                r,
+                f"{r.get('description')}: count {' → '.join(seen)} across reads, and neither the "
+                f"enquiry brief nor the pack states it",
+                f"costed at this read's {seen[-1]}{why}",
+                "state the count in the enquiry brief or the answers file, so the next read "
+                "cannot move it",
+                "concept_bill_check"):
+            asked.append(f"{r.get('part_number')}: {' → '.join(seen)}")
+
+    _g = lambda v: f"{float(v):g}"                                   # noqa: E731
+    done: set = set()
+    # THE BILL'S OWN HISTORY FIRST (D-503): it holds every count the line has had, so a replay
+    # — where nothing changed since the last read — still asks.
+    _prev = {re.sub(r"[^a-z0-9]+", " ", str(p.get("name") or "").lower()).strip(): p
+             for p in ((previous or {}).get("parts") or []) if isinstance(p, Mapping)}
+    for key, r in by_key.items():
+        p = _prev.get(key)
+        if not p:
+            continue
+        seen = [_g(c) for c in (p.get("counts_seen") or [p.get("quantity")]) if c is not None]
+        if not seen or seen[-1] != _g(_qty_of(r)):
+            seen.append(_g(_qty_of(r)))
+        if len(set(seen)) > 1:
+            _ask(r, seen)
+            done.add(id(r))
     for c in changes or []:
         m = re.match(r"(.+?): count ([\d.]+) → ([\d.]+)(.*)$", str(c))
         if not m or "APPROVED" in m.group(4):
             continue
         r = by_key.get(re.sub(r"[^a-z0-9]+", " ", m.group(1).lower()).strip())
-        if r is None or str(source_of(r, "quantity") or "") in (BRIEF_SOURCE, *_APPROVED_SOURCES):
+        if r is None or id(r) in done:
             continue
-        words = re.findall(r"[a-z][a-z\-]{2,}",
-                           re.sub(r"\([^)]*\)", " ", str(r.get("description") or "").lower()))
-        if _head_and_mods(words)[0] in stated_heads:
-            continue
-        if raise_manufacturing_question(
-                r,
-                f"{r.get('description')}: count {m.group(2)} → {m.group(3)} between reads, and "
-                f"neither the enquiry brief nor the pack states it",
-                f"costed at this read's {m.group(3)}{m.group(4).strip() and ' ' + m.group(4).strip()}",
-                "state the count in the enquiry brief or the answers file, so the next read "
-                "cannot move it",
-                "concept_bill_check"):
-            asked.append(f"{r.get('part_number')}: {m.group(2)} → {m.group(3)}")
+        _ask(r, [m.group(2), m.group(3)],
+             (" " + m.group(4).strip()) if m.group(4).strip() else "")
     return asked
 
 
@@ -4041,7 +4106,32 @@ def set_pieces_for(records: List[Dict[str, Any]], brief: str = "") -> List[str]:
         basis = (" + ".join(f"{h.get('description')} ×{_qty_of(h)} ({why})"
                             for h, why in positions)
                  + f" = {n} position(s) holding a {'/'.join(sorted(subjects))}, one piece each")
-        r["set_pieces"] = {"count": n, "basis": basis}
+        # EACH POSITION WITH ITS SIZE (D-503): the reviewer — one panel's price × four is a
+        # fallback, not a set price; holders are not automatically graphics, and the graphics
+        # differ in size. A position named by its own line carries that line's face as the
+        # graphic's size (an upper bound — the holder's face, not a measured graphic); one the
+        # brief ties to a graphic has no size of its own here, and says so.
+        def _face(h: Mapping[str, Any]) -> Optional[Tuple[float, float]]:
+            fin = h.get("concept_finished_mm") if isinstance(h.get("concept_finished_mm"),
+                                                             Mapping) else {}
+            L = _num(fin.get("length")) or _num(h.get("blank_length_mm"))
+            W = _num(fin.get("width")) or _num(h.get("blank_width_mm"))
+            return (L, W) if L and W else None
+        r["set_pieces"] = {
+            "count": n, "basis": basis,
+            "positions": [{"line": str(h.get("description")), "part_number": h.get("part_number"),
+                           "qty": _qty_of(h), "by": why,
+                           "size_mm": (_face(h) if why == "its name" else None)}
+                          for h, why in positions]}
+        from source_precedence import raise_manufacturing_question  # noqa: WPS433
+        raise_manufacturing_question(
+            r,
+            f"{r.get('description')}: which graphics the set contains is not stated",
+            f"taken as one graphic per position the bill names — {basis}. A holder holds a "
+            f"graphic but is not one, and the graphics differ in size and material",
+            "list the set's graphics (each position, its size and material) in the answers "
+            "file, or obtain a price for the complete set",
+            "concept_bill_check")
         said.append(f"{r.get('part_number')}: {n} — {basis}")
     return said
 

@@ -1074,7 +1074,7 @@ def test_a_set_the_re_ask_still_prices_one_piece_of_is_a_reasoned_allowance(monk
     assert res["result"]["selected"]["metadata"]["pricing_mode"] == "set_allowance_from_one_piece"
     (flag,) = [f for f in part["review_flags"] if f.startswith("PROVISIONAL SET ALLOWANCE")]
     assert "4 piece(s) (4 graphic positions) × £18.00 = £72.00" in flag
-    assert "The £18.00 is the evidence for ONE piece only" in flag
+    assert "an extrapolation from ONE piece, not a set price" in flag
     # With no count anywhere it is not priced, and says what is needed — never the £18 as the set.
     bare = dict(_GSET, review_flags=[])
     assert E._resolve_part_system_cost(bare)["applied_unit_cost"] in (None, 0.0)
@@ -1159,7 +1159,7 @@ def test_a_count_no_source_states_that_moved_between_reads_is_asked_on_its_line(
     header = [p for p in parts if p["description"] == "HEADER"][0]
     assert asked == [f"{header['part_number']}: 2 → 6"]
     (q,) = header["manufacturing_questions"]
-    assert "count 2 → 6 between reads, and neither the enquiry brief nor the pack states it" in \
+    assert "count 2 → 6 across reads, and neither the enquiry brief nor the pack states it" in \
         q["issue"] and "costed at this read's 6" in q["assumption"]
     # Stated by the brief, it is not a drift question — the brief decides it.
     parts2 = cs.parts_from_concept(_fsdu(), "J")
@@ -1215,7 +1215,8 @@ def test_the_adhesive_method_follows_the_words_and_the_shape():
     assert glue["unit_of_measure"] == "each"
     flag = glue["review_flags"][-1]
     assert "('glued' in the read's words; round its perimeter)" in flag
-    assert "(only 'bonded' said, and wider than a strip; round its perimeter)" in flag
+    assert "(only 'bonded' said — PROVISIONAL, wider than a strip; round its perimeter)" in flag
+    assert "a PROVISIONAL method, not a construction rule" in flag
     per = config.CONCEPT_ADHESIVE_ALLOWANCE["methods"]["structural adhesive"]["metres_per_unit"]
     cap = [p for p in cs.parts_from_concept(ans, "J") if p["description"] == "TOP CAP (bonded)"][0]
     hdr = [p for p in cs.parts_from_concept(ans, "J") if p["description"] == "HEADER (glued)"][0]
@@ -1232,3 +1233,131 @@ def test_the_d502_vocabulary_lives_in_config_and_holds_no_job():
     blob = repr([rule, config.CONCEPT_JOINED_COMPONENT_ALLOWANCE]).lower()
     for job_word in ("boots", "wellness", "kwellness"):
         assert job_word not in blob
+
+
+
+# ── D-503: the reviewer's tightening of D-502 — prices to the tenth of a penny, counts that
+#    keep their history, a set extrapolated position by position, the host's joint proven,
+#    and an adhesive method that stays provisional ────────────────────────────────────────
+
+def test_a_sub_penny_buy_price_reaches_the_sheet_unrounded(monkeypatch):
+    import estimator as E
+    import wb_populate as W
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: _label_answer(
+        price_gbp=0.018, item_priced="20x20mm QR component label, one label"))
+    pe = E.estimate_part(dict(_LABEL, review_flags=[]), job_quantity=200)
+    sc = pe["cost_breakdown"]["system_cost"]
+    assert sc["unit_cost_gbp"] == 0.018 and sc["applied_to_total"] is True
+    assert W._bom_line_price(pe) == 0.018                    # was 0.02 — 11% over at 48 a unit
+
+
+def test_a_count_that_moved_stays_a_question_on_a_replay(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "_cache_dir", lambda: tmp_path / "engine" / "cache" / "vision_concept")
+    job = tmp_path / "staged" / "Client" / "JOB"
+    job.mkdir(parents=True)
+    a2, a6 = _fsdu(), _fsdu()
+    for p in a2["parts"]:
+        if p["name"] == "HEADER":
+            p["quantity"] = 2
+    cs.save_bill(job, "JOB", a2, read_key="r1")
+    cs.save_bill(job, "JOB", a6, read_key="r2")
+    cs.save_bill(job, "JOB", a6, read_key="r2")              # the same read, replayed
+    prev = cs.load_previous_bill(job, "JOB")
+    (row,) = [r for r in prev["parts"] if r["name"] == "HEADER"]
+    assert row["counts_seen"] == [2.0, 6.0]
+    parts = cs.parts_from_concept(a6, "J")
+    asked = cs.question_unstated_count_changes(parts, [], "metal header", previous=prev)
+    header = [p for p in parts if p["description"] == "HEADER"][0]
+    assert asked == [f"{header['part_number']}: 2 → 6"]       # no change this read; still asked
+    # A count the brief states is not asked — the brief decides it.
+    parts2 = cs.parts_from_concept(a6, "J")
+    assert cs.question_unstated_count_changes(parts2, [], "headers x3", previous=prev) == []
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "previous=_prev_bill)" in src[src.index("question_unstated_count_changes(_sighted"):][:400]
+
+
+def test_a_set_allowance_is_extrapolated_position_by_position_and_asks_its_contents(monkeypatch):
+    import estimator as E
+    ans = {"product": {"name": "FSDU"}, "parts": [
+        _p("TOP CAP", 1, 560, 560, LF, 4),
+        _p("REAR GRAPHIC PANEL", 1, 1400, 460, LF),
+        _p("BASE GRAPHIC HOLDER", 2, 500, 80, LF, 1),
+        {"name": "REPLACEABLE CARD / MAGNETIC GRAPHIC SET", "kind": "graphic", "quantity": 1}]}
+    parts = cs.parts_from_concept(ans, "J")
+    cs.set_pieces_for(parts, "top cap with graphic pass-through cut-out")
+    gset = [p for p in parts if p["description"].endswith("SET")][0]
+    pos = {p["line"]: p for p in gset["set_pieces"]["positions"]}
+    assert pos["REAR GRAPHIC PANEL"]["size_mm"] == (1400.0, 460.0)
+    assert pos["TOP CAP"]["size_mm"] is None and pos["TOP CAP"]["by"] == "the brief"
+    (q,) = gset["manufacturing_questions"]
+    assert "which graphics the set contains is not stated" in q["issue"]
+    assert "A holder holds a graphic but is not one" in q["assumption"]
+    monkeypatch.setattr(E, "_rung4_researcher", _set_research([]))
+    part = dict(gset, assumed_job_quantity=200, review_flags=[], is_bought_in=True)
+    res = E._resolve_part_system_cost(part)
+    rate = 18.00 / (1.4 * 0.46)                                    # £/m² of the priced panel
+    expected = 18.00 + rate * 1.4 * 0.46 + 2 * rate * 0.5 * 0.08   # cap at piece price + sized
+    assert abs(res["applied_unit_cost"] - round(expected, 4)) < 1e-6
+    (flag,) = [f for f in part["review_flags"] if f.startswith("PROVISIONAL SET ALLOWANCE")]
+    assert "an extrapolation from ONE piece, not a set price" in flag
+    assert "£27.95/m² over its 1400 × 460 mm" in flag
+    assert "TOP CAP ×1, size not known (the brief) — at the priced piece's £18.00" in flag
+    assert "BASE GRAPHIC HOLDER ×2, 500 × 80 mm (its face, an upper bound)" in flag
+
+
+def test_the_joint_left_on_its_hosts_is_proven_charged_there_or_asked():
+    import estimator as E
+    a = _folded("FRONT SHELF TRAY")
+    for p in a["parts"]:
+        if p["name"].startswith("FRONT SHELF TRAY"):
+            p["operations"] = p["operations"] + ["welding"]
+    parts = cs.parts_from_concept(a, "J")
+    res = cs.allow_components_inside(parts, {"parts": [_PREV_BRACKET]}, "J",
+                                     brief="each tray with its two hooked brackets")
+    parts += res["minted"]
+    cpa = res["minted"][0]
+    assert cpa["provisional_allowance"]["per_host_piece"] == 2.0
+    pes = [E.estimate_part(dict(p), job_quantity=200) for p in parts]
+    pe_cpa = [p for p in pes if p["part_number"] == cpa["part_number"]][0]
+    assert pe_cpa["provisional_allowance"]["joint_on"] == ["J-CPT05"]
+    (line,) = E.prove_joint_on_hosts(parts, pes, None)
+    assert "JOINT ON THE HOST, PROVEN" in line and "min per bracket joint (2 a piece)" in line
+    assert any("JOINT ON THE HOST, PROVEN" in f for f in pe_cpa["review_flags"])
+    # The host's weld ruled out of the route: the joint costs nothing — a counted question.
+    parts2 = [dict(p, review_flags=list(p.get("review_flags") or []),
+                   manufacturing_questions=[]) for p in parts]
+    route = {"decisions": [
+        {"operation": "welding", "status": "ruled_out", "participants": ["J-CPT05"]},
+        {"operation": "dress_welds", "status": "required", "participants": ["J-CPT05"]}]}
+    (bad,) = E.prove_joint_on_hosts(parts2, pes, route)
+    assert "JOINT NOT CHARGED ON ITS HOST" in bad and "J-CPT05 weld is not charged" in bad
+    raw = [p for p in parts2 if p["part_number"] == cpa["part_number"]][0]
+    assert any("JOINT NOT CHARGED" in q["issue"] for q in raw["manufacturing_questions"])
+    src = (ROOT / "src" / "estimator.py").read_text(encoding="utf-8")
+    assert "prove_joint_on_hosts(parts, part_estimates, canonical_route_shadow)" in src
+
+
+def test_an_unstated_bonding_method_is_provisional_and_asked_with_material_and_load():
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if "STRIP" in p["name"]:
+            p["name"] = "35MM SHELF EDGE STRIP (bonded)"
+        if p["name"] == "FRONT SHELF TRAY":
+            p["name"] = "FRONT SHELF TRAY (bonded)"
+        if p["name"] == "HEADER":
+            p["name"] = "HEADER (taped)"
+    ans["parts"].append(dict(_p("ACRYLIC FACIA (bonded)", 1, 400, 200, ["laser_cutting"]),
+                             material_guess="ACRYLIC"))
+    parts = cs.parts_from_concept(ans, "J")
+    lines = {l["joining_method"]: l for l in cs.adhesive_allowance_lines(parts, "J", 3)}
+    tray = [p for p in parts if p["description"] == "FRONT SHELF TRAY (bonded)"][0]
+    (q,) = tray["manufacturing_questions"]
+    assert "bonded, and the joining method is not stated" in q["issue"]
+    assert "LOAD-BEARING by its name" in q["assumption"]
+    assert "provisionally structural adhesive" in q["assumption"]
+    facia = [p for p in parts if p["description"] == "ACRYLIC FACIA (bonded)"][0]
+    assert facia["normalized_material"].upper().startswith("ACRYLIC")
+    assert "acrylic is usually taped — PROVISIONAL" in lines["tape"]["review_flags"][-1]
+    assert "not load-bearing by its name" in facia["manufacturing_questions"][0]["assumption"]
+    header = [p for p in parts if p["description"] == "HEADER (taped)"][0]
+    assert not header.get("manufacturing_questions")            # the read stated the method
