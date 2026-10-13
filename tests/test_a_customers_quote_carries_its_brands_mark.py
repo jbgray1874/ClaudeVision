@@ -7,8 +7,9 @@ standard, so it lives in config (CUSTOMER_LOGO_BRANDS) beside CUSTOMER_FINISH_ST
 and the lookup maps it at the one place a logo file is chosen, so the quote AND the job
 report (which borrows the quote's loader) agree.
 
-ONLY THE MARK IS MAPPED. The heading still prints the customer's own name: a quote headed
-"Milwaukee" would misstate who is being quoted.
+THE NAME IS MAPPED TOO. "TTI is part of Milwaukee... on the client portal should say
+Milwaukee" — so the heading the client sees reads Milwaukee, while the job header, the
+folders and every internal record keep the customer the estimator typed.
 """
 from __future__ import annotations
 
@@ -66,7 +67,14 @@ def test_the_customers_own_file_is_not_found_once_mapped(tmp_path, monkeypatch):
     assert q._load_logo_markup("TTI") == ""                  # the map points at Milwaukee.*
 
 
-def test_the_heading_name_is_not_what_the_map_changes():
-    """The map lives in the logo loader; the display name goes through _clean_customer_name,
-    which leaves 'TTI' exactly as it is."""
-    assert q._clean_customer_name("TTI") == "TTI"
+def test_the_client_facing_name_is_the_brands():
+    """'on the client portal should say Milwaukee' — the displayed customer maps through the
+    same table, so the heading and the mark cannot disagree."""
+    assert q._brand_name("TTI") == "Milwaukee"
+    assert q._brand_name("T.T.I.") == "Milwaukee"
+    assert q._brand_name("TTI 12801-01") == "Milwaukee"     # a job-numbered spelling still maps
+
+
+def test_an_unmapped_customers_name_comes_back_as_given():
+    assert q._brand_name("Harrods") == "Harrods"
+    assert q._brand_name("") == ""

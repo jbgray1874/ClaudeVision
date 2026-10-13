@@ -179,8 +179,36 @@ def _title_material(m: str) -> str:
 
 
 # ── customer + logo ─────────────────────────────────────────────────────────
+def _brand_name(name: str) -> str:
+    """The name a customer's client-facing documents carry (config.CUSTOMER_LOGO_BRANDS).
+
+    "TTI is part of Milwaukee... on the client portal should say Milwaukee" — James Gray,
+    13 Oct 2026. So the table maps the NAME as well as the mark: a TTI job's quote and
+    report are headed Milwaukee and carry the Milwaukee logo. The job header, the folders
+    and every internal record keep the customer the estimator typed — only what the client
+    sees is branded. A customer not listed comes back exactly as given."""
+    try:
+        import config as _cfg
+        key = _normalise_key(_clean_customer_name(name))
+        if key:
+            for _cust, _brand in (getattr(_cfg, "CUSTOMER_LOGO_BRANDS", {}) or {}).items():
+                if _normalise_key(_cust) == key:
+                    return str(_brand)
+    except Exception:                                                # noqa: BLE001
+        pass
+    return name
+
+
 def _derive_customer(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None,
                      customer_override: Optional[str] = None) -> str:
+    """The display customer for the quote and report: the resolved name, branded
+    (_brand_name) — see _derive_customer_raw for the resolution chain itself."""
+    return _brand_name(_derive_customer_raw(summary, job_stem, manual_workbook=manual_workbook,
+                                            customer_override=customer_override))
+
+
+def _derive_customer_raw(summary: Dict[str, Any], job_stem: str, manual_workbook: Optional[str] = None,
+                         customer_override: Optional[str] = None) -> str:
     """Best-effort customer name for display + logo key. Uses folder/GA-path tokens.
     General fallback chain; when a real customer field exists in future JSONs it can be added here.
 
