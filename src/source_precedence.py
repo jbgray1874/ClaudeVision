@@ -36,7 +36,7 @@ signal that carries knowledge the drawing does not.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 __all__ = [
     "rank", "may_overwrite", "apply_field", "source_of", "SOURCE_RANK", "MISSING",
@@ -111,6 +111,12 @@ def _walk(part: Dict[str, Any], path, create: bool = False) -> Optional[Dict[str
     return node
 
 SOURCE_RANK: Dict[str, int] = {
+    # THE CUSTOMER CHANGED THE PRODUCT AFTER THE DRAWINGS WERE ISSUED (D-507). Not a reading
+    # of the drawing, so no reading — nor a person reading or correcting one at 100 — can stand
+    # against it: the drawing is right about what was drawn, and the customer has since asked
+    # for something else. Written only from an e-mail line or a stated reason a named estimator
+    # ticked (customer_changes.py), and the book shows the drawn value beside it.
+    "customer_change": 101,
     "estimator_confirmed": 100,
     "knowledge_base": 100,
     # A PRODUCTION RULE THE SHOP CONFIRMED (config.PRODUCTION_MATERIAL_SUBSTITUTIONS —
@@ -260,6 +266,14 @@ SOURCE_RANK: Dict[str, int] = {
     # evidence in the pack. The analyser tags which kind it is; an extract that predates the
     # tag carries no applied-material observation and so behaves exactly as before.
     "solidworks_applied_material": 68,
+    # THE SHEET THAT DRAWS A PART WITH NO SHEET OF ITS OWN (D-426). 8188-08's wave layers 014
+    # and 015 are drawn on 013's sheet, whose title block states ACRYLIC; neither has a title
+    # block of its own, so the model's library appearance (MILD_STEEL — the same default the
+    # sheet overruled on 013) was the only reading, and both were lasered, folded and powder
+    # coated as 3 mm steel. The sheet's callout covers what it draws: above the appearance,
+    # because it is the drawing's word; below the drawing text, because it is not the part's
+    # own title block.
+    "drawn_on_sheet": 69,
     # The overall size the DETAIL prints, read as a blank. Deterministic — it is a number
     # off the drawing, not a guess — but it is one inference away from a measurement: an
     # overall is the finished part, and only a flat one has the same extent as its blank.
@@ -273,6 +287,11 @@ SOURCE_RANK: Dict[str, int] = {
     "llm_full_extract": 40,
     "inference": 20,
     "geometry_inference": 20,
+    # THE SHEET'S OWN LARGEST PRINTED DIMENSIONS, DEVELOPED FOR ITS FOLDS (D-505). Read off the
+    # part's own detail sheet when it prints no usable overall pair — above a category default
+    # (which knows nothing about this part) and below the printed overall (which names the
+    # overall). A provisional blank, labelled as one wherever it is shown.
+    "printed_extents_provisional": 30,
     # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
     # looks at a customer's visual — a photoreal render with no dimensions, no title block,
     # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
@@ -477,6 +496,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "vision_concept":         "sighted from the customer's render (assumed, unconfirmed)",
     "enquiry_brief":          "the enquiry brief typed for this job (stated, unconfirmed by a drawing)",
     "production_substitution": "a confirmed production rule (the gauge the shop buys)",
+    "customer_change":        "the customer's change since the drawings, accepted by an estimator",
     "estimator_confirmed":    "an estimator, overruling the files",
     "estimator_read_drawing": "an estimator reading the drawing",
     "estimator_inferred":     "an estimator's stated inference from the drawing",
@@ -484,6 +504,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "solidworks_api":         "the SolidWorks model",
     "solidworks_flat_pattern": "the SolidWorks flat pattern",
     "solidworks_applied_material": "the SolidWorks library material (appearance, not a spec)",
+    "drawn_on_sheet":         "the sheet that draws the part (it has no sheet of its own)",
     "dxf":                    "the DXF",
     "dxf_flat_pattern":       "the DXF flat pattern",
     "mirror_of_measured":     "the measured opposite hand",
@@ -503,6 +524,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "llm_full_job":           "Grok (xAI)",
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
+    "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
     "compiler_default":       "an engine default",
     # A NAME FOR THE THING THAT WAS CALLED NOTHING.
     #
@@ -777,12 +799,15 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "title_block": "the drawing",
     "drawing_deterministic": "the drawing",
     "drawing_notes": "the drawing",
+    "drawn_on_sheet": "the drawing",
     "bom_table": "the drawing",
     "bom_tree": "the drawing",
     "pdf_overall_dims": "the drawing",
     "llm_extract": "the drawing",
     "llm_full_extract": "the drawing",
     "vision": "the drawing",
+    # The customer, asking for something other than what was drawn.
+    "customer_change": "the customer",
     # A person, however they arrived at it.
     "estimator_confirmed": "a person",
     "estimator_read_drawing": "a person",
@@ -901,7 +926,8 @@ def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
 _DECISION_RANK = 100
 # Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
 # bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
-_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution"})
+_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution",
+                            "customer_change"})
 
 
 def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,
@@ -1050,6 +1076,29 @@ def _same_material(a: Any, b: Any) -> bool:
     return bool((ca and _same_token(ca, sb)) or (cb and _same_token(cb, sa)))
 
 
+# Readings that describe a cut blank: on a record that is not cut from one (an assembly), two
+# such readings are not a disagreement anybody has to settle (D-455).
+_FIELDS_OF_A_CUT_PART = frozenset({"normalized_thickness_mm", "blank_length_mm", "blank_width_mm"})
+
+
+def _is_an_assembly_record(part: Mapping[str, Any]) -> bool:
+    """The same evidence detail_page_geometry.not_cut_from_a_blank weighs, asked of the record
+    alone: an assembly flag or children, or a code naming an assembly drawing where nothing —
+    an explicit is_assembly_parent=False or a measured flat — says otherwise."""
+    if not isinstance(part, Mapping):
+        return False
+    if (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+            or part.get("assembly_children")):
+        return True
+    if part.get("is_assembly_parent") is False or part.get("dxf_augmented")             or part.get("dxf_measured_outline"):
+        return False
+    try:
+        from part_code_conventions import carries_assembly_role
+        return bool(carries_assembly_role(part.get("part_number")))
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
 def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
                 note: Optional[str] = None, confidence: Optional[float] = None) -> bool:
     """Set a datum if this source is entitled to, and record where it came from.
@@ -1132,6 +1181,15 @@ def apply_field(part: Dict[str, Any], field: str, value: Any, source: str,
             and not (_material_field and _same_material(_cur, value))
             and str(source) in support_for(part, field, _cur)):
         _observe(part, field, value, source, applied=False)
+        # A GAUGE ON AN ASSEMBLY IS NOBODY'S DECISION (D-455). 8188-08_GA's sheet prints the
+        # gauges of the parts it draws; read onto the assembly record they are two readings of
+        # a field that prices nothing there, and the book asked "3 or 10 mm?" of a record that
+        # is not cut. Recorded, not asked.
+        # Decided from the record and the code's own shape (part_code_conventions, already in
+        # this module's closure) — never by importing the geometry stack, which the pricing
+        # service does not carry.
+        if leaf in _FIELDS_OF_A_CUT_PART and _is_an_assembly_record(part):
+            return False
         part.setdefault("_self_revisions", {}).setdefault(field, []).append(
             {"source": str(source), "from": _cur, "to": value})
         _others = [s for s in support_for(part, field, _cur) if s != str(source)]

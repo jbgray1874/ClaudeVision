@@ -142,6 +142,19 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         if not isinstance(part, dict) or part.get("_commercial_placeholder"):
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
+        if not (L and W):
+            # THROUGH THE SHARED RESOLVER (D-451). describe_order found each blank this way and
+            # handed the part here, which read only the top-level fields: on a costed record
+            # the blank sits under material_estimate / normalized_geometry, so every part was
+            # "without a blank" and every job's shipment came back not countable.
+            try:
+                from document_builder import flat_blank_mm as _fb
+                L, W = (_num(v) for v in _fb(part))
+            except Exception:                                        # noqa: BLE001
+                pass
+            if not (L and W):
+                me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+                L, W = _num(me.get("blank_length_mm")), _num(me.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1

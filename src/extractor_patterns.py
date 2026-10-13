@@ -175,6 +175,27 @@ def weld_process_stated(text: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
+_SIZE_WITH_UNITS = re.compile(
+    r"(?<![\w.])(\d+(?:\.\d+)?)\s*(mm|cm|m)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?"
+    r"(?:\s*[x×]\s*(\d+(?:\.\d+)?)\s*(mm|cm|m)?)?(?![\w.])", re.IGNORECASE)
+
+
+def size_mixing_units(text: Any) -> Optional[Dict[str, Any]]:
+    """A printed size whose figures carry DIFFERENT units ("50mm x 10mm x 2m"), else None (D-426).
+
+    8188-08's GA lists 14 of "KINGDOM: 50mm x 10mm x 2m MAGNET"; the market lookup priced fourteen
+    two-metre magnets at £48.50 each (£706), where the GA's note calls them neo magnets taped to
+    the underside — most likely 2 mm. Nothing in the size says which, so it is a question, not a
+    correction: the line is priced as printed and the mix of units is put to a person."""
+    for m in _SIZE_WITH_UNITS.finditer(str(text or "")):
+        units = [u.lower() for u in m.groups()[1::2] if u]
+        if len(set(units)) > 1:
+            figures = [f"{v}{(u or '').lower()}" for v, u in zip(m.groups()[0::2], m.groups()[1::2])
+                       if v]
+            return {"text": m.group(0).strip(), "figures": figures, "units": sorted(set(units))}
+    return None
+
+
 def legend_cues_set_aside(text: Any) -> List[str]:
     """The operations a page's legend alone would have cued (weld and dressing), for the record:
     what the full text cues and the legend-stripped text does not."""
@@ -577,7 +598,9 @@ def _extract_revision_from_context(text: str, part_numbers: List[str]) -> List[s
         pattern = re.escape(normalize_text(part_number)) + r"\s+([A-Z0-9]{1,4})\b"
         for value in _findall_unique(pattern, normalized, flags=re.IGNORECASE):
             cleaned = normalize_text(value).upper()
-            if cleaned in {"TTI", "A3"}:
+            # A sheet size is not a revision (D-454: no customer's initials listed here; a
+            # three-letter token fails the revision shape below anyway).
+            if re.fullmatch(r"A[0-4]", cleaned):
                 continue
             if re.fullmatch(r"\d{1,3}|[A-Z]\d{0,2}", cleaned):
                 revisions.append(cleaned)
@@ -892,13 +915,88 @@ def _text_for_gauges(text: str) -> str:
     return _TOLERANCE_FIGURE_RE.sub(" ", strip_specification_legend(normalize_text(text)))
 
 
+_SECTION_SIZE_RE = re.compile(
+    r"\b\d+(?:\.\d+)?\s*[xX×]\s*\d+(?:\.\d+)?(?:\s*[xX×]\s*\d+(?:\.\d+)?)?\s*(?:MM|mm)?\b")
+
+
+def _section_words_re():
+    if "section_words" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _w = list(getattr(_cfg, "SECTION_CALLOUT_WORDS", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _w = []
+        _VOCAB_RES["section_words"] = re.compile(
+            r"\b(?:" + "|".join(_w or [r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS"]) + r")\b",
+            re.IGNORECASE)
+    return _VOCAB_RES["section_words"]
+
+
+def names_a_section(text: str, start: int, end: int, window: int = 60) -> bool:
+    """Does the size at text[start:end] name a stock SECTION — "40 x 20mm … OVAL TUBE",
+    "30 x 30 x 2mm SHS" — rather than a blank (D-406)? A section word within `window`
+    characters after it (or a few before) says so."""
+    after = text[end:end + window]
+    before = text[max(0, start - 20):start]
+    return bool(_section_words_re().search(after) or _section_words_re().search(before))
+
+
+def strip_section_sizes(text: str) -> str:
+    """The text with every size that names a section blanked, so neither its terms nor its
+    pair can be read as a gauge or a blank."""
+    out = text or ""
+    for m in reversed(list(_SECTION_SIZE_RE.finditer(out))):
+        if names_a_section(out, m.start(), m.end()):
+            out = out[:m.start()] + " " * (m.end() - m.start()) + out[m.end():]
+    return out
+
+
+def _weight_qualifier_re():
+    if "weight_qual" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _q = list(getattr(_cfg, "WEIGHT_QUALIFIERS_NOT_THE_PARTS", None) or [])
+        except Exception:                                            # noqa: BLE001
+            _q = []
+        _VOCAB_RES["weight_qual"] = re.compile(
+            r"\b(?:" + "|".join(_q or [r"ESTIMATED", r"BAGS?", r"LOAD(?:ING)?"]) + r")\b"
+            r"[^.;:\n]{0,40}?\bWEIGHTS?\b[^0-9\n]{0,8}[0-9]+(?:\.[0-9]+)?\s*(?:KG|G)\b",
+            re.IGNORECASE)
+    return _VOCAB_RES["weight_qual"]
+
+
+def strip_weights_not_the_parts(text: str) -> str:
+    """"ESTIMATED BAG WEIGHT - 1.5kg" is the customer's goods, not the part on the sheet
+    (D-406): every weight the sheet qualifies as something else's is blanked before the
+    title block's own WEIGHT: is read."""
+    return _weight_qualifier_re().sub(" ", text or "")
+
+
+def _not_before_words() -> set:
+    if "not_before" not in _VOCAB_RES:
+        try:
+            import config as _cfg
+            _w = getattr(_cfg, "GAUGE_NOT_BEFORE_WORDS", None) or ()
+        except Exception:                                            # noqa: BLE001
+            _w = ()
+        _VOCAB_RES["not_before"] = {str(w).upper() for w in _w}
+    return _VOCAB_RES["not_before"]
+
+
 def _extract_thickness_fallbacks(text: str) -> List[str]:
-    normalized = _text_for_gauges(text)
-    values = _findall_unique(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE)
+    # A SECTION'S SIZE IS NOT A GAUGE (D-406): "40 x 20mm OVAL TUBE" read 20 mm on 12675-01.
+    # NOR IS A TAPE'S WIDTH (D-421): "20MM MAG TAPE" read 20 mm on 8188-08 — a size followed by
+    # the thing it sizes (config.GAUGE_NOT_BEFORE_WORDS) is that thing's.
+    normalized = strip_section_sizes(_text_for_gauges(text))
+    stop = _not_before_words()
     filtered: List[str] = []
-    for value in values:
+    for m in re.finditer(r"\b(\d+(?:\.\d+)?)\s*mm\b", normalized, flags=re.IGNORECASE):
+        value = m.group(1)
         number = _safe_float(value)
         if number is None:
+            continue
+        nxt = re.match(r"\s*([A-Za-z]+)", normalized[m.end():m.end() + 24])
+        if nxt and nxt.group(1).upper() in stop:
             continue
         if 0.2 <= number <= 20.0 and value not in filtered:
             filtered.append(value)
@@ -1226,7 +1324,7 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "materials": material_values,
         "surface_finishes": finishes,
         "colours": colours,
-        "weights": _findall_unique(WEIGHT_PATTERN, text, flags=re.IGNORECASE),
+        "weights": _findall_unique(WEIGHT_PATTERN, strip_weights_not_the_parts(text), flags=re.IGNORECASE),
         "drawn_by": drawn_by,
         "modified_by": modified_by,
         "sheet_refs": sheet_refs,
@@ -1407,7 +1505,10 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
         tolerance_noise_values = {"0.5", "1.0", "1.5", "2.0", "120", "1000", "2000", "4000"}
     else:
         tolerance_noise_values = set()
-    overall_sizes_raw = re.findall(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
+    # A SIZE THAT NAMES A SECTION IS THE STOCK'S PROFILE, NOT A BLANK (D-406): "40 x 20mm
+    # STAINLESS STEEL FLAT SIDED OVAL TUBE" gave 12675-01-02 a 40 x 20 blank.
+    overall_sizes_raw = [m.groups() for m in re.finditer(LENGTH_BY_WIDTH_PATTERN, text, flags=re.IGNORECASE)
+                         if not names_a_section(text, m.start(), m.end())]
     overall_sizes = [f"{left} x {right}" for left, right in overall_sizes_raw]
     slot_sizes = [f"{left} x {right}" for left, right in re.findall(SLOT_SIZE_PATTERN, text, flags=re.IGNORECASE)]
 
@@ -1802,8 +1903,16 @@ def build_textual_manufacturing_summary(
         or feature_cues.get("angles_deg")
         or feature_cues.get("fold_count_textual")
     )
+    # THE STANDING SPECIFICATION IS NOT A ROUTE CUE, AT PAGE LEVEL AS AT PART LEVEL (D-438).
+    # The border legend — "POWDERCOATING: BETWEEN 80 - 120 MICRON", "Q195 UP TO 3mm THICK FOR
+    # POWDER COATED STEEL", "ALL WELDS TO BE TIG" — is printed on every sheet of a pack. The
+    # weld and material readers above read with it removed (D-394); this inference read the
+    # whole page, so every sheet minted powder_coating, and 8188-08-SA04 — an acrylic waves
+    # sub-assembly whose own title block states no finish at all — took a powder coat from
+    # the legend and carried it to the P.Coat row. A note stays on the sheet it is written
+    # on; a paragraph written on every sheet is a note on none of them.
     inferred_operations = infer_operations_from_text(
-        full_text + " " + notes_source,
+        strip_specification_legend(full_text) + " " + strip_specification_legend(notes_source),
         material=page_material,
         finishes=finishes,
         has_fold_geometry=has_fold_geometry,

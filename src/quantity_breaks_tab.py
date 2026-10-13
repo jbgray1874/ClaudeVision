@@ -68,6 +68,12 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
     if not (has_charges or has_setup):
         return 0
     from openpyxl.styles import Font                                  # noqa: PLC0415
+    # THE NOTE READS ITS OWN ROWS (D-455). A per-unit charge — the same £ at every quantity —
+    # is not money spread over the order, and the 15:43 book said it was beside a row reading
+    # £20.06 in every column. Said as the figures show it, and left out of the spread.
+    _ch_vals = [_money(r.get("order_charges_per_unit")) for r in rows]
+    _ch_vals = [v for v in _ch_vals if v is not None]
+    charges_flat = bool(_ch_vals) and len(rows) > 1 and (max(_ch_vals) - min(_ch_vals)) < 0.01
     base_q = int(rows[0]["quantity"])
     r = top
     ws.cell(row=r, column=1, value=f"What the fall from {base_q} off is made of").font = bold
@@ -98,7 +104,7 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
                 # 12696-01 at one off — not a making cost, and £24 above what the 2,500-off
                 # column falls to. So: (material + labour − spread) × unit / (material + labour),
                 # the same road quantity_sweep.commercial_correction takes.
-                spread = (charges or 0.0) + (setup or 0.0)
+                spread = (0.0 if charges_flat else (charges or 0.0)) + (setup or 0.0)
                 v = None
                 if (unit is not None and material is not None and labour is not None
                         and (charges is not None or setup is not None)
@@ -110,7 +116,12 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
             cell.alignment = Alignment(horizontal="right")
         r += 1
     note = []
-    if has_charges:
+    if has_charges and charges_flat:
+        note.append(f"Packaging and delivery are carried at £{_ch_vals[0]:.2f} a unit at every "
+                    f"quantity — a per-unit figure, so they do not fall with the order and are "
+                    f"not counted as spread money; check the basis on their lines before "
+                    f"quoting a break.")
+    elif has_charges:
         note.append("Packaging and delivery are priced for the whole order and divided by "
                     "the quantity, so most of their fall is arithmetic on an order figure — "
                     "check that figure before quoting a break.")
@@ -125,7 +136,9 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
 
 def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                               requested: Optional[List[int]] = None,
-                              warning: Optional[str] = None) -> Optional[str]:
+                              warning: Optional[str] = None,
+                              project_costs: Optional[Dict[str, Any]] = None,
+                              volume_priced: Optional[List[str]] = None) -> Optional[str]:
     """Add (or replace) the one-sheet break table. Returns the sheet name, or None.
 
     `warning` is printed in red above the figures when the run knows the comparison is
@@ -216,14 +229,60 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                 ws.cell(row=head + 7, column=col, value=_wbk.rsplit("\\", 1)[-1]
                         .rsplit("/", 1)[-1])
 
+        # PROJECT COSTS ARE CHARGED ONCE AND SHOWN BESIDE THE ORDER, NEVER IN THE UNIT
+        # (D-476): design development, prototypes, testing and documentation from the
+        # customer's standards are one-off obligations of the order — the same £ at every
+        # quantity — so the combined total is the view that answers "what does this order
+        # cost", and the unit price stays the manufacturing figure the brief asked for.
+        #
+        # A PER-BATCH COST IS RECALCULATED AT EACH QUANTITY (D-497, reviewed): once a batch is
+        # not once the order — each column counts the batches its own quantity makes.
+        _pc_total = _money((project_costs or {}).get("total_gbp"))
+        _pc_rows = 0
+        if _pc_total:
+            _pc_rows = 3
+            _per_batch = any(isinstance(_l, dict) and _l.get("scope") == "per_batch"
+                             for _l in ((project_costs or {}).get("lines") or []))
+            ws.cell(row=head + 8, column=1,
+                    value=("Project costs £ (per order once, per batch each batch — not in "
+                           "the unit price)" if _per_batch else
+                           "Project costs £ (charged once — not in the unit price)")
+                    ).font = bold
+            ws.cell(row=head + 9, column=1,
+                    value="Order total incl. project costs £").font = bold
+            try:
+                from concept_scan import project_costs_at as _pc_at
+            except Exception:                                        # noqa: BLE001
+                _pc_at = None
+            for col, r in enumerate(rows, start=2):
+                _u = _money(r.get("unit"))
+                _here = (_pc_at(project_costs, r.get("quantity"))
+                         if (_pc_at and (project_costs or {}).get("lines")) else _pc_total)
+                ws.cell(row=head + 8, column=col, value=_here)
+                if _u is not None:
+                    ws.cell(row=head + 9, column=col,
+                            value=round(_u * int(r["quantity"]) + _here, 2))
+            # ONE BATCH AT EVERY QUANTITY IS A WEAK FALLBACK, SAID ON THE TAB (D-500): a
+            # per-batch cost with no batch size stated is counted once in every column.
+            _unsized = [str(_l.get("code") or _l.get("name") or "a per-batch line")
+                        for _l in ((project_costs or {}).get("lines") or [])
+                        if isinstance(_l, dict) and _l.get("scope") == "per_batch"
+                        and not _l.get("batch_size")]
+            if _unsized:
+                ws.cell(row=head + 10, column=1, value=(
+                    "Per-batch cost(s) " + ", ".join(_unsized) + ": the batch size is not "
+                    "stated, so ONE batch is taken at every quantity — a provisional "
+                    "assumption. Set estimator_decisions.project_batch_size and each column "
+                    "counts its own batches.")).font = Font(italic=True, size=9, color="C00000")
+
         ws.column_dimensions["A"].width = 22
         for col in range(2, len(rows) + 2):
             ws.column_dimensions[ws.cell(row=head, column=col).column_letter].width = 17
-        for _r in range(head, head + 8):
+        for _r in range(head, head + 8 + _pc_rows):
             for _c in range(2, len(rows) + 2):
                 ws.cell(row=_r, column=_c).alignment = Alignment(horizontal="right")
 
-        _basis_rows = _write_basis(ws, rows, head + 9, bold, Alignment)
+        _basis_rows = _write_basis(ws, rows, head + 9 + _pc_rows, bold, Alignment)
 
         _n = ws.max_row + 2
         ws.cell(row=_n, column=1, value=(
@@ -238,6 +297,15 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
             "prices itself — the Material Price Break tab carries each line across the "
             "breaks. This sheet is the comparison."))
         ws.cell(row=_n, column=1).font = Font(italic=True, size=9)
+        # A LINE PRICED AT THIS ORDER'S VOLUME IS THE SAME ITEM PRICE IN EVERY COLUMN (D-501):
+        # the 20:49 K-Wellness labels were asked at 9,600 off; the smaller columns re-use that
+        # price, which a smaller order may not get. Said beside the columns, not only on the line.
+        if volume_priced:
+            ws.cell(row=_n + 1, column=1, value=(
+                "Priced at this order's volume and re-used in every column: "
+                + "; ".join(str(v) for v in volume_priced)
+                + " — a smaller order may pay more per item; confirm the break pricing with "
+                  "the supplier.")).font = Font(italic=True, size=9, color="C00000")
 
         wb.save(str(xlsx_path))
         return SHEET_NAME

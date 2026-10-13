@@ -159,6 +159,11 @@ _CODES: Dict[str, Tuple[str, str, str]] = {
         "Powder cost is charged on surface area, and surface area comes from geometry the "
         "engine is not confident about on this part.",
         "Check the coated area and the powder figure."),
+    "powder_charged_zero_coated_area": (
+        "Powder coat charged with no coated area",
+        "The booth time is charged on this part at its minimum, but nothing gave the part a "
+        "size, so its coated area is 0 and no powder material is charged for it.",
+        "Give the part its blank size; the coat and its powder then follow from the area."),
 }
 
 # Prefix codes carrying a payload after a colon, e.g. missing_labour_rate:laser_cutting

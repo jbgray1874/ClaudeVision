@@ -436,15 +436,29 @@ def _title_block_dwg_no(words: List[dict]) -> Optional[str]:
     joined: List[Tuple[float, str]] = []
     for row in band:
         for start in range(len(row)):
+            # A JOIN ENDS WHERE A WORD ENDS (D-421). Text laid down a character at a time —
+            # the M&S border's specification list is — comes back as one-letter words that
+            # touch, and every prefix of "6063 - ALUMINIUM FOR EXTRUSION" was a candidate:
+            # "6063-AL", "6063-ALUM". Only a join whose next word is across a real space, a
+            # cell border or nothing at all is a token; the whole word is then judged.
             text = row[start]["text"]
             right_edge = row[start]["x1"]
-            for nxt in row[start + 1:]:
+            following = row[start + 1:]
+            for k, nxt in enumerate(following):
                 if nxt["x0"] - right_edge > _max_join_gap(nxt):
                     break  # a cell border, not a space
                 text += nxt["text"]
                 right_edge = nxt["x1"]
-                joined.append((row[start]["top"], text))
+                after = following[k + 1] if k + 1 < len(following) else None
+                if after is None or after["x0"] - right_edge >= _min_space(after):
+                    joined.append((row[start]["top"], text))
     return _lowest_drawing_number(candidates + joined)
+
+
+def _min_space(word: dict) -> float:
+    """The narrowest gap that is a space rather than two letters of one word touching."""
+    height = float(word.get("bottom", 0.0)) - float(word.get("top", 0.0))
+    return max(height, 1.0) * 0.15
 
 
 # A real space between words is a fraction of the text's own height; the distance across
@@ -461,14 +475,38 @@ def _max_join_gap(word: dict) -> float:
     return max(height, 6.0) * _JOIN_GAP_AS_FRACTION_OF_HEIGHT
 
 
+def _title_block_spelling(text: Any) -> str:
+    """A title block's code as the graph spells it. An underscore in a drawing-number cell is
+    a separator: 8188-08's GA prints "8188-08_GA", and read as written it matched no shape, so
+    the product's own sheet named no owner and its rows hung from whatever else was lowest."""
+    return str(text or "").strip().replace("_", "-")
+
+
+def _reads_as_words(code: str) -> bool:
+    """A drawing number's letters are a designator (GA, SA05, 01M), never a word. The M&S
+    border prints its specification list below the drawing-number cell — "• 6063 - ALUMINIUM
+    FOR EXTRUSION", "• 304 - STAINLESS STEEL" — and joined across its spaces that is a
+    code-shaped token lower on the page than the real one: on 8188-08 every sheet of three
+    PDFs read "6063-ALUMINIUMFOREXTRUSION", which became the root of the whole product and
+    pulled the deleted swing stopper in with it."""
+    try:
+        import config as _cfg
+        longest = int(getattr(_cfg, "TITLE_BLOCK_CODE_MAX_LETTER_RUN", 4))
+    except Exception:                                                     # noqa: BLE001
+        longest = 4
+    return bool(re.search(r"[A-Z]{%d,}" % (longest + 1), code.upper()))
+
+
 def _lowest_drawing_number(candidates: List[Tuple[float, str]]) -> Optional[str]:
     """The drawing-number-shaped candidate lowest on the page — a title block sits at the
     bottom, and codes quoted higher up are the BOM's rows or a cross-reference to another
     sheet. Among candidates on one line, the longer is the more specific."""
     best: Optional[Tuple[float, str]] = None
     for top, text in candidates:
-        code = str(text or "").strip()
+        code = _title_block_spelling(text)
         if not part_code_conventions.looks_like_a_drawing_number(code):
+            continue
+        if _reads_as_words(code):
             continue
         if best is None or (top, len(code)) > (best[0], len(best[1])):
             best = (top, code.upper())
@@ -622,46 +660,19 @@ def read_bom_from_page(page) -> Optional[Dict[str, Any]]:
 # ── Grok known-good oracle (per-parent, code/desc-token -> qty) ──
 # We compare on (item, a recognisable token, qty) so minor desc wording differences
 # don't fail the check — the QUANTITIES and the presence of each item are what matter.
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [
-        ("1", "101", 1), ("2", "05M", 1),
-    ],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1),
-        ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        # item 3 = keyhole pem qty 2. Its DESCRIPTION is in a drawing note
-        # ("KEYHOLE PEM SIZE REQUIRED"), NOT the table cell, so a deterministic
-        # table reader correctly yields item 3 / qty 2 with a thin (blank) desc.
-        # We match on item+qty here; the note-desc is a separate enrichment step.
-        ("3", "", 2),
-    ],
-    # ---- 1282 Milwaukee Wall Bay (2013 template, "ITEM NO./PartNo" header) ----
-    # Known-good BOM extracted independently (Grok/pdf_browse) across the file set.
-    # Note codes carry hyphen/space variants on the drawing (e.g. "1450 - GA",
-    # "1453-GA C", "1455-C GA") which _normalize_bom_code repairs to canonical form.
-    "1448-GA": [
-        ("1", "1448-01", 1), ("2", "1448-02", 1),
-    ],
-    "1455-C-GA": [
-        ("1", "1455-C-101", 1), ("2", "1455-C-005", 1),
-        # item 3 = ELECTRICS 50cm LOOM (bought-in, no drawing code); item 4 = FIXING
-        # dome rivet x2. Match item+qty; the code column is a commodity spec here.
-        ("3", "", 1), ("4", "", 2),
-    ],
-    # The top-level GA parent token in 1282's title block — confirm its 7 lines.
-    "1282-GA": [
-        ("1", "1448-GA", 2), ("2", "1449-01C", 3), ("3", "1450-GA", 1),
-        ("4", "1453-GA-C", 1), ("5", "2621-01C", 1), ("6", "3886-GA", 2),
-        ("7", "1455-C-GA", 1),
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["words"], read only by verify().
+def _load_oracle(_key: str = "words"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 def _row_token(row: Dict[str, Any]) -> str:

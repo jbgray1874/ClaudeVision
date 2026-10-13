@@ -578,3 +578,108 @@ def test_the_fold_sentence_names_what_the_note_rung_counted():
     out = fc.press_brake_folds(part)
     assert out["count"] == 2
     assert "read 3 (UP 90°, DOWN 180°, FOLD on its own sheet)" in out["disagreement"]
+
+
+# ── D-406: M&S 12675-01, 7 Oct 17:52 book (design-intent pack on a drawings run) ─────────
+#
+# Three concept sheets titled DESIGN INTENT, every material field "SEE PART DRAWINGS", no parts
+# list, no part sheets. The engine minted a part per drawing number: "40 x 20mm … OVAL TUBE"
+# became a 40 x 20 blank of 20 mm stainless, "ESTIMATED BAG WEIGHT - 1.5kg" its weight, and the
+# report said the pack read cleanly beside three failed checks.
+
+_V2_SHEET = ("DESIGN INTENT ONLY 12 x CUSTOMER BAGS BRUSHED STAINLESS STEEL 5mm STAINLESSS STEEL BASE "
+             "ON 18mm BLACK MFMDF WITH FEET 5mm STAINLESS STEEL ARMS LASERED 40 x 20mm STAINLESS STEEL "
+             "FLAT SIDED OVAL TUBE CAPPED AND FINISHED ON TOP ESTIMATED BAG WEIGHT - 1.5kg "
+             "WEIGHT: 34.82kg 600 x 400 BASE 1500 930")
+
+
+def test_a_design_intent_sheet_is_not_a_detail_sheet_and_mints_no_part():
+    import file_scan as fs
+    role = fs._infer_page_role(_V2_SHEET, "", "12675-01-02 BLOCK MODEL V2 DRAWING No BAG STAND V2 - "
+                               "DESIGN INTENT MATERIAL: SEE PART DRAWINGS")
+    assert role["primary_role"] == "design_intent" and "design_intent_detected" in role["signals"]
+    # a real detail sheet and a GA with a parts list keep their roles
+    assert fs._infer_page_role("UP 90° R 1 DOWN 180° FLAT PATTERN", "",
+                               "9598-03-01M DRAWING No METAL FRAME MATERIAL: MILD STEEL")["primary_role"] == "detail"
+    assert fs._infer_page_role("ITEM DWG NO. DESCRIPTION QTY 1 9598-03-01M METAL FRAME 1 2 FIXING1270 BUMPER 4",
+                               "ITEM DWG NO QTY 1 9598-03-01M 1", "9598-03-GA DRAWING No")["primary_role"] == "assembly"
+    assert fs.design_intent_pages({"pages": [{"page_number": 1, "page_role": {"primary_role": "design_intent"}},
+                                             {"page_number": 2, "page_role": {"primary_role": "detail"}}]}) == [1]
+    # the part index reads the role before it mints: a design-intent page contributes nothing
+    src = (ROOT / "src" / "part_index.py").read_text(encoding="utf-8")
+    assert 'if page_role == "design_intent":' in src
+
+
+def test_a_section_callout_is_neither_a_gauge_nor_a_blank():
+    import extractor_patterns as ep
+    assert ep._extract_thickness_fallbacks(_V2_SHEET) == ["5", "18"]        # not the tube's 20
+    dims = ep.classify_dimensions(_V2_SHEET)
+    assert "600 x 400" in dims["overall_sizes_mm"] and "40 x 20" not in dims["overall_sizes_mm"]
+    assert ep.names_a_section("30 x 30 x 2mm SHS UPRIGHT", 0, 13)
+    assert not ep.names_a_section("471.61 x 212 BLANK 1.2mm MILD STEEL", 0, 12)
+    # a plain blank keeps its gauge reading
+    assert "2" in ep._extract_thickness_fallbacks("BLANK 300 x 200 2mm MILD STEEL")
+
+
+def test_a_weight_the_sheet_qualifies_as_something_elses_is_not_the_parts():
+    import extractor_patterns as ep
+    assert ep.extract_title_block_fields(_V2_SHEET)["weights"] == ["34.82kg"]
+    assert ep.strip_weights_not_the_parts("ESTIMATED BAG WEIGHT - 1.5kg WEIGHT: 0.40kg").strip().endswith("WEIGHT: 0.40kg")
+    assert ep.extract_title_block_fields("MAX LOADING: WEIGHT: 398.43g")["weights"] == ["398.43g"]
+
+
+def test_the_report_never_says_the_pack_read_cleanly_beside_a_failed_check():
+    import job_report_html as jr
+    dq = {"dxf_matched": 0, "dxf_unmatched": 0, "dxf_ambiguous": 0, "validation_issues": [],
+          "parts_without_dxf": [], "filename_space_issues": [], "low_confidence": []}
+    clean = jr._render_drawing_analysis(dict(dq), {"pages": [], "invariants": {"violations": []}})
+    assert "No significant drawing faults detected" in clean
+    failed = jr._render_drawing_analysis(dict(dq), {
+        "pages": [{"page_number": 1, "page_role": {"primary_role": "design_intent"}}],
+        "invariants": {"violations": [{"code": "native_extract_refused", "severity": "blocking"},
+                                      {"code": "blank_and_cut_path_disagree", "severity": "blocking"}]}})
+    assert "No significant drawing faults detected" not in failed
+    assert "Consistency checks failed" in failed and "SolidWorks extract refused" in failed
+    assert "Design-intent sheets" in failed
+
+
+# ── D-407: the sheet's charge and the engine's material basis (12675-01, 18:32 book) ─────
+
+def test_a_nested_line_charged_at_another_order_of_magnitude_from_its_engine_basis_fails():
+    s = {"final_estimate": {"material_rows": [
+            {"part_number": "12675-01-02", "block": "steel", "qty_per_unit": 1,
+             "total_value_gbp": 0.05, "charged_cell": "Estimate!M93"},
+            {"part_number": "FIXING1270", "block": "bought_in", "qty_per_unit": 4, "total_value_gbp": 0.37}]},
+         "estimate_summary": {"part_estimates": [
+            {"part_number": "12675-01-02", "material_estimate": {"unit_material_cost_gbp": 112.26,
+                                                                  "cost_method": "stated_weight"}},
+            {"part_number": "FIXING1270", "material_estimate": {"unit_material_cost_gbp": 9.0}}]}}
+    out = invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s)
+    assert out and out[0]["severity"] == invariants.BLOCKING
+    assert "12675-01-02 charged £0.05 a unit (Estimate!M93) against an engine basis of £112.26" in out[0]["message"]
+    assert "FIXING1270" not in out[0]["message"]                      # a bought-in is not a nested line
+    # the control: a nested line whose two readings agree, and a cheap line, pass
+    s["final_estimate"]["material_rows"][0]["total_value_gbp"] = 110.0
+    assert invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s) == []
+    s["final_estimate"]["material_rows"][0]["total_value_gbp"] = 0.05
+    s["estimate_summary"]["part_estimates"][0]["material_estimate"]["unit_material_cost_gbp"] = 0.4
+    assert invariants.check_the_sheets_charge_agrees_with_the_engines_material_basis(s) == []
+
+
+def test_a_dxf_that_is_a_drawing_of_a_part_never_mints_a_part(tmp_path):
+    import ezdxf
+    import drawing_job_merge as djm
+    sheet = tmp_path / "12675-01-02 Block Model V2.dxf"
+    d = ezdxf.new("R2000"); ms = d.modelspace()
+    ms.add_line((0, 0), (420, 0)); ms.add_line((420, 0), (420, 297))
+    ms.add_linear_dim(base=(0, -10), p1=(0, 0), p2=(420, 0))
+    ms.add_text("12675-01-02 BLOCK MODEL V2").set_placement((10, 10))
+    d.saveas(sheet)
+    report = {}
+    assert djm.dxf_may_mint_a_part(sheet, report, "12675-01-02") is False
+    assert report["unmatched_dxf"][0]["reason"].startswith("drawing_export_not_a_flat")
+    flat = tmp_path / "X-01M_1.2mm MS.dxf"
+    f = ezdxf.new("R2000"); fm = f.modelspace()
+    fm.add_lwpolyline([(0, 0), (200, 0), (200, 100), (0, 100)], close=True)
+    f.saveas(flat)
+    assert djm.dxf_may_mint_a_part(flat, {}, "X-01M") is True

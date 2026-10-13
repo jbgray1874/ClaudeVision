@@ -339,17 +339,18 @@ def _rewrite_estimate_banner(xlsx_path, summary) -> None:
             _bhits = 0
             for _brow in _bws.iter_rows():
                 for _bcell in _brow:
-                    if isinstance(_bcell.value, str) and _bcell.value.startswith("PROVISIONAL —"):
-                        _bcell.value = (f"PROVISIONAL — {_total_b} to settle: {_phrase_b} "
-                                        f"(every one is listed on the AI Explanation tab)")
+                    if isinstance(_bcell.value, str) and _bcell.value.startswith(
+                            ("PROVISIONAL —", "DRAFT —")):
+                        _bcell.value = (f"DRAFT — {_total_b} item(s) to confirm: {_phrase_b} "
+                                        f"(each is listed on the AI Explanation tab)")
                         _bhits += 1
                     elif (isinstance(_bcell.value, str)
                           and _bcell.value.startswith("OUTSTANDING ESTIMATOR INPUTS (")
                           and "questions from the drawings" not in _bcell.value):
                         _head_b = _bcell.value.split(")", 1)[0] + ")"
                         _bcell.value = (f"{_head_b} — questions from the drawings, read with "
-                                        f"the {_total_b} to settle on the AI Explanation tab; "
-                                        f"this sheet is NOT a price until they are answered")
+                                        f"the {_total_b} item(s) to confirm on the AI "
+                                        f"Explanation tab; the sheet firms as they are answered")
                         _bhits += 1
             if _bhits:
                 _bwb.save(str(xlsx_path))
@@ -1864,9 +1865,23 @@ def main() -> None:
                         try:
                             from quantity_breaks_tab import (write_quantity_breaks_tab,
                                                              select_show_formulas)
-                            _tab = write_quantity_breaks_tab(xlsx_path, _swept,
-                                                             requested=_breaks,
-                                                             warning=_mpb_warning)
+                            _tab = write_quantity_breaks_tab(
+                                xlsx_path, _swept, requested=_breaks,
+                                warning=_mpb_warning,
+                                # Project costs (D-476): one-off obligations of the order,
+                                # shown beside the order values, never in the unit price.
+                                project_costs=(summary.get("project_costs")
+                                               if isinstance(summary.get("project_costs"),
+                                                             dict) else None),
+                                # Lines researched at this order's volume (D-501).
+                                volume_priced=[
+                                    f"{_pe.get('part_number')} "
+                                    f"({str(_f).split(':', 1)[1].split(';')[0].strip()})"
+                                    for _pe in ((summary.get("estimate_summary") or {})
+                                                .get("part_estimates") or [])
+                                    if isinstance(_pe, dict)
+                                    for _f in (_pe.get("review_flags") or [])
+                                    if str(_f).startswith("PRICED AT VOLUME:")])
                             if _tab:
                                 summary["quantity_breaks_tab"] = _tab
                             # The same request's other half. A view, not a change to a cell:
@@ -2047,8 +2062,11 @@ def main() -> None:
             # and price_not_reproducible blocked the job for it anyway, because the
             # declaration existed only in memory. Carried across explicitly rather than left
             # to whichever pass happens to serialise last.
+            # The quantity sweep and the project costs ride across too (D-504): the quotation's
+            # cost-by-quantity page is generated from this file, and so is every regeneration
+            # after an estimator has amended the sheet.
             if _target is not summary:
-                for _carry in ("withheld_price_lines",):
+                for _carry in ("withheld_price_lines", "quantity_sweep", "project_costs"):
                     _val = summary.get(_carry)
                     if _val and not _target.get(_carry):
                         _target[_carry] = list(_val) if isinstance(_val, list) else _val

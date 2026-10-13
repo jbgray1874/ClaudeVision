@@ -1143,6 +1143,45 @@ def _raw_identity_aliases(
                         "other": str(i_rec.get("description") or ""),
                         "from_identity": ident,
                     })
+
+    # ── A WRAPPED PARTS-LIST CELL IS ONE LINE (D-435) ─────────────────────────────────
+    # 8188-08-SA03's table prints the insert's code cell wrapped: "FIXING M6x12mm" over
+    # "THREADED INSERT, HEADED HEX DRIVE". One reader took the first line as the code and the
+    # rest as the description; another took the whole cell as the identity, with no
+    # description. Two nodes, each x4, and the drawing's four inserts were charged as eight
+    # (17:37 book, £0.42 + £0.92). An identity whose squashed spelling is EXACTLY another
+    # identity's code and description joined is that row read as one cell — not a near
+    # match, a structural identity. The coded spelling survives: it is what a catalogue
+    # holds and a person looks up. The two counts must not disagree, nor the two kinds.
+    _pool3 = [i for i in (set(raw) | set(extracted)) if i not in aliases]
+    _coded: Dict[str, List[str]] = {}
+    for ident in _pool3:
+        desc = str(_rec_of(ident).get("description") or "").strip()
+        if not desc:
+            continue
+        joined = _squashed(ident + " " + desc)
+        if len(joined) >= 10 and joined != _squashed(ident):
+            _coded.setdefault(joined, []).append(ident)
+    for ident in _pool3:
+        if ident in aliases:
+            continue
+        hosts = [h for h in (_coded.get(_squashed(ident)) or [])
+                 if h != ident and h not in aliases]
+        if len(hosts) != 1:
+            continue
+        host = hosts[0]
+        ri, rh = _rec_of(ident), _rec_of(host)
+        if not _quantities_do_not_disagree(number(ri.get("quantity"), None),
+                                           number(rh.get("quantity"), None)):
+            continue
+        if not _kinds_are_compatible(ri, rh):
+            continue
+        aliases[ident] = host
+        if isinstance(rh, dict):
+            _note = (f"{ident} is this row read as one cell — the code and the description "
+                     f"of {host} joined; one line, not two")
+            if _note not in (rh.get("review_flags") or []):
+                rh.setdefault("review_flags", []).append(_note)
     return aliases
 
 
@@ -1478,7 +1517,8 @@ def build_part_graph(
     _claimed_codes |= {
         clean_part_number(_k)
         for _p in (parts or []) if isinstance(_p, Mapping)
-        for _k in (_p.get("assembly_children") or [])
+        for _k in (list(_p.get("assembly_children") or [])
+                   + list(_p.get("assembly_fitted_items") or []))
     }
     _claimed_codes.discard("")
     aliases = _raw_identity_aliases(raw_original, extracted, claimed=_claimed_codes)
@@ -1708,8 +1748,12 @@ def build_part_graph(
     for part in parts or []:
         if not isinstance(part, Mapping):
             continue
-        _kids = part.get("assembly_children")
-        if not isinstance(_kids, list) or not _kids:
+        # A UNIT'S FITTED BOUGHT AND PRINTED LINES ARE ITS CHILDREN IN THE HIERARCHY TOO
+        # (D-487), read from their own field so the member rules never see them.
+        _kids = (list(part.get("assembly_children") or [])
+                 if isinstance(part.get("assembly_children"), list) else []) + \
+            list(part.get("assembly_fitted_items") or [])
+        if not _kids:
             continue
         _pid = clean_part_number(part.get("part_number"))
         _pid = aliases.get(_pid, _pid)
@@ -1949,6 +1993,68 @@ def build_part_graph(
             print(f"   [bom] '{_pid}' owned by '{_bp}' (qty {_q:g}) — the record carries "
                   f"the parent BOM whose table listed it", flush=True)
 
+    # ── THE OTHER HAND OF AN ASSEMBLY IS THAT ASSEMBLY, MIRRORED (D-505) ──────────────────
+    # 12665-01-GA lists 12665-03-GA-H, "NPI ZONE SIDE WING - HANDED", beside 12665-03-GA. The
+    # hand has no drawing of its own — it is the base kit built the other way round — so it
+    # had no children, read as a leaf, and was costed as a 400 x 300 acrylic panel; its own
+    # steel wing 12665-03-01M-H and lighting 12665-03-02X-H were in the pack and hung
+    # "not linked". A hand of an ASSEMBLY that states no members takes the base's members at
+    # the base's counts, each by its own hand where the pack has one (03-01M -> 03-01M-H) and
+    # as itself where it has none (a screw is a screw either way). A hand of a CUT part is the
+    # hardware pass below — it stays a part (D-280); this is only for a base that is an
+    # assembly by its role or by members that are not all hardware. A hand that states ANY
+    # member of its own keeps its own list — its handed differences are the drawing's, not
+    # ours to overwrite.
+    try:
+        from part_code_conventions import (carries_assembly_role as _role_asm,
+                                           mirror_base as _hand_base)
+    except Exception:                                                # noqa: BLE001
+        _role_asm = _hand_base = None
+    if _hand_base is not None:
+        _known_ids = set(raw) | set(extracted) | set(records)
+        _hand_of: Dict[str, str] = {}
+        for _hid in sorted(_known_ids):
+            _b = clean_part_number(_hand_base(_hid) or "")
+            _b = aliases.get(_b, _b)
+            if _b and _b != _hid:
+                _hand_of.setdefault(_b, _hid)
+        for _bid, _hid in sorted(_hand_of.items()):
+            _bkids = dict(children.get(_bid) or {})
+            if not _bkids or children.get(_hid):
+                continue
+
+            def _hardware(_c: str) -> bool:
+                _kr = dict(records.get(_c) or {})
+                _kr.setdefault("part_number", _c)
+                return bool(_bought_in_record(_kr) or str(_c).upper().startswith("BI-")
+                            or bought_in_policy.is_bought_in(_kr))
+
+            if not (_role_asm(_hid) or _role_asm(_bid)
+                    or not all(_hardware(_c) for _c in _bkids)):
+                continue
+            _taken = []
+            _held_above = set()
+            for _hp in parents.get(_hid) or set():
+                _held_above |= set((children.get(_hp) or {}).keys())
+            for _c, _q in _bkids.items():
+                _c2 = _hand_of.get(_c, _c)
+                # NOT TWICE (review of D-505): a shared item the hand's own parent already
+                # lists is counted there — the parent's table took it for both hands.
+                if _c2 == _c and _c in _held_above:
+                    _taken.append(f"{_c} (already counted on the parent, not copied)")
+                    continue
+                children.setdefault(_hid, {})[_c2] = _q
+                parents.setdefault(_c2, set()).add(_hid)
+                _taken.append(f"{_c2} x{_q:g}")
+            if not children.get(_hid):
+                continue
+            records.setdefault(_hid, {})["is_sub_assembly"] = True
+            records[_hid]["hierarchy_source"] = "mirrored_base_assembly"
+            records[_hid]["mirrored_assembly_of"] = _bid
+            print(f"   [graph] {_hid} is the other hand of assembly {_bid} and takes its "
+                  f"members, each by its own hand where the pack has one: "
+                  + ", ".join(_taken), flush=True)
+
     # ── AND THE PAGE A PART WAS LISTED ON, when no reader gave it an owner ────────────
     # The last resort, and it exists because the readers above can all be empty at once.
     # On 12392 the deterministic BOM reader found no rows, so nothing carried bom_parent;
@@ -2130,6 +2236,143 @@ def build_part_graph(
               f"counts; it adds no second path"
               + (f"; linked {', '.join(_linked)}, which nothing else reached" if _linked
                  else ""), flush=True)
+
+    # ── AN ASSEMBLY WHOSE DRAWING IS MISSING: ITS NUMBERING FINDS CANDIDATES (D-505) ──────
+    # 12665-01-GA lists 12665-04-GA, "ISLAND NEW / PACKOUT HEADER"; its drawing is not in the
+    # pack, but 12665-04-201 "NEW FASCIA ASSEMBLY", 12665-04-301 "PACKOUT FASCIA ASSEMBLY" and
+    # 12665-04-01M "HEADER FRAME" are. With no sheet to list them, the header had no members
+    # and those drawings no parent: set aside, their material unpriced, their laser and fold
+    # still charged.
+    #
+    # NUMBERING FINDS, EVIDENCE DECIDES (review of D-505). A drawing numbered under the
+    # assembly ("12665-04-…") that nothing else claims is a CANDIDATE — it could equally be
+    # an alternative, a superseded revision or an unrelated detail. It is charged as a member
+    # only where something else corroborates it: its own record names the assembly as its
+    # parent, or its description shares a word with the assembly's (HEADER, PACKOUT, NEW).
+    # A corroborated member carries its count and the reason on its line, as a question; an
+    # uncorroborated candidate stays out of the price and is NAMED, never silently charged.
+    # Never a code another parent owns; never across job numbers (the prefix carries the
+    # job); never into a loop; the longer numbering wins.
+    try:
+        from part_code_conventions import (carries_assembly_role as _fam_role,
+                                           mirror_base as _fam_hand,
+                                           strip_assembly_role as _fam_strip)
+    except Exception:                                                # noqa: BLE001
+        _fam_role = None
+    _family_adopted: Dict[str, List[Tuple[str, str]]] = {}
+    _family_proposed: Dict[str, List[str]] = {}
+    _family_issues: List[Dict[str, Any]] = []
+    if _fam_role is not None:
+        _fam_universe = set(raw) | set(extracted) | set(records) | set(children) | set(parents)
+        _desc_of: Dict[str, str] = {}
+        for _src in (records, raw, extracted):
+            for _k, _r in _src.items():
+                if isinstance(_r, Mapping) and _r.get("description") and _k not in _desc_of:
+                    _desc_of[_k] = str(_r.get("description"))
+        for _row in (bom_rows or []):
+            if isinstance(_row, Mapping) and _row.get("description"):
+                _k = clean_part_number(_row.get("part_number"))
+                _k = aliases.get(_k, _k)
+                if _k and _k not in _desc_of:
+                    _desc_of[_k] = str(_row.get("description"))
+        _FAM_STOP = {"THE", "AND", "FOR", "WITH", "ASSEMBLY", "ASSY", "ASSEMBLIES", "SUB",
+                     "KIT", "DRAWING", "PART", "ITEM", "REV", "SHEET", "GENERAL",
+                     "ARRANGEMENT"}
+
+        def _words(_t: str) -> Set[str]:
+            return {w for w in re.findall(r"[A-Z]{3,}", str(_t or "").upper())
+                    if w not in _FAM_STOP}
+
+        def _states_parent(_rec: Any, _asm: str) -> bool:
+            if not isinstance(_rec, Mapping):
+                return False
+            for _key in ("bom_parent", "bom_parents", "parent_assembly", "next_assembly",
+                         "used_on", "stated_parent_part_number"):
+                _v = _rec.get(_key)
+                for _x in (_v if isinstance(_v, (list, tuple, set)) else [_v]):
+                    if _x and spelling_key(clean_part_number(_x)) == spelling_key(_asm):
+                        return True
+            return False
+
+        _hollow: Dict[str, str] = {}
+        for _h in sorted(_fam_universe):
+            if not _h or children.get(_h) or not parents.get(_h) or not _fam_role(_h):
+                continue
+            _fam = _fam_strip(_fam_hand(_h) or _h)
+            if _fam and _fam != _h:
+                _hollow[_h] = _fam.upper()
+
+        def _descendants(_n: str) -> Set[str]:
+            _seen: Set[str] = set()
+            _st = [_n]
+            while _st:
+                _x = _st.pop()
+                if _x in _seen:
+                    continue
+                _seen.add(_x)
+                _st.extend((children.get(_x) or {}).keys())
+            return _seen
+
+        for _o in sorted(_fam_universe):
+            if not _o or parents.get(_o) or _o in _hollow or _is_generated_line(
+                    _o, records.get(_o)):
+                continue
+            _matches = [(h, f) for h, f in _hollow.items()
+                        if _o.upper().startswith(f) and len(_o) > len(f)
+                        and _o[len(f)] in "-_ "]
+            if not _matches:
+                continue
+            _h, _f = max(_matches, key=lambda hf: len(hf[1]))
+            if _h in _descendants(_o):
+                continue
+            _rec = records.get(_o) or raw.get(_o) or extracted.get(_o) or {}
+            _why = ""
+            if _states_parent(_rec, _h):
+                _why = f"its own record names {_h} as its parent"
+            else:
+                _shared = sorted(_words(_desc_of.get(_o, "")) & _words(_desc_of.get(_h, "")))
+                if _shared:
+                    _why = (f"its description ('{_desc_of.get(_o)}') shares "
+                            f"{', '.join(_shared)} with {_h}'s ('{_desc_of.get(_h)}')")
+            if not _why:
+                _family_proposed.setdefault(_h, []).append(_o)
+                continue
+            _q = number(_rec.get("quantity") if isinstance(_rec, Mapping) else None, 1.0) or 1.0
+            children.setdefault(_h, {})[_o] = _q
+            parents.setdefault(_o, set()).add(_h)
+            _family_adopted.setdefault(_h, []).append((_o, _why))
+        for _h, _members in sorted(_family_adopted.items()):
+            _ids = [m for m, _w in _members]
+            records.setdefault(_h, {})["is_sub_assembly"] = True
+            records[_h]["hierarchy_source"] = "adopted_by_numbering"
+            records[_h]["adopted_members"] = list(_ids)
+            print(f"   [graph] {_h} states no members (its drawing is not in the pack) — "
+                  f"members taken from its numbering WITH corroboration: "
+                  + "; ".join(f"{m} ({w})" for m, w in _members)
+                  + ". Provisional: confirm against its drawing.", flush=True)
+            _family_issues.append({
+                "code": "members_adopted_by_numbering",
+                "assembly": _h,
+                "identities": _ids,
+                "counts": {m: children[_h][m] for m in _ids},
+                "reasons": {m: w for m, w in _members},
+                "detail": (f"{_h} names no members of its own (its drawing is not in the "
+                           f"pack); members taken from the pack's drawings numbered under it, "
+                           f"each corroborated: "
+                           + "; ".join(f"{m} x{children[_h][m]:g} — {w}" for m, w in _members)
+                           + " — confirm against its parts list"),
+            })
+        for _h, _cands in sorted(_family_proposed.items()):
+            print(f"   [graph] {_h}: numbered under it but NOT charged (nothing corroborates "
+                  f"membership): {', '.join(_cands)}", flush=True)
+            _family_issues.append({
+                "code": "members_proposed_by_numbering",
+                "assembly": _h,
+                "candidates": list(_cands),
+                "detail": (f"{_h} names no members of its own; {', '.join(_cands)} are "
+                           f"numbered under it but nothing else ties them to it, so they are "
+                           f"NOT in the price — confirm whether they belong"),
+            })
 
     top = llm_extract.get("top_assembly") or {}
     top_id = clean_part_number(top.get("part_number") if isinstance(top, Mapping) else top)
@@ -2482,6 +2725,12 @@ def build_part_graph(
             top_id = product_root
         else:
             _stop = len(top_ids) > 1
+            # A ROOT WITH NO NUMBER IS SAID, NOT PRINTED AS "()". 12675-01's design-intent
+            # pack resolved one root whose identity was blank, and the sentence read "The
+            # pack has one top-level assembly (), which is what is costed" (D-409).
+            _named_roots = [str(t) for t in top_ids if str(t or "").strip()]
+            _one_root = (f"({', '.join(_named_roots)})" if _named_roots
+                         else "that carries no drawing number of its own")
             _product_issues.append({
                 "code": "declared_product_not_resolved",
                 "declared": _declared,
@@ -2496,7 +2745,7 @@ def build_part_graph(
                               f"so NOTHING is rolled up — every line is at its own drawing "
                               f"count. Correct the Drawing Number and re-run."
                               if _stop else
-                              f". The pack has one top-level assembly ({', '.join(top_ids)}), "
+                              f". The pack has one top-level assembly {_one_root}, "
                               f"which is what is costed — confirm it is the product.")),
             })
             print(f"   [graph] DECLARED PRODUCT {_declared!r} NOT RESOLVED "
@@ -3008,7 +3257,7 @@ def build_part_graph(
 
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
                     + list(_version_issues)
-                    + list(_product_issues))
+                    + list(_product_issues) + list(_family_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
@@ -3183,11 +3432,30 @@ def apply_canonical_evidence_to_parts(
     set_aside_outside_product(parts, graph.get("issues"), summary=summary)
     nodes = {node.part_number: node for node in graph["nodes"]}
     aliases = graph.get("aliases") or {}
+    # A MEMBERSHIP THE GRAPH INFERRED IS SAID ON THE LINE (D-505): the estimator confirms it
+    # against the missing parts list, the way every other provisional reading is confirmed.
+    _adopted_by: Dict[str, Tuple[str, float, str]] = {}
+    for _iss in graph.get("issues") or []:
+        if isinstance(_iss, Mapping) and _iss.get("code") == "members_adopted_by_numbering":
+            for _m in _iss.get("identities") or []:
+                _adopted_by[clean_part_number(_m)] = (
+                    str(_iss.get("assembly") or ""),
+                    float((_iss.get("counts") or {}).get(_m) or 1.0),
+                    str((_iss.get("reasons") or {}).get(_m) or ""))
     for part in parts or []:
         if not isinstance(part, dict):
             continue
         source_id = clean_part_number(part.get("part_number") or part.get("item_number"))
         identity = aliases.get(source_id, source_id)
+        if identity in _adopted_by:
+            _asm, _cnt, _why = _adopted_by[identity]
+            _flag = (f"{identity} is costed under {_asm}, whose drawing is not in the pack: it "
+                     f"is numbered under it, nothing else lists it"
+                     + (f", and {_why}" if _why else "")
+                     + f" — taken as a member at {_cnt:g}; confirm the membership and count "
+                       f"against {_asm}'s parts list")
+            if _flag not in (part.get("review_flags") or []):
+                part.setdefault("review_flags", []).append(_flag)
         node = nodes.get(identity) if identity else None
         if node is None:
             continue
@@ -4480,6 +4748,13 @@ def compile_job_route(
     explicit_memberships: Dict[Tuple[str, str], Set[str]] = {}
     explicit_assembly_events: Dict[str, List[Tuple[str, str]]] = {}
     issues: List[Dict[str, Any]] = list(graph.get("issues") or [])
+    # ONE SCOPE FOR MATERIAL AND LABOUR (D-505). The graph sets a line aside when the declared
+    # product does not reach it, and its RECORD leaves the costed population — but a stated
+    # route naming it still became a required decision, so 12665-01-GA's sheet charged laser,
+    # fold and assembly on six parts its own header said were "set aside, not priced", with
+    # no material beside them. A route's participants are the graph's; one it does not carry
+    # is dropped here, and a route left with none is recorded rather than charged.
+    _outside = outside_product_identities(issues)
 
     def add_claim(event_id: str, claim: OperationClaim) -> None:
         claims_by_event.setdefault(event_id, []).append(claim)
@@ -4494,6 +4769,12 @@ def compile_job_route(
             for item in (route.get("part_numbers") or [])
             if clean_part_number(item)
         ]
+        _dropped = [item for item in participants if item in _outside]
+        if _dropped:
+            participants = [item for item in participants if item not in _outside]
+            issues.append({"code": "route_participant_outside_the_product",
+                           "operation": operation, "identities": _dropped,
+                           "kept": list(participants)})
         if not operation or not participants:
             continue
         stated_scope = str(route.get("scope") or "").strip().lower()
@@ -5779,6 +6060,8 @@ def compile_job_route(
     # on its members' own lines (D-387). Both leave the ruled-out decision and its reason.
     _member_finish_weld_is_the_assemblys(decisions, graph, issues)
     _withhold_coats_with_nothing_to_coat(decisions, graph, issues)
+    # A bond, a coat or a routing is charged at one level of the tree (D-446).
+    _withhold_duplicate_level_ops(decisions, graph, issues)
     # NOT GATED, BECAUSE IT MOVES NO MONEY. The family gate above changes what a job charges and
     # so enters only where its evidence is; this one only ever adds a question to the record, and
     # a job that is double-charging a joint deserves the question whichever lane it came down.
@@ -5997,7 +6280,11 @@ _LEAF_WELD_OPS = frozenset({"welding", "dress_welds"})
 # "override_rule" is a decision derived from another (dressing from a weld).
 _WELD_EVIDENCE_FREE_SOURCES = frozenset({
     "inference", "geometry_inference", "estimator_inferred", "override_rule", "unknown",
-    "vision_concept", "enquiry_brief", "",
+    "vision_concept", "",
+    # "enquiry_brief" left this set with D-467: a weld source is stamped enquiry_brief in
+    # exactly one place — the concept read, from the model's own per-part from_brief
+    # attribution (parts_from_concept, D-469) — and a concept pack has no sheets to outrank
+    # it. On a drawing pack no operation source is ever the brief, so the drawings still rule.
 })
 # A person's answer, or a measurement: a weld these state is never re-homed by a rule here.
 _PERSON_OR_MODEL_SOURCES = frozenset({
@@ -6095,7 +6382,18 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
     leaf has no required weld at all and the dressing rests on an inference alone.
 
     A leaf with no parent keeps D-258's rule (an inference is priced and asked): there is no
-    assembly to carry the joint. A weld stated by the part's own sheet is never touched here."""
+    assembly to carry the joint. A weld stated by the part's own sheet is never touched here.
+
+    A CONCEPT PART keeps D-258's rule too (D-472). This withhold holds a leaf's weld to the
+    standard its own pack sets — a drawing pack gives every part a sheet, and a weld that
+    sheet does not state is contradicted by the pack's own evidence. A concept part has no
+    sheet at all: the model's sighting is the only reading the job has, and the estimate is
+    a concept budget whose every sighted operation is a priced provisional operation. James
+    Gray, 11 Oct 2026: "if the llm passes us back welds, we price welds" — 'no individual
+    part drawing' must not silently turn a concept weld into £0. The weld stays priced with
+    its concept provenance on the record (the assumptions list carries 'the work sighted on
+    the render'), and one located joint is still one charge (concept_scan's
+    price_the_joint_once dedupes the pair before the compiler ever sees it)."""
     kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
     parents = graph.get("parents") or {}
     withheld: List[str] = []
@@ -6127,6 +6425,11 @@ def _withhold_evidenceless_leaf_welds(decisions: Sequence[Any], graph: Mapping[s
             continue
         _tid = str(_d.target_id or "")
         if not _leaf_under_assembly(_tid):
+            continue
+        if _graph_record(graph, _tid).get("concept"):
+            # A concept part has no sheet to give evidence, so "its own sheet gives no
+            # weld" can never be true of it — the sighting is priced and asked (D-472).
+            weld_state[_tid] = "kept"
             continue
         _ev = _own_evidence(_d, _tid)
         if _ev:
@@ -6402,6 +6705,109 @@ def _withhold_coats_with_nothing_to_coat(decisions: Sequence[Any], graph: Mappin
         if issues is not None:
             issues.append({"code": "coat_with_nothing_to_coat", "operation": _op, "part": _tid,
                            "members": _classes})
+    return withheld
+
+
+def _withhold_duplicate_level_ops(decisions: Sequence[Any], graph: Mapping[str, Any],
+                                  issues: Optional[List[Dict[str, Any]]] = None) -> List[str]:
+    """An operation is charged at one level of the tree (D-446).
+
+    8188-08, the 19:32 book: Glue on 8188-08_GA (the acrylic route's inference) and again on
+    SA03 and SA04 (their sheets say BONDED); Wet Spray on SA04 and again on its member 013
+    (whose own sheet states WET SPRAYED); CNC Joinery on SA03 (the board-material default,
+    "unmeasured_default") and again, measured, on its MDF child 010. Each pair was raised as a
+    decision for an estimator. The pack decides most of them: a bond, a coat, a routing is done
+    once to a thing, and where an assembly and its members both carry one of config
+    ONE_LEVEL_OPERATIONS, the side whose evidence is weaker — a page word or a material default
+    against a stated finish or a measured time — is ruled out with the reason. Where the
+    evidence is equal the members keep it (the work is on the members; they already carry it)
+    and the assembly stands down. Nothing is deleted: the ruled-out decision keeps its reason
+    and the status provenance names this rule. A welded assembly's coat and powder have their
+    own rules and are not touched here.
+    """
+    try:
+        import config as _cfg
+        from source_precedence import rank as _rank
+    except Exception:                                                # pragma: no cover
+        return []
+    ops = {str(o).lower() for o in (getattr(_cfg, "ONE_LEVEL_OPERATIONS", None)
+                                    or ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic"))}
+    kinds = {getattr(n, "part_number", ""): getattr(n, "kind", "") for n in (graph.get("nodes") or [])}
+    children = graph.get("children") or {}
+
+    def _descendants(_pn: str, _depth: int = 0) -> List[str]:
+        out: List[str] = []
+        for _k in (children.get(_pn) or {}):
+            out.append(str(_k))
+            if _depth < 8:
+                out.extend(_descendants(str(_k), _depth + 1))
+        return out
+
+    stated = {str(s).lower() for s in (getattr(_cfg, "ONE_LEVEL_STATED_SOURCES", None)
+                                        or ("drawing_notes", "drawing_deterministic", "dxf",
+                                            "dxf_geometry", "solidworks", "finish_field"))}
+
+    def _one(_src: Any) -> int:
+        _s = str(_src or "").lower()
+        # 2: the sheet, the flat or the model states it; 1: inferred, defaulted, or unknown.
+        # source_precedence's rank is honoured where it already places a reader above inference.
+        return 2 if (_s in stated or (_rank(_s) or 0) > (_rank("inference") or 0)) else 1
+
+    def _strength(_d: Any) -> int:
+        best = _one(getattr(_d, "source", ""))
+        for _c in (getattr(_d, "claims", None) or []):
+            if isinstance(_c, Mapping) and str(_c.get("status") or "").upper() == REQUIRED.upper():
+                best = max(best, _one(_c.get("source")))
+        return best
+
+    required = [d for d in decisions if d.status == REQUIRED and str(d.operation or "").lower() in ops]
+    by_target: Dict[Tuple[str, str], List[Any]] = {}
+    for d in required:
+        by_target.setdefault((str(d.target_id or ""), str(d.operation or "").lower()), []).append(d)
+    withheld: List[str] = []
+    for d in list(required):
+        if d.status != REQUIRED:
+            continue
+        _op = str(d.operation or "").lower()
+        _tid = str(d.target_id or "")
+        if kinds.get(_tid) != "assembly":
+            continue
+        below = [(k, dd) for k in _descendants(_tid) for dd in by_target.get((k, _op), []) if dd.status == REQUIRED]
+        if not below:
+            continue
+        parent_s = _strength(d)
+        child_s = max(_strength(dd) for _, dd in below)
+        words = _op.replace("_", " ")
+        if parent_s > child_s:
+            # the assembly's evidence is the stronger (its sheet states the finish; the members
+            # carry an inference): the members stand down
+            for k, dd in below:
+                dd.status = NOT_APPLICABLE
+                dd.reason = ((f"{dd.reason}; " if dd.reason else "")
+                             + f"{words} is charged once, on {_tid}, whose evidence for it is the "
+                               f"stronger ({d.source}); this member's ({dd.source}) is the weaker reading "
+                               f"of the same work — if it is a separate stage (before as well as "
+                               f"after assembly), both are real and this row should be put back")
+                dd.field_provenance["status"] = "operation_charged_at_one_level"
+                withheld.append(k)
+                if issues is not None:
+                    issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                                   "part": k, "kept_on": _tid})
+            continue
+        kept = ", ".join(sorted({k for k, _ in below}))
+        d.status = NOT_APPLICABLE
+        d.reason = ((f"{d.reason}; " if d.reason else "")
+                    + f"{words} is charged once, on the member(s) that carry it ({kept}); "
+                    + (f"this assembly's evidence ({d.source}) is the weaker reading of the same work"
+                       if parent_s < child_s else
+                       f"the evidence is equal on both — PROVISIONAL: read as one event, done on "
+                       f"the members; if the shop does this both before and after assembly, both "
+                       f"are real and this row should be put back"))
+        d.field_provenance["status"] = "operation_charged_at_one_level"
+        withheld.append(_tid)
+        if issues is not None:
+            issues.append({"code": "operation_charged_at_one_level", "operation": _op,
+                           "part": _tid, "kept_on": kept})
     return withheld
 
 

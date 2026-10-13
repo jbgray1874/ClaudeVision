@@ -43,8 +43,10 @@ FLAT_PATTERN = "flat_pattern_bend_lines"
 DRAWING_NOTE = "drawing_fold_note"
 MODEL_FEATURES = "solidworks_bend_features"
 DASHED_PROXY = "inferred_dashed_lines"
+CONCEPT_READ = "concept_read_fold_count"
 NO_EVIDENCE = "no_bend_evidence"
 CALLOUTS_AND_MODEL = "drawing_callouts_agreeing_with_model"
+CALLOUTS_ONLY = "drawing_bend_callouts"
 
 _MEASURED = {FLAT_PATTERN, MODEL_FEATURES, CALLOUTS_AND_MODEL}
 
@@ -53,8 +55,10 @@ _LABEL = {
     DRAWING_NOTE: "the drawing's fold callouts",
     MODEL_FEATURES: "the SolidWorks bend features",
     DASHED_PROXY: "dashed lines read off a drawing view",
+    CONCEPT_READ: "the concept read's provisional fold count (sighted, not measured)",
     NO_EVIDENCE: "nothing on this part",
     CALLOUTS_AND_MODEL: "the drawing's bend callouts, which the SolidWorks model confirms",
+    CALLOUTS_ONLY: "the UP/DOWN bend callouts on its own sheet (no model to confirm them)",
 }
 # Not a rung: the UP/DOWN callouts counted off the part's own sheet. They decide only with the
 # model's confirmation (CALLOUTS_AND_MODEL); where they do not decide, they are still a reading.
@@ -116,6 +120,17 @@ def solidworks_bend_features(part: Dict[str, Any]) -> Optional[int]:
     return _int(part.get("solidworks_bend_features"))
 
 
+def concept_read_fold_count(part: Dict[str, Any]) -> Optional[int]:
+    """The folds the concept read gave a part it sighted (D-490): a provisional count off a
+    brief or render, below every reading of a drawing, model or flat. Without it a sighted
+    folded part was charged no fold at all — run time 0, so the workbook's per-part rate was
+    its pieces over the set-up alone (36,036/hr on the K-Wellness posts)."""
+    if not isinstance(part, dict):
+        return None
+    value = _int(part.get("concept_fold_count"))
+    return value if value and value > 0 else None
+
+
 def dashed_line_proxy(part: Dict[str, Any]) -> Optional[int]:
     """Our own inference from dashed vectors in a PDF view. The weakest thing here."""
     if not isinstance(part, dict):
@@ -148,6 +163,7 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
         (FLAT_PATTERN, flat_pattern_bend_lines(part)),
         (DRAWING_NOTE, drawing_fold_note(part)),
         (MODEL_FEATURES, solidworks_bend_features(part)),
+        (CONCEPT_READ, concept_read_fold_count(part)),
         (DASHED_PROXY, dashed_line_proxy(part)),
     )
     count, source = 0, NO_EVIDENCE
@@ -181,6 +197,19 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
             and (source == FLAT_PATTERN
                  or (source == DRAWING_NOTE and _note_is_angle_list_only(part)))):
         count, source = _callouts, CALLOUTS_AND_MODEL
+    # AND WITH NO MODEL AT ALL, THE FULL LIST BEATS ITS DE-DUPLICATED SHADOW (D-505). 12665's
+    # side wing prints seven UP/DOWN callouts on its own sheet; the note rung read lists that
+    # are de-duplicated by value (one "90°" for five 90° bends) and charged two folds. Where no
+    # flat pattern and no model exist, and the drawing office wrote no fold COUNT, the sheet's
+    # own per-bend callouts are the fuller count of the same printed statements — charged, not
+    # measured, and still asked.
+    # NOT A COUNT OF REPEATED VIEWS (review of D-505): the same bend called out in two views
+    # reads twice. Where the sheet's drawn bend lines were counted (the dashed-line reading),
+    # the callouts may not exceed them; past that ceiling they stay a reading, not the charge.
+    elif (_callouts and not _model and _callouts > count and source == DRAWING_NOTE
+          and not _int(part.get("fold_count_textual"))
+          and (dashed_line_proxy(part) is None or _callouts <= dashed_line_proxy(part))):
+        count, source = _callouts, CALLOUTS_ONLY
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is
     # a sentence an estimator should read: on 401912-02 the model carried three bend features
@@ -193,7 +222,7 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # THE CALLOUTS ARE A READING TOO. They were not a rung, so a note that beat them — or a
     # flat pattern the model did not let them correct — left them out of the sentence, and a
     # sheet's own UP/DOWN count could disagree with the charge without anyone being told.
-    if _callouts and source != CALLOUTS_AND_MODEL and _callouts != count:
+    if _callouts and source not in (CALLOUTS_AND_MODEL, CALLOUTS_ONLY) and _callouts != count:
         _others.append((_CALLOUTS_LABEL, _callouts))
     disagreement = None
     if _others:

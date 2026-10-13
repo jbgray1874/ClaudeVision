@@ -64,7 +64,7 @@ def test_the_summary_is_the_sheets_money_and_the_release_status():
     top = _text(_above_the_fold(_page()))
     for figure in ("£80.09", "£40.89", "£33.59"):
         assert figure in top
-    assert "Not for release" in top
+    assert "Estimator review" in top
     assert "PACKAGING, DELIVERY" in top
     assert "Diamond polished and plated" in top
     assert "priced on 7332-01-008" in top
@@ -136,5 +136,5 @@ def test_a_job_with_nothing_outstanding_is_not_called_a_draft():
                        "checks_run": ["a"] * 11, "violations": []},
     })
     top = _above_the_fold(html)
-    assert "Not for release" not in top
+    assert "Estimator review" not in top
     assert "Nothing on this estimate is waiting on a person" in top

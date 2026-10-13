@@ -173,6 +173,25 @@ def _bom_table_pages(summary: Dict[str, Any]) -> Tuple[set, Dict[str, set]]:
     return pages, owned
 
 
+def document_gauge_to_hand_down(summary: Dict[str, Any]) -> Any:
+    """The document's gauge, for a made part that states none — or None.
+
+    A DOCUMENT OF SEVERAL GAUGES HAS NONE TO HAND DOWN (D-421). 8188-08 pools a GA that names
+    "3MM ACRYLIC", "6MM" and "10MM" lettering beside an 18 mm MDF panel; its first figure was
+    given to every part that stated none — the MDF at 3 mm, the letters at 3 — ranked as a
+    drawing reading, above the model's read of each part's own sheet."""
+    doc = summary.get("document_analysis", {}) or {}
+    gauges = set()
+    for g in ((doc.get("title_block") or {}).get("thicknesses_mm") or []):
+        try:
+            gauges.add(round(float(g), 2))
+        except (TypeError, ValueError):
+            continue
+    if len(gauges) > 1:
+        return None
+    return (doc.get("primary_fields") or {}).get("thickness_mm")
+
+
 def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[str, Any]]:
     dedupe = deps.dedupe
     is_valid_part_identifier = deps.is_valid_part_identifier
@@ -203,7 +222,7 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         for row in _table_rows
         if is_valid_part_identifier(row.get("part_number"))
     }
-    document_primary_thickness = summary.get("document_analysis", {}).get("primary_fields", {}).get("thickness_mm")
+    document_primary_thickness = document_gauge_to_hand_down(summary)
 
     for row in _table_rows:
         pn = row["part_number"]
@@ -238,7 +257,10 @@ def build_part_index(summary: Dict[str, Any], deps: PartIndexDeps) -> List[Dict[
         title_block_drawing_numbers = title_block.get("drawing_numbers", [])
         page_target_part_numbers: List[str] = []
 
-        if page_role == "detail":
+        if page_role == "design_intent":
+            # A DESIGN-INTENT SHEET MINTS NO PART (D-406): its drawing number names an idea.
+            pass
+        elif page_role == "detail":
             page_target_part_numbers.extend(
                 [value for value in title_block_drawing_numbers if is_valid_part_identifier(value)]
             )

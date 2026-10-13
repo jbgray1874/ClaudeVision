@@ -117,6 +117,26 @@ def cut_path_is_measured(source: Any) -> bool:
     return str(source or "").strip().lower() in MEASURING_CUT_PATH_SOURCES
 
 
+def blank_is_measured(part: Any) -> bool:
+    """True when a part's FLAT BLANK was measured, not inferred (D-454).
+
+    The one test every reader of a blank asks, so an assumption cannot come back as evidence
+    through a copy: the costed material_estimate carries the blank the costing used, and that
+    figure is only as good as the source stamped on the part. A blank inferred from drawing
+    overalls, a bounding-box floor, a fallback envelope or a weight is not measured — and an
+    unstamped blank is not assumed to be."""
+    if not isinstance(part, dict):
+        return False
+    ng = part.get("normalized_geometry") if isinstance(part.get("normalized_geometry"), dict) else {}
+    if part.get("blank_is_inferred") or part.get("_blank_provisional") or ng.get("_inferred"):
+        return False
+    src = (part.get("blank_length_mm_source") or ng.get("blank_length_mm_source")
+           or part.get("geometry_source") or ng.get("geometry_source"))
+    if cut_path_is_measured(src):
+        return True
+    return bool(part.get("dxf_augmented")) and not src
+
+
 # ── a section length that is really a cut path ───────────────────────────────────────
 #
 # Section stock is priced per metre, so the length IS the money, and the last rung of the

@@ -28,6 +28,7 @@ estimator changing the quantity can see what the number was built from.
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 import config
@@ -118,8 +119,13 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # 446 — and 2026 mm is the install width, not a part anybody wraps. Both the
         # packaging and the delivery indication were asked against that phantom, and they are
         # the two largest bought-in lines on the job.
+        try:
+            from part_code_conventions import carries_assembly_role as _role
+            _role_coded = _role(part.get("part_number"))
+        except Exception:                                            # noqa: BLE001
+            _role_coded = False
         if part.get("is_assembly_parent") or (part.get("route_context") or {}).get(
-                "is_assembly_parent") or part.get("is_sub_assembly"):
+                "is_assembly_parent") or part.get("is_sub_assembly") or _role_coded:
             skipped += 1
             _leave_out(part, "an assembly, weighed through its children")
             continue
@@ -133,6 +139,10 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
                 L, W = (_num(v) for v in _fb(part))
             except Exception:                                        # noqa: BLE001
                 pass
+        if not (L and W):
+            # THE BLANK THE MATERIAL WAS COSTED ON (D-451): a costed record keeps it here.
+            _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+            L, W = _num(_me.get("blank_length_mm")), _num(_me.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
@@ -202,6 +212,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         # carton and pallet count resting on the assembly envelope the weight had just been
         # cleared of — half a fix, and the half nobody reads.
         out["shipment"] = palletising.plan_shipment(shippable, order_qty)
+        out["shippable_parts"] = shippable          # for a re-plan at each break (D-449)
     except Exception:                                                # noqa: BLE001
         out["shipment"] = None
     return out
@@ -225,11 +236,20 @@ def _commercial_researcher(brief: Dict[str, Any]) -> Dict[str, Any]:
     from price_provenance import stamp_source_name as _stamp_source_name
     try:
         from web_ai_price_lookup import lookup_web_ai_price as _look
+        # THE WHOLE ORDER (D-448). The brief said "priced FOR THE WHOLE ORDER of N units" and
+        # the researcher handed the model quantity 1; the model priced one unit's packaging and
+        # the line divided it by N. The question itself is the brief's, composed and refused
+        # on its evidence contract by indicative_price — it is not repeated into the words.
+        _oq = brief.get("order_quantity")
+        try:
+            _oq = max(1, int(float(_oq))) if _oq is not None else 1
+        except (TypeError, ValueError):
+            _oq = 1
         found = _look({"material": str(brief.get("code") or "").title(),
                        "description": brief.get("description"),
                        "part_code": brief.get("code"),
-                       "quantity": 1,
-                       "wanted_unit": "order"},
+                       "quantity": _oq,
+                       "wanted_unit": str(brief.get("wanted_unit") or "order")},
                       enable_web_search=True, enable_llm_estimate=True) or {}
     except Exception:                                            # noqa: BLE001
         return {}
@@ -487,11 +507,374 @@ def _held_rate(key: str) -> Optional[float]:
     return v if v > 0 else None
 
 
+_LIVE_RATE_CACHE: Dict[str, Any] = {}
+_LIVE_RATE_STATUS: Dict[str, str] = {}
+
+
+def _sdi_live_rate(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """SDI Live's own figure for a commercial line, or None (D-448).
+
+    First AIEstimating.vCurrentCommercialRate: a rate the business entered whose key names
+    this line (packaging_per_order, delivery_per_order, carriage ...), per order. Then the
+    history: dbo.historical_quote_material_line rows whose description carries this line's
+    words (config COMMERCIAL_HISTORY_WORDS), this customer's quotes first, then anyone's, the
+    median of the most recent config COMMERCIAL_HISTORY_MAX_ROWS lines, per unit, times the
+    order quantity — with the quotes it came from named on the line. Offline, or with no DB,
+    None: the market rung follows as before. Memoised per code and customer for the run."""
+    # NOT CACHED ACROSS CALLS (D-453): the runner is a long-lived process and a CommercialRate
+    # figure is multiplied by THIS job's counted shipment — a cached answer would carry another
+    # job's pallets. The queries are cheap; the status is kept for the line's note only.
+    key = f"{code}|{order.get('customer') or ''}|{order.get('order_quantity') or 1}"
+    result: Optional[Dict[str, Any]] = None
+    conn = None
+    status = "SDI_OFFLINE: SDI Live not asked"
+    if not str(os.getenv("SDI_OFFLINE", "")).strip().lower() in {"1", "true", "yes"}:
+        try:
+            from estimator import _get_pricing_service as _gps      # the engine's one handle
+            ps = _gps()
+            conn = ps._get_db_connection() if ps is not None else None
+            status = "no SDI Live connection" if conn is None else "asked"
+        except Exception as _exc:                                    # noqa: BLE001
+            conn = None
+            status = f"SDI Live not reachable ({type(_exc).__name__})"
+    if conn is not None:
+        qty = max(1, int(_num(order.get("order_quantity")) or 1))
+        _all_words = getattr(config, "COMMERCIAL_HISTORY_WORDS", {}) or {}
+        words = tuple(str(w).upper() for w in (_all_words.get(code) or (code,)))
+        # A KEY THAT NAMES ANOTHER LINE'S WORK IS THAT LINE'S: haulage_per_pallet is delivery,
+        # though it says PALLET; carton_packing is packaging. A word only another line uses
+        # rules a key out of this one.
+        _unit_words = {"PALLET", "CARTON", "BOX", "KG", "UNIT", "EACH", "ORDER", "JOB", "CONSIGN"}
+        only_others = ({str(w).upper() for c, ws_ in _all_words.items() if c != code for w in ws_}
+                       - set(words) - _unit_words)                 # a unit of count belongs to no one line
+        try:
+            cur = conn.cursor()
+            # 1. A RATE THE BUSINESS ENTERED, APPLIED TO THE COUNTED SHIPMENT (D-449). The
+            # CommercialRate table holds rates per PALLET, per CARTON, per KG, per UNIT or per
+            # ORDER (its key says which: pallet_per_bay, carton_packing, haulage_per_pallet,
+            # delivery_per_order ...). The shipment is already counted (palletising.plan_shipment:
+            # cartons, pallets, weight), so each rate times its count is the line — and the same
+            # count is re-planned at every break quantity, so fifty headers are priced on fifty
+            # headers' pallets, not one header's share divided by fifty.
+            try:
+                cur.execute("SELECT rate_key, value_gbp FROM AIEstimating.vCurrentCommercialRate")
+                comps = []
+                for rk, val in cur.fetchall() or []:
+                    up = str(rk or "").upper()
+                    v = _num(val)
+                    if not v or not any(w in up for w in words) or any(w in up for w in only_others):
+                        continue
+                    unit = ("pallet" if "PALLET" in up else "carton" if ("CARTON" in up or "BOX" in up)
+                            else "kg" if "KG" in up else "unit" if ("UNIT" in up or "EACH" in up)
+                            else "order" if ("ORDER" in up or "JOB" in up or "CONSIGN" in up) else None)
+                    if unit:
+                        comps.append((str(rk), v, unit))
+                if comps:
+                    import palletising as _pal
+                    shippable = order.get("shippable_parts") or []
+                    weight_each = (_num(order.get("order_weight_kg")) or 0.0) / qty
+
+                    def _count(unit: str, q: int) -> Optional[float]:
+                        if unit == "order":
+                            return 1.0
+                        if unit == "unit":
+                            return float(q)
+                        if unit == "kg":
+                            return weight_each * q if weight_each else None
+                        plan = (order.get("shipment") if q == qty else
+                                (_pal.plan_shipment(shippable, q) if shippable else None)) or {}
+                        n = _num(plan.get("pallet_count" if unit == "pallet" else "carton_count"))
+                        return float(n) if n else None
+
+                    def _total(q: int):
+                        t, parts_said, missing = 0.0, [], []
+                        for rk, v, unit in comps:
+                            n = _count(unit, q)
+                            if n is None:
+                                missing.append(f"{rk} (no {unit} count)")
+                                continue
+                            t += v * n
+                            parts_said.append(f"{rk} GBP {v:,.2f} x {n:g} {unit}{'s' if n != 1 else ''}")
+                        return t, parts_said, missing
+
+                    t_now, said, missing = _total(qty)
+                    if t_now > 0:
+                        breaks = sorted({1, qty} | set(_BREAKS_DEFAULT)
+                                        | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)})
+                        result = {"order_gbp": round(t_now, 2), "source_class": "sdi_commercial_rate",
+                                  "source_name": "AIEstimating.CommercialRate x the counted shipment",
+                                  "working": (" + ".join(said) + f" = GBP {t_now:,.2f} the order"
+                                              + (f"; not applied: {', '.join(missing)}" if missing else "")),
+                                  "order_gbp_at_breaks": {q: round(_total(q)[0], 2) for q in breaks},
+                                  "rows": []}
+            except Exception as _exc:                                # noqa: BLE001
+                status = f"CommercialRate not read ({type(_exc).__name__})"
+            if result is None:
+                status = "no CommercialRate key for this line"
+            # 2. what past quotes charged
+            if result is None:
+                like = " OR ".join("UPPER(hml.line_description) LIKE ?" for _ in words)
+                n = int(getattr(config, "COMMERCIAL_HISTORY_MAX_ROWS", 12) or 12)
+                cur.execute(
+                    f"""SELECT TOP ({n}) hml.line_description, hml.unit_price_gbp, hh.drawing_number,
+                               hh.quote_date, hh.customer_name
+                        FROM dbo.historical_quote_material_line hml
+                        LEFT JOIN dbo.historical_quote_header hh ON hml.quote_id = hh.quote_id
+                        WHERE hml.unit_price_gbp IS NOT NULL AND hml.unit_price_gbp > 0 AND ({like})
+                        ORDER BY CASE WHEN UPPER(ISNULL(hh.customer_name, '')) = ? THEN 0 ELSE 1 END,
+                                 CASE WHEN hh.quote_date IS NOT NULL THEN 0 ELSE 1 END,
+                                 hh.quote_date DESC""",
+                    *[f"%{w}%" for w in words], str(order.get("customer") or "").upper())
+                rows = [r for r in (cur.fetchall() or []) if _num(r[1])]
+                if not rows:
+                    status += f"; no past quote line carries {'/'.join(w.lower() for w in words)}"
+                if rows:
+                    cust = str(order.get("customer") or "").upper()
+                    own = [r for r in rows if str(r[4] or "").upper() == cust] if cust else []
+                    use = own or rows
+                    # COMPARABLE, OR SAID NOT TO BE. A past quote's packaging is evidence for this
+                    # one where the order is alike; the header holds no size, weight or pallet
+                    # count, so the quantity is the one axis available — kept to the same band
+                    # (half to double) where any row sits in it, and the comparability is written
+                    # on the line either way. Order-level cost is what is recorded: the per-unit
+                    # median x this order's quantity, so the breaks re-divide a counted order
+                    # rather than inherit one unit's share.
+                    comparability = ("same customer" if own else "any customer")
+                    try:
+                        cur.execute("SELECT TOP 1 quantity FROM dbo.historical_quote_header")
+                        has_qty = True
+                    except Exception:                                # noqa: BLE001
+                        has_qty = False
+                    if has_qty:
+                        try:
+                            ids = tuple(str(r[2] or "") for r in use)
+                            cur.execute(
+                                "SELECT drawing_number, quantity FROM dbo.historical_quote_header "
+                                f"WHERE drawing_number IN ({','.join('?' * len(ids))})", *ids)
+                            qmap = {str(a): _num(b) for a, b in (cur.fetchall() or [])}
+                            band = [r for r in use if qmap.get(str(r[2] or ""))
+                                    and qty / 2.0 <= qmap[str(r[2] or "")] <= qty * 2.0]
+                            if band:
+                                use = band
+                                comparability += f", quantity within half to double of {qty}"
+                            else:
+                                comparability += f", NO row within half to double of {qty} off — weak comparability"
+                        except Exception:                            # noqa: BLE001
+                            comparability += ", quantity not compared"
+                    else:
+                        comparability += ", quantity not held on the history header"
+                    comparability += "; size, weight, packing method and destination not held — confirm"
+                    prices = sorted(float(r[1]) for r in use)
+                    median = prices[len(prices) // 2] if len(prices) % 2 else \
+                        (prices[len(prices) // 2 - 1] + prices[len(prices) // 2]) / 2.0
+                    jobs = ", ".join(str(r[2] or "?") for r in use[:6])
+                    # A PER-UNIT FIGURE STAYS PER UNIT AT EVERY BREAK (D-452). A past quote's
+                    # line is a per-unit share; written as one order figure it was divided by
+                    # the break, so fifty headers carried £0.20 of packaging each.
+                    _bq = sorted({1, qty} | {int(b) for b in (order.get("quantity_breaks") or []) if _num(b)}
+                                 | set(_BREAKS_DEFAULT))
+                    result = {"order_gbp": round(median * qty, 2),
+                              "order_gbp_at_breaks": {q: round(median * q, 2) for q in _bq},
+                              "source_class": "sdi_history",
+                              "source_name": f"SDI Live history: {len(use)} quote line(s), {comparability}",
+                              "comparability": comparability,
+                              "working": (f"median GBP {median:,.2f} a unit of {len(use)} "
+                                          f"{code.lower()} line(s) in SDI Live ({comparability}; "
+                                          f"{jobs}) — a per-unit share on those quotes, held per "
+                                          f"unit at every break"),
+                              "rows": [{"description": str(r[0] or ""), "unit_price_gbp": float(r[1]),
+                                        "drawing_number": str(r[2] or ""), "quote_date": str(r[3] or ""),
+                                        "customer": str(r[4] or "")} for r in use]}
+        except Exception as _exc:                                    # noqa: BLE001
+            result = None
+            status = f"SDI Live query failed ({type(_exc).__name__}: {str(_exc)[:80]})"
+    _LIVE_RATE_STATUS[key] = (f"{result['source_name']}" if result else status)
+    return result
+
+
+def sdi_live_status(code: str, order: Dict[str, Any]) -> str:
+    """What the SDI Live rung found for this line, or why nothing — for the line's own note."""
+    key = f"{code}|{order.get('customer') or ''}|{order.get('order_quantity') or 1}"
+    return _LIVE_RATE_STATUS.get(key, "")
+
+
+_BREAKS_DEFAULT = (1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000)
+
+
+_SHIPMENT_STATUS: Dict[str, str] = {}
+
+
+def _unit_word(value: Any) -> str:
+    """'per_pallet' / 'Per Pallet' / 'pallets' / 'PER-PALLET' -> 'pallet'."""
+    w = _re.sub(r"[_\-]+", " ", str(value or "").strip().lower())
+    w = _re.sub(r"^(?:gbp\s+)?per\s+", "", w).strip()
+    w = _re.sub(r"^(?:a|one|each)\s+", "", w).strip()
+    return w[:-1] if w.endswith("s") and not w.endswith("ss") else w
+
+
+def shipment_status(code: str, order: Dict[str, Any]) -> str:
+    """Why the counted shipment did or did not price this line, for the line's own note."""
+    return _SHIPMENT_STATUS.get(f"{code}|{order.get('order_quantity') or 1}", "")
+
+
+def _counted_shipment_price(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """{order_gbp, order_gbp_at_breaks, working, source_name, evidence} — the counted shipment
+    priced at a researched per-pallet (or per-carton) rate, or None where nothing was counted
+    or the market gave no evidenced unit rate (D-451)."""
+    plan = order.get("shipment") or {}
+    pallets, cartons = _num(plan.get("pallet_count")), _num(plan.get("carton_count"))
+    _status_key = f"{code}|{order.get('order_quantity') or 1}"
+    _SHIPMENT_STATUS.pop(_status_key, None)
+    if not (pallets or cartons):
+        _SHIPMENT_STATUS[_status_key] = ("nothing was counted: no part on the order has a measured "
+                                         "blank to pack")
+        return None
+    qty = max(1, int(_num(order.get("order_quantity")) or 1))
+    unit = "carton" if (cartons and not pallets) or (cartons and shipment_shape(order) == "parcel") else "pallet"
+    big = plan.get("largest_blank_mm") or order.get("largest_part_mm") or []
+    oversize = "blank_exceeds_pallet" in (plan.get("flags") or [])
+    size = (f"goods up to {float(big[0]):.0f} x {float(big[1]):.0f} mm" if len(big) == 2 else "display goods")
+    per_kg = (_num(plan.get("order_weight_kg")) or _num(order.get("order_weight_kg")) or 0.0) / max(1.0, (pallets or cartons or 1.0))
+    if unit == "pallet":
+        kind = "an oversize (long) pallet or crate" if oversize else "a standard UK pallet (1200 x 1000)"
+        desc = (f"Protective wrapping and {kind} for {size}, per pallet" if code == "PACKAGING" else
+                f"Palletised haulage of {kind}, about {per_kg:.0f} kg, {size}, one UK mainland delivery, per pallet")
+    else:
+        desc = ("One double-wall carton with protective packing, up to 25 kg, per carton" if code == "PACKAGING"
+                else "Next-day courier, one parcel up to 25 kg, UK mainland, per parcel")
+    # ASKED ONCE PER LINE, NOT HELD IN THIS MODULE: the runner is a long-lived process and a
+    # rate kept here would outlive its job. Reproducibility is the market cache's business.
+    rate = None
+    try:
+        _r = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
+                                     "wanted_unit": unit,
+                                     "ask": f"Current UK trade cost PER {unit.upper()} for: {desc}. "
+                                            f"Give the carrier or supplier and the date."})
+        # AN ANSWER IN THE UNIT ASKED, OR NONE (D-452): a figure quoted per order is not a
+        # per-pallet rate, and multiplying it by the pallets would charge the order N times.
+        # THE UNIT AS THE MODEL WRITES IT (D-455): "per_pallet", "Per Pallet", "pallets" are
+        # one unit. The 15:43 book's shipment basis was refused for a spelling, and weak
+        # history won by default. Normalised, then compared; a per-order or per-delivery
+        # figure is still not a pallet rate.
+        _said = _unit_word((_r or {}).get("unit"))
+        _units_ok = {unit} | ({"parcel", "box"} if unit == "carton" else set())
+        # ONE CORRECTIVE RE-ASK (D-460), the same shape as the vision re-ask (D-415b): the
+        # model answered per each on one run and per pallet on another for the same brief.
+        # A wrong unit gets one more ask that names the fault; a second wrong answer is a
+        # recorded refusal.
+        if _num((_r or {}).get("price_gbp")) and _said not in _units_ok:
+            _r2 = _commercial_researcher({"code": code, "description": desc, "order_quantity": 1,
+                                          "wanted_unit": unit,
+                                          "ask": (f"Your last answer was priced per {_said or 'unit unstated'}, "
+                                                  f"which cannot be used. Give the cost of exactly ONE "
+                                                  f"{unit.upper()} — {desc}. Set \"unit\" to \"{unit}\".")})
+            _said2 = _unit_word((_r2 or {}).get("unit"))
+            if _num((_r2 or {}).get("price_gbp")) and _said2 in _units_ok:
+                _r, _said = _r2, _said2
+        if not _num((_r or {}).get("price_gbp")):
+            _SHIPMENT_STATUS[_status_key] = (f"the market gave no per-{unit} figure for this "
+                                             f"shipment")
+        elif _said in _units_ok:
+            rate = _r
+        else:
+            _SHIPMENT_STATUS[_status_key] = (f"the market answered per {_said or 'unstated unit'}, "
+                                             f"not per {unit}, twice (once re-asked) — refused, it "
+                                             f"cannot be multiplied by the {unit}s counted")
+    except Exception as _exc:                                        # noqa: BLE001
+        _SHIPMENT_STATUS[_status_key] = f"the market lookup failed ({type(_exc).__name__})"
+        rate = None
+    if not rate:
+        _SHIPMENT_STATUS.setdefault(_status_key, f"the market gave no evidenced per-{unit} rate")
+        print(f"   [commercial] {code}: shipment rung counted "
+              f"{(pallets or cartons):g} {unit}(s) but did not price — "
+              f"{_SHIPMENT_STATUS[_status_key]}", flush=True)
+        return None
+    unit_gbp = float(rate["price_gbp"])
+    print(f"   [commercial] {code}: shipment rung priced {(pallets or cartons):g} {unit}(s) at "
+          f"GBP {unit_gbp:,.2f} per {unit} ({rate.get('source') or rate.get('supplier_name')})",
+          flush=True)
+    src = str(rate.get("source") or rate.get("supplier_name") or "market research")
+
+    def _count(q: int) -> Optional[float]:
+        if q == qty:
+            p = plan
+        else:
+            try:
+                import palletising
+                p = palletising.plan_shipment(order.get("shippable_parts") or [], q) or {}
+            except Exception:                                        # noqa: BLE001
+                return None
+        n = _num(p.get("pallet_count" if unit == "pallet" else "carton_count"))
+        return n
+    n_now = _count(qty) or 0.0
+    at = {}
+    for q in sorted(set(_BREAKS_DEFAULT) | {qty}):
+        n = _count(q)
+        if n:
+            at[q] = round(unit_gbp * n, 2)
+    why_n = ("a WORKING count, a weight-only lower bound: the longest part exceeds the pallet "
+             "footprint, so stacking, protection and the crate are not modelled — confirm the "
+             "pallets with the packer" if oversize else
+             "a WORKING count from the measured blanks' footprint and weight at the configured "
+             "packing factor, not a packing plan — confirm the pallets with the packer")
+    return {"order_gbp": round(unit_gbp * n_now, 2), "order_gbp_at_breaks": at,
+            "source_name": f"researched per-{unit} rate ({src}) x the counted shipment",
+            "evidence": rate.get("evidence") or {"source": src, "date": rate.get("price_date")},
+            "working": (f"GBP {unit_gbp:,.2f} per {unit} (researched: {src}) x {n_now:g} "
+                        f"{unit}{'s' if n_now != 1 else ''} for {qty} off ({why_n}) = GBP "
+                        f"{unit_gbp * n_now:,.2f} the order; re-counted at each break")}
+
+
+def _choose_commercial_basis(code: str, order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """{basis, order_gbp, order_gbp_at_breaks, price_source, shipment_working, history_working,
+    cross_check} — the best-supported commercial basis, or None where nothing answered (D-453)."""
+    live = _sdi_live_rate(code, order)
+    out: Optional[Dict[str, Any]] = None
+    if live and live.get("source_class") == "sdi_commercial_rate":
+        out = {"basis": "SDI Live rate x the counted shipment", "order_gbp": live["order_gbp"],
+               "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+               "price_source": {"source_class": "sdi_commercial_rate", "reproducible": True,
+                                "indicative": True, "source_name": live["source_name"]},
+               "history_working": live.get("working")}
+    else:
+        comparable = bool(live) and "same customer" in str(live.get("comparability") or "") \
+            and "quantity within" in str(live.get("comparability") or "")
+        cs = None if comparable else _counted_shipment_price(code, order)
+        hist_said = ((f"SDI Live history for comparison: {live.get('working')}") if live else "")
+        _ship_why = "" if cs else (shipment_status(code, order)
+                                   or "the shipment rung recorded no reason — investigate")
+        if live and comparable:
+            out = {"basis": "SDI Live history, comparable on customer and quantity",
+                   "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+                   "price_source": {"source_class": "sdi_history", "reproducible": True,
+                                    "indicative": True, "source_name": live["source_name"]},
+                   "history_working": live.get("working"), "history_rows": live.get("rows")}
+        elif cs:
+            out = {"basis": "the counted shipment at a researched unit rate",
+                   "order_gbp": cs["order_gbp"], "order_gbp_at_breaks": cs["order_gbp_at_breaks"],
+                   "price_source": {"source_class": "llm_indicative", "reproducible": False,
+                                    "indicative": True, "source_name": cs["source_name"],
+                                    "evidence": cs.get("evidence")},
+                   "shipment_working": cs["working"],
+                   "cross_check": (hist_said + " — not comparable (no quantity, size or shipment "
+                                   "on those quotes), so the shipment basis is used") if live else ""}
+        elif live:
+            out = {"basis": ("SDI Live history only — weak comparability; the counted shipment could "
+                             "not be priced" + (f" ({_ship_why})" if _ship_why else "")),
+                   # STRUCTURED, NOT PROSE (D-457): the gate reads this field, never the wording.
+                   "shipment_refusal": _ship_why,
+                   "order_gbp": live["order_gbp"], "order_gbp_at_breaks": live.get("order_gbp_at_breaks"),
+                   "price_source": {"source_class": "sdi_history", "reproducible": True,
+                                    "indicative": True, "source_name": live["source_name"]},
+                   "history_working": live.get("working"), "history_rows": live.get("rows")}
+    return out
+
+
 def _line(code: str, order: Dict[str, Any], description: str,
           held_key: str) -> Dict[str, Any]:
     qty = order.get("order_quantity") or 1
-    out: Dict[str, Any] = {"code": code, "order_quantity": qty,
-                           "described_as": description, "basis": dict(order)}
+    out: Dict[str, Any] = {"code": code, "order_quantity": qty, "described_as": description,
+                           "basis": {k: v for k, v in order.items() if k != "shippable_parts"}}
     _held = _held_rate(held_key)
     _method = _method_price(order) if code == "PACKAGING" else None
     _method_gap = ""
@@ -546,6 +929,23 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["method_source"] = _method.get("method_source")
         if _method.get("inferred_step_note"):
             out["inferred_step"] = True
+    elif (_ch := _choose_commercial_basis(code, order)) is not None:
+        # THE BEST-SUPPORTED BASIS, CHOSEN AND SAID (D-453). The business's own rate on the
+        # counted shipment first; then SDI history where it is comparable (same customer AND
+        # the same quantity band); then the counted shipment at a researched unit rate, with
+        # weaker history shown beside it as a cross-check; then weak history alone. 8188-08's
+        # £10.00 / £10.06 were per-unit shares at unknown quantities on twelve past M&S quotes
+        # — evidence of what M&S jobs carried, not of what this shipment costs.
+        _order_gbp, _src = _ch["order_gbp"], _ch["price_source"]
+        out["basis_chosen"] = _ch["basis"]
+        out["shipment_working"] = _ch.get("shipment_working")
+        out["history_working"] = _ch.get("history_working")
+        out["history_rows"] = _ch.get("history_rows")
+        out["cross_check"] = _ch.get("cross_check")
+        out["shipment_refusal"] = _ch.get("shipment_refusal")
+        if _ch.get("order_gbp_at_breaks"):
+            out["order_gbp_at_breaks"] = _ch["order_gbp_at_breaks"]
+        out["sdi_live_status"] = sdi_live_status(code, order)
     else:
         # ── RUNG 4, THE SAME ONE EVERY OTHER LINE USES ──────────────────────────────
         #
@@ -582,6 +982,7 @@ def _line(code: str, order: Dict[str, Any], description: str,
             ) or {}
         except Exception:                                        # noqa: BLE001
             _res = {}
+        out["sdi_live_status"] = sdi_live_status(code, order)
         _res_gbp = _num(_res.get("price_gbp"))
         if _res_gbp and _res_gbp > 0:
             _ind = {"order_gbp": round(_res_gbp, 2), "source_class": "llm_indicative",
@@ -621,7 +1022,8 @@ def _line(code: str, order: Dict[str, Any], description: str,
                     f"{out.get('packing_working')} = £{_order_gbp:,.2f} the order — counts "
                     f"stated, prices live from the system this run; confirm the method "
                     f"fits this job. " if out.get('packing_working') else "")
-                 + f"Described as: {description}."),
+                 + f"Described as: {description}."
+                 + (f" SDI Live: {out['sdi_live_status']}." if out.get("sdi_live_status") else "")),
     })
     return out
 
@@ -670,8 +1072,9 @@ def shipment_shape(order: Dict[str, Any]) -> str:
     return "pallet"
 
 
-def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def packaging_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
+    order["customer"] = str(customer or "").strip()
     size = order.get("largest_part_mm")
     where = (f"largest panel {size[0]:.0f} x {size[1]:.0f}mm, " if size else "")
     weight = (f"about {order['order_weight_kg']:.0f} kg total, "
@@ -687,8 +1090,9 @@ def packaging_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
                  "PACKAGING")
 
 
-def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
+def delivery_line(parts: List[Dict[str, Any]], order_qty: Any, customer: Any = None) -> Dict[str, Any]:
     order = describe_order(parts, order_qty)
+    order["customer"] = str(customer or "").strip()
     weight = (f"about {order['order_weight_kg']:.0f} kg" if order.get("order_weight_kg")
               else "a part pallet")
     ship = order.get("shipment") or {}
@@ -702,6 +1106,33 @@ def delivery_line(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
          else f"Palletised haulage of {weight}{on} for {order['order_quantity']} display "
               f"assemblies, one UK mainland delivery, per order"),
         "DELIVERY")
+
+
+def nothing_to_ship(summary: Any, parts: Any) -> Optional[str]:
+    """Why no packaging or delivery line belongs on this book — or None when something ships.
+
+    A commercial line is a per-unit share of packing and carrying the PARTS. On a run that
+    produced none there is nothing to pack, and a line for it is a price for nothing: 12675-01
+    on 8 Oct 2026 carried £14.50 packaging and £8.50 delivery on a book with no part, and the
+    customer's terms ran over them to £25.46 a unit of nothing (D-409). Two questions, the
+    stop first: a run the scan stopped has nothing to cost whatever the part list holds, and
+    a part list holding only the engine's own placeholders has nothing in it that ships.
+    """
+    try:
+        from run_stop import nothing_to_cost                           # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                  # noqa: BLE001
+        stop = None
+    if stop:
+        return (f"the run produced nothing to cost "
+                f"({stop.get('short') or stop.get('kind') or 'the run stopped'})")
+    shippable = [p for p in (parts or ()) if isinstance(p, dict)
+                 and not p.get("_commercial_placeholder")
+                 and not p.get("_plating_placeholder")
+                 and str(p.get("source") or "") != "commercial_placeholder"]
+    if not shippable:
+        return "no part on this book to pack or deliver"
+    return None
 
 
 def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -726,11 +1157,16 @@ def collect_lines(summary: Dict[str, Any]) -> List[Dict[str, Any]]:
                 seen.add(cl["code"])
                 out.append(cl)
 
-    # anything already on the summary wins; the part records fill the gaps
+    # THE PART RECORDS ARE THE AUTHORITY; the stored list fills gaps (D-459). It was the
+    # other way round, and a record saved with summary["commercial_lines"] shadowed every
+    # freshly chosen line forever: the venv replay rebuilt DELIVERY on a researched
+    # GBP 175/pallet and the reader still served the saved stub's weak history. The stored
+    # key is a cache of the stubs, not evidence of its own.
+    _scan(((summary or {}).get("manufacturing_writeup") or {}).get("parts"))
+    _scan((summary or {}).get("parts"))
+    _scan(((summary or {}).get("estimate_summary") or {}).get("part_estimates"))
     for cl in ((summary or {}).get("commercial_lines") or []):
         if isinstance(cl, dict) and cl.get("code") and cl["code"] not in seen:
             seen.add(cl["code"])
             out.append(cl)
-    _scan((summary or {}).get("parts"))
-    _scan(((summary or {}).get("estimate_summary") or {}).get("part_estimates"))
     return out

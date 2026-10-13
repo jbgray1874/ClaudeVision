@@ -2287,7 +2287,7 @@ def _parse_bom_from_page_text(page_text: str) -> List[Dict[str, Any]]:
 
     _JUNK_KW = (
         "MICRON", "THICKNESS", "PLATING", "COPYRIGHT", "TOLERANCE",
-        "DIMENSION", "MARKS &", "SPENCER", "USING TAPE", "TICKET TAPED",
+        "DIMENSION", "PROPERTY OF", "ALL RIGHTS", "USING TAPE", "TICKET TAPED",
         "COVERAGE", "NICKEL", "CHROME", "POWDERCOAT", "PROTOTYPE",
         "TIMBER-BASED", "TIMBER BASED", "ALUMINIUM-BASED",
     )
@@ -2528,6 +2528,20 @@ def bought_in_rows_without_records(bom_rows: Any, parts: List[Dict[str, Any]]
             pn = _article
         if not pn or pn.upper() in _existing_pns:
             continue
+        # A WRAPPED CELL IS ONE ROW HERE TOO (D-443). This is the minter that first saw the
+        # table reader's whole-cell "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" beside
+        # the record "FIXING M6x12mm" / "THREADED INSERT, HEADED HEX DRIVE" and, keyed on the
+        # exact code, minted a second line — the reconcile's own check came too late to undo
+        # a record already in the writeup. One shared predicate, asked where the record is born.
+        try:
+            from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
+            if any(isinstance(p, dict) and _one_cell(pn, dsc if dsc != pn else "",
+                                                     p.get("part_number"), p.get("description"))
+                   and _same_occ(row, p) for p in parts):
+                continue
+        except Exception:                                                # noqa: BLE001
+            pass
         if _SDI_PN_RE.match(pn) or pn.upper().endswith("-GA"):
             continue
         if not _article and not _is_valid_part_identifier(pn):

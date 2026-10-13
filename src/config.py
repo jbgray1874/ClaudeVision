@@ -260,7 +260,7 @@ QUANTITY_PATTERN = r"\b(?:QTY|QUANTITY)\s*[:\-]?\s*(\d+)\b"
 # kept because other people's drawings do write it that way.
 THICKNESS_PATTERN = (
     r"\b(?:"
-    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE)"
+    r"(\d+(?:\.\d+)?)\s*(?:MM|mm)?\s*(?:THK|THICK|THICKNESS|GAUGE|MATL)"
     r"|(?:THK|THICKNESS|GAUGE)\s*[:\-]?\s*(\d+(?:\.\d+)?)\s*(?:MM|mm)?"
     r")\b"
 )
@@ -300,16 +300,10 @@ EDGE_DISTANCE_PATTERN = r"\b(\d+(?:\.\d+)?)\s*(?:MM|mm)\s+EDGE\b"
 
 QTY_TABLE_ROW_PATTERN = r"(\d+)\s+([A-Z0-9_]+(?:-[A-Z0-9_]+|\s-\s[A-Z0-9_]+){1,4})-?\s+(.+?)\s+(\d+)"
 
-# --- Punch cycle-time calibration (TruPunch 1000 setup-plan data) ---------------
-# Peg-family panels are PUNCHED (cluster + tooth + perimeter), not lasered, and the
-# DXF/PDF under-reads their perforation so the hole-count model collapses to ~0.
-# Anchor on measured 1m machine times; scale to 500mm x0.65 (per Tim: peg 1.38->0.90).
-# Surfaced on the estimate basis page; override here if a 500mm setup plan is supplied.
-PUNCH_CYCLE_TIME_MIN = {
-    "PEG_PANEL":  {"1000mm": 1.38, "500mm": 0.90},
-    "HALF_PEG":   {"1000mm": 0.86, "500mm": 0.72},  # 500mm bumped to measured TruPunch time (2621 setup plan)
-    "BASE_PLATE": {"1000mm": 0.62, "500mm": 0.40},
-}
+# --- Punch cycle-time calibration: REMOVED (D-454) ---------------------------------
+# One product family's measured TruPunch times (peg panels, half pegs, base plates at 500 /
+# 1000 mm) were applied to any part whose description carried those words. A measured cycle is
+# that part's estimator-confirmed time, recorded against that job; the punch model prices the rest.
 
 # --- Packaging (ad-hoc; compute when we can, else UNPRICED flagged line) ---------
 # Rule (per SDI): if a unit fits a UK 1200x1000 pallet/box and the sizes are known,
@@ -518,6 +512,26 @@ PACKING_METHOD = {
 # tab and the report both read; this setting governs only whether extra FILES are written.
 QUANTITY_VARIANT_WORKBOOKS = None       # None | True | False
 
+# ── THE QUOTATION'S PAGES AFTER THE PRICE (D-504) ─────────────────────────────────────
+# James Gray, 13 Oct 2026: the quotation should look like the K-Wellness showcase —
+# "auto-generated as part of the general process, with as much detail as possible, two or
+# three pages". quote_story builds them from the run's own record for every job; the price
+# page is unchanged.
+#   story_pages          the two pages at all
+#   show_cost_structure  the price at each quantity split into material, set-up, running work
+#                        and overheads (it shows the shape of SDI's costs); off = unit price
+#                        and order value per quantity only
+#   evidence_cards       how many "your words → what we concluded → on the bill" cards
+#   page_thumbnails      the pack page each quote came from, shown beside it
+QUOTE_DOCUMENT = {
+    "story_pages": True,
+    "show_cost_structure": True,
+    "evidence_cards": 4,
+    "page_thumbnails": True,
+    "thumbnail_zoom": 0.55,
+    "max_pages_read": 60,
+}
+
 MATERIAL_PRICE_BREAK = {
     "enabled": True,
     "sheet": "Material Price Break",
@@ -657,6 +671,277 @@ CUT_METHOD_BY_MATERIAL: list = [
     {"material": "MILD_STEEL", "method": "laser",
      "source": "SDI shop default, James Gray, 14 Sep 2026"},
 ]
+
+# THE DRAWING'S OWN WORDS FOR THE CUTTER (D-440, cut_method_reader): read off the sheets that
+# draw a part, legend removed; one method named stamps it, two named put the question on the
+# part and the rule above prices the working figure.
+CUT_METHOD_WORDS = {"laser": ("LASER", "LASERED", "LASER CUT"),
+                    "router": ("CNC", "ROUTED", "ROUTER", "PIN ROUT", "PIN-ROUT")}
+
+# A PURCHASED LINE CUT FROM STOCK (D-441, cut_piece_pricing). A line naming a thing bought by
+# the length AND stating a cut length ("EXTRUSION 92: LENGTH =100mm") is a piece cut from
+# stock: priced on its metres at a per-metre rate, on its share of a stock length at a
+# per-length price, and read as a stock length with a question where the unit of sale is
+# "each" or unknown — never silently quantity × the stock length. The cut-loss allowance is
+# SECTION_STOCK_POLICY's; the standard stock length SECTION_STOCK_LENGTH_MIN_MM.
+BOUGHT_IN_STOCK_BY_LENGTH_WORDS = ("EXTRUSION", "PROFILE", "TUBE", "BAR", "ROD", "STRIP",
+                                   "ANGLE", "CHANNEL", "SECTION", "RAIL", "TRACK", "TRIM",
+                                   "EDGING", "BEAD", "BOX SECTION", "RHS", "SHS", "CHS")
+CUT_LENGTH_WORDS = ("LENGTH", "LGTH", "LG", "LONG", "L")
+UOM_LENGTH_WORDS = ("LGTH", "LENGTH", "LEN", "PER LENGTH", "PER LGTH", "STOCK LENGTH")
+
+# THE SHEET'S WEIGHT IS THE MODEL'S MASS (D-451, estimator._blank_weight_check). A SolidWorks
+# part with no material assigned weighs as the template's default; the title block prints that
+# mass. Where the same blank in one of these weighs the stated weight within the tolerance, the
+# weight is read as the model's material — a note, not a gauge question.
+# ── WHAT COUNTS AS A CONSUMABLE ON A CONCEPT READ (D-468) ──────────────────────────────
+# The read lists what a real unit needs that the images cannot show. An item naming one of
+# these words is a purchasable consumable and gets a provisional bought-in allowance line;
+# anything else is a design unknown and is asked, never priced at a guess. Vocabulary, not
+# logic: extend it here, never in code.
+CONCEPT_CONSUMABLE_WORDS = [
+    "fixing", "screw", "bolt", "nut", "rivet", "washer", "insert", "adhesive", "glue",
+    "tape", "velcro", "label", "clip", "plug", "foot", "feet", "glide",
+]
+# A PART ROUTED THROUGH FOLDING THAT NOTHING COUNTED IS FOLDED AT LEAST ONCE (D-490). A count,
+# never a time: the minutes come from LABOUR_RULES["folding"]. Without it the run time was 0
+# and the workbook's per-part fold rate was pieces over set-up alone (36,036/hr).
+FOLDS_ASSUMED_WHEN_UNCOUNTED = 1
+# A consumable the read says is PER COMPONENT is counted once per piece the unit fits
+# (D-487) — "QR component labels" on a unit of forty pieces is forty labels, not one.
+# Vocabulary, not logic.
+CONCEPT_PER_COMPONENT_WORDS = ["component", "per part", "each part", "every part", "per piece",
+                               "each piece", "every piece"]
+# HOW MANY EACH COMPONENT CARRIES (D-491): a COUNT, never a price — the line is priced per
+# item by the ordinary chain and counted as this × the components the unit fits. AN
+# ASSUMPTION TO CONFIRM: the customer's own labelling rule decides.
+CONCEPT_PER_COMPONENT = {
+    "items_per_component": 1,
+    "basis": "an assumption to confirm — one per component",
+}
+# Per-component items that are APPLIED to the product, whose application and checking is
+# labour charged once on the unit (D-491). Vocabulary, not logic.
+CONCEPT_APPLIED_ITEM_WORDS = ["label", "sticker", "decal", "tag"]
+# Minutes to apply and check ONE such item — a time, an assumption to confirm (15 seconds:
+# peel, place, scan to verify). Charged once, on the unit's Assemble/pack time.
+CONCEPT_APPLY_MIN_PER_ITEM = 0.25
+# THE ALLOWANCE FOR A CONSUMABLES SET THE MARKET COULD NOT PRICE (D-487): a COUNT, never a
+# price. The set is costed as this many of the reference item per piece the unit fits, and
+# the reference item is priced by the ordinary chain (SDI's own sources first, then
+# research) at run time — so nothing here can go stale invisibly. AN ASSUMPTION TO CONFIRM:
+# estimating to state the real fixings count for a fixture of this kind.
+CONCEPT_CONSUMABLE_ALLOWANCE = {
+    "per_piece_fitted": 4,
+    "reference_item": "M6 x 16 pan head machine screw, zinc plated, with nut and washer",
+    "basis": "an assumption to confirm — four fixings for each piece the unit fits",
+}
+# THE FIXINGS A SIGHTED UNIT NEEDS WHEN THE READ NAMES NONE (D-499). Not visible must not
+# mean unpriced: the unit gets a provisional fixings line counted per MECHANICALLY fitted
+# piece — a welded piece's joint is its weld and a piece that hangs or clips is fitted
+# without tools, so neither is counted. Words that say a line IS fixings (so the read named
+# them), and words that say a piece needs none. Vocabulary, not logic.
+CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "screws",
+                        "bolt", "bolts", "rivet", "rivets", "nut", "nuts", "washer"]
+CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
+                             "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
+                             "snap", "magnet", "magnetic", "tool-free"]
+# A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
+# different consumable, named on the line as not in the fixings allowance.
+CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
+# THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501),
+# BY A METHOD SUITED TO THE JOINT (D-502): "bonded" is not always tape. The read's own words
+# choose the method (taped/VHB -> tape; glued/epoxy/structural -> structural adhesive); where
+# they only say "bonded", a narrow strip is taped along its length and anything wider takes a
+# structural adhesive bead round its perimeter. COUNT RULES AND ITEMS, never prices — each item
+# is priced by the ordinary chain. AN ASSUMPTION TO CONFIRM, said on the line.
+CONCEPT_ADHESIVE_ALLOWANCE = {
+    "methods": {
+        "tape": {"words": ["tape", "taped", "vhb", "double-sided", "double sided"],
+                 "reference_item": "double-sided acrylic foam mounting tape, 12 mm wide",
+                 "unit_of_measure": "m", "metres_per_unit": 1.0},
+        "structural adhesive": {"words": ["glue", "glued", "epoxy", "structural",
+                                          "methacrylate", "adhesive-bonded"],
+                                "reference_item": "two-part methacrylate structural adhesive, "
+                                                  "50 ml cartridge",
+                                "unit_of_measure": "each", "metres_per_unit": 6.0},
+    },
+    "strip_max_width_mm": 50,
+    "strip_method": "tape",
+    "default_method": "structural adhesive",
+    # A PROVISIONAL METHOD, NOT A CONSTRUCTION RULE (D-503): materials usually taped rather than
+    # glued, and the words that make a bonded piece load-bearing — a bonded load path is always
+    # asked, never assumed sound.
+    "tape_materials": ["acrylic", "pvc", "polycarbonate", "abs", "glass", "foam", "printed",
+                       "paper", "card", "magnetic"],
+    "load_bearing_words": ["shelf", "tray", "bracket", "post", "frame", "base", "plinth",
+                           "spine", "leg", "support", "upright", "rail"],
+    "basis": "a provisional method to confirm — from the read's words, else the piece's shape "
+             "and material",
+}
+# A LINE THAT IS A SET IS PRICED AS THE WHOLE SET (D-501). Words that make a line a set, and
+# words in a price answer that say it priced one piece of it. Vocabulary, not logic. ("pack"
+# is not here: a pack of an each-bought item is divided down to one, not priced whole.)
+CONCEPT_SET_WORDS = ["set", "sets", "kit", "kits", "pair", "pairs", "suite"]
+PRICE_SINGLE_PIECE_WORDS = ["one panel", "single panel", "one piece", "single piece",
+                            "one sheet", "single sheet", "one card", "single card",
+                            "1 x panel", "1x panel", "per panel", "each panel"]
+# A SMALL JOINED COMPONENT NAMED INSIDE ANOTHER LINE, WHICH NOTHING SIZES (D-501): priced as a
+# house allowance per component at its host's gauge, rather than left knowingly unpriced. The
+# count per host is the brief's or the read's own number ("two hooked brackets"), else the
+# plural said as an assumption. Components outside this list stay a question. AN ASSUMPTION TO
+# CONFIRM WITH ESTIMATING — said on the line it charges.
+CONCEPT_JOINED_COMPONENT_ALLOWANCE = {
+    "components": ["bracket", "hook", "tab", "lug", "cleat", "gusset", "clip", "stiffener"],
+    "blank_mm": {"length": 60, "width": 40},
+    "folds": 1,
+    "basis": "a house allowance for a small folded component — an assumption to confirm",
+}
+# A SPACING IS NOT A SIZE (D-501). Words that make a figure in the brief or the read a pitch —
+# the distance between features — so a cut-out read at exactly that figure is questioned.
+CONCEPT_PITCH_WORDS = ["pitch", "spacing", "spaced", "centres", "centers", "c/c", "crs"]
+# WHICH COMPONENTS CARRY A PER-COMPONENT LABEL (D-500): made components fitted at the unit,
+# less any too small to carry one — the smaller blank dimension under this many mm. None until
+# the customer's rule states it; the count says the exception was not applied.
+CONCEPT_LABEL_MIN_FACE_MM = None
+# A COMPONENT NAMED INSIDE ANOTHER LINE (D-500): "TRAY (with welded hooked brackets)". A
+# "with …" phrase naming a joining word names a component, which must have a line of its own —
+# unless its last word is a feature of the host, not a part. Vocabulary, not logic.
+CONCEPT_JOINED_COMPONENT_WORDS = ["welded", "riveted", "bonded", "fitted", "attached",
+                                  "screwed", "bolted", "glued"]
+CONCEPT_FEATURE_WORDS = ["seam", "joint", "corner", "edge", "lip", "return", "flange", "fold",
+                         "hem", "bead", "cut-out", "cutout", "slot", "hole", "opening", "notch",
+                         "stud", "nut", "insert", "rivet", "fixing", "finish", "coat"]
+# A PIECE WELDED TO A NAMED HOST IS PART OF THAT HOST'S COMPONENT (D-499): "<piece> welded
+# to <host>". It is not fitted, labelled or fixed at the unit on its own, and it is coated
+# with its host. The joining words that name the host:
+CONCEPT_WELDED_TO_WORDS = ["welded to", "welded onto", "welded on to"]
+# A FLANGE DEPTH FOR A CONCEPT BLANK WHOSE READ GAVE NONE (D-499) — a typical return on a
+# folded sheet-steel display part. AN ASSUMPTION TO CONFIRM, recorded on every part it sizes.
+CONCEPT_FLANGE_ALLOWANCE_MM = 25
+
+# A PROVISIONAL BLANK FROM A DRAWING SHEET'S PRINTED FIGURES (D-505, tightened on review). Used
+# only where the sheet prints no usable overall pair, and only when its figures can be put on
+# two perpendicular axes (the text's own orientation). A flange depth the drawing states is
+# used first; this allowance only where it states none. A stated weight must agree with the
+# result within the ratio bounds, else no provisional blank is made (the weight then speaks
+# through the mass-implied allowance instead).
+PROVISIONAL_BLANK_FROM_SHEET = {
+    "flange_allowance_mm": 25,
+    "weight_ratio_bounds": (0.6, 1.6),
+    "density_kg_m3": {"STEEL": 7850, "MILD": 7850, "STAINLESS": 8000, "GALV": 7850,
+                      "ZINTEC": 7850, "CR4": 7850, "ALUMIN": 2700, "ACRYLIC": 1190,
+                      "PERSPEX": 1190, "POLYCARBONATE": 1200},
+    # Words on a sheet that say its figures include the DEVELOPED blank — no flange is added.
+    "developed_words": r"FLAT\s*PATTERN|DEVELOPED|BLANK\s*SIZE|FLAT\s*BLANK|UNFOLDED",
+}
+# CUSTOMER CHANGES SINCE THE DRAWINGS (D-507): the portal box on the normal Run. The e-mail is
+# read against the pack's own part list and text (capped), the estimator ticks what is accepted,
+# and the engine costs it in place of what the drawings state. A size the customer states
+# (from -> to) changes the blank exactly where one side IS the old size; where no side is, the
+# same change is made to the one side that is the old size plus no more than this allowance for
+# its flanges (a straight span of a folded part), and anything else is asked.
+CUSTOMER_CHANGES = {
+    "email_max_chars": 20000,
+    "pack_context_chars": 30000,
+    "size_span_allowance_mm": 200,
+    # The text model for the read; empty means the engine's default xAI model.
+    "model": "",
+}
+# A SHELF-EDGE STRIP, TRIM OR LIP SIZED FROM THE PART IT EDGES (D-499): when the read gives
+# one line whose count is the total of several host parts of different sizes, it is split
+# into one line per host, each at its host's own length. Words that make a line an edging.
+CONCEPT_EDGE_STRIP_WORDS = ["strip", "trim", "edging", "edge", "lip", "nosing"]
+
+# HOW OFTEN A PROJECT REQUIREMENT HAPPENS IS EVIDENCE, NOT A GUESS (D-497). The read classed
+# the K-Wellness topple/tilt/bump tests "per unit" and the book charged £450 on each of 200
+# units, though the brief says testing is NOT in the unit price. The scope is decided, in
+# order, by the estimator's answer, the brief's own sentence, the requirement's own words,
+# and only then the read — whose call is labelled unconfirmed. Vocabulary, not logic.
+PROJECT_SCOPE_EVIDENCE = {
+    # What a requirement IS, read from its name, its words and its allowance basis.
+    "categories": {
+        "testing": ["test", "tests", "testing", "tested", "trial", "trials"],
+        "design": ["design", "development", "cad", "drawing pack", "drawings"],
+        "prototype": ["prototype", "prototypes", "first-off", "first off", "sample"],
+        "documentation": ["documentation", "manual", "o&m", "document", "report"],
+        "assessment": ["assessment", "audit", "survey", "certification", "certificate",
+                       "approval"],
+        "labelling": ["label", "labels", "labelling", "marking"],
+        "inspection": ["inspection", "qc", "quality check", "verification"],
+    },
+    # How often, in the words of the brief or the requirement. Checked per_order first
+    # ("NOT in the unit price" is a per-order sentence), then per_batch, then per_unit; a
+    # phrase negated earlier in its clause ("not full inspection per unit") does not count.
+    "per_order": ["not in the unit price", "per-order", "per order", "shown separately",
+                  "listed separately", "charged once", "project cost", "type test",
+                  "type-test", "per design", "once per design", "before production",
+                  "prior to production", "pre-production", "design approval", "one-off"],
+    "per_batch": ["per batch", "each batch", "every batch", "batch setup", "batch set-up",
+                  "per production run", "per lot", "each delivery", "per consignment",
+                  "sampled"],
+    "per_unit": ["per-unit requirement", "per unit requirement", "each unit", "every unit",
+                 "per unit", "each fixture", "every fixture", "all units", "100%"],
+    # A requirement repeated when the design changes is still a per-design cost; the flag
+    # says a change brings it back.
+    "repeat_on_change": ["design change", "after any change", "re-test", "retest",
+                         "modification"],
+}
+# Items in SHIPMENT scope are already carried by the commercial PACKAGING and DELIVERY
+# lines every run prices — never duplicated as a parts line, and never one per fixture
+# (D-469). Checked BEFORE the consumable words, so "packing tape" lands here.
+CONCEPT_SHIPMENT_WORDS = [
+    "pallet", "packaging", "packing", "carton", "crate", "shrink", "stretch wrap",
+    "banding", "strap", "protective wrap", "bubble",
+]
+# A weld word within three words of one of these is a negation or an alternative, not a
+# statement ("riveted rather than welded", "no welding") — the brief's joint test (D-471)
+# reads sentences, not the pack-level word D-469 removed. Vocabulary, not logic.
+CONCEPT_NEGATION_WORDS = ["no", "not", "never", "without", "rather than", "instead of"]
+
+
+MODEL_DEFAULT_MATERIALS = ("MILD STEEL", "STAINLESS STEEL", "ALUMINIUM")
+# AN ASSUMPTION TO VALIDATE ACROSS PACKS, not a measured figure: set from one pack (8188-08's
+# four acrylic parts fit steel within 1%), wide enough for a printed weight's rounding.
+MODEL_MATERIAL_WEIGHT_TOLERANCE_PCT = 8.0
+
+# A PURCHASED LINE'S WORDS NAME ITS MATERIAL (D-445, size_reading): the word on the line ->
+# the MATERIAL_DENSITY_KG_PER_M3 key, so a reading of its size can be weighed against the
+# heaviest thing the pack states. Only used to refute a reading, never to price one.
+PURCHASED_MATERIAL_WORDS = {"MAGNET": "MAGNET", "MAGNETS": "MAGNET",
+                            "NEODYMIUM": "NEODYMIUM", "FERRITE": "FERRITE",
+                            "STEEL": "MILD STEEL", "STAINLESS": "STAINLESS STEEL",
+                            "ALUMINIUM": "ALUMINIUM", "ALUMINUM": "ALUMINIUM", "BRASS": "BRASS",
+                            "ACRYLIC": "ACRYLIC", "PERSPEX": "ACRYLIC", "MDF": "MDF",
+                            "PLYWOOD": "PLYWOOD"}
+
+# AN OPERATION CHARGED AT ONE LEVEL OF THE TREE (D-446, route_compiler
+# _withhold_duplicate_level_ops): these are done once to a thing, not once per level of the
+# hierarchy that contains it. Where an assembly and its members both carry one, the side with
+# the weaker evidence (a page word or a material default against a stated finish or a
+# measured time) is ruled out with the reason; where the evidence is equal the members keep
+# it and the assembly stands down. Welds, powder and assembly events have their own rules.
+ONE_LEVEL_OPERATIONS = ("glue", "wet_spray", "cnc_routing", "cnc", "manual_labour_acrylic")
+
+# AN EDGE THE SHEET SAYS THE CUTTER FINISHED NEEDS NO POLISH (D-447, the acrylic route). The
+# acrylic route diamond-polishes every acrylic part (the estimators' own sheets, corpus n=147,
+# say so), and that stands. Where a part's OWN finish or notes state that its edges are finished
+# by the cut — LASERED EDGES, LASER POLISHED — the edge is the finish, and Diamond Polish is
+# ruled out with that reason; a sheet that calls for polish keeps it.
+EDGE_FINISHED_BY_CUT_WORDS = ("LASERED EDGES", "LASERED EDGE", "LASER CUT EDGES", "LASER POLISHED",
+                              "LASER-POLISHED", "FLAME POLISHED EDGES")
+
+# WHICH ROUTE SOURCES STATE AN OPERATION, as against inferring it (D-446): a word on the
+# part's own sheet, a measured flat, the model. Everything else — a page inference, a material
+# default, a route rule — is the weaker evidence when one level of the tree has to stand down.
+ONE_LEVEL_STATED_SOURCES = ("drawing_notes", "drawing_deterministic", "dxf", "dxf_geometry",
+                            "solidworks", "solidworks_applied_material", "finish_field",
+                            "title_block", "drawn_on_sheet")
+
+# PACKAGING AND DELIVERY ARE LOOKED UP IN SDI LIVE'S OWN HISTORY BEFORE THE MARKET (D-448,
+# commercial_lines._history_rate): the words a past quote's line carries for each code.
+COMMERCIAL_HISTORY_WORDS = {"PACKAGING": ("PACKAG", "PACKING", "CARTON", "BOX", "PALLET"),
+                            "DELIVERY": ("DELIVER", "CARRIAGE", "HAULAGE", "TRANSPORT", "FREIGHT")}
+COMMERCIAL_HISTORY_MAX_ROWS = 12
 
 # --- ...and whether to ask the market when there is no house figure ---------------
 #
@@ -1677,6 +1962,49 @@ SPECIFICATION_DEFAULT_SENTENCES = [
     # standing instruction, which a route may rest on only as an inference that says so.
     r"\b(?:ALWAYS\s+)?REMOVE\s+(?:ALL\s+)?BURRS?\s+AND\s+SHARP\s+(?:CORNERS|EDGES)\b",
 ]
+# ── THE SHEET'S CHARGE AND THE ENGINE'S MATERIAL BASIS MUST BE THE SAME ORDER OF MAGNITUDE (D-407)
+# 12675-01-02: the engine carried about £112 of stainless for the part and the Sheet Steel block
+# charged £0.05 for a 20 x 18 blank nested 2,542 to a sheet; the book reconciled and said nothing.
+# A nested line whose two readings differ by this factor (or more) fails a check, both named.
+MATERIAL_BASIS_DISAGREEMENT_FACTOR = 5.0
+# Below this on both sides the gap is pence and is not worth a failed check.
+MATERIAL_BASIS_DISAGREEMENT_FLOOR_GBP = 1.0
+# ── A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406) ──────────────────────────────────
+# M&S 12675-01: three concept sheets titled "… — DESIGN INTENT" / "DESIGN INTENT ONLY", every
+# MATERIAL / FINISH / COLOUR field "SEE PART DRAWINGS", no parts list and no part sheets. The
+# drawings run minted a part from each sheet's drawing number and costed it: "40 x 20mm …
+# OVAL TUBE" became a 40 x 20 blank of 20 mm stainless, "ESTIMATED BAG WEIGHT - 1.5kg" became
+# its weight, and a 25/09 concept's 83.86 kg (bags included) became another part's. A sheet
+# that says it is design intent mints no part; a pack with nothing else stops and says which
+# method answers it (the concept read with a brief).
+DESIGN_INTENT_MARKERS = [
+    r"\bDESIGN\s+INTENT\b", r"\bCONCEPT\s+ONLY\b", r"\bNOT\s+FOR\s+MANUFACTURE\b",
+    r"\bFOR\s+(?:DISCUSSION|APPROVAL|COMMENT)\s+ONLY\b", r"\bBLOCK\s+MODEL\b",
+]
+# A size that names a SECTION is the stock's profile, never a blank and never a gauge:
+# "40 x 20mm … OVAL TUBE", "30 x 30 x 2mm SHS", "25 x 3 FLAT BAR".
+SECTION_CALLOUT_WORDS = [
+    r"TUBE", r"SECTION", r"OVAL", r"SHS", r"RHS", r"CHS", r"BOX", r"ANGLE", r"CHANNEL",
+    r"FLAT\s+BAR", r"BAR", r"ROD", r"UPRIGHT", r"POST",
+]
+# A weight the sheet qualifies as somebody else's — the customer's goods, a load, an estimate
+# of the product — is never the part's stated weight. Only the title block's own WEIGHT: is.
+WEIGHT_QUALIFIERS_NOT_THE_PARTS = [
+    r"ESTIMATED", r"EST\.?", r"APPROX(?:IMATE(?:LY)?)?", r"MAX(?:IMUM)?", r"LOAD(?:ING)?",
+    r"CAPACITY", r"BAGS?", r"PRODUCTS?", r"GOODS", r"CUSTOMER", r"GROSS", r"SHIPPING", r"TOTAL",
+]
+# ── WHERE THE PACK HAS NO PART DRAWINGS, THE MODEL IS THE PARTS LIST (D-411) ─────────────
+# A model in the assembly tree whose NAME says it is the customer's or a reference — the goods
+# the stand holds, modelled so the stand fits them — is set aside from a model take-off and
+# listed, never costed. 12675-01: "12675-M&S Customer Bag" and "… Customer Bag_Estimated
+# Stakable" sit in every stand's tree. Matched on whole words, case-insensitive.
+REFERENCE_MODEL_NAME_WORDS = [
+    r"\bCUSTOMER\b", r"\bSUPPLIED\b", r"\bREFERENCE\b", r"\bPLACEHOLDER\b", r"\bDUMMY\b",
+    r"\bENVELOPE\b", r"\bFREE\s+ISSUE\b",
+]
+# The drawing office marks the product among its models with a GA token in the name
+# ("12675-01-GA Stacking Block Model"); the same convention ignore_dxf_name_tokens reads.
+GA_NAME_TOKEN_PATTERN = r"(?:^|[\s_-])GA(?:[\s_-]|$)"
 # ── A FLAT PATTERN IS NOT A TUBE (D-403) ─────────────────────────────────────────────────
 # 9598-03-01M: a 1.2 mm frame with a measured DXF flat and a sheet-metal cut list was given
 # Tube (£8.79) and Tubebend (£25.72) rows at one off, inferred by the vision read from "radii
@@ -1846,6 +2174,71 @@ CONCEPT_IMPLIED_FITTINGS = (
      "per_part": 2},
 )
 
+# ── A CONCEPT READ OF A DRAWING SHEET, HELD AGAINST THE SHEET (D-415) ──────────────────────
+# The sighted bill's made parts, weighed as sized (gross blanks, before any cut-out), against
+# the product weight the sheet states less any goods it says that weight includes. Gross blanks
+# weigh more than the finished part, so the band is wide on the heavy side: a bill below the
+# lower bound is missing or undersizing parts; above the upper, oversizing or double-counting.
+# 12675-01 V1: about 15 kg sighted against 37 kg of stand (0.39) was the read that prompted it;
+# the sheet's own panels, gross, weigh about 55 kg (1.46).
+# D-418: the lower bound was 0.6, and the 14:42 read — two sides, a base and a 186 mm divider,
+# the front and back faces missing — weighed 23 kg against 37 kg (0.62) and passed. Blanks are
+# gross: a product cannot weigh more than the sheet it is cut from, so a bill well under the
+# stated weight is missing parts. 0.8, not 1.0, because the goods' weight a sheet states is
+# often an estimate ("ESTIMATED BAG WEIGHT") and bought-ins add a little.
+CONCEPT_SHEET_WEIGHT_BAND = (0.8, 2.0)
+# A made part longer or wider than the product body by more than this, and not folded, breaks
+# the sheet's envelope.
+CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
+
+# What a design sheet LABELS must be on the bill (D-417). A callout of at most
+# CONCEPT_LABEL_MAX_WORDS words on its own line that names one of these components is a part the
+# product has ("ADJUSTABLE FEET", "CENTRAL SOLID DIVIDER" on 12675-01's GA); a bill with no line
+# carrying that word disagrees with the sheet. Words, not phrases: the bill's line may say
+# "ADJUSTABLE FOOT". The forms map irregular plurals to the one form compared.
+CONCEPT_COMPONENT_WORDS = (
+    "FOOT", "LEVELLER", "GLIDE", "CASTOR", "WHEEL", "DIVIDER", "PARTITION", "SHELF", "TRAY",
+    "DRAWER", "LID", "DOOR", "HINGE", "HOOK", "ARM", "LEG", "POST", "UPRIGHT", "PANEL", "HEADER",
+    "FASCIA", "PLINTH", "PLATE", "CAP", "BRACKET", "RAIL", "BACKBOARD", "RISER",
+)
+CONCEPT_COMPONENT_WORD_FORMS = {"FEET": "FOOT", "SHELVES": "SHELF", "CASTORS": "CASTOR",
+                                "LEVELLERS": "LEVELLER", "GLIDES": "GLIDE"}
+CONCEPT_LABEL_MAX_WORDS = 4
+# A short line is a CALLOUT only if it reads like a label, not a wrapped fragment of a sentence
+# (D-482). A tech brief is paragraph text, and PDF extraction breaks paragraphs into lines: the
+# K-Wellness brief's "uprights. These could" was three words carrying UPRIGHT, so it was taken
+# as a printed part, the bill "missed" it, and a corrective second read was spent on prose.
+# A line with a sentence break inside it, or that starts or ends on one of these words, is
+# prose — a label never begins or ends on an article, conjunction, pronoun or modal verb.
+CONCEPT_LABEL_PROSE_WORDS = (
+    "A", "AN", "THE", "AND", "OR", "BUT", "OF", "TO", "IN", "ON", "AT", "BY", "FOR", "WITH",
+    "FROM", "AS", "THAT", "THIS", "THESE", "THOSE", "IT", "ITS", "THEY", "THEIR", "WHICH",
+    "IS", "ARE", "BE", "BEEN", "WAS", "WERE", "CAN", "COULD", "WILL", "WOULD", "SHOULD",
+    "MAY", "MIGHT", "MUST", "ALSO", "THEN", "SO", "IF",
+)
+
+# A short "<gauge>mm <material>" note on a design sheet ("2mm STEEL CONSTRUCTION", D-419), and
+# the stock material it names. Plain STEEL on a design sheet is mild steel unless it says
+# otherwise; stainless and galvanised are named.
+CONCEPT_SHEET_MATERIAL_WORDS = {
+    "MILD STEEL": "MILD STEEL", "STAINLESS STEEL": "STAINLESS STEEL",
+    "STAINLESS": "STAINLESS STEEL", "GALVANISED STEEL": "GALVANISED STEEL",
+    "ZINTEC": "ZINTEC", "STEEL": "MILD STEEL", "ALUMINIUM": "ALUMINIUM",
+    "ACRYLIC": "ACRYLIC", "MDF": "MDF", "MFMDF": "MFMDF", "PLYWOOD": "PLYWOOD",
+}
+
+# A finish the sheet states, and the operation the bill must then carry somewhere (D-417).
+CONCEPT_FINISH_OPERATIONS = (
+    (r"POWDER", "powder_coating"),
+    (r"\bSPRAY|\bPAINT|LACQUER", "wet_spray"),
+)
+
+# The route operations that cut a part out of stock. A costed line whose route carries one of
+# these is a part SDI cuts, whatever block its money sits in (D-415: the 12675-01 concept book
+# lasered its flat bars and the report said none of its lines was a part SDI cuts).
+CUTTING_OPERATIONS = ("laser_cutting", "laser", "tube_laser", "cnc_routing", "waterjet_cutting",
+                      "plasma_cutting", "punching", "guillotine", "saw", "sawing")
+
 MATERIAL_DENSITY_KG_PER_M3 = {
     "MILD STEEL": 7850,
     "MILD_STEEL": 7850,
@@ -1869,6 +2262,15 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "ACRYLIC": 1190,
     "PERSPEX": 1190,
     "POLYCARBONATE": 1200,
+    # PURCHASED MAGNETS (D-445, size_reading): used only to refute a reading of a size printed
+    # in two units — "could fourteen of these weigh more than the product?" — so the LIGHTEST
+    # of the common SINTERED grades is the figure: ferrite. NdFeB is 7,400-7,600. Bonded and
+    # flexible magnetic products are lighter still (about 3,500-3,800) and are not this entry;
+    # a line whose words say FLEXIBLE or MAGNETIC TAPE is weighed as none of these.
+    "MAGNET": 4900,
+    "FERRITE": 4900,
+    "NEODYMIUM": 7500,
+    "BRASS": 8500,
     # Physical constants, checkable against any materials datasheet.
     "PETG": 1270,
     "HIPS": 1050,
@@ -2357,6 +2759,10 @@ ACRYLIC_OP_DRIVERS = {
 # The eleven below the first group exist on the template and were absent from the engine's card
 # entirely, so the engine could not cost or check them: two of them, Weld (CO2) and Wet Spray,
 # are used on 12349-02.
+# One saw cut on section stock, in seconds — an ALLOWANCE to confirm with the saw (D-455):
+# load, measure, cut, deburr the end. Applied once per piece on a part's own cut list.
+SAW_SECONDS_PER_CUT = 90.0
+
 OPERATION_SETUP_MIN = {
     "PACP": 15, "PACM": 15, "BENC": 30, "CNC": 10, "CNCJ": 15, "DPOL": 10,
     "DRES": 30, "DRIL": 30, "EDGE": 30, "FOLD": 30, "GLUE": 30, "GUIL": 15,
@@ -3691,6 +4097,8 @@ SHEET_WELD_NOTE_PATTERNS = [
 #   the dressing that goes with it, where the note says so
 SHEET_WELD_DRESS_PATTERNS = [
     r"\bDRESS(?:ED)?\b",
+    # "WELDED AND FINISHED FLUSH" (12675-01's GA, D-418): a weld ground flush is a dressed weld.
+    r"\b(?:FINISHED|GROUND)\s+FLUSH\b",
 ]
 
 # ── THE WELD PROCESS THE PACK STATES, NAMED ON THE WELD ROW (D-393) ───────────────────────
@@ -3934,6 +4342,16 @@ WORKBOOK_INPUT_DEFAULTS = {
 
 # Wire gauge lookup table — workbook rows 151-159: H=gauge_mm, I=metres_per_tonne.
 # Used by estimate_material() wire path: price_per_metre = wire_£_per_tonne / metres_per_tonne.
+# A WIRE PART READ OFF THE SHEET THAT DRAWS IT (D-437, wire_sheet_reader). A callout "6 WIRE
+# WORK FRAME" states the gauge; "1081 EXT." by "206 EXT." states the outline. The largest gauge
+# a callout may state (a bigger figure beside WIRE is a pitch or a length); the words that label
+# an external figure; the words that make a part wire for this reader where nothing else has
+# said so; the words that make it a closed frame, whose developed length is its perimeter.
+WIRE_GAUGE_CALLOUT_MAX_MM = 12.0
+WIRE_OUTLINE_LABEL_WORDS = ("EXT.", "EXT", "EXTERNAL", "O/A", "OVERALL")
+WIRE_PART_WORDS = ("WIRE MESH", "WELDED WIRE", "WIRE FORM", "WIREWORK", "WIRE WORK", "WIRE ")
+WIRE_FRAME_WORDS = ("FRAME", "LOOP", "RING", "HOOP")
+
 WIRE_GAUGE_TABLE = {
     2.0:  40550.0,
     2.5:  25950.0,
@@ -3960,6 +4378,10 @@ PUNCH_RECOGNITION = {
     # Corpus-validated descriptive terms; require a modest hole count alongside.
     "punch_keywords": ["PEG", "SLOT", "PERFORAT", "PERF", "MESH", "GRILLE", "VENT"],
     "min_holes_with_keyword": int(os.getenv("PUNCH_MIN_HOLES_KEYWORD", "8")),
+    # THE PUNCH'S OWN LIMITS (D-494) — unset until the shop states them. Set, the switch
+    # checks them; unset, a switch is costed but said as a provisional process assumption.
+    "max_gauge_mm": None,
+    "max_tool_mm": None,
 }
 
 POWDER_COSTING_POLICY = {
@@ -4464,3 +4886,93 @@ CONSISTENCY_CHECK_OWNER = {
 # that reader's set, which drives its own header detection). A customer whose title block
 # genuinely reads "DESCRIPTION: ITEM HOLDER" would lose that description — narrow the list.
 PARTS_TABLE_COLUMN_WORDS = ("ITEM", "DWG", "NO", "NO.", "DESCRIPTION", "QTY", "QTY.", "LENGTH")
+
+
+# ── THE LIVE ENQUIRY RUNNER (D-420) ──────────────────────────────────────────────────
+# The estimators' Live Enquiry workbook drives AI estimates, one after another. A row names a
+# customer and a drawing; the pack is <LIVE_ENQUIRY_ROOT>\<customer folder>\<drawing folder>,
+# and only the files directly in the drawing folder are the pack (never its sub-folders). The
+# runner READS the workbook and never writes it; what it did is kept in its own ledger.
+# src/live_enquiry_runner.py. Paths are UNC, never a drive letter: K: is per-logon and is
+# not there at all for a service account.
+LIVE_ENQUIRY_ROOT = os.getenv(
+    "SDI_LIVE_ENQUIRY_ROOT",
+    r"\\sdi-dc01\shareddata$\Shared\Estimating\Completed\AI Estimating\Live Enquiry")
+# The workbook itself. No default: where the estimators keep it is theirs to say, and a guess
+# that reads last month's copy would run the wrong jobs with every appearance of working.
+LIVE_ENQUIRY_WORKBOOK = os.getenv("SDI_LIVE_ENQUIRY_WORKBOOK", "")
+LIVE_ENQUIRY_SHEET = os.getenv("SDI_LIVE_ENQUIRY_SHEET", "Sheet1")
+# Header words -> the field each column carries. Matched on the header text, so a column moved
+# or inserted on the sheet is still found. A cell with no header is a note (the sheet's
+# unheaded column J: "WAIT FOR DRAWINGS", "Manual Estimate Complete 22/09/2026").
+LIVE_ENQUIRY_COLUMNS = (
+    ("customer", r"\bCUSTOMER\b"),
+    ("drawing", r"\bDRAWING\b"),
+    ("description", r"\bJOB\b.*\bDESC"),
+    ("received", r"\bENQUIRY\b.*\bRECEIVED\b"),
+    ("due", r"\bREQUESTED\b|\bCOMPLETION\b"),
+    ("ai_check", r"\bAI\b"),
+    ("estimator", r"\bESTIMATOR\b"),
+    ("account_manager", r"\bACCOUNT\b"),
+    ("quantities", r"\bQTY\b|\bQUANTIT|\bAMOUNTS?\b"),
+)
+# The AI CHECK answers that ask for a run. Anything else, blank included, is not asked.
+LIVE_ENQUIRY_ASKED = ("YES", "Y")
+# A Drawing No. that is not one drawing: the row needs a pack made up by a person.
+LIVE_ENQUIRY_NOT_A_DRAWING = ("N/A", "NA", "VARIOUS", "TBC", "TBA", "NONE", "-", "?")
+# A note on the row that stops it, whatever else the row says. The person wrote it; the
+# runner does not second-guess it because a folder happens to have appeared.
+LIVE_ENQUIRY_HOLD_NOTES = (r"\bWAIT(?:ING)?\b.*\bDRAWINGS?\b", r"\bON\s+HOLD\b",
+                           r"\bCANCELL?ED\b", r"\bDO\s+NOT\s+RUN\b", r"\bNO\s+AI\b")
+# A drawing number's sheet-type tail, so the sheet's "12633-01-GA" finds the folder
+# "12633-01" and the folder "12633-01-GA Wine lifter" finds "12633-01".
+LIVE_ENQUIRY_SHEET_SUFFIX = r"[-_ ](?:GA|SA)\d*$"
+# Words a customer's name carries that never tell two customers apart (D-423): the sheet's
+# Customer finds its folder by name, however either is spelt, with no list of aliases.
+LIVE_ENQUIRY_CUSTOMER_NOISE_WORDS = ("LTD", "LIMITED", "PLC", "UK", "GROUP", "THE", "INC",
+                                     "CO", "COMPANY")
+# A file in the drawing folder that states the quantities, for a row whose sheet gives none:
+# one line, e.g. "1, 5, 10, 50". The first is the run quantity, the rest are breaks.
+LIVE_ENQUIRY_QTY_FILES = ("QUANTITIES.txt", "QTY.txt")
+# The job description states a quantity only in these forms ("50 OFF", "QTY 250").
+LIVE_ENQUIRY_QTY_IN_TEXT = (r"\b(\d{1,6})\s*(?:OFF|PCS|PIECES|UNITS)\b",
+                            r"\bQTY\.?\s*:?\s*(\d{1,6})\b")
+LIVE_ENQUIRY_POLL_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_POLL_MINUTES", "15"))
+# How long one estimate may take before the runner stops waiting on it. The run is not
+# abandoned — the portal keeps it — the runner just stops queueing behind it this cycle.
+LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES = int(os.getenv("SDI_LIVE_ENQUIRY_RUN_TIMEOUT_MINUTES", "240"))
+# A failed run is tried this many times in all, then waits for `retry` from a person.
+LIVE_ENQUIRY_MAX_ATTEMPTS = int(os.getenv("SDI_LIVE_ENQUIRY_MAX_ATTEMPTS", "1"))
+# Who the portal e-mails a finished estimate to. Empty: filed, sent to nobody — every book is
+# checked before an estimator sees it.
+LIVE_ENQUIRY_EMAIL_TO = os.getenv("SDI_LIVE_ENQUIRY_EMAIL_TO", "")
+LIVE_ENQUIRY_LEDGER = os.getenv("SDI_LIVE_ENQUIRY_LEDGER",
+                                str(BASE_DIR / "output" / "live_enquiry" / "ledger.json"))
+# The design area, through the endpoint James will provide. Unset: the share is the only
+# source of a pack.
+DESIGN_AREA_ENDPOINT = os.getenv("SDI_DESIGN_AREA_ENDPOINT", "")
+
+# The longest run of letters a title block's drawing number carries: GA, SA05, 01M, ASSY. A
+# code-shaped token with a longer run is words joined across spaces — the M&S border's
+# "• 6063 - ALUMINIUM FOR EXTRUSION" printed below the drawing-number cell (D-421).
+TITLE_BLOCK_CODE_MAX_LETTER_RUN = 4
+
+# A size followed by one of these words is the size of that thing, not a sheet's gauge (D-421):
+# "20MM MAG TAPE" and "20MM MAGTAPE TO BASE FOLD" on 8188-08 were read as a 20 mm gauge and,
+# as the pooled pack's only figure, handed to every part. Read by the unlabelled fallback only;
+# a labelled THK / THICKNESS / MATL. figure is the sheet's statement and is not filtered.
+GAUGE_NOT_BEFORE_WORDS = ("TAPE", "MAGTAPE", "MAG", "DOWEL", "DOWELS", "GLUE", "MAGNET",
+                          "MAGNETS", "SCREW", "SCREWS", "BOLT", "RIVET", "INSERT", "NUTSERT",
+                          "HOLE", "HOLES", "DIA", "WIDE", "LONG", "DEEP", "HIGH", "FEET", "FOOT",
+                          "LIP", "GAP", "RADIUS", "BASE", "EDGE", "EDGING", "BAND", "STRIP",
+                          "MESH", "X")
+
+# The family a canonical material name belongs to, for "does this document state one material
+# or several" (D-421). Substrings of the canonical name; the first family that matches wins.
+MATERIAL_FAMILY_WORDS = (
+    ("STEEL", ("STEEL", "ZINTEC", "GALV")),
+    ("BOARD", ("MDF", "TIMBER", "PLY", "WOOD", "BOARD", "VENEER")),
+    ("ALUMINIUM", ("ALUMIN",)),
+    ("PLASTIC", ("ACRYLIC", "PERSPEX", "PMMA", "PETG", "POLYCARB", "PVC", "FOAMEX", "ABS",
+                 "HIPS")),
+)

@@ -1015,7 +1015,7 @@ def test_the_estimate_banner_carries_the_shared_tally():
     src = open(_os.path.join(_os.path.dirname(__file__), "..", "src", "main.py"),
                encoding="utf-8").read()
     # 12173-02: the banner carries the headline count too ("PROVISIONAL — N to settle: ...").
-    i = src.index("to settle: {_phrase_b}")
+    i = src.index("item(s) to confirm: {_phrase_b}")
     assert "outstanding_summary" in src[i - 2500:i], \
         "the banner phrase must be the record's, not a new count"
     assert i < src.index("from estimate_explanation_tab import write_tab"), \

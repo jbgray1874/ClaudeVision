@@ -29,7 +29,7 @@ except Exception:                                                    # noqa: BLE
     ASSEMBLY_ROLE_TOKENS = frozenset({"GA", "ASSY", "ASSEMBLY", "ARR", "ARRANGEMENT", "GEN"})
 
     def strip_assembly_role(identity: str) -> str:
-        m = re.match(r"^(.*\S)[\s\-]+([A-Za-z]+)$", str(identity or "").strip())
+        m = re.match(r"^(.*[^\s_\-])[\s_\-]+([A-Za-z]+)$", str(identity or "").strip())
         if m and m.group(2).upper() in ASSEMBLY_ROLE_TOKENS:
             return m.group(1)
         return str(identity or "").strip()
@@ -326,6 +326,23 @@ def resolve_product(declared: Any, file_names: Sequence[Any],
             d["is_assembly"] = any(str(o["number"]).startswith(d["number"] + "-")
                                    for o in drawings.values() if o is not d)
     if not drawings:
+        # THE NAME TYPED IS STILL RECOGNISED (D-465). A client document ("KWellnessFSDU.pdf")
+        # carries no drawing-number-shaped code for drawing_of_file to read, and this branch
+        # answered "cannot be checked" even when the field and the file were the SAME NAME —
+        # raised twice from the estimating page before it was heard. Compared on
+        # alphanumerics, exactly as the page compares them, and only where the typed name is
+        # long enough to be evidence.
+        _want = re.sub(r"[^A-Z0-9]", "", declared_s.upper())
+        _named = [Path(str(n)).name for n in (file_names or [])
+                  if len(_want) >= 4
+                  and _want in re.sub(r"[^A-Z0-9]", "", Path(str(n)).name.upper())]
+        if _named:
+            return {"status": "unchecked", "declared": declared_s, "match": None,
+                    "matches": [], "others": [], "named_files": _named,
+                    "message": f"No drawing number is printed in these file names, but the "
+                               f"Drawing Number typed matches {_named[0]} — a client "
+                               f"document carries no number of its own, so the name typed "
+                               f"is this job's identity."}
         return {"status": "unchecked", "declared": declared_s, "match": None,
                 "matches": [], "others": [],
                 "message": "No file name here carries a drawing number, so the Drawing "

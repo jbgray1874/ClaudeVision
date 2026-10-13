@@ -536,6 +536,14 @@ class EstimateRequest(BaseModel):
     # folder as ENQUIRY_BRIEF.txt and read by the concept read as stated facts. Ignored on
     # any other method: a drawing pack's drawings are its facts.
     enquiry_brief: Optional[str] = None
+    concept_document: bool = False
+    # REFERENCE / STANDARDS DOCUMENTS (D-474). File names among the submitted files that the
+    # estimator declares to be the customer's standards or requirements manual, not the
+    # product — Boots' 101-page in-store equipment manual illustrates example fixtures and
+    # test rigs that must never become BOM parts. Filed as REFERENCE_DOCUMENTS.json beside
+    # the pack; the concept read sends their words under the standards section and renders
+    # none of their pages as the product.
+    reference_documents: Optional[List[str]] = None
     # WHO TO SEND THE FINISHED ESTIMATE TO. One or more addresses, however they were typed —
     # commas, semicolons, newlines. Absent or empty means send to nobody, which is what a
     # test run wants and what an API caller that has never heard of this field gets.
@@ -549,6 +557,10 @@ class EstimateRequest(BaseModel):
     # checked against the pack BEFORE staging and written into the staged folder as the job's
     # answers file — src/material_confirmation.build_answers, never a price.
     material_answers: Optional[Dict[str, Any]] = None
+    # THE CUSTOMER'S CHANGES SINCE THE DRAWINGS (D-507), ticked on the page. None means the box
+    # was not used. Checked before staging and written into the staged folder as
+    # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
+    customer_changes: Optional[Dict[str, Any]] = None
 
 
 class RecipientsRequest(BaseModel):
@@ -1394,6 +1406,93 @@ def materials_check(req: MaterialCheckRequest, x_sdi_key: Optional[str] = Header
     return {"ok": not errors, "errors": errors, "parts": (data or {}).get("parts") or {}}
 
 
+# ── CUSTOMER CHANGES SINCE THE DRAWINGS (D-507) ────────────────────────────────────────
+#
+# "It happens sometimes and we don't have time to change the drawing pack." The estimator
+# pastes the customer's e-mail; the engine reads it against the pack's own part list and
+# proposes changes — part, field, what the drawing states, what is asked, the e-mail's words.
+# Nothing is applied without a tick and a name, a change typed by hand needs a reason, and
+# whatever this cannot change becomes a question on the book. Never a price.
+_CHANGES_CLI = str(_REPO_ROOT / "src" / "customer_changes.py")
+
+
+def _changes_module():
+    """src/customer_changes, loaded by path like the material step. The checking and writing
+    are pure python; only the e-mail read needs the engine (out of process)."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_customer_changes",
+                                                  src / "customer_changes.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+class ChangesReadRequest(BaseModel):
+    files: List[str] = []
+    email: str = ""
+
+
+@router.post("/changes/read")
+def changes_read(req: ChangesReadRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The e-mail read against the drawings: proposed changes and open questions. Nothing is
+    written. A machine without the engine says so, and the page still takes changes by hand."""
+    import json as _json
+    import subprocess
+    _check_key(x_sdi_key)
+    vocab = _changes_module().vocabulary()
+    if not str(req.email or "").strip():
+        return {"status": "empty", "message": "Paste the customer's e-mail first.",
+                "changes": [], "questions": [], "vocabulary": vocab}
+    resolved = []
+    for raw in req.files or []:
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the e-mail can only be read on the machine that runs estimates "
+                           "(no engine python here) — add the changes by hand"}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _CHANGES_CLI, "--read", *resolved],
+                              input=str(req.email), capture_output=True, text=True,
+                              encoding="utf-8", timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "reading the e-mail took too long — add the changes by hand"}
+    if proc.returncode != 0:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": f"the reader failed: {(proc.stderr or proc.stdout)[-300:]}"}
+    try:
+        data = _json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the reader returned nothing usable — add the changes by hand"}
+    data.setdefault("vocabulary", vocab)
+    return data
+
+
+class ChangesCheckRequest(BaseModel):
+    drawing_number: str = ""
+    customer_changes: Dict[str, Any] = {}
+
+
+@router.post("/changes/check")
+def changes_check(req: ChangesCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The ticked changes as the run would take them, or why they would be refused — so the
+    page shows a missing name or reason before Run. The Run checks again."""
+    _check_key(x_sdi_key)
+    data, errors = _changes_module().build_changes_file(req.customer_changes or {},
+                                                        req.drawing_number or "")
+    return {"ok": not errors, "errors": errors,
+            "accepted": len((data or {}).get("changes") or []),
+            "questions": len((data or {}).get("questions") or [])}
+
+
 class BriefRequest(BaseModel):
     """A run queued from a typed brief with no drawings (D-401) — the shape another site
     posts. `reference` is the enquiry or drawing number the job is filed under."""
@@ -1454,6 +1553,23 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     if method not in {"both", "llm", "engine"}:
         raise HTTPException(400, f"Unknown pricing method {req.method!r}. Use both, llm or "
                                  f"engine.")
+    if req.concept_document and method != "llm":
+        raise HTTPException(400, "Client-document costing requires the LLM read method.")
+    _ref_docs = [Path(str(f)).name for f in (req.reference_documents or [])
+                 if str(f or "").strip()]
+    if _ref_docs and method != "llm":
+        raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    if _ref_docs and req.files:
+        _file_names = {Path(str(f)).name for f in req.files if str(f or "").strip()}
+        _unknown = sorted(set(_ref_docs) - _file_names)
+        if _unknown:
+            raise HTTPException(400, f"These reference documents are not among the submitted "
+                                     f"files: {', '.join(_unknown)}.")
+        if _file_names and set(_ref_docs) >= _file_names:
+            raise HTTPException(400, "Every submitted document is declared reference/standards "
+                                     "— there is no product to cost. A standards manual states "
+                                     "requirements; stage the product's pack or brief beside "
+                                     "it, or untick one.")
 
     # CHECKED BEFORE ANYTHING IS STAGED, for the same reason `method` is: a typo in an
     # address should not cost the estimator a rewritten job folder. Reported rather than
@@ -1528,6 +1644,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(400, "Material confirmation not accepted: " + "; ".join(_merrs))
         _material_file = _mfile
 
+    # THE CUSTOMER'S CHANGES, CHECKED BEFORE STAGING for the same reason: a missing name or
+    # reason is refused while nothing has moved. Part codes are not checked against the pack
+    # here — the engine reports any code that matches no part, on the book.
+    _changes_file: Optional[Dict[str, Any]] = None
+    if req.customer_changes:
+        _cfile, _cerrs = _changes_module().build_changes_file(req.customer_changes, drawing)
+        if _cerrs:
+            raise HTTPException(400, "Customer changes not accepted: " + "; ".join(_cerrs))
+        _changes_file = _cfile or None
+
     try:
         if _brief_only:
             staged = staging.stage_brief_only(client=client, drawing=drawing,
@@ -1545,6 +1671,26 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             502, f"The drawings could not be staged to {staging.staging_root()} "
                  f"({type(exc).__name__}: {exc}). Check the share is reachable and writable.")
     folder = staged["folder"]
+    # An explicit input, reset for every submission. Never infer this mode from a job code.
+    _document_marker = Path(folder) / "CONCEPT_DOCUMENT.json"
+    try:
+        if req.concept_document:
+            _document_marker.write_text('{"mode": "client_document"}\n', encoding="utf-8")
+        elif _document_marker.exists():
+            _document_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the client-document mode: {exc}. Nothing queued.")
+    # The reference-document declaration, beside it and under the same reset-every-run rule.
+    _reference_marker = Path(folder) / "REFERENCE_DOCUMENTS.json"
+    try:
+        if _ref_docs:
+            _reference_marker.write_text(
+                json.dumps({"files": _ref_docs}) + "\n", encoding="utf-8")
+        elif _reference_marker.exists():
+            _reference_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the reference-document declaration: {exc}. "
+                                 f"Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
     # a new job; a file somebody wrote by hand is left alone.
@@ -1554,6 +1700,15 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         if _material_file:
             raise HTTPException(
                 502, f"The drawings were staged but the material confirmation could not be "
+                     f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+    # The customer's changes, under the same rule: written after staging, and a file the
+    # portal wrote on an earlier run is removed when this run carries none.
+    try:
+        _changes_module().write_changes(folder, drawing, _changes_file)
+    except OSError as exc:
+        if _changes_file:
+            raise HTTPException(
+                502, f"The drawings were staged but the customer changes could not be "
                      f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
 
     job = _within_a_root(folder)
@@ -1638,6 +1793,13 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "quoted or compared with a normal run's.")
     _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
                      if run.llm_only else "not_an_llm_read")
+    if req.concept_document:
+        run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
+                 "brief together; infer a provisional BOM and route for ordinary costing.")
+    if _ref_docs:
+        run.line("REFERENCE DOCUMENTS: " + ", ".join(_ref_docs) + " — read as the customer's "
+                 "standards: applicable requirements become named allowances, and the "
+                 "objects they illustrate never become parts.")
     if run.fresh_read:
         # SAID, BECAUSE IT CHANGES WHAT THE ANSWER MEANS. A cached run repeats the last
         # answer exactly; this one may not, and "the number moved and nothing changed" is
@@ -1648,6 +1810,10 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     run.line(f"Staged    {staged['copied_count']} drawing(s) into {job}"
              + (f" (replaced {staged['replaced_count']} from a previous run)"
                 if staged["replaced_count"] else ""))
+    if staged.get("job_data_kept"):
+        # THE JOB'S OWN DATA SURVIVED THE RE-STAGE, AND THE LOG SAYS WHICH (review of D-492).
+        run.line(f"  kept      {', '.join(staged['job_data_kept'])} — the job's own data "
+                 f"(estimator answers, the previous read's bill), carried across the re-stage")
     # SAY WHEN THE SOLIDWORKS EXTRACT CAME WITH IT, and say when it did not. Layer 0 applying
     # or not is the single biggest difference between two runs of the same pack, and it used to
     # be invisible either way.
@@ -1695,7 +1861,9 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     return {"run_id": run.run_id, "output_path": str(out),
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None,
-            "enquiry_brief": _brief_status}
+            "enquiry_brief": _brief_status,
+            "reference_documents": list(_ref_docs),
+            "concept_document": bool(req.concept_document)}
 
 
 @router.post("/override")

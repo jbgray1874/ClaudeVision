@@ -391,8 +391,15 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     # stay as a second net for records that arrive without either.
     try:
         from bought_in_policy import FABRICATION_OPS, has_fabrication_evidence, is_bought_in
+        # THE COSTED RECORD KEEPS ITS ROUTE UNDER route_context (D-485). The last-resort rescue
+        # asks this of the costed line, not the raw part, so the top-level fields were empty and
+        # the K-Wellness trays, posts and spine — laser, fold, weld and powder on every one —
+        # read as things to buy: £6,163 of finished-item market figures with our own labour
+        # charged on top. Both places are read.
+        _rc = part.get("route_context") if isinstance(part.get("route_context"), dict) else {}
         _ops = {str(o).strip().lower() for o in
-                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or []))}
+                ((part.get("textual_operations") or []) + (part.get("inferred_operations") or [])
+                 + (_rc.get("textual_operations") or []) + (_rc.get("inferred_operations") or []))}
         if has_fabrication_evidence(part):
             return False
         # AN OPERATION READ ONTO A PURCHASED ITEM IS A MIS-READ, NOT A MAKE. MAGNET21 sat on
@@ -420,12 +427,21 @@ def is_something_you_can_buy(part: Dict[str, Any], skip_rollup_parents: bool = T
     if skip_rollup_parents:
         _pn = str(part.get("part_number") or "").upper()
         _desc = str(part.get("description") or "").upper()
+        # A "-GA" CODE THAT IS A LINE WE BUY IS NOT A ROLL-UP PARENT (D-505). 12665-01-GA
+        # lists "9370-66-GA 200mm Euro Hook" x9 — another job's drawing, no members in this
+        # pack, carried as a bought line — and the market was never asked because of the
+        # code's last two letters: nine hooks at £0. The code still refuses where the line has
+        # structure or an assembly flag; it no longer refuses a purchase on its spelling alone.
+        _roles = {str(r).strip().lower() for r in (part.get("page_roles") or [])}
+        _bought_line = (("bought_in" in _roles or bool(part.get("is_bought_in")))
+                        and not _structural
+                        and not (part.get("is_assembly_parent") or part.get("is_sub_assembly")))
         _is_parent = (
             (structure_decides
              and (bool(part.get("is_assembly_parent")) or bool(part.get("is_sub_assembly"))))
             or "weldment_parent_material_suppressed" in [str(f).lower() for f in (part.get("reliability_flags") or [])]
             or str(part.get("cost_method") or "").lower().startswith("weldment_parent")
-            or _pn.endswith("-GA") or "-GA-" in _pn
+            or ((_pn.endswith("-GA") or "-GA-" in _pn) and not _bought_line)
             or any(t in _desc for t in ("WELDMENT", "ASSEMBLY", "SUB ASSEMBLY", "SUB-ASSEMBLY"))
         )
         if _is_parent:
@@ -1421,10 +1437,13 @@ class PricingService:
         try:
             from bought_in_policy import has_fabrication_evidence as _measured
             from bought_in_policy import is_bought_in as _bought
+            from bought_in_policy import read_states_a_made_part as _read_made
             _is_purchase = bool(_bought(part))
             # The service's own word heuristic (NUT, PIN, SPRING, WHEEL...) must not turn a
-            # made part with a measured flat into a purchase and lose it its material row.
-            if not _is_purchase and self._is_bought_in_heuristic(part) and not _measured(part):
+            # made part with a measured flat into a purchase and lose it its material row —
+            # nor one the concept read states it makes, with evidence (D-489).
+            if (not _is_purchase and self._is_bought_in_heuristic(part)
+                    and not _measured(part) and not _read_made(part)):
                 _is_purchase = True
         except Exception:                                        # noqa: BLE001
             _is_purchase = bool(self._is_bought_in_heuristic(part))

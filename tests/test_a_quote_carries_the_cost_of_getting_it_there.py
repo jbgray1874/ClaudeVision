@@ -166,8 +166,8 @@ def test_the_estimator_asks_for_these_lines_rather_than_zeroing_them():
     src = open(os.path.join(os.path.dirname(__file__), "..", "src", "estimator.py"),
                encoding="utf-8").read()
     assert "import commercial_lines as _cl" in src
-    assert "_cl.packaging_line(parts, _oq)" in src
-    assert "_cl.delivery_line(parts, _oq)" in src
+    assert "_cl.packaging_line(parts, _oq, customer=_cust)" in src   # the customer travels with the order (D-448)
+    assert "_cl.delivery_line(parts, _oq, customer=_cust)" in src
     # And the quantity is read through the one helper that knows where file_scan wrote it.
     assert "_oq = _commercial_order_quantity(summary)" in src
 
@@ -243,7 +243,13 @@ def test_the_pipeline_reaches_a_commercial_line(monkeypatch):
                         lambda brief: asked.append(brief) or {})
     cl.packaging_line(PANELS, 7)
     cl.delivery_line(PANELS, 7)
-    assert len(asked) == 2, "a commercial line was not offered to the research rung"
+    # D-451: a counted shipment is first asked its per-pallet rate; with no evidenced answer
+    # the whole-order rung follows. Each line still reaches the order-level research rung.
+    _order_asks = [b for b in asked if "per order" in str(b.get("description") or "")]
+    assert len(_order_asks) == 2, "a commercial line was not offered to the research rung"
+    assert all("per pallet" in str(b.get("description") or "") or "per carton" in str(b.get("description") or "")
+               or "per parcel" in str(b.get("description") or "")
+               for b in asked if b not in _order_asks), "the unit-rate ask names its unit"
     assert all(b.get("description") for b in asked), \
         "the researcher was asked without the sentence describing the consignment"
 

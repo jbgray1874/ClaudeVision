@@ -57,45 +57,19 @@ except Exception:
 # Oracles (same known-good sets used to prove Path A). Match on (item, token, qty)
 # so minor description wording differences don't fail the check.
 # ----------------------------------------------------------------------------
-ORACLE = {
-    "12120-01-GA": [
-        ("1", "SA01", 1), ("2", "103", 1), ("3", "04M", 1),
-        ("4", "THUM620", 4), ("5", "08M", 1), ("6", "FIXINGTBC", 2),
-    ],
-    "12120-01-SA01": [("1", "101", 1), ("2", "05M", 1)],
-    "12120-01-101": [
-        ("1", "02M", 1), ("2", "03M", 1), ("3", "PEM", 2), ("4", "CLINCH", 4),
-    ],
-    "12120-01-103": [
-        ("1", "01M", 1), ("2", "06M", 1),
-        # item 3 = keyhole pem qty 2. Its description ("KEYHOLE PEM SIZE REQUIRED")
-        # is a NOTE, not the table cell - vision correctly returns item 3/qty 2 with
-        # a blank desc (obeying the strict "blank if only in a note" prompt rule).
-        # Match on item+qty, same as Path A's oracle.
-        ("3", "", 2),
-    ],
-    # 1282 (2013 template) — the job where Path A only reached ~90%.
-    "1282-GA": [
-        ("1", "1448-GA", 2), ("2", "1449-01C", 3), ("3", "1450-GA", 1),
-        ("4", "1453-GA-C", 1), ("5", "2621-01C", 1), ("6", "3886-GA", 2),
-        ("7", "1455-C-GA", 1),
-    ],
-    "1448-GA": [("1", "1448-01", 1), ("2", "1448-02", 1)],
-    "1455-C-GA": [
-        ("1", "1455-C-101", 1), ("2", "1455-C-005", 1),
-        ("3", "LOOM", 1), ("4", "RIVET", 2),
-    ],
-    # weldment 1455-C-101's own children (nested sub-BOM on its detail page)
-    "1455-C-101": [
-        ("1", "1455-C-001", 1), ("2", "1455-C-002", 1),
-        ("3", "1455-C-003", 1), ("4", "1455-C-004", 1),
-    ],
-    # 3886 lower-leg sub-assembly (note the drawing's trailing-hyphen codes)
-    "3886-GA": [
-        ("1", "3886-01", 1), ("2", "3886-02", 1), ("3", "3886-03", 1),
-        ("4", "FIXING", 2), ("5", "FIXING", 2),  # nutsert x2, glide x2
-    ],
-}
+# The self-test answers for this reader are regression data, not engine code (D-454):
+# tests/fixtures/bom_reader_oracles.json["vision"], read only by verify().
+def _load_oracle(_key: str = "vision"):
+    import json as _json
+    from pathlib import Path as _Path
+    _p = _Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "bom_reader_oracles.json"
+    try:
+        return {k: [tuple(t) for t in v] for k, v in _json.loads(_p.read_text(encoding="utf-8"))[_key].items()}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+ORACLE = _load_oracle()
 
 
 # ----------------------------------------------------------------------------
@@ -174,7 +148,7 @@ Return ONLY valid JSON, no markdown, in EXACTLY this shape:
 {
   "parent": "<title-block DWG NO, or null>",
   "rows": [
-    {"item": "1", "part_code": "1448-GA", "description": "UPPER LEG ASSEMBLY", "qty": 2,
+    {"item": "<item no>", "part_code": "<code as printed>", "description": "<as printed>", "qty": <number>,
      "material": null, "weight": null}
   ],
   "part_details": {

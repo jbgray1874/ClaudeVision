@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from source_precedence import apply_field as _apply_field
+from source_precedence import source_of as _source_of
 
 try:
     import pdfplumber  # type: ignore
@@ -168,6 +169,8 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
         if not _p.get("bom_parent"):
             _p["bom_parent"] = _bp
 
+    from part_identity import same_row_read_as_one_cell as _one_cell    # D-443
+    from part_identity import same_bom_occurrence as _same_occ           # D-454
     _added = _updated = 0
     for _r in rows:
         if not _is_fastener_row(_r):
@@ -179,12 +182,27 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             _qty = 1
 
         # 1) CODE match -> update qty, no add
+        # A WRAPPED CELL IS ONE ROW HERE TOO (D-443). D-435 taught the route compiler that an
+        # identity spelled as another's code and description joined is the same row read as
+        # one cell; this reconcile minted its own record first — the table reader's whole-cell
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" found no record of that code and
+        # was appended beside "FIXING M6x12mm", four inserts charged as eight (19:32 book).
+        # One predicate, shared, so the two passes cannot disagree.
         _cm = None
         if _code:
             for _p in _parts_recon:
                 if _p_code(_p) == _code.upper():
                     _cm = _p
                     break
+            if _cm is None:
+                for _p in _parts_recon:
+                    if _one_cell(_code, _desc if _desc != _code else "",
+                                 _p.get("part_number"), _p.get("description")) \
+                            and _same_occ(_r, _p):
+                        _cm = _p
+                        print(f"   [recon-row] ONE-CELL '{_code}' is {_p_code(_p)} read as one "
+                              f"cell — one line, not two", flush=True)
+                        break
         if _cm is not None:
             # A quantity read from the PDF BOM table — rank 60. It must not displace the
             # assembly BOM the shop builds from, and the flag is gated on the write landing
@@ -323,6 +341,12 @@ def _reconcile_dualpath_into_part_estimates(summary, dp):
             _w = tuple(_aw(_o.get("description")))
             _rec = _minted.get(_w)
             _already = _same_article_held(_w)
+            if _already is None:                                  # the row read as one cell (D-443)
+                _already = next((_p for _p in _parts_recon if isinstance(_p, dict)
+                                 and _one_cell(_o.get("part_number"), _o.get("description"),
+                                               _p.get("part_number"), _p.get("description"))
+                                 and _p_code(_p) != str(_o.get("part_number") or "").strip().upper()),
+                                None)
             if _rec is None or _already is not None:
                 # Held already — by identity (the minter skipped it) or by article. This
                 # table's occurrence is still a fact about the record.
@@ -481,8 +505,6 @@ def _score_primary_job_pdf(pdf_path: Path, summary: Dict[str, Any]) -> int:
         score += 20
     if re.search(r"\b\d{4}\b", name):
         score += 5
-    if "WALL BAY" in name or "STANDARD" in name:
-        score += 3
     bom_rows = (summary.get("document_analysis") or {}).get("bom_rows") or []
     score += min(len(bom_rows), 30)
     score += min(int(summary.get("page_count") or 0), 10)
@@ -924,6 +946,51 @@ def scan_folder_job(
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     started = time.time()
     pdfs = [Path(p) for p in pdf_paths if Path(p).suffix.lower() == ".pdf"]
+    # A DECLARED REFERENCE DOCUMENT NEVER ENTERS THE PRODUCT READ (D-477). D-474 kept a
+    # standards manual out of the CONCEPT prompt, but the 11 Oct 21:20 K-Wellness run never
+    # reached that prompt: the ordinary pipeline extracted all 101 pages of the Boots
+    # manual, sent them to the BOM vision read, minted 32 parts from Appendix A's worked
+    # EXAMPLE pack (a DS Screen FSU with Samsung screens — on a job whose brief states no
+    # electrics), took the manual as the anchor PDF and could not resolve the declared
+    # product. The separation is a property of the DOCUMENT, so it is enforced here, where
+    # documents enter the pipeline — extraction, geometry, the pooled BOM, the vision read
+    # and the roots never see a declared reference file. Its words still reach the model,
+    # through the standards channel the concept read carries (reference_pack_paths below).
+    reference_pdfs: List[Path] = []
+    _undeclared_note = ""
+    try:
+        import concept_scan as _cs_ref                              # noqa: WPS433
+        _ref_names = set(_cs_ref.reference_documents_declared([job_folder]))
+    except Exception:                                               # noqa: BLE001
+        _ref_names = set()
+    if _ref_names:
+        _held = [p for p in pdfs if p.name in _ref_names]
+        _product_pdfs = [p for p in pdfs if p.name not in _ref_names]
+        if _held and _product_pdfs:
+            reference_pdfs, pdfs = _held, _product_pdfs
+            print(f"   -> Reference document(s) held OUT of the product read: "
+                  f"{', '.join(p.name for p in reference_pdfs)} — their words ride the "
+                  f"concept read as the customer's standards; nothing they illustrate can "
+                  f"join the bill")
+        elif _held:
+            print(f"   -> every staged document is declared reference — the declaration "
+                  f"is set aside so the read has a product", flush=True)
+    elif (len(pdfs) > 1
+          and os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}):
+        # THE ABSENCE IS SAID WHERE THE HOUR IS ABOUT TO BE SPENT (D-479): three K-Wellness
+        # runs read a 101-page standards manual as the product because the declaration was
+        # lost on the way in, and the only sign was a line that was not printed. Scoped to
+        # LLM-only runs — an ordinary multi-sheet drawing pack has no declaration and needs
+        # none. The flag below puts the same fact ON THE BOOK the estimator opens.
+        print(f"   -> NOTE: {len(pdfs)} documents and NO reference declaration — every one "
+              f"is read as the product. If one is a standards or reference manual, tick it "
+              f"in the portal's Reference/standards list and run again.", flush=True)
+        _undeclared_note = (
+            f"{len(pdfs)} documents reached this LLM read with NO reference declaration "
+            f"and every one was read as the product ("
+            + ", ".join(p.name for p in pdfs)
+            + ") — if one of them is a standards or reference manual, its examples are in "
+              "this bill: tick it in the portal's Reference/standards list and run again")
     # A RENDER IN THE PACK IS A PAGE OF THE JOB. Wrapped one image to one PDF page, so the
     # pooled scan reads it exactly as it reads a raster drawing sheet; what it cannot supply
     # (text, title block, BOM) is absent because a render carries none, not because a reader
@@ -959,6 +1026,11 @@ def scan_folder_job(
     # renders ITS pages from these, and a wrapped render lives in the output tree, not in
     # the job folder, so a glob of the folder would silently miss the whole point.
     merged["scanned_documents"] = [str(p) for p in pdfs]
+    if reference_pdfs:
+        # The held-out standards documents, for the concept read's requirements channel.
+        merged["reference_pack_paths"] = [str(p) for p in reference_pdfs]
+    if _undeclared_note:
+        merged.setdefault("review_flags", []).append(_undeclared_note)
     # THE PACK THE ESTIMATOR STAGED, exactly as handed in, before this function dropped what
     # no reader opens. The measured-CAD guard reads THIS, not a listing of the folder: a STEP
     # file selected for the job is part of the job even though nothing read it, and a STEP
@@ -987,6 +1059,19 @@ def scan_folder_job(
     )
 
 
+def design_intent_pages(summary: Any) -> List[Any]:
+    """The page numbers whose role is design_intent (D-406), in order."""
+    out: List[Any] = []
+    for pg in ((summary or {}).get("pages") or []) if isinstance(summary, dict) else []:
+        if not isinstance(pg, dict):
+            continue
+        _r = pg.get("page_role")
+        _r = _r.get("primary_role") if isinstance(_r, dict) else _r
+        if str(_r or "").strip().lower() == "design_intent":
+            out.append(pg.get("page_number"))
+    return out
+
+
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
     full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
@@ -1013,6 +1098,22 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
 
     signals: List[str] = []
     primary_role = "detail"
+
+    # A DESIGN-INTENT SHEET IS NOT A PART DRAWING (D-406). "… — DESIGN INTENT" in the title
+    # block, "DESIGN INTENT ONLY" on the sheet, a concept's block model: a drawing of an idea,
+    # not of parts. It mints no part (part_index) and, with nothing else in the pack, the
+    # drawings run stops and names the method that answers it. Vocabulary in config.
+    try:
+        _di_markers = [re.compile(m, re.IGNORECASE)
+                       for m in (getattr(config, "DESIGN_INTENT_MARKERS", None) or [])]
+    except re.error:
+        _di_markers = []
+    # The row count is not the test: the M&S border's glyph-spaced "304 - STAINLESS STEEL …
+    # 6063" matches the BOM-row pattern once on every sheet, which is what kept this branch
+    # off on 12675-01's 18:32 book. A parts list has a header (ITEM / DWG NO / QTY).
+    if _di_markers and not bom_header_detected and any(m.search(full_text) for m in _di_markers):
+        signals.append("design_intent_detected")
+        return {"primary_role": "design_intent", "signals": signals}
 
     if bom_row_count > 0:
         signals.append("bom_rows_detected")
@@ -1789,6 +1890,22 @@ def write_outputs(summary: Dict[str, Any]) -> Tuple[Path, Path, Path, Path]:
     return json_path, text_path, log_path, csv_path
 
 
+def _material_family(name: Any) -> str:
+    """The family a stated material belongs to — MILD STEEL and ZINTEC are one, MDF and
+    TIMBER are one (boards), ACRYLIC another — by the engine's own canonical material."""
+    try:
+        from json_normaliser import normalise_material
+        canon = str(normalise_material(str(name or "")) or "").upper()
+    except Exception:                                                     # noqa: BLE001
+        canon = str(name or "").upper()
+    if not canon or canon in {"UNKNOWN", "NONE", "?"}:
+        return ""
+    for family, words in (getattr(config, "MATERIAL_FAMILY_WORDS", None) or ()):
+        if any(w in canon for w in words):
+            return family
+    return canon
+
+
 def _inherit_document_material_to_parts(
     parts: List[Dict[str, Any]],
     document_analysis: Dict[str, Any],
@@ -1808,6 +1925,15 @@ def _inherit_document_material_to_parts(
     tb_norm = (document_analysis.get("title_block") or {}).get("normalized") or {}
     doc_mat_raw = tb_norm.get("primary_material") or None
     if not doc_mat_norm and not doc_mat_raw:
+        return
+    # A DOCUMENT OF SEVERAL MATERIALS HAS NONE TO HAND DOWN (D-421). 8188-08 pools a GA
+    # ("MATERIAL: VARIOUS"), steel, acrylic and MDF sheets; its document material came out
+    # TIMBER and the wire frame and two wave layers — parts with no sheet of their own —
+    # inherited it. One family stated is a GA's material; two or more is a mixed pack.
+    _families = {_material_family(m) for m in
+                 ((document_analysis.get("title_block") or {}).get("materials") or [])}
+    _families.discard("")
+    if len(_families) > 1:
         return
     for part in parts:
         # Display boards (VINYL-* / DISPLAY BOARD) must NOT inherit the assembly's
@@ -1833,6 +1959,104 @@ def _inherit_document_material_to_parts(
         if doc_mat_raw and not part.get("materials"):
             part["materials"] = [doc_mat_raw]
             part.setdefault("material_inherited_from", "document_level")
+
+
+def word_coded_row_is_a_purchase(part_number: Any, description: Any) -> bool:
+    """Is a parts-list row whose code cell holds a WORD a purchased line to keep (D-436)?
+
+    8188-08-SA04's table prints "Strengthener | EXTRUSION 92: LENGTH =100mm | 24". The code
+    cell is a word, so the validity gate — written for finish and title-block text, and
+    demanding a digit — rejected it, the record lost its identity, and the 24 lengths of
+    extrusion were on the bill the product reaches with no line on the sheet. A word in the
+    code cell is not a code, but with a description the row reader calls a part it is the
+    drawing's own name for a thing we buy, and the line stands under that name: a word
+    alone, no placeholder, no category word (FIXING, P/P — those are shared rows), no finish
+    word, and a description that reads as a part, never a note, a finish or a material."""
+    pn = " ".join(str(part_number or "").split())
+    if len(pn) < 3 or not re.fullmatch(r"[A-Za-z][A-Za-z ]*", pn):
+        return False
+    up = pn.upper()
+    if any(w in up for w in ("COATED", "GLOSS", "POWDER", "MATT", "PRIMER", "FINISH")):
+        return False
+    try:
+        from part_identity import (ROW_ROLE_PART, is_placeholder_identity,
+                                   parts_list_row_role)
+        from part_code_conventions import is_category_not_a_code
+    except Exception:                                                 # noqa: BLE001
+        return False
+    if is_placeholder_identity(pn) or is_category_not_a_code(pn):
+        return False
+    desc = " ".join(str(description or "").split())
+    return bool(desc) and parts_list_row_role(desc) == ROW_ROLE_PART
+
+
+def _inherit_sheet_material_to_parts(
+    parts: List[Dict[str, Any]],
+    pages: List[Dict[str, Any]],
+) -> None:
+    """A part with no sheet of its own takes the material of the sheet that draws it (D-426).
+
+    8188-08: wave layers 014 and 015 are drawn on 013's sheet, whose title block states
+    ACRYLIC, and have no title block of their own. The document states several materials, so
+    it hands down none (D-421), and the model's library appearance — MILD_STEEL, the default
+    the same sheet overruled on 013 — was the only reading: both layers were nested on the
+    Sheet Steel block, lasered on the metal laser, folded and powder coated.
+
+    Only a sheet that states ONE family hands anything down, only to a made part, and only
+    where none of the part's pages is its own; the part's own title block always outranks
+    this, and where it displaces another family the record says so as a question."""
+    if not parts or not pages:
+        return
+
+    def _bare(code: Any) -> str:
+        return re.sub(r"[\s\-_]+", "", str(code or "").upper())
+
+    sheets: Dict[str, Tuple[List[str], List[str]]] = {}
+    for pg in pages:
+        pa = pg.get("page_analysis")
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        sheets[str(pg.get("page_number") or "").strip()] = (
+            [str(n) for n in (tb.get("drawing_numbers") or []) if n],
+            [str(m) for m in (tb.get("materials") or []) if str(m or "").strip()],
+        )
+    for part in parts:
+        pn = str(part.get("part_number") or "").strip()
+        if not pn or part.get("is_bought_in") or part.get("is_assembly_parent") \
+                or part.get("is_sub_assembly") or "bought_in" in [
+                    str(r).lower() for r in (part.get("page_roles") or [])]:
+            continue
+        drawn_on = [str(p).strip() for p in (part.get("pages") or []) if str(p).strip() in sheets]
+        if not drawn_on:
+            continue
+        if any(_bare(pn) in {_bare(n) for n in sheets[p][0]} for p in drawn_on):
+            continue                     # its own sheet speaks through the drawing readers
+        stated = [m for p in drawn_on for m in sheets[p][1]]
+        families = {_material_family(m) for m in stated}
+        families.discard("")
+        if len(families) != 1:
+            continue
+        try:
+            from json_normaliser import normalise_material
+            material = str(normalise_material(stated[0]) or stated[0])
+        except Exception:                                                 # noqa: BLE001
+            material = stated[0]
+        before = str(part.get("normalized_material") or "").strip()
+        before_src = str(_source_of(part, "normalized_material") or "")
+        sheet = ", ".join(f"p.{p}" + (f" ({sheets[p][0][0]})" if sheets[p][0] else "")
+                          for p in drawn_on)
+        if not _apply_field(part, "normalized_material", material, "drawn_on_sheet"):
+            continue
+        part["material_inherited_from"] = f"the sheet that draws it: {sheet}"
+        if not part.get("materials"):
+            part["materials"] = [stated[0]]
+        if before and _material_family(before) not in families:
+            part.setdefault("review_flags", []).append(
+                f"material: {pn} has no sheet of its own; the sheet that draws it ({sheet}) "
+                f"states {stated[0]}, taken over '{before}'"
+                + (" — the model's library appearance, not a spec"
+                   if before_src == "solidworks_applied_material" else
+                   f" from {before_src}" if before_src else "")
+                + ". Confirm the material against the drawing.")
 
 
 def _fill_part_revisions_from_pages(summary: Dict[str, Any]) -> None:
@@ -2197,6 +2421,82 @@ def _answers_file_for_order_qty(job_folder: Any, pdf_path: Any):
     return None
 
 
+def pre_costing_passes(summary: Dict[str, Any]) -> None:
+    """The readings that must land on the part records before estimate_document prices them,
+    in order (D-433, D-437, D-453, D-454, D-451, D-445, D-440). One function, called by the run
+    and by tools/replay_saved_job.py, so a replay exercises exactly what a run does."""
+    if not isinstance(summary, dict) or not isinstance(summary.get("manufacturing_writeup"), dict):
+        return
+    # THE SHEET THAT DRAWS A PART HANDS DOWN ITS MATERIAL BEFORE ANYTHING IS COSTED (D-433).
+    # D-426 ran in the summary sections, after estimate_document: on 8188-08's 17:37 book the
+    # report said 014 and 015 took ACRYLIC from their sheet while the sheet costed both as
+    # 3 mm mild steel. A material that arrives after the price is a note, not a material.
+    _inherit_sheet_material_to_parts(summary["manufacturing_writeup"]["parts"],
+                                     summary.get("pages") or [])
+    # AND A WIRE PART'S GAUGE AND OUTLINE (D-437), read off the same sheets, before the
+    # costing reaches for a default gauge and an assumed length.
+    try:
+        from wire_sheet_reader import apply_wire_callouts_to_parts as _wire_callouts
+        _n_wire = _wire_callouts(summary["manufacturing_writeup"]["parts"],
+                                 summary.get("pages") or [])
+        if _n_wire:
+            print(f"   [wire] {_n_wire} wire part(s) took a gauge or an outline off the sheet "
+                  f"that draws them", flush=True)
+    except Exception as _wire_exc:                                  # noqa: BLE001
+        print(f"   [wire] sheet callouts not read ({type(_wire_exc).__name__}: {_wire_exc})",
+              flush=True)
+    # THE MATERIAL THE PACK'S MODEL PRINTED ITS WEIGHTS IN, where its measured parts say so (D-453),
+    # and the measured blanks of related parts (same material and gauge) beside each (D-454).
+    try:
+        from estimator import related_measured_blanks as _rmb
+        _rmb(summary["manufacturing_writeup"]["parts"])
+    except Exception as _rmb_exc:                                   # noqa: BLE001
+        print(f"   [weight] related blanks not read ({type(_rmb_exc).__name__}: {_rmb_exc})", flush=True)
+    try:
+        from estimator import pack_model_material as _pmm
+        _pm = _pmm(summary["manufacturing_writeup"]["parts"])
+        if _pm:
+            summary["pack_model_material"] = _pm
+            for _p in summary["manufacturing_writeup"]["parts"]:
+                if isinstance(_p, dict):
+                    _p["_pack_model_material"] = _pm
+            print(f"   [weight] the pack's model printed its weights in {_pm['material'].lower()} "
+                  f"({', '.join(_pm['parts'][:6])})", flush=True)
+    except Exception as _pm_exc:                                    # noqa: BLE001
+        print(f"   [weight] pack model material not read ({type(_pm_exc).__name__}: {_pm_exc})",
+              flush=True)
+    # ONE ROW READ TWO WAYS IS ONE RECORD (D-451), folded before anything is costed.
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold
+        _folded = _fold(summary["manufacturing_writeup"]["parts"])
+        if _folded:
+            print(f"   [one-cell] {len(_folded)} record(s) folded onto the line they are a "
+                  f"second reading of: {', '.join(a for a, _ in _folded)}", flush=True)
+    except Exception as _fold_exc:                                  # noqa: BLE001
+        print(f"   [one-cell] not folded ({type(_fold_exc).__name__}: {_fold_exc})", flush=True)
+    # AND THE ONE READING A TWO-UNIT SIZE ALLOWS, where the job's yardstick decides (D-445).
+    try:
+        from size_reading import apply_size_readings as _size_readings
+        _n_sz = _size_readings(summary["manufacturing_writeup"]["parts"], summary)
+        if _n_sz:
+            print(f"   [size] {_n_sz} purchased line(s) read at the one size the job allows; "
+                  f"priced at that reading, still to confirm", flush=True)
+    except Exception as _sz_exc:                                    # noqa: BLE001
+        print(f"   [size] two-unit sizes not resolved ({type(_sz_exc).__name__}: {_sz_exc})",
+              flush=True)
+    # AND WHICH MACHINE CUTS A SHEET PART, where its sheets name one (D-440).
+    try:
+        from cut_method_reader import apply_cut_method_from_sheets as _cut_from_sheets
+        _n_cut = _cut_from_sheets(summary["manufacturing_writeup"]["parts"],
+                                  summary.get("pages") or [])
+        if _n_cut:
+            print(f"   [cut] {_n_cut} part(s) took a cutting machine, or a question, off the "
+                  f"sheet that draws them", flush=True)
+    except Exception as _cut_exc:                                   # noqa: BLE001
+        print(f"   [cut] sheet cut words not read ({type(_cut_exc).__name__}: {_cut_exc})",
+              flush=True)
+
+
 def _finalize_scan_summary(
     summary: Dict[str, Any],
     started: float,
@@ -2511,6 +2811,20 @@ def _finalize_scan_summary(
                 _p["part_number"] = _pn
             if _p.get("part_number") and not _is_valid_part_number(_p["part_number"]):
                 _bad = _p["part_number"]
+                # A WORD IN THE CODE CELL WITH A PART'S DESCRIPTION IS A PURCHASED LINE
+                # (D-436), kept under the drawing's own word, not rejected to a nameless
+                # record the sheet cannot carry.
+                if word_coded_row_is_a_purchase(_bad, _p.get("description")):
+                    _p["part_number"] = str(_bad).strip().upper()
+                    _p["is_bought_in"] = True
+                    _roles = _p.setdefault("page_roles", [])
+                    if isinstance(_roles, list) and "bought_in" not in _roles:
+                        _roles.append("bought_in")
+                    _p.setdefault("review_flags", []).append(
+                        f"word-coded parts-list row: the code cell prints '{_bad}', a word, "
+                        f"not a code; kept as a purchased line under that word, priced by "
+                        f"its description")
+                    continue
                 _p["part_number"] = None
                 _p.setdefault("review_flags", []).append({
                     "severity": "warning",
@@ -2629,9 +2943,12 @@ def _finalize_scan_summary(
                     for p in (summary.get("pages") or [])
                     if p.get("page_number") in (_part.get("pages") or [])
                 )
+                # A WEIGHT THE SHEET QUALIFIES AS SOMETHING ELSE'S IS NOT THE PART'S (D-406):
+                # "ESTIMATED BAG WEIGHT - 1.5kg" became 12675-01-02's weight.
+                from extractor_patterns import strip_weights_not_the_parts as _strip_w
                 _weight_matches = re.findall(
                     r"WEIGHT\s*(?:\([^)]*\))?\s*[:\s]+([0-9]+(?:\.[0-9]+)?)\s*(KG|G)\b",
-                    _all_page_text.upper(),
+                    _strip_w(_all_page_text).upper(),
                 )
                 # THE SAME RULE THE SUPPRESSION PASS USES, ASKED HERE TOO.
                 #
@@ -2707,6 +3024,9 @@ def _finalize_scan_summary(
     # unanswerable.
     # _sw_why records which of the several ways to have no extract actually happened.
     _sw_job = None
+    # THIS JOB'S OWN EXTRACT THAT MATCHED NO PART, kept for the model take-off (D-411): on a
+    # design-intent pack the drawings mint nothing, so the model is the parts list.
+    _sw_job_own_unmatched = None
     _sw_why = "not attempted"
     if _sw_flag in {"0", "false", "no", "off"}:
         _sw_why = "SDI_APPLY_SOLIDWORKS is off"
@@ -2882,16 +3202,31 @@ def _finalize_scan_summary(
             _sw_id = None
             if _sw_job and _sw_job.found:
                 from source_connectors.solidworks import extract_is_for_this_job
-                _sw_id = extract_is_for_this_job(_pre_estimate_parts, _sw_job)
+                # THE JOB'S OWN IDENTITY GOES WITH THE PARTS (D-410): a pack that minted no
+                # part still has a drawing number and a folder, and its extract is still its own.
+                _sw_id = extract_is_for_this_job(
+                    _pre_estimate_parts, _sw_job,
+                    job_identity=[summary.get("drawing_number"), summary.get("job_name"),
+                                  Path(str(summary.get("job_folder") or "")).name])
                 if not _sw_id.get("belongs"):
                     # WHICH FAILURE IS THIS? Both look like zero matches, and for a whole
                     # session job 11350 reported "different job" while suffering "our matcher
                     # does not know this convention". Say which, and print the codes on both
                     # sides, so the next convention gap is one look rather than a week.
                     _ours = _sw_id.get("shares_job_number")
-                    _why = ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
-                            "codes share a job number. That is a naming convention this "
-                            "connector does not know, NOT a foreign pack."
+                    _empty_job = bool(_sw_id.get("job_has_no_parts"))
+                    # THREE FAILURES, NOT TWO (D-410). A pack that produced no part records
+                    # cannot match anything, and that is neither a foreign extract nor an
+                    # unknown naming convention: it is this job's model with nothing drawn to
+                    # hold it against — the parts list where the pack has none.
+                    _why = ((("THIS IS THIS JOB'S OWN EXTRACT (the codes share this job's "
+                              "number) and the pack produced NO part records to match it "
+                              "against — the model is the parts list where the pack has none, "
+                              "and nothing was taken off from it on this run.")
+                             if _empty_job else
+                             ("THIS IS THIS JOB'S OWN EXTRACT and we could not match it — the "
+                              "codes share a job number. That is a naming convention this "
+                              "connector does not know, NOT a foreign pack."))
                             if _ours else
                             "The codes share no job number with this one, so it describes a "
                             "different job. Point SDI_SW_EXTRACT_JSON at this job's extract, "
@@ -2913,6 +3248,7 @@ def _finalize_scan_summary(
                         "found": False,
                         "refused_wrong_job": True,
                         "refused_own_job": bool(_ours),
+                        "job_has_no_parts": _empty_job,
                         "extract_path": _sw_job.meta.get("extract_path"),
                         "extract_top_assembly": _sw_id.get("top_assembly"),
                         "extract_part_count": _sw_id.get("candidates"),
@@ -2921,6 +3257,8 @@ def _finalize_scan_summary(
                         "job_codes": _sw_id.get("job_codes"),
                         "reason": _why,
                     }
+                    if _ours and _empty_job:
+                        _sw_job_own_unmatched = _sw_job
                     _sw_job = None
                     _sw_why = f"extract refused as belonging to another job: {_why}"
             if _sw_job and _sw_job.found:
@@ -4193,6 +4531,38 @@ def _finalize_scan_summary(
         print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
 
     try:
+        # WHAT THE CUSTOMER HAS ASKED FOR SINCE THE DRAWINGS WERE ISSUED (D-507), after the
+        # answers file and above it: the drawing is right about what was drawn, and the
+        # customer has since asked for something else. Its own file, so the portal's material
+        # confirmation and an e-mail's changes never shadow one another. No file is the usual
+        # case and is one quiet line.
+        import customer_changes as _cc
+        _cc_drawing = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number"))
+        _cc_path = _cc.find_changes_file(job_folder, pdf_path, _cc_drawing)
+        if _cc_path:
+            _cc_data, _cc_problems = _cc.load_changes(_cc_path)
+            for _p in _cc_problems:
+                print(f"   [customer-change] NOT APPLIED — {_p}", flush=True)
+            _cc_rep = _cc.apply_customer_changes(summary["manufacturing_writeup"]["parts"],
+                                                 _cc_data, summary)
+            for _a in _cc_rep["applied"]:
+                print(f"   [customer-change] {_a.get('part') or 'order'}: "
+                      f"{_cc.LABELS.get(_a['field'], _a['field'])} -> "
+                      f"{_cc.describe(_a.get('to'), _a['field'])} — {_a['evidence']}",
+                      flush=True)
+            for _n in _cc_rep["not_applied"]:
+                print(f"   [customer-change] NOT APPLIED — {_n.get('part') or 'order'}: "
+                      f"{_n.get('why')} (asked on the book)", flush=True)
+            summary["customer_changes"] = dict(
+                _cc_rep, file=str(_cc_path), problems=_cc_problems,
+                accepted_by=_cc_data.get("accepted_by"),
+                accepted_on=_cc_data.get("accepted_on"))
+    except Exception as _cc_err:                                       # noqa: BLE001
+        print(f"   [customer-change] not applied: {type(_cc_err).__name__}: {_cc_err}",
+              flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child
@@ -4283,19 +4653,107 @@ def _finalize_scan_summary(
     # parts never pays for this, and a full engine run never sights what it can measure.
     _llm_only_run = os.getenv("SDI_LLM_ONLY", "").strip().lower() in {"1", "true", "yes"}
     _is_render_pack = summary.get("source_format") == "image_render"
+    # CLIENT-DOCUMENT MODE IS DECLARED, NEVER GUESSED (D-464): the portal stages the marker
+    # beside the pack, and only an LLM-only run honours it. An ordinary LLM run of drawings
+    # supplied as PDFs keeps the readers' parts — their dimensions are real and the
+    # measured-CAD guard cannot protect a PDF read.
+    import concept_scan as _cs_mode
+    _client_document = _llm_only_run and _cs_mode.document_mode_requested(
+        [job_folder, summary.get("job_folder")]
+        + [Path(str(_sp)).parent for _sp in (summary.get("staged_inputs") or [])]
+        + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
     _no_parts = not summary["manufacturing_writeup"]["parts"]
     if _is_render_pack and not _llm_only_run:
         # A RENDER PACK ON AN ENGINE RUN IS AN EMPTY BOOK WAITING TO BE MISREAD. The four
         # readers read drawings; a render has no text layer, no dimensions and no flats, so
         # they correctly find nothing — and "£0.00, no parts" filed without a reason reads
         # as a free job, not as the wrong mode. Say which mode answers this pack.
-        summary.setdefault("review_flags", []).append(
+        _render_stop = (
             "THIS PACK IS IMAGE RENDERS AND THIS WAS AN ENGINE RUN — the drawing readers "
             "have nothing to measure, so this book is empty by mode, not by content. Run "
             "the same pack as LLM SCAN ONLY: the vision model sights the parts and the "
             "ordinary waterfall prices them.")
+        summary.setdefault("review_flags", []).append(_render_stop)
+        if _no_parts:
+            # THE STOP IS A FACT ON THE RECORD, NOT ONLY A FLAG (D-409): the commercial
+            # lines, the quote, the sheet banner and the report all ask run_stop.
+            from run_stop import record as _record_stop
+            _record_stop(summary, "image_render_pack_on_engine_run", _render_stop,
+                         next_step="Run the same pack as LLM SCAN ONLY: the vision model "
+                                   "sights the parts and the ordinary waterfall prices them.")
         print("   !! this pack is image renders on an ENGINE run — nothing to measure. "
               "Run it as LLM SCAN ONLY to sight and price the parts.", flush=True)
+    # A DESIGN-INTENT PACK ON AN ENGINE RUN IS THE SAME EMPTY BOOK (D-406). 12675-01: three
+    # concept sheets, no parts list, no part sheets; the readers minted a part per drawing
+    # number and costed a tube callout as a 20 mm blank. With nothing the readers can cost,
+    # the book is empty by mode and says so — and names the method that answers the pack.
+    _design_intent_pages = design_intent_pages(summary)
+    _di_pending = None          # (stop text, next step): recorded only if nothing below prices the pack
+    _design_intent_fallback = False
+    if _design_intent_pages and _no_parts and not _llm_only_run and not _is_render_pack:
+        # THE MODEL IS THE PARTS LIST WHERE THE PACK HAS NONE (D-411). James Gray, 8 Oct 2026:
+        # "we should be able to BOM and route a lot from this." The job's own extract was kept
+        # when it matched no drawn part; the chosen design's bodies become the parts, stamped
+        # by the connector that stamps a drawn part, and the book says it is a concept take-off.
+        _took = None
+        try:
+            import model_takeoff as _mt
+            _took = _mt.takeoff(summary, _sw_job_own_unmatched,
+                                declared=str(summary.get("declared_product") or ""),
+                                drawing_number=str(summary.get("drawing_number") or ""),
+                                job_folder_name=Path(str(summary.get("job_folder") or "")).name)
+        except Exception as _mt_exc:                                   # noqa: BLE001
+            print(f"   [takeoff] the model take-off could not run "
+                  f"({type(_mt_exc).__name__}: {_mt_exc})", flush=True)
+            _took = None
+        if _took and _took.get("parts"):
+            summary["manufacturing_writeup"]["parts"].extend(_took["parts"])
+            _no_parts = False
+            print(f"   [takeoff] CONCEPT TAKE-OFF FROM THE MODEL: {len(_took['parts']) - 1} "
+                  f"part(s) under {_took['design']} ({_took['chosen_by']})"
+                  + (f"; set aside: {', '.join(e['part_number'] for e in _took['excluded'])}"
+                     if _took.get("excluded") else "")
+                  + (f"; other designs not priced in this book: "
+                     f"{', '.join(_took['other_designs'])}" if _took.get("other_designs") else ""),
+                  flush=True)
+        else:
+            _di_why = ((_took or {}).get("why_not")
+                       or "no SolidWorks extract of this job's own was available")
+            # THE MODEL DOOR RAN AND ANSWERED (D-414): recorded, so the concept read's guard
+            # knows the model files beside the pack were offered first and gave nothing to
+            # cost — they are not measured CAD the sighting would be guessing over.
+            summary["model_takeoff_door"] = {
+                "ran": True, "design": str((_took or {}).get("design") or ""),
+                "why_not": _di_why,
+                "undetailed": list((_took or {}).get("undetailed") or []),
+                # The one block's envelope, where the design is one (D-416): the body the
+                # concept read is told and held to.
+                "model_envelope_mm": list((_took or {}).get("model_envelope_mm") or []),
+                "model_envelope_of": str((_took or {}).get("model_envelope_of") or ""),
+                "excluded": [e.get("part_number") for e in ((_took or {}).get("excluded") or [])
+                             if isinstance(e, dict)],
+            }
+            _di_next = ("The design being priced is taken off from its own SolidWorks assembly "
+                        "(the model is the parts list where the pack has none) or detailed by "
+                        "Design into a GA with a parts list and part sheets; an LLM scan with an "
+                        "enquiry brief is a fallback budget only, one design per run.")
+            _di_stop = (
+                f"THIS PACK IS DESIGN-INTENT SHEETS (page(s) {', '.join(str(p) for p in _design_intent_pages)}) "
+                f"AND THIS WAS AN ENGINE RUN — no parts list and no part drawings, so the drawing "
+                f"readers have nothing to cost and this book is empty by mode, not by content. "
+                f"The model take-off did not run: {_di_why}. {_di_next}")
+            summary.setdefault("review_flags", []).append(_di_stop)
+            # THE STOP IS DEFERRED, NOT DROPPED (D-409, D-411): the concept read with the
+            # brief is tried first as the fallback James named; if it prices nothing either,
+            # the stop is recorded as the fact on the record, as before.
+            _di_pending = (_di_stop, _di_next, _di_why)
+            _design_intent_fallback = True
+            print("   !! this pack is design-intent sheets on an ENGINE run and the model gave "
+                  f"no take-off ({_di_why}) — the concept read with the brief is the fallback; "
+                  "failing that, nothing to cost.", flush=True)
+    # The concept read runs for an LLM-only run, and as the FALLBACK for a design-intent pack
+    # the model could not answer (D-411) — "even if it's LLM pricing" (James Gray, 8 Oct 2026).
+    _sight_run = _llm_only_run or _design_intent_fallback
     # ── MEASURED CAD IS NEVER SIGHTED OVER ──────────────────────────────────────────
     #
     # The condition below is "--llm-only AND (a render pack OR nothing came out)", and the
@@ -4308,7 +4766,11 @@ def _finalize_scan_summary(
     # that is the failure — not a picture-guess wearing its name. Checked BEFORE the try, so
     # a deliberate refusal is never reported as a concept read that crashed.
     _concept_refused = None
-    if _llm_only_run and (_no_parts or _is_render_pack):
+    # A DECLARED CLIENT-DOCUMENT RUN IS A SIGHT RUN WHATEVER THE READERS PARSED (D-463,
+    # narrowed by D-464 to the portal's explicit marker): a tech brief whose pages were
+    # minted as BOM rows still goes to the concept read, and those rows stand down below.
+    # The measured-CAD guard right here still refuses a pack with real geometry.
+    if _sight_run and (_no_parts or _is_render_pack or _client_document):
         try:
             import concept_scan as _cs_probe
             # THE STAGED PACK, NOT THE FOLDER. This listed every file beside the render —
@@ -4345,18 +4807,51 @@ def _finalize_scan_summary(
             + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])])[0]
     except Exception:                                                # noqa: BLE001
         _brief_unused = ""
-    if _brief_unused and (_concept_refused or not (_llm_only_run and (_no_parts
-                                                                     or _is_render_pack))):
+    if _brief_unused and (_concept_refused or not (_sight_run and (_no_parts
+                                                                  or _is_render_pack
+                                                                  or _client_document))):
         summary.setdefault("review_flags", []).append(
             "ENQUIRY BRIEF NOT USED: a brief is filed with this pack, but it is read only by "
             "an LLM-only run of a render pack. This run priced the drawings, which outrank it.")
+    # ONE DESIGN PER READ (D-413). A design-intent pack holding several designs is read one
+    # design at a time — the sheet(s) the same rule picks that picks a design from the model —
+    # never all three as one stand. A pack it cannot choose from asks, and the read does not run.
+    _fallback_sheets: List[str] = []
+    _fallback_pick: Optional[Dict[str, Any]] = None
+    _fallback_ask = ""
+    if _sight_run and (_no_parts or _is_render_pack or _client_document) and not _concept_refused and _design_intent_pages:
+        try:
+            import model_takeoff as _mt_sheets
+            _cands = ([str(p) for p in (summary.get("scanned_documents") or [])]
+                      or ([str(pdf_path)] if pdf_path is not None else []))
+            _fallback_pick = _mt_sheets.choose_design_sheets(
+                _cands, declared=str(summary.get("declared_product") or ""),
+                drawing_number=str(summary.get("drawing_number") or ""))
+            if _fallback_pick.get("sheets"):
+                _fallback_sheets = list(_fallback_pick["sheets"])
+            else:
+                _fallback_ask = str(_fallback_pick.get("why_not") or "which design to read is not said")
+        except Exception as _fs_exc:                                    # noqa: BLE001
+            _fallback_ask = f"the design sheets could not be chosen ({type(_fs_exc).__name__}: {_fs_exc})"
     if _concept_refused:
         summary["concept_read"] = {"refused": _concept_refused}
-        summary.setdefault("review_flags", []).append(
-            f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable geometry, "
-            f"so an empty parts list is a reading problem to fix, not a picture to guess at.")
+        _cr_stop = (f"CONCEPT READ REFUSED: {_concept_refused}. This pack has measurable "
+                    f"geometry, so an empty parts list is a reading problem to fix, not a "
+                    f"picture to guess at.")
+        summary.setdefault("review_flags", []).append(_cr_stop)
+        if _no_parts:
+            from run_stop import record as _record_stop
+            _record_stop(summary, "concept_read_refused", _cr_stop,
+                         next_step="Fix the reading of the pack's drawings; nothing is "
+                                   "guessed from pictures while measurable geometry is present.",
+                         refused=_concept_refused)
         print(f"   [concept] not sighted — {_concept_refused}", flush=True)
-    elif _llm_only_run and (_no_parts or _is_render_pack):
+    elif _fallback_ask:
+        summary["concept_read"] = {"refused": _fallback_ask}
+        summary.setdefault("review_flags", []).append(
+            f"CONCEPT READ NOT RUN: {_fallback_ask}. One design is read per book; say which.")
+        print(f"   [concept] not run — {_fallback_ask}", flush=True)
+    elif _sight_run and (_no_parts or _is_render_pack or _client_document):
         try:
             import concept_scan
             _pack: List[str] = [str(p) for p in (summary.get("scanned_documents") or [])]
@@ -4364,8 +4859,51 @@ def _finalize_scan_summary(
                 _pack = [str(pdf_path)]
             if not _pack and job_folder is not None:
                 _pack = [str(p) for p in sorted(Path(job_folder).glob("*.pdf"))]
+            if _fallback_sheets:
+                # THE CHOSEN DESIGN'S SHEET(S), NOT THE PACK (D-413).
+                _pack = list(_fallback_sheets)
+                print(f"   [concept] reading one design: {_fallback_pick.get('design')} "
+                      f"({_fallback_pick.get('chosen_by')}) — "
+                      f"{', '.join(Path(p).name for p in _pack)}"
+                      + (f"; other designs in the pack, not read: "
+                         f"{', '.join(_fallback_pick.get('other_designs') or [])}"
+                         if _fallback_pick.get("other_designs") else ""), flush=True)
             _fresh = os.getenv("SDI_VISION_REFRESH", "").strip().lower() in {"1", "true",
                                                                              "yes", "on"}
+            # A STANDARDS MANUAL STATES REQUIREMENTS, NEVER PARTS (D-474; enforced at the
+            # scan by D-477). scan_folder_job holds a declared reference document out of the
+            # product read entirely — extraction, geometry, the BOM vision read and the
+            # roots never see it — and stashes its path here for the standards channel.
+            # The split below remains for any path that did not come through that scan.
+            _ref_pack: List[str] = [str(p) for p in
+                                    (summary.get("reference_pack_paths") or [])]
+            _ref_names = set() if _ref_pack else set(
+                concept_scan.reference_documents_declared(
+                    [job_folder, summary.get("job_folder")]
+                    + [Path(str(p)).parent for p in _pack]))
+            if _ref_pack:
+                print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                      f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+            elif _ref_names:
+                _ref_pack = [p for p in _pack if Path(p).name in _ref_names]
+                _product_pack = [p for p in _pack if Path(p).name not in _ref_names]
+                if _product_pack and _ref_pack:
+                    _pack = _product_pack
+                    print(f"   [concept] reference document(s) ride as REQUIREMENTS, never "
+                          f"parts: {', '.join(Path(p).name for p in _ref_pack)}", flush=True)
+                else:
+                    # A read must have a product. Declared-everything, or names matching
+                    # nothing staged, sets the declaration aside and says so — the portal
+                    # refuses the all-reference submission before it gets here.
+                    _why = ("every staged document is declared reference"
+                            if _ref_pack else
+                            "the declared reference documents are not among the staged files")
+                    _ref_pack = []
+                    summary.setdefault("review_flags", []).append(
+                        "CONCEPT: " + _why + " — the declaration was set aside so the "
+                        "read has a product; stage the product's pack or brief beside "
+                        "the standards document and run again")
+                    print(f"   [concept] {_why} — declaration set aside", flush=True)
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
             _brief, _brief_file = concept_scan.find_brief(
                 [job_folder, summary.get("job_folder")]
@@ -4387,15 +4925,123 @@ def _finalize_scan_summary(
                     + ("…" if len(_brief) > 300 else ""))
                 print(f"   [concept] enquiry brief read ({len(_brief)} chars) — stated "
                       f"facts outrank what the render suggests", flush=True)
-            _read = concept_scan.read_concept(_pack, refresh=_fresh, brief=_brief)
-            _answer = _read.get("parsed") or {}
+            else:
+                # NO BRIEF IS SAID ON THE BOOK (D-473), not only in the run log: the read
+                # still prices — a concept budget from the documents alone — but what it
+                # lacked joins the confirm list every surface shows.
+                _nb = concept_scan.missing_brief_flag(bool(_client_document))
+                summary.setdefault("review_flags", []).append(_nb)
+                print(f"   [concept] {_nb}", flush=True)
+            # A DRAWING SHEET IS READ AS A DRAWING (D-415). Design-intent pages go to the model
+            # with their own printed text, under a preamble that makes the sheet's dimensions
+            # and notes facts; the bill that comes back is held against the body and weight the
+            # sheet states, put back once with what broke, and a fitting it does not draw is
+            # asked, not costed. A render is read exactly as before.
+            _sheet_read = bool(_design_intent_pages)
+            _sheet_check: Dict[str, Any] = {}
+            _set_aside: List[Dict[str, Any]] = []
+            # THE PREVIOUS READ, KEPT UNLESS THE PAGES SAY OTHERWISE (D-492): a re-read asked
+            # because the question changed is shown the bill it priced last time; a cached
+            # answer to the same question still replays untouched.
+            _bill_job = (Path(job_folder).name if job_folder else "") or (
+                Path(_pack[0]).stem if _pack else "CONCEPT")
+            _prev_bill = concept_scan.load_previous_bill(job_folder, _bill_job)
+            _prev_text = concept_scan.previous_bill_text(_prev_bill)
+            if _prev_text:
+                print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
+                      f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
+                      f"new read, to keep unless the pages say otherwise", flush=True)
+            if _sheet_read:
+                _door_rec = (summary.get("model_takeoff_door")
+                             if isinstance(summary.get("model_takeoff_door"), dict) else {})
+                # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
+                # apply whatever the product's pages are, and only the render read was given
+                # them — the K-Wellness 12:31 book priced no test, documentation or project row.
+                _sr = concept_scan.read_sheet_concept(
+                    _pack, refresh=_fresh, brief=_brief,
+                    envelope=list(_door_rec.get("model_envelope_mm") or []),
+                    envelope_of=str(_door_rec.get("model_envelope_of") or ""),
+                    reference_pack=_ref_pack, previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
+                _read, _answer = _sr["read"], _sr["answer"]
+                _sheet_check, _set_aside = _sr["check"], _sr["set_aside"]
+            else:
+                _read = concept_scan.read_concept(
+                    _pack, refresh=_fresh, brief=_brief, reference_pack=_ref_pack,
+                    previous=_prev_text,
+                    previous_base_key=str(_prev_bill.get("base_key") or ""),
+                    previous_read_key=str(_prev_bill.get("read_key") or ""))
+                _answer = _read.get("parsed") or {}
+            # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
+            # moved against the previous read — on the book, not only in the log.
+            _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []
+            if _changes:
+                _ch = ("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(_changes[:20])
+                       + (f"; and {len(_changes) - 20} more" if len(_changes) > 20 else ""))
+                summary.setdefault("review_flags", []).append(_ch)
+                print(f"   [concept] {_ch}", flush=True)
+            elif _prev_bill and _answer:
+                print("   [concept] the bill is unchanged from the previous read", flush=True)
+            if _read.get("baseline"):
+                print(f"   [concept] baseline: {_read['baseline']}", flush=True)
+            _bill_base_key = str((_sr.get("base_key") if _sheet_read else _read.get("base_key"))
+                                 or "")
+            if _ref_pack and not _read.get("standards_text_chars"):
+                summary.setdefault("review_flags", []).append(
+                    "CONCEPT: the declared reference document(s) have no readable text "
+                    "layer, so no requirement reached the model — the standards remain "
+                    "the estimator's own list this run")
+            _sc = (_read.get("standards_coverage")
+                   if isinstance(_read.get("standards_coverage"), dict) else None)
+            if _sc:
+                # PARTIAL STANDARDS COVERAGE IS ON THE BOOK (D-476): the manual rides as
+                # words only, so a trimmed page's diagram-only requirement may be missed.
+                _sc_note = (f"STANDARDS TEXT TRIMMED TO FIT — {_sc.get('sent')} of "
+                            f"{_sc.get('total')} extracted character(s) of the reference "
+                            f"document(s) went to the model; its pages are not read as "
+                            f"images, so a requirement carried only by a trimmed page's "
+                            f"diagram may be missed — walk the manual's checklist "
+                            f"sections against the requirement lines before issue")
+                summary.setdefault("review_flags", []).append(_sc_note)
+                print(f"   [concept] {_sc_note}", flush=True)
+            if not _sheet_read and _read.get("document_text_chars"):
+                # THE PACK'S PRINTED WORDS WENT WITH ITS PICTURES (D-462): a tech brief's
+                # stated footprint, construction and counts are facts, not visual cues.
+                summary["concept_document_text_chars"] = int(_read["document_text_chars"])
+                print(f"   [concept] the pack's own words went to the model with its "
+                      f"pages ({_read['document_text_chars']} chars) — a figure, material "
+                      f"or count stated in them is a fact, not a visual cue", flush=True)
+            # A REQUIREMENT THE STANDARDS DOCUMENT STATES IS A NAMED ALLOWANCE (D-474):
+            # design development, testing, assessments and documentation are project costs
+            # the estimator prices SEPARATELY, never parts and never silently buried in the
+            # unit — each lands on the confirm list with the manual's own words and place.
+            _reqs = concept_scan.standards_requirements(_answer, brief=_brief or "")
+            if _reqs:
+                summary["standards_requirements"] = [dict(r) for r in _reqs]
+                for _rf in concept_scan.requirement_flags(_reqs):
+                    summary.setdefault("review_flags", []).append(_rf)
+                print(f"   [concept] {len(_reqs)} requirement(s) of the customer's standards "
+                      f"document apply — each is a named allowance on the confirm list, "
+                      f"never a part", flush=True)
+            _tc = (_read.get("text_coverage")
+                   if isinstance(_read.get("text_coverage"), dict) else None)
+            if _tc:
+                # EVERY PAGE WENT IN, AND THE CUT IS SAID (D-466) — never again a sixteen-page
+                # brief silently reaching the model as pages one to six.
+                _tc_note = (f"DOCUMENT TEXT TRIMMED TO FIT — {_tc.get('sent')} of "
+                            f"{_tc.get('total')} extracted character(s) went to the model, "
+                            f"every page included, {_tc.get('pages_trimmed')} page(s) "
+                            f"trimmed; the page images carry the full pages")
+                summary.setdefault("review_flags", []).append(_tc_note)
+                print(f"   [concept] {_tc_note}", flush=True)
             # THE JOB'S NAME, NOT THE WRAPPER'S. A render is scanned as a content-keyed PDF
             # in the output tree, so the anchor's stem is a hash — and every sighted part
             # was numbered `5E09BE03B9741E5F-BDAB4AD-C01 …`, a code no estimator would type
             # into a confirmations file and nobody can match to a job by eye.
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
-            _sighted = concept_scan.parts_from_concept(_answer, _job_name)
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)
             _unit_ops = concept_scan.unit_operations(_answer)
             # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
             #
@@ -4423,7 +5069,107 @@ def _finalize_scan_summary(
                 except Exception as _ec2_err:                          # noqa: BLE001
                     print(f"   [confirmed] the answers file could not be applied to the "
                           f"sighted parts: {type(_ec2_err).__name__}: {_ec2_err}", flush=True)
+                _kept_strip = concept_scan.keep_approved_strip_lines(_sighted)
+                if _kept_strip:
+                    print(f"   [confirmed] an approved edging line stands whole — per-host "
+                          f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
+            # A COUNT THE BRIEF STATES OUTRANKS THE READ'S (D-502), after the answers file so an
+            # estimator's figure still stands above it, and before anything counts from the
+            # lines; a count no source states that moved between reads is asked on its line.
+            _bc = concept_scan.apply_brief_counts(_sighted, _brief or "")
+            for _a in _bc["applied"]:
+                print(f"   [concept] count stated by the enquiry brief: {_a} — the read's figure "
+                      f"is disclosed on the line", flush=True)
+            if _bc["asked"]:
+                print(f"   [concept] brief count not matched to one line: "
+                      f"{'; '.join(_bc['asked'])} — a question on the lines", flush=True)
+            _drift = concept_scan.question_unstated_count_changes(_sighted, _changes,
+                                                                  _brief or "",
+                                                                  previous=_prev_bill)
+            if _drift:
+                print(f"   [concept] count moved between reads and no source states it: "
+                      f"{'; '.join(_drift)} — a question on the line", flush=True)
+            # A COMPONENT STILL FOLDED INTO ANOTHER LINE (D-500, D-501): priced once as a
+            # provisional allowance where the previous read sized it, else a question on the line.
+            _inside = concept_scan.allow_components_inside(_sighted, _prev_bill, _job_name,
+                                                           brief=_brief or "")
+            _sighted.extend(_inside["minted"])
+            for _m in _inside["minted"]:
+                print(f"   [concept] named inside another line and listed by none: "
+                      f"{_m['description']} x{_m.get('quantity')} — a PROVISIONAL ALLOWANCE "
+                      f"{_m['part_number']}, charged once: "
+                      f"{_m['provisional_allowance']['basis']}", flush=True)
+            if _inside["asked"]:
+                print(f"   [concept] named inside another line, costed by none and with nothing "
+                      f"to size it: {'; '.join(_inside['asked'])} — a question on the line",
+                      flush=True)
+            # HOW MANY PIECES A SET HOLDS (D-502), from the bill, so a set the research prices
+            # one piece of is a reasoned allowance rather than nothing.
+            for _sp in concept_scan.set_pieces_for(_sighted, _brief or ""):
+                print(f"   [concept] set line: {_sp}", flush=True)
+            # A CUT-OUT READ AT A STATED PITCH IS ASKED (D-501): a spacing is not a size.
+            _pitch_q = concept_scan.pitch_as_size_questions(_sighted, _brief or "")
+            if _pitch_q:
+                print(f"   [concept] cut-out size equal to a stated pitch: "
+                      f"{'; '.join(_pitch_q)} — a question on the line, priced as read",
+                      flush=True)
+            # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
+            # values an estimator APPROVED, and the bill names the question and the answer it
+            # came from, so the next read can tell an unchanged read from a new one.
+            if _answer:
+                concept_scan.save_bill(job_folder, _bill_job, _answer, records=_sighted,
+                                       base_key=_bill_base_key,
+                                       read_key=str(_read.get("read_key") or ""))
+            _welded = concept_scan.brief_stated_welds(_sighted)
+            if _welded:
+                # A WELD THE BRIEF STATES IS A STATED WELD (D-467), on the parts the model
+                # attributed it to (D-469) — never a pack-level word made part-level evidence.
+                print(f"   [concept] welded per the enquiry brief: "
+                      f"{', '.join(_welded)} — the stated joint is charged on the parts "
+                      f"the brief names, not spread across the pack", flush=True)
             _unit = concept_scan.unit_assembly_part(_sighted, _answer, _job_name)
+            # WHAT THIS READ CHANGED, ON THE BOOK (D-500): the unit carries the change list,
+            # each dropped line as its own decision, and whether the read was a replay.
+            _chg_host = _unit or (_sighted[0] if _sighted else None)
+            if _chg_host is not None and (_changes or _prev_bill):
+                _chg_host.setdefault("review_flags", []).extend(concept_scan.change_flags(
+                    _changes, str(_read.get("baseline") or "") if _prev_bill else "",
+                    allowed=_inside.get("allowed") if isinstance(_inside, dict) else None))
+            if _sheet_read and _unit:
+                # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
+                # is a stated weld on the product the sheet draws, not an inference.
+                try:
+                    from weld_symbols import sheet_weld_facts as _swf
+                    if concept_scan.apply_sheet_notes_to_unit(_unit, _swf(_pack)):
+                        print(f"   [concept] welded per the design sheet's own note: "
+                              f"'{_unit.get('weld_stated_by_note')}' — stated on "
+                              f"{_unit.get('part_number')}, not inferred", flush=True)
+                except Exception as _sw_exc:                       # noqa: BLE001
+                    print(f"   [concept] the sheet's weld note could not be read "
+                          f"({type(_sw_exc).__name__}: {_sw_exc})", flush=True)
+            # ONE LOCATED JOINT IS ONE CHARGE whatever stated it (D-471, widened by D-472):
+            # a sighted concept weld is priced now, so a "welded to" pair the read placed on
+            # both pieces must collapse to one charge with or without a brief.
+            _once = concept_scan.price_the_joint_once(_sighted)
+            if _once:
+                print(f"   [concept] the located joint is priced once, on the attaching "
+                      f"part — the duplicate weld attribution was removed from: "
+                      f"{', '.join(_once)}", flush=True)
+            if _brief:
+                # A STATED JOINT ALWAYS RECEIVES ONE TRACEABLE CHARGE (D-471): the model's
+                # own placements stand, deduplicated to one charge per joint; where none
+                # landed, the brief's affirmative weld statement is put to the unit through
+                # the sheet-note reader, with the located pieces stated — never a bare
+                # question over a known requirement.
+                _ja = concept_scan.ensure_stated_joint_charged(_sighted, _unit, _brief)
+                if _ja:
+                    summary.setdefault("review_flags", []).append(_ja)
+                    print(f"   [concept] {_ja}", flush=True)
+            if _sheet_read:
+                # WHAT THE SHEET CHECK COULD NOT SETTLE IS ASKED (D-415), on the unit, in the
+                # channel the book's "to settle" count already reads.
+                concept_scan.raise_sheet_questions(([_unit] if _unit else []) + _sighted,
+                                                   _sheet_check, _set_aside)
             _assumed = concept_scan.assumption_register(_sighted)
             _answers_path = concept_scan.write_assumptions_file(
                 _sighted, folder=job_folder, job=_job_name)
@@ -4434,7 +5180,29 @@ def _finalize_scan_summary(
                                            assumptions=_assumed,
                                            assumptions_file=(str(_answers_path)
                                                              if _answers_path else ""),
-                                           cache_hit=bool(_read.get("cache_hit")))
+                                           cache_hit=bool(_read.get("cache_hit")),
+                                           input_documents=[Path(p).name for p in _pack],
+                                           reference_documents=[Path(p).name
+                                                                for p in _ref_pack],
+                                           standards_requirements=len(_reqs),
+                                           brief_used=bool(_brief),
+                                           document_text_chars=int(
+                                               _read.get("document_text_chars") or 0),
+                                           client_document=bool(_client_document))
+            if _sheet_read:
+                summary["concept_read"].update(
+                    sheet_read=True, sheet_check=_sheet_check, set_aside_undrawn=_set_aside,
+                    sheet_facts=(_answer.get("sheet_facts")
+                                 if isinstance(_answer.get("sheet_facts"), dict) else {}))
+                _sc_flag = concept_scan.sheet_check_sentence(_sheet_check)
+                if _sc_flag:
+                    summary.setdefault("review_flags", []).append(_sc_flag)
+                    print(f"   [concept] {_sc_flag}", flush=True)
+                for _sa in _set_aside:
+                    summary.setdefault("review_flags", []).append(
+                        f"NOT COSTED — LISTED BUT NOT DRAWN: {_sa.get('name')}"
+                        f"{' x' + str(_sa.get('quantity')) if _sa.get('quantity') else ''} — the read "
+                        f"listed it and the sheet does not draw or label it; asked, not priced")
             # ── THE UNIT ITSELF, SO SOMEBODY ASSEMBLES IT ───────────────────────────
             #
             # This wrote the unit's work to `summary["assembly_events"]`, and NOTHING IN
@@ -4444,9 +5212,104 @@ def _finalize_scan_summary(
             # together. The honest fix is a part: an assembly parent whose children are
             # the sighted panels, which the existing board-assembly rule then fits and
             # times off the shop's own measured rate. See unit_assembly_part.
+            _replacement = len(_sighted) + (1 if _unit else 0)
+            _stood_down = concept_scan.stand_down_reader_rows(
+                summary, _client_document, replacement_parts=_replacement)
+            if _stood_down:
+                summary.setdefault("review_flags", []).append(_stood_down)
+                print(f"   [concept] {_stood_down}", flush=True)
+            elif (_client_document and not _replacement
+                  and summary["manufacturing_writeup"]["parts"]):
+                # A FAILED READ NEVER MINTS AN EMPTY BOOK (D-464): the earlier rows stand,
+                # said out loud, instead of being traded for nothing.
+                _kept = ("CLIENT DOCUMENT READ RETURNED NO PARTS — the readers' "
+                         f"{len(summary['manufacturing_writeup']['parts'])} row(s) are kept "
+                         "and the read must be repaired before this book is trusted")
+                summary.setdefault("review_flags", []).append(_kept)
+                print(f"   [concept] {_kept}", flush=True)
             if _unit:
                 summary["manufacturing_writeup"]["parts"].append(_unit)
             summary["manufacturing_writeup"]["parts"].extend(_sighted)
+            # NOT VISIBLE MUST NOT MEAN UNPRICED (D-468). A consumable the read names gets a
+            # provisional bought-in line down the ordinary price chain; a design unknown is
+            # asked on the record — and neither lives only in this log any more.
+            _nv_cons, _nv_ship, _nv_unknown = concept_scan.split_not_visible(
+                _answer.get("not_visible") or [])
+            for _s in _nv_ship:
+                # PRICED ONCE (D-469): the commercial PACKAGING and DELIVERY lines carry
+                # shipment scope; a second line here would charge the pallet twice.
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE — SHIPMENT SCOPE: {_s} — carried by the commercial "
+                    f"PACKAGING/DELIVERY lines, not duplicated as a parts line")
+            _mech = concept_scan.mechanically_fitted(_sighted)
+            _nv_lines = concept_scan.consumable_lines(
+                _nv_cons, _job_name,
+                pieces_fitted=int((_unit or {}).get("pieces_fitted") or 0),
+                fixed_pieces=(_mech["pieces"] if _unit else None),
+                components=((_unit or {}).get("components_labelled") if _unit else None))
+            # THE FIXINGS THE READ DID NOT NAME (D-499): a unit with pieces fitted by hand gets
+            # a provisional fixings line counted per mechanically fitted piece — never a silent
+            # £0, and never a fixing for a welded or hung joint.
+            if _unit and not concept_scan.read_names_fixings(_nv_cons, _sighted):
+                _fx = concept_scan.fixings_allowance_line(_sighted, _job_name,
+                                                          len(_nv_lines) + 1)
+                if _fx:
+                    _nv_lines = list(_nv_lines) + [_fx]
+                    print(f"   [concept] the read named no fixings — a provisional allowance "
+                          f"of {_fx.get('quantity')} × the reference fixing for "
+                          f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
+            # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws, by a method
+            # suited to the joint (D-502).
+            if _unit:
+                for _adh in concept_scan.adhesive_allowance_lines(_sighted, _job_name,
+                                                                  len(_nv_lines) + 1):
+                    _nv_lines = list(_nv_lines) + [_adh]
+                    print(f"   [concept] bonded piece(s): a provisional {_adh.get('joining_method')}"
+                          f" allowance of {_adh.get('quantity')} {_adh.get('unit_of_measure')}",
+                          flush=True)
+            if _nv_lines:
+                summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
+                if _unit:
+                    # THE CONSUMABLES GO ON THE UNIT (D-487): owned in the hierarchy, not
+                    # orphans the consistency check blocks on.
+                    _unit.setdefault("assembly_fitted_items", []).extend(
+                        str(_l.get("part_number")) for _l in _nv_lines)
+                    # AND APPLYING THEM IS THE UNIT'S WORK, ONCE (D-491).
+                    _to_apply = sum(int(_l.get("items_to_apply") or 0) for _l in _nv_lines)
+                    if _to_apply:
+                        _unit["items_to_apply"] = _to_apply
+                print(f"   [concept] {len(_nv_lines)} provisional consumable line(s) minted "
+                      f"from the read's not-visible list — priced by the ordinary bought-in "
+                      f"chain, flagged for confirmation", flush=True)
+            for _u in _nv_unknown:
+                summary.setdefault("review_flags", []).append(
+                    f"NOT VISIBLE ON THE RENDER — NOT PRICED: {_u} — a design unknown, not "
+                    f"a consumable; name it as a part and it prices itself")
+            if _design_intent_fallback and _fallback_pick and _fallback_pick.get("design"):
+                # THE BOOK SAYS WHAT IT IS, IN THE TAKE-OFF'S OWN WORDS (D-411, D-413): the
+                # report's callout, the sheet's banner and the quote's gate all read this.
+                summary["concept_takeoff"] = {
+                    "source": "vision_concept", "design": _fallback_pick.get("design"),
+                    "design_title": ", ".join(Path(p).name for p in _pack),
+                    "chosen_by": _fallback_pick.get("chosen_by"),
+                    "other_designs": list(_fallback_pick.get("other_designs") or []),
+                    "excluded": [], "parts": len(_sighted), "sheets": list(_pack),
+                    "model_takeoff_why_not": (_di_pending[2] if _di_pending else ""),
+                    "brief_used": bool(_brief),
+                    "sheet_check": {k: _sheet_check.get(k) for k in (
+                        "checked", "agrees", "verdict", "failures", "unverified",
+                        "stated_weight_kg", "net_weight_kg", "sighted_weight_kg",
+                        "second_read_taken")} if _sheet_check else {},
+                }
+                summary.setdefault("review_flags", []).append(
+                    f"CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate. The model "
+                    f"gave no take-off, so the vision model read the parts of "
+                    f"{_fallback_pick.get('design')} ({', '.join(Path(p).name for p in _pack)}) "
+                    f"off the sheet{' with the enquiry brief' if _brief else ''}: "
+                    f"{len(_sighted)} part(s), every size, material and count an assumption."
+                    + (f" Other designs in the pack, not read: "
+                       f"{', '.join(_fallback_pick.get('other_designs') or [])} — run with "
+                       f"SDI_PRODUCT=<name> for each." if _fallback_pick.get("other_designs") else ""))
             print("")
             print("   " + "=" * 68)
             print("   CONCEPT READ. This pack is a visual, not a drawing pack, so the")
@@ -4457,6 +5320,15 @@ def _finalize_scan_summary(
                 print(f"   The unit itself is {_unit['part_number']} — "
                       f"{len(_unit.get('assembly_children') or [])} made part(s) to fit "
                       f"together, so the shop's own bench rule times the build.")
+            # THE BILL, BEFORE THE PRICING (D-481). The banner promised "the parts below"
+            # and listed none, so the only place to see the proposed bill was the finished
+            # book an hour later. A read that is not the product is visible here, in the
+            # first minutes, and the run can be stopped before a single price is looked up.
+            print("   THE PROPOSED BILL — check it now; if it is not the product, stop the "
+                  "run here:")
+            for _bl in concept_scan.bill_lines(
+                    ([_unit] if _unit else []) + list(_sighted) + list(_nv_lines or [])):
+                print(f"     {_bl}", flush=True)
             # WHAT IT ASSUMED, AND WHERE TO ANSWER IT. A concept budget is only honest if
             # the assumptions are a list somebody can work through, not stamps on twelve
             # records that have to be opened one at a time.
@@ -4493,6 +5365,22 @@ def _finalize_scan_summary(
                 f"because the read failed, not because the pack has no parts")
             print(f"   !! concept read failed: {type(_ce).__name__}: {_ce}", flush=True)
 
+    # A DESIGN-INTENT PACK THAT NEITHER THE MODEL NOR THE CONCEPT READ COULD PRICE STOPS HERE,
+    # as the fact on the record (D-409), with the reasons both doors gave (D-411).
+    if _di_pending and not summary["manufacturing_writeup"]["parts"]:
+        from run_stop import record as _record_stop
+        # BOTH DOORS' REASONS GO ON THE RECORD (D-413): the 10:40 page said "take the design
+        # off the model" and never why the run had not — the one thing a reader needed.
+        _record_stop(summary, "design_intent_pack_on_engine_run", _di_pending[0],
+                     next_step=_di_pending[1], pages=[str(p) for p in _design_intent_pages],
+                     model_takeoff=str(_di_pending[2] or ""),
+                     concept_read=(str(_concept_refused) if _concept_refused else
+                                   str(_fallback_ask or (summary.get("concept_read") or {}).get("error")
+                                       or "the concept read produced no part")))
+        print("   !! this pack is design-intent sheets on an ENGINE run — nothing to cost. "
+              "Take the chosen design off from its own model, or have Design detail it.", flush=True)
+    # EVERY READING THAT MUST LAND BEFORE A PRICE, in one function the replay runs too (D-454).
+    pre_costing_passes(summary)
     summary["estimate_summary"] = estimate_document(summary["manufacturing_writeup"]["parts"], summary=summary)
     _debug("done estimate_document")
 

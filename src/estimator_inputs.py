@@ -261,8 +261,25 @@ def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
         return NOT_APPLICABLE
     if str(part.get("_canonical_kind") or "").strip().lower() == "assembly":
         return NOT_APPLICABLE
+    # A PROJECT COST CHARGED ONCE ON THE ORDER IS NOT A RATE TO ENTER (D-501). The 20:49
+    # K-Wellness rows for the six per-order project lines read "MATERIAL UNPRICED: enter a unit
+    # rate" beside the £3,800 the Quantity Breaks tab charged for them — an invitation to charge
+    # them a second time, in every unit. Their £0 in the unit column is the rule (D-476).
+    if _charged_once_on_the_order(part):
+        return NOT_APPLICABLE
     numeric = _num(price)
     return PRICED if numeric is not None and numeric > 0 else UNPRICED
+
+
+def _charged_once_on_the_order(part: Mapping[str, Any]) -> bool:
+    _pcl = part.get("project_cost_line") if isinstance(part, Mapping) else None
+    if not (isinstance(_pcl, Mapping)
+            and str(_pcl.get("scope") or "") in ("per_order", "per_batch")):
+        return False
+    try:
+        return float(_pcl.get("order_gbp") or 0.0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
@@ -305,6 +322,24 @@ def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:
             price_provenance.NOT_APPLICABLE,
             "FREE-ISSUE: the customer supplies this item, so the nil is on purpose. "
             "Confirm free issue with the customer; do not price it")
+    # A PROJECT COST CHARGED ONCE ON THE ORDER (D-497): its £0 in the unit column is the
+    # rule, and the order figure is charged on the Quantity Breaks tab. The 18:17 K-Wellness
+    # provenance tab called four such lines "ESTIMATOR TO PRICE: no catalogue … holds this
+    # item" beside the £2,720 the book had charged for them.
+    _pcl = part.get("project_cost_line")
+    if isinstance(_pcl, Mapping) and str(_pcl.get("scope") or "") in ("per_order", "per_batch"):
+        try:
+            _og = float(_pcl.get("order_gbp") or 0.0)
+        except (TypeError, ValueError):
+            _og = 0.0
+        if _og > 0:
+            return price_provenance.unpriced_reason(
+                price_provenance.NOT_APPLICABLE,
+                f"a {'per-batch' if _pcl.get('scope') == 'per_batch' else 'per-order'} project "
+                f"cost of £{_og:,.2f}, charged ONCE on the order (Quantity Breaks tab) and kept "
+                f"out of the unit price"
+                + ("; an AI provisional allowance to confirm"
+                   if str(_pcl.get("state") or "") == "provisional" else ""))
     # "Delivery is not required" is an estimator's ruling, recorded through the answers
     # file — the £0 is the decision, and it comes off the outstanding list for good.
     if part.get("_commercial_excluded"):

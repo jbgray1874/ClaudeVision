@@ -39,6 +39,36 @@ def _clean_pn(s: Any) -> str:
     return str(s or "").strip().upper()
 
 
+# The one reason bought_in_reason gives that is not evidence of a purchase: it is what a
+# part with no material yet defaults to, which is exactly the gap the general note fills.
+_WEAK_BOUGHT_REASON = "no material was identified"
+
+
+def _general_note_applies(part: Dict[str, Any], jp: Dict[str, Any], pn: str,
+                          assembly_pns: Any) -> bool:
+    """May the drawing's GENERAL material/finish note fill this line's blank? Only for a
+    part we cut: never an assembly (stated, or by its code's role, hands read through), and
+    never a line already known to be bought (the extract's own row, the X convention, a
+    purchase code family or class word)."""
+    try:
+        from part_code_conventions import carries_assembly_role, purchased_suffix
+        if pn in (assembly_pns or ()) or carries_assembly_role(pn) or purchased_suffix(pn):
+            return False
+    except Exception:                                                # noqa: BLE001
+        if pn in (assembly_pns or ()):
+            return False
+    if part.get("is_sub_assembly") or part.get("is_assembly_parent"):
+        return False
+    if jp.get("is_bought_in") or str(jp.get("material_family") or "").strip().lower() \
+            == "bought_in":
+        return False
+    try:
+        _why = _bought_in_reason(part)
+    except Exception:                                                # noqa: BLE001
+        _why = ""
+    return not (_why and _WEAK_BOUGHT_REASON not in _why)
+
+
 def _num(v: Any) -> Optional[float]:
     try:
         return float(str(v).replace(",", "").strip())
@@ -313,8 +343,14 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # left blank, and it never overrides. Flagged on the part, because "inherited from
         # the drawing's general note" is a different quality of evidence from "printed on
         # this row" and an estimator quoting firm needs to see which one they have.
+        # NOT ONTO A KIT OR A PURCHASE (D-505). The general note says what the drawing's CUT
+        # parts are made of. 12665-01-GA's "ACRYLIC" made its handed side-wing kit a 6 mm
+        # acrylic blank, and gave a JST cable splitter an acrylic hand operation and a glue
+        # question. A line that is an assembly, or that the record already buys, takes
+        # neither the material nor the finish from the general note.
+        _general_applies = _general_note_applies(part, jp, pn, assembly_pns)
         mat = jp.get("material")
-        if not mat and _job_material:
+        if not mat and _job_material and _general_applies:
             mat = _job_material
             if not str(part.get("normalized_material") or "").strip():
                 part.setdefault("review_flags", []).append(
@@ -361,7 +397,7 @@ def apply_full_job_to_pre_estimate(parts: List[Dict[str, Any]], job: Dict[str, A
         # Same for the finish: "SURFACE FINISH: POWDER COATED" printed once on the GA covers
         # every part it does not contradict. drawing_info.finish_general was equally unread.
         _fin = jp.get("finish")
-        if not _fin and _job_finish:
+        if not _fin and _job_finish and _general_applies:
             _fin = _job_finish
             if not str(part.get("normalized_finish") or "").strip():
                 part.setdefault("review_flags", []).append(

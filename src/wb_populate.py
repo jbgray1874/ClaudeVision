@@ -909,6 +909,39 @@ def bom_line_pricing(part: Dict[str, Any], is_indicative: bool,
             "note": {"kind": "ai_estimate_unconfirmed", "note": _note_for(guess)}}
 
 
+def cut_list_text(stock_estimate: Any) -> str:
+    """"cut 2 × 300 + 1 × 1,272 = 1,872 mm" for a section costed as its cut list, else "".
+
+    The line said the goalpost's name and its price; the length bought was only in the record,
+    so a book could not show whether the column was read and the price was not (D-429)."""
+    se = stock_estimate if isinstance(stock_estimate, dict) else {}
+    pieces = [p for p in (_safe(x) for x in (se.get("cut_lengths_mm") or [])) if p and p > 0]
+    if len(pieces) < 2:
+        return ""
+    counts: Dict[float, int] = {}
+    for p in pieces:
+        counts[round(p, 1)] = counts.get(round(p, 1), 0) + 1
+    parts = " + ".join(f"{n} × {L:,.6g}" for L, n in sorted(counts.items()))
+    return f"cut {parts} = {sum(pieces):,.6g} mm"
+
+
+def unresolved_reading_note(pe: Dict[str, Any]) -> str:
+    """The words a BOM line carries when its figure rests on a reading nobody has confirmed.
+
+    PRICED, MARKED, QUOTE BLOCKED (D-432). The figure stays in the price cell — a blank would
+    total a lighter unit with nothing saying it is incomplete — and the line says the reading
+    is open, so nobody reads the working figure as settled."""
+    mark = (pe or {}).get("_price_unresolved")
+    if not isinstance(mark, dict):
+        return ""
+    units = " and ".join(str(u) for u in (mark.get("units") or []))
+    inferred = str(mark.get("inferred_text") or "").strip()
+    return ("UNRESOLVED READING" + (f" ({units} in one size)" if units else "")
+            + (f": read as {inferred}, priced at that reading, a working figure" if inferred
+               else ": priced as printed, a working figure")
+            + " — customer quote blocked until confirmed")
+
+
 def reconcile_price_stamp_with_sheet(pe: Dict[str, Any], price: Any,
                                      summary: Optional[Dict[str, Any]] = None) -> bool:
     """When the sheet writes no price on a bought-in line, its record says so too.
@@ -2183,8 +2216,14 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
             continue
         if part_cannot_be_powder_coated(_sp):
             continue   # acrylic is not powder coated — contributes zero coated area
-        if not says_coated(_sp):
-            continue   # the route decided this part does not go through the booth
+        if not says_coated(_sp) and not (
+                isinstance(_sp.get("coated_with_host"), (list, tuple))
+                and any(says_coated({"part_number": str(_h)})
+                        for _h in _sp.get("coated_with_host"))):
+            # the route decided this part does not go through the booth — unless it is
+            # welded to a host that does (D-499): its area is coated with the host's, and it
+            # adds no P.Coat piece of its own. The K-Wellness brackets' area had disappeared.
+            continue
         # AN ASSEMBLY COATED AS ONE THING HAS NO BLANK, AND STILL HAS AN AREA. 12567-02-101
         # HEADER CASE: the coat is claimed on the case, its members' sheets carry none of
         # their own, so the route names the case and not the panels. This sum read blanks —
@@ -2231,7 +2270,11 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
         if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
             continue
         if _sl and _sw:
-            total += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+            # LESS THE OPENINGS CUT THROUGH IT (D-500): a sighted slot or opening is metal that
+            # is not there to coat, on both faces. Never below nothing.
+            _open = float(_safe(_sp.get("concept_open_area_mm2")) or 0.0) / 1e6
+            _faces = max(0.0, (_sl / 1000.0) * (_sw / 1000.0) - _open) * 2.0
+            total += _faces * float(_sq)
             if _sq_pn:
                 _seen_squash.add(_sq_pn)
     return total
@@ -2704,6 +2747,22 @@ def canonicalise_part_estimates_for_workbook(
     # missed and this mint wrote an unpriced BOM row for a part the Sheet Steel block was
     # already charging £0.45 — every reader then counted a charged part as a missing
     # price. Identity is compared squashed (alphanumerics only) before minting.
+    # AND TWO LINES ALREADY IN THE POPULATION THAT ARE ONE ROW READ TWO WAYS (D-452).
+    try:
+        from part_identity import fold_one_cell_duplicates as _fold_pop
+        _vals = list(normalised.values())
+        for _drop, _keep in _fold_pop(_vals):
+            _dk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _drop.upper()), None)
+            _kk = next((k for k in list(normalised) if str(normalised[k].get("part_number") or k).upper() == _keep.upper()), None)
+            if _dk and _kk and _dk != _kk:
+                normalised.pop(_dk, None)
+                if _dk in order:
+                    order.remove(_dk)
+                aliases[_dk] = _kk
+                print(f"   [wb_populate] '{_drop}' folded onto '{_keep}' — one row read as one "
+                      f"cell; one line, not two.", flush=True)
+    except Exception as _fold_exc:                               # noqa: BLE001
+        print(f"   [wb_populate] one-cell fold not run ({_fold_exc})", flush=True)
     _norm_squash = {re.sub(r"[^A-Z0-9]", "", str(k).upper()): k for k in normalised}
     for identity, node in nodes.items():
         if node.get("kind") != "bought_in" or identity in normalised:
@@ -2723,6 +2782,34 @@ def canonicalise_part_estimates_for_workbook(
                   f"or quarantined by the identity gate; the graph node describes a "
                   f"removed duplicate, not a missing purchase.", flush=True)
             continue
+        # A NODE THAT IS A LINE ALREADY ON THE SHEET READ AS ONE CELL IS NOT A PURCHASE
+        # (D-452). 8188-08's insert was charged twice on five books: the vision model listed
+        # "FIXING M6X12MM THREADED INSERT, HEADED HEX DRIVE" (no description) among SA03's
+        # children, the graph made a node of it, and this mint priced it a second time at
+        # £0.22 beside the line "FIXING M6X12MM / THREADED INSERT, HEADED HEX DRIVE" at £0.10.
+        # Every earlier fix ran on the part records, before this line exists; the rule is
+        # asked here too, where it is born, and the node is recorded as an alias.
+        try:
+            from part_identity import same_row_read_as_one_cell as _one_cell
+            from part_identity import same_bom_occurrence as _same_occ
+            # ...and only where it is the SAME occurrence (D-454): a node listed under a parent
+            # the held line was never listed under is the same item somewhere else.
+            _host = next((k for k, v in normalised.items()
+                          if _one_cell(identity, node.get("description"),
+                                       v.get("part_number") or k, v.get("description"))
+                          and _same_occ(node, v)), None)
+        except Exception:                                        # noqa: BLE001
+            _host = None
+        if _host:
+            aliases[identity] = _host
+            _hv = normalised.get(_host) or {}
+            _note = (f"{identity} is this row read as one cell — the code and the description "
+                     f"of {_host} joined; one line, not two")
+            if _note not in (_hv.get("review_flags") or []):
+                _hv.setdefault("review_flags", []).append(_note)
+            print(f"   [wb_populate] '{identity}' not minted — it is '{_host}' read as one "
+                  f"cell; one line, not two.", flush=True)
+            continue
         _bi_desc = node.get("description") or ""
         _bi_qty = node.get("qty_per_unit") or 1
         _bi_com = None
@@ -2733,7 +2820,7 @@ def canonicalise_part_estimates_for_workbook(
             _bi_com = None
         _bi_unit = _safe(_bi_com.get("unit_price_gbp")) if _bi_com else None
         if _bi_unit is not None and _bi_unit > 0:
-            _bi_unit = round(float(_bi_unit), 2)
+            _bi_unit = round(float(_bi_unit), 4)              # sub-penny items (D-503)
             _bi_ext = round(_bi_unit * int(_bi_qty or 1), 2)
             normalised[identity] = {
                 "part_number": identity,
@@ -2816,8 +2903,12 @@ def canonicalise_part_estimates_for_workbook(
                 "supplier": _sup,
                 "review_flag": True,
                 "review_flags": [
-                    f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
-                    f"class-word line; verify before quoting."
+                    (f"a past SDI quote's line price (SDI Live history) via {_sup} — a per-unit "
+                     f"share at that quote's own quantity; confirm it fits this order"
+                     if "historical_quote" in str(_sup).lower() or "historical_quote" in
+                     str(_sel.get("source") or "").lower() else
+                     f"INDICATIVE market/AI price from {_sup} — no catalogue rate for this "
+                     f"class-word line; verify before quoting.")
                 ],
             }
             order.append(identity)
@@ -3087,6 +3178,21 @@ def canonical_labour_groups(
         str(item).strip().upper() for item in (skipped_part_numbers or [])
         if str(item).strip()
     }
+    # The lines the declared product does not reach — the graph's set-aside issues and the
+    # ledger of records taken out (D-505). The out-of-scope set, not a node allowlist, so
+    # synthetic targets (@ROUTE-n) and generated lines are never caught by it.
+    _out_of_scope: Set[str] = set()
+    try:
+        from route_compiler import outside_product_identities as _outside, \
+            clean_part_number as _cpn
+        _out_of_scope = {k.upper() for k in _outside(payload.get("issues"))}
+        _out_of_scope |= {
+            _cpn(e.get("part_number")).upper()
+            for e in (summary.get("set_aside_outside_product") or [])
+            if isinstance(e, dict) and e.get("part_number")}
+        _out_of_scope.discard("")
+    except Exception:                                                # noqa: BLE001
+        _out_of_scope = set()
     tube_pns = tube_part_numbers(summary)
     groups: Dict[Any, Dict[str, Any]] = {}
 
@@ -3184,6 +3290,13 @@ def canonical_labour_groups(
             continue
         if target_id in skipped or any(item in skipped for item in participants):
             continue
+        # THE SAME SCOPE AS THE MATERIAL (D-505), at the place a row is made. A line the
+        # declared product does not reach left the material blocks; it leaves the labour
+        # block too. A shared row keeps its in-scope parts; one with none left is not made.
+        if _out_of_scope:
+            if target_id in _out_of_scope:
+                continue
+            participants = [p for p in participants if p not in _out_of_scope]
 
         candidate_ids = list(dict.fromkeys(
             [target_id] + participants))
@@ -3503,8 +3616,12 @@ def canonical_labour_groups(
                 if _r and _r > 0:
                     group["run_hours_per_unit"] = (
                         group.get("run_hours_per_unit") or 0.0) + float(_r) * qty
+                # `rh` is the run time a piece THIS ROW INCLUDED for the member — found here
+                # under the department's other name — so a stated time replaces exactly it
+                # (D-495), and the row's working shows the member's own rate (D-498).
                 group.setdefault("hours_by_part", {})[str(_asm_id)] = {
-                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1)}
+                    "bh": float(_h or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_r or 0.0)}
                 group["assembly_own_time"] = True
                 continue
 
@@ -3537,7 +3654,8 @@ def canonical_labour_groups(
             # kept, so a row combining a long strap and a small cap could not be audited.
             if (hours and hours > 0) or (_rh and _rh > 0):
                 group.setdefault("hours_by_part", {})[str(representative_id)] = {
-                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1)}
+                    "bh": float(hours or 0.0), "qty_per_unit": float(qty or 1),
+                    "rh": float(_rh or 0.0)}
 
             geometry = estimates[representative_id].get("normalized_geometry") or {}
             if operation == "folding":
@@ -4471,7 +4589,101 @@ def _apply_customer_terms(ws, customer_name: Any, flags: List[str]) -> None:
               f"defaults stand.", flags)
 
 
-def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) -> None:
+def _write_beside_price_labels(ws, text: Optional[str]) -> int:
+    """Write `text` in the first free cell past the value beside each figure that reads as a
+    price — Unit Cost, Sell Price, Total Unit Cost — and return the lowest label row found.
+
+    With `text` None nothing is written and only the row is returned, so the checklist still
+    anchors below the totals. ONE WALK, because the run-stop banner (D-409) and the estimator-
+    inputs banner must land in the same cells by the same rule; a second copy of this walk
+    would be a second opinion about where the price is.
+
+    ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same row was
+    found twice and the second pass walked past the first banner and wrote another beside it.
+
+    PAST THE VALUE, NOT AT A FIXED OFFSET. The value sits somewhere to the right of its label
+    and the gap differs per row, so a fixed +3 landed exactly on the Total Unit Cost figure.
+    The write was refused — the formula is safe either way — but a refused banner is no
+    banner, and the sheet went out looking finished again. Walk right past every populated
+    cell, then take the first free one.
+    """
+    _last_row = 0
+    _done_rows = set()
+    for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
+        _hit = _find_label_cell(ws, *_needles)
+        if not _hit:
+            continue
+        _r, _c = _hit
+        _last_row = max(_last_row, _r)
+        if _r in _done_rows or text is None:
+            continue
+        _done_rows.add(_r)
+        _col = _c + 1
+        _seen_value = False
+        for _step in range(1, 12):
+            if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
+                _seen_value = True
+                _col = _c + _step + 1
+            elif _seen_value:
+                _col = _c + _step
+                break
+        _target = _writable_cell(ws, _r, _col)
+        if _target is not None and _target.value in (None, ""):
+            _target.value = text
+            _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
+            _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+    return _last_row
+
+
+def _write_run_stop_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409).
+
+    The 12675-01 book of 8 Oct 09:15 carried "PROVISIONAL — 2 to settle: 2 market figures to
+    replace (£23.00)" beside a Unit Cost of £25.46 — packaging and delivery for a product the
+    run never costed — and nothing on the sheet said the run had stopped. The stop the scan
+    recorded is written where a reader looks for the price, in the same words the report and
+    the quote use. Returns True when it was written, so the estimator-inputs banner stands
+    aside: "PROVISIONAL" promises a figure somebody can finish.
+    """
+    try:
+        from run_stop import nothing_to_cost, banner                   # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not stop:
+        return False
+    try:
+        _write_beside_price_labels(ws, banner(stop))
+        _flag(f"NO PRICE: {banner(stop)}", flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the run-stop banner could not be written ({_exc}) — the report and the quote "
+              f"carry the stop", flags)
+        return False
+
+
+def _write_concept_takeoff_banner(ws, summary: Dict[str, Any], flags: List[str]) -> bool:
+    """A SHEET PRICED FROM THE MODEL SAYS SO BESIDE ITS PRICE CELLS (D-411), in the words the
+    report's callout and the quote's gate use. Returns True when written."""
+    try:
+        from model_takeoff import banner as _takeoff_banner           # noqa: PLC0415
+        text = _takeoff_banner(summary.get("concept_takeoff"))
+    except Exception:                                                  # noqa: BLE001
+        return False
+    if not text:
+        return False
+    try:
+        _write_beside_price_labels(ws, text)
+        _flag(text, flags)
+        return True
+    except Exception as _exc:                                          # noqa: BLE001
+        _flag(f"the concept take-off banner could not be written ({_exc}) — the report and "
+              f"the quote carry the label", flags)
+        return False
+
+
+def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str],
+                            banner: bool = True) -> None:
     """Put the outstanding inputs where the estimator is already looking.
 
     Three places, because one is not enough. Beside Unit Cost and beside Sell Price, so the
@@ -4499,41 +4711,9 @@ def _write_estimator_inputs(ws, inputs: List[Dict[str, Any]], flags: List[str]) 
         _banner = banner_text(inputs)
 
         # ── beside the two figures that look like a price ──────────────────────
-        _last_row = 0
-        # ONE BANNER PER ROW. "unit cost" also matches "Total Unit Cost Price", so the same
-        # row was found twice and the second pass walked past the first banner and wrote
-        # another beside it.
-        _done_rows = set()
-        for _needles in (("unit cost",), ("sell price",), ("total unit cost",)):
-            _hit = _find_label_cell(ws, *_needles)
-            if not _hit:
-                continue
-            _r, _c = _hit
-            _last_row = max(_last_row, _r)
-            if _r in _done_rows:
-                continue
-            _done_rows.add(_r)
-            # PAST THE VALUE, NOT AT A FIXED OFFSET.
-            #
-            # The value sits somewhere to the right of its label and the gap differs per
-            # row, so a fixed +3 landed exactly on the Total Unit Cost figure. The write
-            # was refused — the formula is safe either way — but a refused banner is no
-            # banner, and the sheet went out looking finished again. Walk right past every
-            # populated cell, then take the first free one.
-            _col = _c + 1
-            _seen_value = False
-            for _step in range(1, 12):
-                if ws.cell(row=_r, column=_c + _step).value not in (None, ""):
-                    _seen_value = True
-                    _col = _c + _step + 1
-                elif _seen_value:
-                    _col = _c + _step
-                    break
-            _target = _writable_cell(ws, _r, _col)
-            if _target is not None and _target.value in (None, ""):
-                _target.value = _banner
-                _target.font = Font(name="Arial", bold=True, size=11, color=C_ALERT_TEXT)
-                _target.fill = PatternFill("solid", fgColor=C_ALERT_FILL)
+        # One walk for every banner (D-409); with `banner` False the stop's banner already
+        # stands there and only the anchor row is wanted.
+        _last_row = _write_beside_price_labels(ws, _banner if banner else None)
 
         # ── the checklist ──────────────────────────────────────────────────────
         # ANCHORED BELOW THE TOTALS, AND NOWHERE ELSE.
@@ -4944,6 +5124,10 @@ _STATED_SHOP_TIME_MARKERS = (
     ("bench_work_applied", ("bench_work",),
      "the bench-fitting rule for a board assembly (the joinery bench rate, or the house "
      "allowance per part fitted)"),
+    # THE SIGHTED UNIT'S FITTING TIME (D-486): the per-part handling minutes for every piece
+    # it fits — not a derivation for the floor guard to replace with a department median.
+    ("unit_fitting_applied", ("handling", "assembly"),
+     "the per-part handling allowance for each piece the unit fits (LABOUR_RULES handling)"),
 )
 
 
@@ -4960,6 +5144,116 @@ def _claim_covers(stated_ops: Any, operation: Any) -> bool:
         return bool(_want) and any(code_for(o) == _want for o in (stated_ops or ()))
     except Exception:                                                # noqa: BLE001
         return False
+
+
+def _member_stated_hours(hours: Dict[str, Any], covered: Any, engine_ops: Any) -> float:
+    """One member's stated hours a piece for the row's operation, or 0.
+
+    A stated time belongs to its own operation and to no other: the department alias is
+    asked only for an operation that is not itself a stated-time one, and never takes a
+    stated operation's figure as its source (the six-off book's generic assembly row picked
+    up the final pack's stated 8 minutes that way)."""
+    for _eop in (engine_ops or []):
+        if not _claim_covers(covered, _eop):
+            continue
+        _v = _safe(hours.get(str(_eop).strip().lower()))
+        if not _v and not is_stated_time_operation(_eop):
+            # The same operation under the department's other name — "assembly" on the
+            # route, "handling" in the costing, one PACM row on the sheet. Never for a stated
+            # operation, in either direction: excluding the TARGET stops a generic row
+            # borrowing one; excluding stated ops as SOURCES stops it from the other end.
+            try:
+                from department_codes import code_for as _dept_of2
+                _want2 = _dept_of2(_eop)
+                if _want2:
+                    for _ak, _av in hours.items():
+                        if is_stated_time_operation(_ak):
+                            continue
+                        if _dept_of2(_ak) == _want2 and _safe(_av):
+                            _v = _safe(_av)
+                            break
+            except Exception:                                        # noqa: BLE001
+                pass
+        if _v and _v > 0:
+            return float(_v)
+    return 0.0
+
+
+def member_rates(hours_by_part: Mapping[str, Any], order_qty: Any) -> List[Tuple[str, float, float]]:
+    """(part, pieces an hour, batch hours) for each member of a shared labour row — the row's
+    working, shown beside the one combined rate it charges.
+
+    A MEMBER'S RATE IS ITS OWN PIECE TIME (D-498). The batch hours a part estimate carries are
+    its piece time × the ORDER's units, not × its pieces a unit — so multiplying the order by
+    the pieces a unit inflated every multi-off member: a bracket thirty to a unit read 5807/hr
+    beside its true ~194/hr, and the spread warning fired on that. The row's charge never used
+    these figures; only what the row SAID about its members was wrong."""
+    out: List[Tuple[str, float, float]] = []
+    try:
+        oq = float(order_qty or 0)
+    except (TypeError, ValueError):
+        oq = 0.0
+    for _ppn, _rec in (hours_by_part or {}).items():
+        _rec = _rec if isinstance(_rec, Mapping) else {}
+        _pbh = _safe(_rec.get("bh"))
+        _prh = _safe(_rec.get("rh"))
+        if _prh and _prh > 0:
+            out.append((str(_ppn), 1.0 / _prh, float(_pbh or 0.0)))
+        elif _pbh and _pbh > 0 and oq > 0:
+            out.append((str(_ppn), oq / _pbh, float(_pbh)))
+    return out
+
+
+def stated_row_hours(group: Dict[str, Any], stated_time_by_pn: Dict[str, str],
+                     stated_hours_by_pn: Dict[str, Dict[str, Any]],
+                     stated_ops_by_pn: Dict[str, Any]) -> Tuple[float, List[str]]:
+    """The row's run hours a finished unit where a member's time was STATED, and who stated it.
+
+    EVERY MEMBER, EACH TIMES ITS PIECES (D-428). Tim Wilkes on 12173-02: weld and dress "very
+    low". The Weld (CO2) row grouped 12173-05-01M x4, -05-101 x4 and -06-201 x7 — fifteen
+    pieces — and this read the FIRST member's stated 6 minutes and charged the row as if it
+    were the whole: 15 pieces at 150/hr, six minutes for fifteen welds. The grouping had
+    already summed them (1.355 h); the stated branch threw that away.
+
+    So the row's hours are the group's own sum (each member's hours a piece x its pieces),
+    with each claimed member's computed share replaced by its stated one. A member with no
+    claim keeps its computed share; nothing is invented for a member with no hours at all."""
+    g = group or {}
+    by_part = {str(k).strip().upper(): v for k, v in (g.get("hours_by_part") or {}).items()}
+    # A time stated ONCE PER FINISHED UNIT is booked once however many members carry it.
+    _once = bool(g.get("stated_once_per_finished_unit"))
+    total = 0.0 if _once else (_safe(g.get("run_hours_per_unit")) or 0.0)
+    claimed: List[str] = []
+    for _gp in (g.get("parts") or []):
+        _gk = str(_gp).strip().upper()
+        if _gk not in stated_time_by_pn:
+            continue                     # hours exist for most parts; a CLAIM does not
+        _hrs = stated_hours_by_pn.get(_gk) or {}
+        _v = _member_stated_hours(_hrs, stated_ops_by_pn.get(_gk) or (), g.get("engine_ops"))
+        if not _v:
+            continue
+        if _once:
+            total = max(total, _v)
+            claimed.append(_gk)
+            continue
+        _rec = by_part.get(_gk) or {}
+        _q = _safe(_rec.get("qty_per_unit"), 1) or 1
+        _computed = 0.0
+        if "rh" in _rec:
+            # WHAT THE ROW ACTUALLY INCLUDED FOR THIS MEMBER (D-495). The stated time is found
+            # under the department's other name ("assembly" on the route, "handling" in the
+            # costing); asking for the computed share by the route's spelling found nothing,
+            # so the K-Wellness unit's 82.95 minutes were added on top of themselves and the
+            # Assemble/pack row charged 165.9. The grouping records the share it summed.
+            _computed = _safe(_rec.get("rh")) or 0.0
+        elif _rec:
+            for _eop in (g.get("engine_ops") or []):
+                _computed = _safe(_hrs.get(str(_eop).strip().lower())) or 0.0
+                if _computed:
+                    break
+        total += (_v - _computed) * _q
+        claimed.append(_gk)
+    return (round(total, 6) if claimed and total > 0 else 0.0), claimed
 
 
 def _group_carries_a_stated_shop_time(group: Any, stated: Dict[str, str],
@@ -5826,6 +6120,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         _dims = _own_size_mm(pe)
         if _dims and not re.search(r"\d+(?:\.\d+)?\s*[x×]\s*\d+", str(desc or "")):
             desc = f"{desc}  {_dims[0]:g} × {_dims[1]:g}"
+        _cut = cut_list_text(se)
+        if _cut:
+            desc = f"{desc}  —  {_cut}"
         # code: THIS part's own number; fall back to catalogue code only if the part has none
         code = _own_pn or se.get("catalogue_part_code")
         # supplier: engine may put it at top level OR in material_estimate
@@ -5984,12 +6281,17 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             # SHEET unchanged and only corrected the overflow sum nobody sees. That is the
             # test-the-caller-not-the-helper trap, in the code rather than in a fixture.
             price = _bom_line_price(pe)
+        # A FIGURE ON AN UNRESOLVED READING SAYS SO ON ITS LINE (D-432); the price stands.
+        _unres = unresolved_reading_note(pe)
+        if _unres:
+            desc = f"{str(desc)[:60]}  —  {_unres}"
+            _flag(f"BOM {pe.get('part_number')}: {_unres}.", flags)
         # THE STAMP SAYS WHAT THE SHEET DID. Whatever path led here, this is the figure the
         # line carries; a record that still says its bought-in price reached the total when
         # the cell is empty is one fact with two writers, and the consistency check reported
         # exactly that on the 21:57 book: eleven £0 lines "reached the total as AI prices".
         reconcile_price_stamp_with_sheet(pe, price, summary)
-        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:120])
+        ws.cell(row=row, column=b["col_desc"],     value=str(desc)[:200 if _unres else 120])
         ws.cell(row=row, column=b["col_code"],     value=code)
         ws.cell(row=row, column=b["col_supplier"], value=supplier)
         # A PER-ORDER LINE AMORTISES THROUGH THE SHEET'S OWN LOOKUP, NOT A FROZEN LITERAL.
@@ -6680,6 +6982,14 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         # whether those are one object or two has already cost this session one fix that
         # found nothing and passed. So the hours are collected from every record that has
         # them, and the claim is checked separately at the point of use.
+        # A TIME COUNTED FROM THE PART'S OWN RECORD (a cut list's pieces at a config
+        # allowance) is the same kind of claim as a stated time for the floor guard's
+        # purposes (D-460): evidence about THIS part, which a corpus median cannot improve.
+        _cot = _sp.get("_counted_op_times")
+        if isinstance(_cot, dict):
+            for _cop, _cwhy in _cot.items():
+                _stated_time_by_pn.setdefault(_spn, str(_cwhy))
+                _stated_ops_by_pn.setdefault(_spn, set()).add(str(_cop).strip().lower())
         _le = _sp.get("labour_estimate")
         if isinstance(_le, dict):
             _rh = _le.get("run_hours_per_unit")
@@ -7574,56 +7884,9 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
         #
         # Everything else is untouched: a group with no stated time walks the chain exactly
         # as before, and the medians keep doing the job they are good at.
-        _stated_hours = None
-        _stated_from = ""
-        for _gp in (g.get("parts") or []):
-            _gk = str(_gp).strip().upper()
-            if _gk not in _stated_time_by_pn:
-                continue                 # hours exist for most parts; a CLAIM does not
-            _hrs = _stated_hours_by_pn.get(_gk)
-            if not _hrs:
-                continue
-            _covered = _stated_ops_by_pn.get(_gk) or ()
-            for _eop in (g.get("engine_ops") or []):
-                # 008 is plated, so its PACK time is stated. Its laser time is not.
-                if not _claim_covers(_covered, _eop):
-                    continue
-                _v = _safe(_hrs.get(str(_eop).strip().lower()))
-                if not _v and not is_stated_time_operation(_eop):
-                    # The same operation under the department's other name — "assembly" on
-                    # the route, "handling" in the costing, one PACM row on the sheet.
-                    #
-                    # NEVER FOR A STATED OPERATION, IN EITHER DIRECTION. This fallback asks
-                    # "any operation on this part that bills to the same bench", and the
-                    # bench is PACM for the generic assembly row, the pack OUT and the pack
-                    # BACK alike. On the six-off book the GENERIC assembly row — 007, 008,
-                    # 101 and the felt pad — found no `assembly` hours, reached for the
-                    # bench and picked up the final pack's stated 8 minutes a unit, which
-                    # is 7.5/hr on a row that should have been at the department's own
-                    # rate. One stated figure, charged twice, on a row nobody had stated
-                    # anything about.
-                    #
-                    # A stated time belongs to its own operation and to no other. Excluding
-                    # the TARGET stops a generic row borrowing one; excluding stated ops as
-                    # SOURCES below stops the same thing from the other end.
-                    try:
-                        from department_codes import code_for as _dept_of2
-                        _want2 = _dept_of2(_eop)
-                        if _want2:
-                            for _ak, _av in _hrs.items():
-                                if is_stated_time_operation(_ak):
-                                    continue
-                                if _dept_of2(_ak) == _want2 and _safe(_av):
-                                    _v = _safe(_av)
-                                    break
-                    except Exception:                                # noqa: BLE001
-                        pass
-                if _v and _v > 0:
-                    _stated_hours, _stated_from = float(_v), _gk
-                    break
-            if _stated_hours:
-                break
-
+        _stated_hours, _stated_members = stated_row_hours(
+            g, _stated_time_by_pn, _stated_hours_by_pn, _stated_ops_by_pn)
+        _stated_from = ", ".join(_stated_members)
         if _stated_hours and _stated_hours > 0:
             _tp_stated = float(_qty) / _stated_hours
             ws.cell(row=row, column=lb["col_throughput"], value=round(_tp_stated, 4))
@@ -7631,8 +7894,10 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             g["workbook_row"] = row
             _flag(f"throughput for '{wb_op}' is {_tp_stated:.2f}/hr — "
                   f"{_stated_shop_time_source(g, _stated_time_by_pn)}, read from "
-                  f"{_stated_from}'s own record ({_stated_hours * 60:.1f} min a unit). A "
-                  f"stated time does not compete with a department median; it replaces it.",
+                  f"{_stated_from}'s own record{'s' if len(_stated_members) > 1 else ''}: "
+                  f"{_qty} piece(s) in {_stated_hours * 60:.1f} min a finished unit, every "
+                  f"member times its own pieces. A stated time does not compete with a "
+                  f"department median; it replaces it.",
                   flags)
             row += 1
             continue
@@ -7873,13 +8138,7 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
             _hbp = g.get("hours_by_part") or {}
             _each_cell = None
             if len(_hbp) > 1 and order_qty:
-                _per_part = []
-                for _ppn, _rec in _hbp.items():
-                    _pbh = _safe(_rec.get("bh"))
-                    _pq = _safe(_rec.get("qty_per_unit"), 1) or 1
-                    if not _pbh or _pbh <= 0:
-                        continue
-                    _per_part.append((_ppn, (order_qty * _pq) / _pbh, _pbh))
+                _per_part = member_rates(_hbp, order_qty)
                 if len(_per_part) > 1:
                     _rates = [r for _, r, _ in _per_part]
                     _spread = max(_rates) / max(1e-9, min(_rates))
@@ -8231,7 +8490,15 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                 "where": "engine question", "what": _txt[:400],
             })
 
-    _write_estimator_inputs(ws, _inputs, flags)
+    # A RUN THAT COSTED NOTHING SAYS SO BESIDE THE PRICE CELLS (D-409), and the estimator-
+    # inputs banner stands aside: "PROVISIONAL — 2 to settle" over an empty book promised a
+    # figure somebody could finish.
+    _stopped = _write_run_stop_banner(ws, summary, flags)
+    if not _stopped:
+        # A book priced from the model carries that label first (D-411); the inputs banner
+        # follows it in the next free cell, since both are true.
+        _write_concept_takeoff_banner(ws, summary, flags)
+    _write_estimator_inputs(ws, _inputs, flags, banner=not _stopped)
     _write_undrawn_bom_lines(ws, summary, flags)
     _append_ai_sheets(wb, summary, flags)
 

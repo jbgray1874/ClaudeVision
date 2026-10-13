@@ -20,6 +20,10 @@ Keys understood (all optional; the replay keys behave as they do there):
                                  description carries these words (a merged pair or a doubled
                                  line both fail)
   required_operations            {code: [op]} routed or charged on the line
+  total_quantity_by_words        {words: qty} summed across every line the words
+                                 match — a mirrored pair of fives is ten
+  required_operations_by_words   {words: [op]} routed or charged on the line(s) the
+                                 words match — never keyed by a run's minted codes
   required_operations_incl_pieces{code: [op]} met by the line or its numbered pieces
   forbidden_operations           {code: [op]} not charged on the line
   forbidden_operations_anywhere  [op] charged on no line
@@ -31,6 +35,16 @@ Keys understood (all optional; the replay keys behave as they do there):
   max_unit_material_mass_kg      {code: kg} — a title-block mass used as material fails here
   min_unit_material_mass_kg      {code: kg}
   quantity_breaks                [q] the book's Quantity Breaks columns (needs --xlsx)
+  provisional_material           {code: {min_unit_material_gbp}} — the line's material is priced
+                                 (at least the floor) and, where its blank was not measured, the
+                                 record says which dimensions were measured and which inferred
+  commercial_basis               [code] each commercial line names the basis it was priced on, holds
+                                 an order figure at every break, and — where that basis is SDI
+                                 history — says the history is comparable on customer and quantity
+  no_gauge_decision_on_assemblies true: no assembly record carries a gauge decision
+  operation_times                {code: {op: {min_run_min, min_setup_min}}} — the op's charged
+                                 time reaches the stated floor (proves the work, not only the
+                                 word; the workbook row itself is verified only on the book)
 
 Exit status 0 when every pin holds, 1 otherwise.
 """
@@ -188,6 +202,26 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         for op in ops:
             res.add("required_op", f"{code} {op}", op.lower() in got,
                     "no line" if line is None else f"line carries {sorted(got)}")
+    for words, q in (facts.get("total_quantity_by_words") or {}).items():
+        # THE TOTAL ACROSS MATCHING LINES (D-471's facts fix): ten side trays built as five
+        # left and five right is CORRECT manufacture, and a one-line gate failed it.
+        key = _sq(words)
+        hits = [l for l in lines
+                if key in _sq(l.get("part_number")) or key in _sq(l.get("description"))]
+        got = sum(_num(l.get("qty_per_unit")) or 0 for l in hits)
+        res.add("total_quantity", words, abs(got - float(q)) < 0.01,
+                f"{len(hits)} line(s) totalling {got:g} / brief {q:g}")
+    for words, ops in (facts.get("required_operations_by_words") or {}).items():
+        # KEYED BY DESCRIPTION WORDS (D-469), never by a run's minted codes, which shift
+        # between reads — the facts file must not let a book define its own expected answer.
+        key = _sq(words)
+        hits = [l for l in lines
+                if key in _sq(l.get("part_number")) or key in _sq(l.get("description"))]
+        got = set().union(*(_ops(l, routed=True) for l in hits)) if hits else set()
+        for op in ops:
+            res.add("required_op", f"'{words}' {op}", op.lower() in got,
+                    "no line matches" if not hits else
+                    f"{[l.get('part_number') for l in hits[:3]]} carry {sorted(got)}")
     for code, ops in (facts.get("required_operations_incl_pieces") or {}).items():
         group = [l for l in [find(code)] + pieces(code) if l]
         got = set().union(*(_ops(l, routed=True) for l in group)) if group else set()
@@ -205,9 +239,10 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         guilty = [l.get("part_number") for l in lines if op.lower() in _ops(l)]
         res.add("forbidden_anywhere", op, not guilty, f"charged on {guilty}" if guilty else "")
     if facts.get("no_cut_assemblies"):
+        from part_code_conventions import carries_assembly_role
         guilty = [l.get("part_number") for l in lines
                   if (str(l.get("kind") or "").lower() == "assembly"
-                      or _sq(l.get("part_number")).endswith("GA"))
+                      or carries_assembly_role(str(l.get("part_number") or "")))
                   and _ops(l) & _CUTTING]
         res.add("no_cut_assemblies", "assemblies", not guilty,
                 f"cut: {guilty}" if guilty else "no assembly is cut")
@@ -247,6 +282,107 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
         missing = [t for t in tokens if str(t).upper() not in blob]
         res.add("material_basis_names", code, not missing,
                 f"missing {missing}" if missing else f"names {tokens}")
+
+    # ── a provisional figure, said as one (D-454) ───────────────────────────────
+    _wparts = {_sq(p.get("part_number")): p for p in
+               ((summary.get("manufacturing_writeup") or {}).get("parts") or []) if isinstance(p, dict)}
+    for code, want in (facts.get("provisional_material") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        me = pe.get("material_estimate") or {}
+        money = _num(me.get("unit_material_cost_gbp"))
+        floor = _num((want or {}).get("min_unit_material_gbp")) or 0.0
+        _wpart = _wparts.get(_sq(code)) or {}
+        rec = (_wpart or pe).get("_blank_provisional")
+        # A CUT PATH IS NOT AN OUTLINE (D-456): "dxf_cut_length_only" carries "dxf" and the
+        # first replay called 013's unmeasured blank a measured outline. One shared test.
+        try:
+            import blank_credibility as _bc
+            _measured = _bc.blank_is_measured(_wpart)
+        except Exception:                                        # noqa: BLE001
+            _measured = False
+        said = isinstance(rec, dict) and "measured_mm" in rec and "inferred_mm" in rec
+        ok = money is not None and money >= floor and (said or _measured)
+        res.add("provisional_material", code, ok,
+                f"material £{money} (floor £{floor:g}); "
+                + (f"basis {rec.get('basis')}, measured {rec.get('measured_mm')}, inferred "
+                   f"{rec.get('inferred_mm')}" if said else
+                   ("measured blank" if _measured else
+                    "no provisional record and no measured blank — "
+                    + str(_wpart.get('geometry_source') or 'no geometry source'))))
+    if facts.get("commercial_basis"):
+        cls = {str(c.get("code") or "").upper(): c for c in (summary.get("commercial_lines") or [])
+               if isinstance(c, dict)}
+        if not cls:
+            try:
+                from commercial_lines import collect_lines
+                cls = {str(c.get("code") or "").upper(): c for c in collect_lines(summary)
+                       if isinstance(c, dict)}
+            except Exception:                                    # noqa: BLE001
+                cls = {}
+        want_breaks = [int(q) for q in (facts.get("commercial_breaks") or facts.get("quantity_breaks") or [])]
+        for code in facts["commercial_basis"]:
+            c = cls.get(str(code).upper())
+            if not c:
+                res.add("commercial_basis", code, False, "no commercial line")
+                continue
+            basis = str(c.get("basis_chosen") or "")
+            breaks = {int(k): v for k, v in (c.get("order_gbp_at_breaks") or {}).items()}
+            missing = [q for q in want_breaks if q not in breaks]
+            # Weak history IS the justified working basis where the line records why the
+            # counted shipment could not price (the market refused, nothing counted) — the
+            # policy asks for the best-supported basis SAID, not for history never to win.
+            # STRUCTURED EVIDENCE FIRST (D-457): the engine stamps shipment_refusal on the
+            # line; wording (the parenthesis) is accepted only for records saved before the
+            # field existed. "recorded no reason" is the engine saying its own evidence is
+            # missing, and never passes.
+            refusal = str(c.get("shipment_refusal") or "")
+            researched = bool(c.get("shipment_working"))
+            weak = "weak" in basis.lower()
+            justified = bool(refusal) and "recorded no reason" not in refusal
+            if not refusal and "(" in basis and "recorded no reason" not in basis:
+                justified = True                    # a pre-field record, reason in the words
+            hist_ok = ("history" not in basis.lower()) or ("comparable" in basis.lower()
+                                                           and not weak) \
+                or (weak and justified)
+            klass = ("researched shipment" if researched else
+                     "comparable history" if "comparable" in basis.lower() and not weak else
+                     f"justified fallback — {refusal or 'reason in the basis words'}" if weak and hist_ok
+                     else "unjustified fallback")
+            ok = bool(basis) and not missing and hist_ok
+            res.add("commercial_basis", code, ok,
+                    (f"[{klass}] basis: {basis or 'NOT NAMED'}; " +
+                     ("; ".join(f"{q}: £{float(breaks[q]) / max(q, 1):.2f}/unit" for q in sorted(breaks))
+                      or "no breaks held") +
+                     (f"; breaks missing {missing}" if missing else "") +
+                     ("" if hist_ok else "; history won with no stated reason why the shipment "
+                                        "basis did not price")))
+    for code, ops_want in (facts.get("operation_times") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        proc = pe.get("process_estimate") or {}
+        run = proc.get("run_times_min_per_unit") or {}
+        setup = proc.get("setup_times_min") or {}
+        hours = (pe.get("labour_estimate") or {}).get("run_hours_per_unit") or {}
+        for op, want in (ops_want or {}).items():
+            got_run = _num(run.get(op))
+            if got_run is None and _num(hours.get(op)) is not None:
+                got_run = round(float(hours[op]) * 60.0, 2)
+            got_setup = _num(setup.get(op))
+            ok = True
+            if _num((want or {}).get("min_run_min")) is not None:
+                ok = got_run is not None and got_run >= float(want["min_run_min"])
+            if ok and _num((want or {}).get("min_setup_min")) is not None:
+                ok = got_setup is not None and got_setup >= float(want["min_setup_min"])
+            res.add("operation_time", f"{code} {op}", ok,
+                    f"run {got_run} min (floor {(want or {}).get('min_run_min')}), "
+                    f"setup {got_setup} min (floor {(want or {}).get('min_setup_min')}); "
+                    f"the charged workbook row is proven only on the book")
+    if facts.get("no_gauge_decision_on_assemblies"):
+        import costed_facts as _cf
+        from detail_page_geometry import not_cut_from_a_blank
+        guilty = [p.get("part_number") for p in _wparts.values()
+                  if not_cut_from_a_blank(p) and _cf.thickness_conflict(p)]
+        res.add("no_gauge_decision", "assemblies", not guilty,
+                f"gauge decision on {guilty}" if guilty else "no assembly carries a gauge decision")
 
     # ── mass ────────────────────────────────────────────────────────────────────
     for code, kg in (facts.get("max_unit_material_mass_kg") or {}).items():

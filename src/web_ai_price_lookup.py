@@ -139,7 +139,7 @@ Part specification:
 Respond with ONLY a JSON object in this exact format (no other text):
 {{
   "price_gbp": <number — unit price in GBP, realistic UK trade/subcontract price>,
-  "unit": "<each|per_kg|per_metre|per_m2>",
+  "unit": "<each|per_kg|per_metre|per_m2, or per_<the unit this request is sold by> when one is named>",
   "price_basis": "<brief explanation of what drives this price>",
   "low_estimate_gbp": <lower bound>,
   "high_estimate_gbp": <upper bound>,
@@ -282,6 +282,18 @@ def _offline() -> bool:
     return bool(os.environ.get("SDI_OFFLINE"))
 
 
+# A CAPACITY REFUSAL IS ACCOUNT-LEVEL, NOT PER-LINE (D-478, the serpapi rule applied to the
+# model). The 11 Oct 21:20 K-Wellness run met "HTTP 429 resource-exhausted — the model is
+# currently at capacity" and kept asking, line after line, each with its own timeout into
+# the same wall — the exact failure the serpapi breaker already names: "Asking again with a
+# different material cannot change that." Two capacity refusals trip the breaker for the
+# rest of the run; lines that needed a model price are left for the estimator, not priced
+# at nothing, and the one printed line says so. Scoped to THIS module's pricing calls —
+# the concept read is a different client and is not touched.
+_XAI_CAPACITY_SEEN = 0
+_XAI_CAPACITY_TRIPPED = False
+
+
 def _call_xai_llm(
     prompt: str,
     *,
@@ -301,6 +313,9 @@ def _call_xai_llm(
     """
     if _offline():
         return None          # SDI_OFFLINE: no paid call from a fixture
+    global _XAI_CAPACITY_SEEN, _XAI_CAPACITY_TRIPPED
+    if _XAI_CAPACITY_TRIPPED:
+        return None          # capacity breaker: the account-level refusal already said why
     import urllib.request
     import urllib.error
     # Importing config runs its os.environ.setdefault(...) for the keys and carries
@@ -370,6 +385,15 @@ def _call_xai_llm(
         except Exception:
             pass
         logger.warning("xAI HTTP %s for model=%s — %s", exc.code, model, detail or exc.reason)
+        if exc.code == 429 and ("resource-exhausted" in detail
+                                or "capacity" in detail.lower()):
+            _XAI_CAPACITY_SEEN += 1
+            if _XAI_CAPACITY_SEEN >= 2 and not _XAI_CAPACITY_TRIPPED:
+                _XAI_CAPACITY_TRIPPED = True
+                print("   [pricing] xAI refused on CAPACITY (HTTP 429, resource-exhausted) "
+                      "twice — model price lookups are off for the rest of this run. Lines "
+                      "that needed one are left for the estimator, not priced at nothing.",
+                      flush=True)
         return None
     except urllib.error.URLError as exc:
         logger.warning("xAI could not reach api.x.ai: %s", getattr(exc, "reason", exc))
@@ -578,7 +602,7 @@ def _web_search_price_anthropic(query: str, spec: Dict[str, Any]) -> Dict[str, A
         f"Part specification:\n{spec_summary}\n\n"
         f"Search for: {query}\n\n"
         f"Return ONLY a JSON object:\n"
-        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre>", "source_url": "<url>", '
+        f'{{"price_gbp": <number>, "unit": "<each|per_kg|per_metre, or per_<the unit this request is sold by> when one is named>", "source_url": "<url>", '
         f'"supplier_name": "<name>", "price_basis": "<brief note>", "confidence": <0.4-0.65>}}'
     )
 

@@ -45,12 +45,10 @@ _CATALOGUE_RE = re.compile("|".join(_CATALOGUE_PATTERNS), re.IGNORECASE)
 
 _CONSUMABLE_RE = re.compile(r"\bPOWDER", re.IGNORECASE)
 _ASSEMBLY_SUFFIX_RE = re.compile(r"-(GA|SA\d*)$", re.IGNORECASE)
-_WELDMENT_PARENT_RE = re.compile(r"-101$", re.IGNORECASE)
 _CATALOGUE_BOM_ROW_RE = re.compile(
     r"\b(\d+)\s+(ELECTRICS(?:[-\s][A-Z0-9]+)?|FIXING\s*\d+|SLOTTEDTUBE\s*\d+|VINYL\s*\d+|SUBPLAS\s*\d+|POWDER\s*\d+)\s+(.+?)\s+(\d+)\b",
     re.IGNORECASE,
 )
-_JUNK_ESTIMATE_CODES = frozenset({"C-001"})
 
 
 def _norm_code(raw: Any) -> str:
@@ -701,20 +699,13 @@ def dedupe_bom_rows_for_bay_rollup(
 
 
 def dedupe_weldment_parent_rows(bom_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Drop weldment parent (-101) when its detail children are also BOM lines."""
+    """Drop a parent row when the rows it is the parent of are lines too (D-454: read from the
+    hierarchy the rows carry — their bom_parent — not from a "-101" code shape one job used)."""
     codes = {_row_code(r) for r in bom_rows if _row_code(r)}
-    drop: set = set()
-    for code in codes:
-        if not _WELDMENT_PARENT_RE.search(code):
-            continue
-        prefix = _WELDMENT_PARENT_RE.sub("", code)
-        children = [
-            c
-            for c in codes
-            if c.startswith(prefix + "-") and c != code and not _WELDMENT_PARENT_RE.search(c)
-        ]
-        if children:
-            drop.add(code)
+    parents = {_norm_code(r.get("bom_parent")) for r in bom_rows
+               if r.get("bom_parent") and _row_code(r)}
+    drop = {c for c in codes if c in parents
+            and any(_norm_code(r.get("bom_parent")) == c and _row_code(r) != c for r in bom_rows)}
     return [r for r in bom_rows if _row_code(r) not in drop]
 
 
@@ -722,7 +713,7 @@ def synthesize_folder_job_bom_rows(
     summary: Dict[str, Any],
     part_estimates: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    """Build a job-level bay BOM when the folder has no top-level 1282-GA PDF."""
+    """Build a job-level BOM when the folder has no top-level GA drawing."""
     rows = [dict(r) for r in (summary.get("document_analysis") or {}).get("bom_rows") or []]
     try:
         from part_identity import inject_missing_bay_rows
@@ -734,7 +725,11 @@ def synthesize_folder_job_bom_rows(
 
     for est in part_estimates:
         code = _est_code(est)
-        if not code or code in existing or code in _JUNK_ESTIMATE_CODES:
+        if not code or code in existing:
+            continue
+        # A FRAGMENT OF A CODE ALREADY HERE IS NOT A PART (D-454): "C-001" read off the tail of
+        # "1455-C-001" — said by shape, not listed by name.
+        if any(e.endswith("-" + code) for e in existing if e):
             continue
         try:
             from part_identity import dxf_alias_target
@@ -770,12 +765,20 @@ def synthesize_folder_job_bom_rows(
 
 
 def job_has_costing_root(bom_rows: List[Dict[str, Any]], summary: Dict[str, Any]) -> bool:
-    for row in bom_rows:
-        pn = str(row.get("part_number") or "").upper()
-        if re.search(r"\b1282\b", pn) and "-GA" in pn:
+    """True when the job declares a product to cost from (D-454): the canonical route names a
+    product root, or a BOM row is an assembly drawing that no other row lists as its child.
+    Read from the hierarchy, not from one job's codes."""
+    for holder in ((summary or {}).get("estimate_summary") or {}, summary or {}):
+        payload = holder.get("canonical_route_shadow") if isinstance(holder, dict) else None
+        if isinstance(payload, dict) and payload.get("product_root"):
             return True
-    codes = {_row_code(r) for r in bom_rows}
-    return "1449-01C" in codes and "1450-01C" in codes
+    try:
+        from part_code_conventions import carries_assembly_role as _is_asm
+    except Exception:                                            # noqa: BLE001
+        return False
+    children = {_norm_code(r.get("part_number")) for r in bom_rows if r.get("bom_parent")}
+    return any(_is_asm(_row_code(r)) and _row_code(r) not in children for r in bom_rows
+               if _row_code(r))
 
 
 # ── Rollup ───────────────────────────────────────────────────────────────────

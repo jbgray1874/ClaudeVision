@@ -820,9 +820,10 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
     """
     inv = summary.get("invariants")
     if not isinstance(inv, dict):
-        return ('    <div class="prov">PROVISIONAL — the consistency checks did not run on '
-                'this estimate, so none of its figures have been verified against the '
-                'workbook. Not for release as a firm price.</div>')
+        return ('    <div class="prov">PROVISIONAL — the automated checks are still to run '
+                'on this estimate, so its figures are not yet verified against the '
+                'workbook. Subject to estimator confirmation before it is issued as a '
+                'firm price.</div>')
     if inv.get("may_quote_firm"):
         return ""
     _blocking = [v for v in (inv.get("violations") or [])
@@ -840,7 +841,7 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
     _not_run = [v for v in _unver if v not in _rulings]
     _bits = []
     if _blocking:
-        _bits.append(f"{len(_blocking)} consistency finding(s) FAILED")
+        _bits.append(f"{len(_blocking)} automated check(s) to review")
     if _rulings:
         _bits.append(f"{len(_rulings)} finding(s) need an estimator's ruling")
     if _not_run:
@@ -848,7 +849,7 @@ def _invariant_banner(summary: Dict[str, Any]) -> str:
                      f"unverified")
     _detail = "; ".join(_esc(str(v.get("message") or "")) for v in (_blocking + _unver)[:3])
     return ('    <div class="prov">PROVISIONAL — ' + _esc(" and ".join(_bits)) +
-            '. This estimate is not for release as a firm price until they are resolved.'
+            '. Subject to estimator confirmation before it is issued as a firm price.'
             + (f'<span class="prov-d">{_detail}</span>' if _detail else "") + '</div>')
 
 
@@ -1511,9 +1512,15 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         _unit_figure = _order_figure = "&mdash;"
         _unit_caption = "per unit, ex VAT"
         _order_caption = "ex VAT"
-        _pending_note = (
-            '\n      <div class="estimator-action">Enter the unit cost on the Estimate sheet '
-            'and regenerate — the price follows from the workbook.</div>')
+        if _state["price"].get("nothing_to_cost"):
+            # NOT "ENTER THE UNIT COST" ON A RUN THAT COSTED NOTHING (D-409). The one useful
+            # sentence on an empty book is why it is empty and what answers the pack.
+            _pending_note = ('\n      <div class="estimator-action">'
+                             + _esc(str(_state["price"].get("why") or "")) + '</div>')
+        else:
+            _pending_note = (
+                '\n      <div class="estimator-action">Enter the unit cost on the Estimate sheet '
+                'and regenerate — the price follows from the workbook.</div>')
     else:
         _price_class, _order_class = "unit", "ov"
         _unit_figure, _order_figure = _money(unit_price), _money(order_value)
@@ -1774,6 +1781,30 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
             f"{_esc(product)} — manufactured to drawing {_esc(job_number)}"
             f"{(' ' + _esc(rev)) if rev else ''}. ")
 
+    # ── THE PAGES AFTER THE PRICE (D-504) ───────────────────────────────────────────
+    #
+    # James Gray, 13 Oct 2026, of the one-off K-Wellness showcase: "can we massively improve
+    # it so it much more closely represents [it]... auto-generated as part of the general
+    # process, with as much detail as possible... two or three pages." quote_story builds them
+    # from the run's own record — the pack's words beside what was concluded, one part
+    # followed to its priced line, the price at each quantity — and appends them. THIS PAGE
+    # IS UNCHANGED: price, release gate, naming and print block are decided above, and the
+    # story pages carry the same figure (the workbook's, at the same markup) or none.
+    _story_css = _story_html = ""
+    try:
+        from quote_story import story_pages as _story_pages
+        _story_price = unit_price
+        if _story_price is None and _internal and isinstance(_workbook_only, (int, float)):
+            _story_price = _workbook_only * MARKUP_FACTOR
+        _story_css, _story_html = _story_pages(
+            summary, parts, customer=customer, product=product, job_number=job_number,
+            qty=qty, unit_price=_story_price, markup=MARKUP_FACTOR,
+            basis=(_basis if (_concept_pack or _llm) else ""),
+            sdi_logo=sdi_logo, cust_header=cust_header)
+    except Exception as _st_exc:                                     # noqa: BLE001
+        print(f"   [quote] the pages after the price were not built "
+              f"({type(_st_exc).__name__}: {_st_exc}) — the price page stands.", flush=True)
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1859,6 +1890,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
            font-size:12px; display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; }}
   .foot .terms b {{ color:var(--ink); }}
   @media print {{ body {{ background:#fff; }} .sheet {{ border:none; box-shadow:none; margin:0; max-width:100%; }} }}
+{_story_css}
 </style>
 </head>
 <body>
@@ -1926,7 +1958,7 @@ def build_quote_html(summary: Dict[str, Any], job_stem: Optional[str] = None,
         wearesdi is the trading name of SDI Displays Ltd.{_run_foot}
       </div>
     </div>
-  </div>
+  </div>{_story_html}
 </body>
 </html>"""
 

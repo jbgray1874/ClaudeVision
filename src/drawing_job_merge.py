@@ -964,10 +964,22 @@ def _lookup_part_with_basis(parts_by_key: Dict[str, Dict[str, Any]], part_number
     # match "-202" — the near-match presumption Dave Wright ruled out ("better left as zero
     # cost and flagging it"). The trailing segment must equal the candidate's own, and be long
     # enough to mean something.
-    suffix = key.split("-")[-1]
+    #
+    # AND EVERY SEGMENT THE FILE HAS, NOT ONLY ITS LAST (D-434). 8188-08's folder holds
+    # "8188-12-002 MS 2MM.DXF", a part of the swing stopper. Its last segment "002" equals the
+    # frame base 8188-29-002's, so it was bound to the base; two flats at two gauges then made
+    # the base an "assembly" of two minted pieces, both of which the product scope set aside,
+    # and the 1,292 x 200 x 3 base left the book. A file's code may stand for a LONGER code
+    # only where the file's own segments are the candidate's last segments, whole: "12-002"
+    # may be 8188-12-002; "8188-12-002" is never 8188-29-002.
+    _fsegs = [x for x in key.split("-") if x]
+    suffix = _fsegs[-1] if _fsegs else ""
     for candidate_key, part in parts_by_key.items():
-        if (len(suffix) >= 3 and candidate_key.split("-")[-1] == suffix) \
-                or candidate_key.replace("-", "") == key.replace("-", ""):
+        _csegs = [x for x in candidate_key.split("-") if x]
+        if candidate_key.replace("-", "") == key.replace("-", ""):
+            return part, "segment"
+        if (len(suffix) >= 3 and len(_csegs) >= len(_fsegs)
+                and _csegs[len(_csegs) - len(_fsegs):] == _fsegs):
             return part, "segment"
     # Tolerant fall-back: bridge abbreviated DXF part numbers ("1449C", "1450")
     # to full BOM numbers ("1449-01C", "1450-01C") via leading numeric block +
@@ -1067,6 +1079,23 @@ def _description_for_orphan_dxf(summary: Dict[str, Any], part_number: str,
         if named:
             return named
     return pn_key
+
+
+def dxf_may_mint_a_part(dxf_path: Path, report: Optional[Dict[str, Any]] = None,
+                        part_number: str = "") -> bool:
+    """A DXF that is a drawing of a part — a sheet export with dimensions, a title block and
+    notes — never mints a part (D-406). 12675-01: "12675-01-02 Block Model V2.dxf" was minted
+    as an orphan, its geometry then refused as a drawing, and the record survived as a
+    bought-in priced by an AI market figure at £8.50 beside packaging and delivery for it.
+    The refusal is recorded in the report's unmatched list so the file is not silently lost."""
+    _why = drawing_export_reason(dxf_path)
+    if not _why:
+        return True
+    if isinstance(report, dict):
+        report.setdefault("unmatched_dxf", []).append({
+            "path": str(dxf_path), "part_number": part_number,
+            "reason": f"drawing_export_not_a_flat: {_why}"})
+    return False
 
 
 def _create_orphan_dxf_part(summary: Dict[str, Any], part_number: str, dxf_path: Path) -> Dict[str, Any]:
@@ -1647,6 +1676,8 @@ def _split_parent_flats_to_children(
                 # Submitted, not gap-filled — see the note at the flat-application site.
                 _apply_field(target, "normalized_material", _mat_fn, "dxf_filename")
             _apply_and_report(target, chosen, report, matched_keys, reason=bind_reason)
+        elif not dxf_may_mint_a_part(chosen, report):
+            pass                          # a drawing of a part is not a part (D-406)
         else:
             pn = _orphan_child_pn(parent, chosen, _ci, _taken_keys)
             orphan = _create_orphan_dxf_part(summary, pn, chosen)
@@ -2792,6 +2823,15 @@ def apply_mirror_geometry(parts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         base_pn = _mirror_base_of(part)
         if not base_pn:
             continue
+        # AN ASSEMBLY'S HAND HAS NO FLAT TO COPY (D-505). 12665-03-GA-H is the side-wing kit
+        # built the other way round; the graph gives it the base kit's members, each by its
+        # own hand. "MIRROR NOT APPLIED" on it read as a missing drawing when nothing was.
+        try:
+            from part_code_conventions import carries_assembly_role as _asm_role
+            if _asm_role(base_pn) or _asm_role(part.get("part_number")):
+                continue
+        except Exception:                                            # noqa: BLE001
+            pass
         base = by_key.get(_own_number_key(base_pn))
         if base is None:
             _refuse(part, base_pn,
@@ -3424,6 +3464,8 @@ def augment_summary_with_dxf(
                 "path": str(path), "part_number": pn,
                 "reason": "code_belongs_to_another_assembly_in_this_job_number"})
             continue
+        if not part and not dxf_may_mint_a_part(path, report, pn):
+            continue                      # a drawing of a part is not a part (D-406)
         if not part:
             part = _create_orphan_dxf_part(summary, pn, path)
             parts.append(part)

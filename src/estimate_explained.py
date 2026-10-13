@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 try:
     import openpyxl
@@ -643,6 +643,7 @@ _READER_WORDS = {
     "solidworks_api": "the SOLIDWORKS model",
     "solidworks_flat_pattern": "the SOLIDWORKS flat pattern — measured",
     "solidworks_applied_material": "the material applied in the SOLIDWORKS model",
+    "drawn_on_sheet": "the sheet that draws it — it has no sheet of its own",
     "dxf": "the part's DXF",
     "dxf_flat_pattern": "the part's DXF flat pattern — measured",
     "dxf_filename": "the DXF's own filename",
@@ -833,6 +834,29 @@ def _what_they_are(lines: List[Dict[str, Any]]) -> str:
     return ", ".join(kinds[:-1]) + " and " + kinds[-1]
 
 
+def _sdi_cuts(code: str, steel: Dict[str, Any], material: Dict[str, Dict[str, Any]],
+              line: Optional[Mapping[str, Any]]) -> bool:
+    """Is this a line SDI cuts? A sheet blank, a section cut to length, or a route that cuts it.
+
+    THE ROUTE IS EVIDENCE TOO (D-415). The 12675-01 concept book lasered its flat bars from
+    strip, priced them off length, and this table read neither a Sheet Steel row nor a Blank L
+    column for them — so it told the reader none of its lines was a part SDI cuts, and that
+    each was "a bought item, a fastener off a BOM table, or a commercial line"."""
+    if bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")):
+        return True
+    line = line or {}
+    if line.get("length"):
+        return True
+    try:
+        import config                                                    # noqa: PLC0415
+        cutting = {str(o).lower() for o in getattr(config, "CUTTING_OPERATIONS", ())}
+    except Exception:                                                    # noqa: BLE001
+        cutting = set()
+    ops = {str(o or "").strip().lower()
+           for o in list(line.get("route_operations") or []) + list(line.get("operations") or [])}
+    return bool(ops & cutting)
+
+
 def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]],
                       steel: Dict[str, Any],
                       material: Dict[str, Dict[str, Any]],
@@ -862,7 +886,7 @@ def _missing_drawings(bom: List[Dict[str, Any]], scan: Dict[str, Dict[str, Any]]
         _charged = _money(_line.get("charged_ext_gbp"))
         out.append({
             "code": row.get("code"), "desc": _description(row),
-            "cut": bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L")),
+            "cut": _sdi_cuts(code, steel, material, _line),
             "section": bool(_line.get("length")),
             "gbp": (round(unit * qty, 2) if unit and qty else _charged or None),
             "priced": row.get("price") not in (None, "") or bool(_charged),
@@ -1532,9 +1556,9 @@ def _settle_block(record: Any, o: Optional[Dict[str, Any]] = None) -> List[str]:
 
     def _cell(v: Any) -> str:
         return str(v if v is not None else "").replace("|", "/").replace("\n", " ").strip()
-    out = ["## What a person still has to settle", "",
-           f"{o['total']} to settle: {o['phrase']}. Until these are answered the estimate is "
-           f"not a quote, and the banner on the sheet says so."]
+    out = ["## For the estimator to confirm", "",
+           f"{o['total']} item(s) to confirm: {o['phrase']}. The estimate firms as each is "
+           f"confirmed, and the customer quote follows sign-off."]
     if o.get("legacy"):
         out.append(f"{o['legacy']} of them (failing checks or sizes assumed) were counted on a "
                    f"record saved before they were listed as rows, so they are not itemised.")
@@ -1682,12 +1706,22 @@ def build(workbook: Path, scan_json: Optional[Path],
     _unpriced = [r for r in _unpriced if id(r) not in _classified]
     add("## The questions, answered first")
     add("")
-    add(f"- **What does a unit cost, and of what?** "
-        f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
-        f"{_gbp(totals['labour'])}"
-        + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
-           if _other_gbp else "")
-        + ".")
+    try:
+        from run_stop import nothing_to_cost as _ntc, sentence as _stop_sentence
+        _stop = _ntc(scan_doc)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
+    if _stop:
+        # THE FIRST ANSWER ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409) — not "£25.46 —
+        # material £23.00 + labour £0.00" over packaging and delivery for nothing.
+        add(f"- **What does a unit cost, and of what?** {_stop_sentence(_stop)}")
+    else:
+        add(f"- **What does a unit cost, and of what?** "
+            f"{_gbp(totals['unit'])} — material {_gbp(totals['material'])} + labour "
+            f"{_gbp(totals['labour'])}"
+            + (f", and the unit cell adds {_gbp(_other_gbp)} ({_basis_text})"
+               if _other_gbp else "")
+            + ".")
     # THE BANNER'S TALLY, NOT A SECOND ONE (D-349). This counted bill-of-materials lines
     # only, so the 12645 book of 29 Sep 21:27 said "1 line(s) carry no price at all — Roller
     # Shutter" beneath a banner of "21 prices missing": twenty Sheet Steel rows with no cost
@@ -1731,7 +1765,7 @@ def build(workbook: Path, scan_json: Optional[Path],
         from costed_facts import outstanding_summary
         _out = outstanding_summary(record)
         add(f"- **Can this go out?** "
-            + (f"No — {_out['total']} to settle: {_out['phrase']}. The quote is a draft "
+            + (f"No — {_out['total']} item(s) to confirm: {_out['phrase']}. The quote is a draft "
                f"and the sheet is provisional until they are settled."
                if _rel.get("draft") else
                "Nothing is waiting on a person; release is subject to the consistency checks."))
@@ -1750,12 +1784,12 @@ def build(workbook: Path, scan_json: Optional[Path],
     if not _settle and (_unpriced or _indicative or _mfg):
         # No costed record to read (a book explained without its run JSON): the read-back's
         # own lines, counted as they are listed.
-        add("## What a person still has to settle")
+        add("## For the estimator to confirm")
         add("")
         add(f"{len(_unpriced) + len(_indicative)} line(s)"
             + (f" and {len(_mfg)} manufacturing decision(s)" if _mfg else "")
-            + ". Until these are answered the estimate is not a quote, and the banner on the "
-              "sheet says so.")
+            + ". The estimate firms as each is confirmed, and the customer quote follows "
+              "sign-off.")
         add("")
     if _unpriced or _indicative:
         if _settle:
@@ -2257,7 +2291,7 @@ def build(workbook: Path, scan_json: Optional[Path],
             rec = scan.get(code) or {}
             if rec.get("pages"):
                 continue
-            cut_here = bool(steel.get(code)) or bool((material.get(code) or {}).get("Blank L"))
+            cut_here = _sdi_cuts(code, steel, material, (record_lines or {}).get(code))
             # A SECTION IS NOT CUT FROM SHEET. The leg's 15.88 × 15.88 profile sat in the
             # Blank L column and this table told the reader its "blank and gauge" came from
             # nowhere. The record knows it is priced by length.
@@ -2428,11 +2462,11 @@ def build(workbook: Path, scan_json: Optional[Path],
                     f"costed part.")
             add("")
 
-    # DECISIONS FIRST. The section "What a person still has to settle" is emitted where its
+    # DECISIONS FIRST. The section "For the estimator to confirm" is emitted where its
     # inputs are computed, between the questions and the reconciliation; the estimator
     # wants it above everything else, as the report has it. Hoisted rather than rewritten,
     # so the section's own tests and the tab's parser see the same block.
-    lines = _hoist_section(lines, "## What a person still has to settle",
+    lines = _hoist_section(lines, "## For the estimator to confirm",
                            before="## The questions, answered first")
     return "\n".join(lines)
 
@@ -2852,7 +2886,7 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
         from costed_facts import outstanding_summary as _osum
         _o = _osum(record)
         if _o["total"]:
-            _need = f"To settle: {_o['phrase']}."
+            _need = f"To confirm: {_o['phrase']}."
         elif not needs_a_person:
             _need = "Nothing is waiting on a person."
     subject = (f"{job} — SDI Intelligence estimate, {_state}"

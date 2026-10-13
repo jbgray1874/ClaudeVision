@@ -860,12 +860,17 @@ def check_native_evidence_is_current(summary: Any) -> List[Dict[str, Any]]:
         # second is this guard working and a pointer to fix; the first is a defect in our
         # matching, and it is silent, and it is expensive.
         _own = sw.get("refused_own_job")
+        _empty = sw.get("job_has_no_parts")
         out.append(_violation(
             "native_extract_refused", BLOCKING if _own else WARNING,
             (f"The SolidWorks extract was REFUSED and nothing from it was applied — this job "
              f"is costed from drawings alone. "
-             + (f"Its codes share a job number with this job's, so it IS this job's extract "
-                f"and the connector could not match it: a naming convention it does not know."
+             + ((f"Its codes share a job number with this job's, so it IS this job's extract; "
+                 f"the pack produced no part records to match it against, so nothing was taken "
+                 f"off from the model — the model is the parts list where the pack has none."
+                 if _empty else
+                 f"Its codes share a job number with this job's, so it IS this job's extract "
+                 f"and the connector could not match it: a naming convention it does not know.")
                 if _own else
                 f"Its codes share no job number with this job's, so it describes a different "
                 f"job — the pointer is wrong, and this job's own models were never read.")),
@@ -1169,6 +1174,65 @@ def check_prices_are_reproducible(summary: Any) -> List[Dict[str, Any]]:
         f"be reproduced or defended. Add these codes to the price catalogue, or price the "
         f"lines by hand.",
         parts=_names, lines=guessed[:10], count=len(guessed))]
+
+
+def check_an_unresolved_reading_blocks_the_quote(summary: Any) -> List[Dict[str, Any]]:
+    """A line priced on a reading nobody has confirmed blocks the customer quote (D-432).
+
+    8188-08: fourteen magnets printed "50mm x 10mm x 2m" are priced as two-metre magnets —
+    £706.16 of the unit. The figure stays in as a working figure (a blank would total a lighter
+    unit that says nothing is missing), so the quote is what is stopped: not a firm price
+    until a person says which size it is. Independent of price_not_reproducible, which would
+    lift the day a catalogue row turned up for the misread size while the question stood."""
+    if not isinstance(summary, dict):
+        return _unevaluated("unresolved_reading_priced", "This job is not a readable structure.")
+    found: Dict[str, str] = {}
+    holders = [summary, summary.get("estimate_summary") or {},
+               summary.get("manufacturing_writeup") or {}]
+    # ONLY A LINE CARRYING MONEY BLOCKS THE QUOTE (D-444). 8188-08's 19:32 book reported
+    # "2 line(s) are priced on a reading nobody has confirmed: KINGDOM; KINGDOM:" — the second
+    # a record of the same row read with its separator, set aside with the stopper and
+    # carrying nothing on the sheet. The check guards the figure in the unit, so a record
+    # with no figure, or one the product does not reach, is not counted.
+    _aside = {" ".join(str((e or {}).get("part_number") if isinstance(e, dict) else e or "").upper().split())
+              for e in (summary.get("set_aside_outside_product") or [])}   # by its own spelling
+
+    def _carries_money(p: Dict[str, Any]) -> bool:
+        me = p.get("material_estimate") if isinstance(p.get("material_estimate"), dict) else {}
+        cb = p.get("cost_breakdown") if isinstance(p.get("cost_breakdown"), dict) else {}
+        for v in (me.get("unit_material_cost_gbp"), me.get("extended_material_cost_gbp"),
+                  cb.get("total"), cb.get("per_part"), cb.get("system_cost"),
+                  p.get("unit_total_gbp"), p.get("total_unit_cost_gbp")):
+            try:
+                if v is not None and float(v) > 0:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    for holder in holders:
+        if not isinstance(holder, dict):
+            continue
+        for key in ("part_estimates", "canonical_part_estimates", "parts"):
+            for p in holder.get(key) or []:
+                if not isinstance(p, dict) or not isinstance(p.get("_price_unresolved"), dict):
+                    continue
+                pn = str(p.get("part_number") or "").strip()
+                sq = re.sub(r"[^A-Z0-9]", "", pn.upper())
+                if not pn or " ".join(pn.upper().split()) in _aside or not _carries_money(p):
+                    continue
+                if sq not in {re.sub(r"[^A-Z0-9]", "", k.upper()) for k in found}:
+                    found[pn] = str(p["_price_unresolved"].get("reason") or "an unconfirmed reading")
+    if not found:
+        return []
+    names = sorted(found)
+    return [_violation(
+        "unresolved_reading_priced", BLOCKING,
+        f"{len(names)} line(s) are priced on a reading nobody has confirmed: "
+        + "; ".join(f"{n} — {found[n]}" for n in names[:6])
+        + ". The figure is in the unit as a working figure; the customer quote waits until "
+          "the reading is confirmed and the price that goes with it is settled.",
+        parts=names, count=len(names))]
 
 
 def check_price_disagreement_is_declared(summary: Any) -> List[Dict[str, Any]]:
@@ -1500,7 +1564,19 @@ def check_both_bom_readers_ran(summary: Any) -> List[Dict[str, Any]]:
                 f"corroboration and no line only one reader could see has been flagged as "
                 f"such. A parent BOM missing from this estimate would look exactly like a job "
                 f"that has none.")
-        if summary.get("source_format") == "image_render":
+        _ct = summary.get("concept_takeoff") if isinstance(summary.get("concept_takeoff"), dict) else {}
+        if _ct.get("design") or summary.get("model_takeoff_door"):
+            # SAID AS WHAT IT IS ON A DESIGN-INTENT PACK (D-414): the sheets carry no parts
+            # list, so both readers correctly found none; the parts here come from the model
+            # take-off or the concept read, and are assumptions until a parts list confirms them.
+            _src = ("taken off the SolidWorks model" if _ct.get("source") == "solidworks_model"
+                    else "sighted on the design-intent sheet by the vision model" if _ct.get("design")
+                    else "not yet established")
+            _msg = (f"This pack is design-intent sheets with no parts list for either BOM reader to "
+                    f"read; the parts here were {_src}, so none is a read line and none is "
+                    f"corroborated. The estimate stays blocked from release until a parts list or a "
+                    f"detailed drawing confirms them.")
+        elif summary.get("source_format") == "image_render":
             # SAID AS WHAT IT IS ON A RENDER (D-358): no parts list exists to be read twice.
             _msg = ("This pack is a customer render: there is no parts list for either BOM "
                     "reader to read, so every part here was sighted on the picture and none is "
@@ -1831,6 +1907,16 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
     if not isinstance(summary, dict):
         return _unevaluated("blank_vs_cut_path", "This job is not a readable structure.")
     parts = _parts(summary)
+    # THE BLANK THE MONEY CAME FROM (D-450). The raw record holds the first reading of a
+    # blank — on 8188-08-011 a 30 x 6 read off the page — while the costed record's
+    # material_estimate holds the DXF flat the sheet charged (157 x 745). A check about the
+    # money reads the costed record where one exists; blank_dimensions already prefers it.
+    _canon: Dict[str, Any] = {}
+    _es0 = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    for _lst in (_es0.get("canonical_part_estimates"), _es0.get("part_estimates")):
+        for _rec in (_lst or []):
+            if isinstance(_rec, dict) and _rec.get("part_number"):
+                _canon.setdefault(str(_rec["part_number"]).strip().upper(), _rec)
     if not parts:
         return []
 
@@ -1875,7 +1961,7 @@ def check_a_blank_and_its_cut_path_can_both_be_true(summary: Any) -> List[Dict[s
         except Exception:                                            # noqa: BLE001
             pass
         import costed_facts as _cf
-        _blank = _cf.blank_dimensions(part)
+        _blank = _cf.blank_dimensions(_canon.get(str(part.get('part_number') or '').strip().upper()) or part)
         length = _blank["length_mm"] or 0.0
         width = _blank["width_mm"] or 0.0
         if _blank["conflict"]:
@@ -2768,17 +2854,51 @@ def check_the_pack_contains_the_drawings_its_bom_names(summary: Any) -> List[Dic
     if not missing:
         return []
 
-    _named = ", ".join(f"{m['part_number']}"
-                       + (f" ({m['description']})" if m["description"] else "")
-                       for m in missing[:6])
-    _more = f" and {len(missing) - 6} more" if len(missing) > 6 else ""
-    return [_violation(
-        "bom_names_a_drawing_the_pack_does_not_contain", BLOCKING,
-        f"{len(missing)} bill-of-materials line(s) name a drawing that is not in this pack: "
-        f"{_named}{_more}. Nothing read those parts, so nothing costed them -- and the "
-        f"total still reads as a finished estimate. This is an incomplete pack, not a cheap "
-        f"job: ask for the missing detail drawings before quoting.",
-        missing=missing, count=len(missing))]
+    # A LINE THAT CARRIES MONEY WAS COSTED (D-451). 8188-08's wire frame (£0.95, its gauge
+    # and outline read off the sheet that draws it) and mesh panel (£10.40, a catalogue row)
+    # were both on the sheet while this said "nothing costed them". Each missing drawing is
+    # held against the costed records: a priced line is said as priced without a drawing of
+    # its own; only lines nothing priced keep the blocking wording.
+    _es = summary.get("estimate_summary") if isinstance(summary.get("estimate_summary"), dict) else {}
+    _money: Dict[str, float] = {}
+    for _lst in (_es.get("canonical_part_estimates"), _es.get("part_estimates")):
+        for _rec in (_lst or []):
+            if not isinstance(_rec, dict) or not _rec.get("part_number"):
+                continue
+            _me = _rec.get("material_estimate") if isinstance(_rec.get("material_estimate"), dict) else {}
+            _cb = _rec.get("cost_breakdown") if isinstance(_rec.get("cost_breakdown"), dict) else {}
+            for _v in (_me.get("unit_material_cost_gbp"), _cb.get("total"), _cb.get("per_part")):
+                try:
+                    if _v is not None and float(_v) > 0:
+                        _money.setdefault(_bare(_rec["part_number"]), float(_v))
+                        break
+                except (TypeError, ValueError):
+                    continue
+    unpriced = [m for m in missing if _bare(m["part_number"]) not in _money]
+    priced = [m for m in missing if _bare(m["part_number"]) in _money]
+
+    def _names(ms: List[Dict[str, Any]]) -> str:
+        return (", ".join(f"{m['part_number']}" + (f" ({m['description']})" if m["description"] else "")
+                          for m in ms[:6]) + (f" and {len(ms) - 6} more" if len(ms) > 6 else ""))
+
+    out: List[Dict[str, Any]] = []
+    if unpriced:
+        out.append(_violation(
+            "bom_names_a_drawing_the_pack_does_not_contain", BLOCKING,
+            f"{len(unpriced)} bill-of-materials line(s) name a drawing that is not in this pack "
+            f"and carry no price: {_names(unpriced)}. Nothing read those parts, so nothing costed "
+            f"them -- and the total still reads as a finished estimate. This is an incomplete "
+            f"pack, not a cheap job: ask for the missing detail drawings before quoting.",
+            missing=missing, unpriced=unpriced, priced_without_drawing=priced, count=len(unpriced)))
+    if priced:
+        out.append(_violation(
+            "bom_names_a_drawing_the_pack_does_not_contain", WARNING,
+            f"{len(priced)} bill-of-materials line(s) name a drawing that is not in this pack and "
+            f"are priced without one: {_names(priced)} — from the sheet that draws them, a "
+            f"catalogue or the market, as each line's basis says. Confirm the size and the figure "
+            f"against the detail drawing when it arrives.",
+            missing=missing if not unpriced else [], priced_without_drawing=priced, count=len(priced)))
+    return out
 
 
 def check_the_quantity_costed_is_the_quantity_ordered(summary: Any) -> List[Dict[str, Any]]:
@@ -3771,6 +3891,84 @@ def check_a_guessed_blank_its_own_weight_disproves(summary: Any) -> List[Dict[st
         count=len(hits), parts=hits[:20])]
 
 
+def check_the_sheets_charge_agrees_with_the_engines_material_basis(summary: Any) -> List[Dict[str, Any]]:
+    """A nested line whose sheet charge and engine material basis are a different order of
+    magnitude is costed on one of two wrong numbers, and the book must say which (D-407).
+
+    12675-01-02 on the 7 Oct 18:32 book: the engine carried a provisional material figure of
+    about £112 for the part (its stated 34.82 kg of stainless), and the Sheet Steel block
+    nested a 20 x 18 mm blank 2,542 to a sheet and charged £0.05. Both sat on the record; the
+    reconciliation checks passed, because rows summed to totals; and the gap between the two
+    readings of one line — a factor of two thousand — was written nowhere. James Gray: "make
+    a large disagreement between the engine's material basis and the final sheet visible."
+
+    Only lines the sheet nests (the Sheet Steel and Other Sheet blocks) are compared: on a
+    bought-in or a commercial line the engine's figure IS the sheet's. The factor is
+    config.MATERIAL_BASIS_DISAGREEMENT_FACTOR; both figures and the ratio are named.
+    """
+    fe = _node(summary, "final_estimate")
+    if not fe:
+        return []
+    # THE FACTOR AND THE FLOOR LIVE IN config, NOT HERE (the rate audit counts a literal in
+    # this module as a rate kept outside its one place). No config, no verdict.
+    try:
+        import config as _cfg
+        _factor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FACTOR"))
+        _floor = float(getattr(_cfg, "MATERIAL_BASIS_DISAGREEMENT_FLOOR_GBP"))
+    except Exception:                                                # noqa: BLE001
+        return _unevaluated("sheet_charge_disagrees_with_engine_material_basis",
+                            "config carries no MATERIAL_BASIS_DISAGREEMENT_FACTOR / "
+                            "_FLOOR_GBP, so the sheet's charge could not be compared with "
+                            "the engine's material basis.")
+    _by_pn: Dict[str, Dict[str, Any]] = {}
+    for _pe in ((summary.get("estimate_summary") or {}).get("part_estimates") or []):
+        if isinstance(_pe, dict) and _pe.get("part_number"):
+            _by_pn[str(_pe.get("part_number")).strip().upper()] = _pe
+    disputed = []
+    for row in (fe.get("material_rows") or []):
+        if not isinstance(row, dict):
+            continue
+        _blk = str(row.get("block") or "").lower()
+        if not any(k in _blk for k in ("steel", "sheet")):
+            continue
+        pn = str(row.get("part_number") or "").strip().upper()
+        pe = _by_pn.get(pn)
+        if not pe:
+            continue
+        me = pe.get("material_estimate") if isinstance(pe.get("material_estimate"), dict) else {}
+        basis = _num(me.get("unit_material_cost_gbp")) or _num(me.get("cost_per_part_gbp")) \
+            or _num(pe.get("unit_material_cost_gbp"))
+        total = _num(row.get("total_value_gbp"))
+        qty = _num(row.get("qty_per_unit")) or 1.0
+        if basis is None or total is None or qty <= 0:
+            continue
+        charged = total / qty
+        hi, lo = max(basis, charged), min(basis, charged)
+        if hi < _floor:
+            continue
+        ratio = (hi / lo) if lo > 0 else float("inf")
+        if ratio < _factor:
+            continue
+        disputed.append({"part_number": row.get("part_number"), "charged_gbp": round(charged, 2),
+                         "engine_basis_gbp": round(basis, 2),
+                         "ratio": (round(ratio, 1) if ratio != float("inf") else "inf"),
+                         "charged_cell": row.get("charged_cell"),
+                         "basis_method": me.get("cost_method") or me.get("basis") or ""})
+    if not disputed:
+        return []
+    return [_violation(
+        "sheet_charge_disagrees_with_engine_material_basis", BLOCKING,
+        f"{len(disputed)} nested line(s) are charged on the sheet at a different order of "
+        f"magnitude from the engine's own material basis for the same part: "
+        + "; ".join(f"{d['part_number']} charged £{d['charged_gbp']:.2f} a unit "
+                    f"({d['charged_cell'] or 'the nested row'}) against an engine basis of "
+                    f"£{d['engine_basis_gbp']:.2f}" + (f" ({d['basis_method']})" if d['basis_method'] else "")
+                    + f" — {d['ratio']}x" for d in disputed[:6])
+        + ". One of the two is the wrong blank, gauge, weight or stock form; the sheet's "
+          "figure is what the price carries, so the line is not a price until the two agree.",
+        parts=disputed)]
+
+
 def check_two_sources_disagree_about_the_gauge(summary: Any) -> List[Dict[str, Any]]:
     """A part whose thickness two sources read differently, by enough to move the money.
 
@@ -4418,6 +4616,7 @@ CHECKS = (
     check_a_handed_pair_priced_on_the_cut_file,
     check_two_sources_disagree_about_the_material,
     check_two_sources_disagree_about_the_gauge,
+    check_the_sheets_charge_agrees_with_the_engines_material_basis,
     check_a_guessed_blank_its_own_weight_disproves,
     check_every_declared_material_layer_is_priced,
     check_the_record_declares_whether_it_carries_the_money,
@@ -4445,6 +4644,7 @@ CHECKS = (
     check_an_assembly_is_not_charged_as_a_blank,
     check_a_blank_and_its_cut_path_can_both_be_true,
     check_prices_are_firm,
+    check_an_unresolved_reading_blocks_the_quote,
     check_every_cad_file_was_used,
     check_uncorroborated_bom_lines_are_not_silent,
     check_both_bom_readers_ran,

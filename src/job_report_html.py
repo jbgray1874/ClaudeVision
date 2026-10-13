@@ -202,8 +202,17 @@ def _extract_headline(summary: Dict[str, Any]) -> Dict[str, Any]:
     _pt = _pub({"run": {"unit_cost_gbp": unit,
                         "unit_cell": _fe_tot.get("unit_cell"),
                         "unit_cell_value": _fe_tot.get("unit_cell_value")}})
+    # A RUN THAT COSTED NOTHING HAS NO FIGURE TO PUBLISH (D-409) — decided here, where every
+    # renderer reads its answer, so the header, the summary, the glance, the verdict and the
+    # footer say "no price" together instead of one of them finding £25.46 of packaging.
+    try:
+        from run_stop import nothing_to_cost as _ntc                 # noqa: PLC0415
+        _stop = _ntc(summary)
+    except Exception:                                                # noqa: BLE001
+        _stop = None
     return {
         "unit": unit, "material": material, "labour": labour,
+        "nothing_to_cost": _stop,
         "unit_publishable": _pt.get("amount"),
         "unit_cell": _pt.get("cell"),
         "unit_withheld_why": _pt.get("why") or "",
@@ -539,6 +548,20 @@ def part_review_notes(parts: List[Dict[str, Any]],
     return [{"note": t, "parts": who} for t, who in seen.items()]
 
 
+# WHAT A DXF RECORD IS CALLED, ONCE (D-408, D-409). drawing_job_merge writes `dxf` on a matched
+# record, `path` on an unmatched, skipped or ambiguous one and `candidates` where several flats
+# were weighed — full Windows paths as written on the box. This report read `dxf_name`, `name`
+# and `file`, keys no live run has ever written, so 4.1 listed every PDF and every model and not
+# one DXF: on 12675-01's 19:10 report the only DXF in the pack minted the priced part and was
+# named nowhere, and 4.2 could only count the unmatched files; the test fixture used `dxf_name`,
+# so the test passed against a shape the engine never produces. The vocabulary lives in
+# costed_facts beside the covering note's, so the two cannot call one file two things.
+from costed_facts import (DXF_REASON_SENTENCES as _DXF_REASON_SENTENCES,  # noqa: E402
+                          dxf_record_names as _dxf_record_names,
+                          dxf_record_code_and_evidence as _dxf_record_code_and_evidence,
+                          dxf_record_reason as _dxf_record_reason)
+
+
 def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     """The drawing-quality audit: DXF coverage, geometry reliability, contaminated fields,
     filename issues, part-number variety, validation issues, junk records."""
@@ -554,10 +577,21 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     dxf_names = []
     for k in ("matched", "unmatched_dxf", "ambiguous_dxf", "skipped"):
         for it in (dxf.get(k) or []):
-            nm = it.get("dxf_name") or it.get("name") or it.get("file") if isinstance(it, dict) else str(it)
-            if nm:
-                dxf_names.append(str(nm))
+            dxf_names.extend(_dxf_record_names(it))
     all_names = [str(p.get("name") or p) if isinstance(p, dict) else str(p) for p in pdfs] + dxf_names
+    # THE FILES SET ASIDE, BY NAME AND WITH THE REASON THE MERGE RECORDED (D-408). A refused
+    # drawing export is a different fact from a naming mismatch and gets its own row: the
+    # advice for one ("align the filename to the part number") is wrong for the other.
+    _refused_drawings: List[Tuple[str, str]] = []
+    _unmatched_items: List[Tuple[str, str]] = []
+    for k in ("unmatched_dxf", "skipped"):
+        for it in (dxf.get(k) or []):
+            code, evidence = _dxf_record_code_and_evidence(it)
+            for nm in _dxf_record_names(it):
+                if code == "drawing_export_not_a_flat":
+                    _refused_drawings.append((nm, evidence))
+                elif k == "unmatched_dxf":
+                    _unmatched_items.append((nm, _dxf_record_reason(it) or "matched to no part"))
     stray_space = [n for n in all_names if re.search(r"\s\.(dxf|pdf)$", n, re.I) or "  " in n]
 
     # part-number format variety
@@ -644,6 +678,8 @@ def _extract_drawing_quality(summary: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "dxf_matched": len(dxf.get("matched") or []),
         "dxf_unmatched": len(dxf.get("unmatched_dxf") or []),
+        "dxf_unmatched_items": _unmatched_items,
+        "dxf_refused_drawings": _refused_drawings,
         "dxf_ambiguous": len(dxf.get("ambiguous_dxf") or []),
         "dxf_skipped": len(dxf.get("skipped") or []),
         "native_flat_parts": len(_native_flat_pns),
@@ -826,6 +862,96 @@ _CSS = """
 # Section renderers — each returns an HTML string, driven by the view-model
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _render_run_stop(summary: Dict[str, Any]) -> str:
+    """THE FIRST THING ON AN EMPTY BOOK IS WHY IT IS EMPTY (D-409).
+
+    The 12675-01 report of 8 Oct 09:15 opened on "What this estimate prices", a Summary with a
+    PENDING unit cost, £23.00 of material and "Not for release — 3 to settle", and a Decisions
+    table about packaging and delivery. The run had stopped — design-intent sheets, nothing to
+    cost — and that sentence was on no page: the scan wrote it as a review flag that nothing
+    rendered. It is the one fact every other section is about, so it is the first thing read.
+    """
+    try:
+        from run_stop import nothing_to_cost, sentence, doors, HEADLINE  # noqa: PLC0415
+        stop = nothing_to_cost(summary)
+    except Exception:                                                # noqa: BLE001
+        return ""
+    if not stop:
+        return ""
+    pages = stop.get("pages") or []
+    where = (f" Page(s) {_esc(', '.join(str(p) for p in pages))} of the pack." if pages else "")
+    # WHY BOTH DOORS GAVE NOTHING (D-413). An empty book that does not say why the model and
+    # the concept read both produced nothing is a failed run wearing a safety result.
+    why = doors(stop)
+    why_html = (f'<br><b>Why both doors gave nothing:</b> {_esc(why)}.' if why else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #b3261e">'
+            f'<b>{_esc(HEADLINE)}.</b> {_esc(sentence(stop))}{where} Nothing on this page or '
+            f'on the sheet is a price for the product; the sections below describe an empty '
+            f'book and what was set aside, and this is not to be sent as an estimate.{why_html}</div>')
+
+
+def _render_concept_takeoff(summary: Dict[str, Any]) -> str:
+    """A BOOK PRICED FROM THE MODEL SAYS SO BEFORE ANY FIGURE (D-411). Every part, size,
+    material and count came off a SolidWorks assembly nobody has detailed; the reader must know
+    that before the number, in the same words the sheet and the quote use."""
+    t = summary.get("concept_takeoff")
+    if not isinstance(t, dict) or not t.get("design"):
+        return ""
+    excluded = [str(e.get("part_number") or "") for e in (t.get("excluded") or [])
+                if isinstance(e, dict) and e.get("part_number")]
+    others = [str(o) for o in (t.get("other_designs") or []) if str(o or "").strip()]
+    set_aside = (f" Set aside as the customer's / reference models, not costed: "
+                 f"{_esc(', '.join(excluded))}." if excluded else "")
+    if str(t.get("source") or "") == "vision_concept":
+        # THE FALLBACK (D-413): one design's sheet(s), sighted — said as such, with why the
+        # model gave nothing and which designs were left unread.
+        other_designs = (f" Other designs in the pack, not read in this book: "
+                         f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                         if others else "")
+        why = str(t.get("model_takeoff_why_not") or "").strip()
+        # WHAT THE SHEET CHECK FOUND, IN THE CALLOUT (D-415): agreeing or not, before any figure.
+        _sc = t.get("sheet_check") if isinstance(t.get("sheet_check"), dict) else {}
+        held = ""
+        if _sc.get("failures"):
+            held = (' <b>UNCHECKED CONCEPT FIGURE — the bill does not agree with the sheet:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["failures"]))
+                    + '. Costed as sighted — not a checked budget; walk it against the GA before '
+                      'anyone relies on it.')
+        elif _sc.get("unverified"):
+            held = (' <b>UNCHECKED CONCEPT FIGURE — nothing in the bill contradicts the sheet, '
+                    'but it is unverified:</b> '
+                    + _esc("; ".join(str(f) for f in _sc["unverified"]))
+                    + '. Not a checked budget; walk it against the GA before anyone relies on it.')
+        elif _sc.get("agrees"):
+            held = (' The bill was checked against the body and weight the sheet states'
+                    + (f' (about {_sc["sighted_weight_kg"]:g} kg as sized against '
+                       f'{_sc["net_weight_kg"]:g} kg on the sheet)'
+                       if _sc.get("sighted_weight_kg") and _sc.get("net_weight_kg") else '')
+                    + ' and agrees.')
+        elif _sc and not _sc.get("checked"):
+            held = ' The sheet states no body size or weight to check the bill against.'
+        return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+                f'<b>CONCEPT READ OF A DESIGN-INTENT SHEET — not a drawings estimate.</b> This pack '
+                f'has no parts list and no part drawings'
+                + (f', and the model gave no take-off ({_esc(why)})' if why else '')
+                + f'; the vision model read the parts of <code>{_esc(str(t["design"]))}</code> '
+                f'({_esc(str(t.get("design_title") or ""))}) off the sheet'
+                + (' with the enquiry brief' if t.get("brief_used", True) else '')
+                + f' — {t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}. '
+                f'Every size, material and count is an assumption to confirm; nothing here was '
+                f'measured.{held}{other_designs}</div>')
+    other_designs = (f" Other designs in the model, not priced in this book: "
+                     f"{_esc(', '.join(others))} — each is its own run (SDI_PRODUCT=&lt;name&gt;)."
+                     if others else "")
+    return (f'<div class="callout warn" style="border-left:6px solid #1F4E79">'
+            f'<b>CONCEPT TAKE-OFF FROM THE MODEL — not a drawings estimate.</b> This pack has no '
+            f'parts list and no part drawings; every part, size, material and count on this page is '
+            f'read from the SolidWorks assembly <code>{_esc(str(t["design"]))}</code> '
+            f'({t.get("parts", 0)} part(s); chosen as {_esc(str(t.get("chosen_by") or ""))}). '
+            f'Operations come from the model\'s features and are assumptions to confirm; nothing '
+            f'here has been detailed, toleranced or released.{set_aside}{other_designs}</div>')
+
+
 def _render_product_scope(summary: Dict[str, Any]) -> str:
     """WHAT WAS PRICED, AND WHAT WAS LEFT OUT — before any figure.
 
@@ -844,6 +970,47 @@ def _render_product_scope(summary: Dict[str, Any]) -> str:
             '4px 18px;padding:0">'
             + "".join(f"<li style='margin:3px 0'>{_esc(t)}</li>" for t in lines)
             + "</ul></div>")
+
+
+def _render_customer_changes(summary: Dict[str, Any]) -> str:
+    """WHAT THE CUSTOMER CHANGED SINCE THE DRAWINGS, BEFORE ANY FIGURE (D-507).
+
+    An estimate costed on a value the drawings do not state has to say so where it is read:
+    the drawn value, the customer's, which was costed, and the e-mail's own words. Changes that
+    could not be applied are on the Decisions list; declined ones are named here so a reader
+    knows they were seen. Empty when the run carried no customer changes."""
+    cc = summary.get("customer_changes") or {}
+    if not isinstance(cc, dict) or not (cc.get("applied") or cc.get("agreed")
+                                        or cc.get("not_applied") or cc.get("declined")):
+        return ""
+    try:
+        from customer_changes import LABELS, describe
+    except Exception:                                                # noqa: BLE001
+        LABELS, describe = {}, (lambda v, f: str(v))                 # type: ignore
+
+    def _row(e: Dict[str, Any], status: str) -> str:
+        f = str(e.get("field") or "")
+        drawn = describe(e.get("from"), f) if "from" in e else "—"
+        return (f"<tr><td><code>{_esc(e.get('part') or 'the order')}</code></td>"
+                f"<td>{_esc(LABELS.get(f, f))}</td><td>{_esc(drawn)}</td>"
+                f"<td><b>{_esc(e.get('applied') or describe(e.get('to'), f))}</b></td>"
+                f"<td>{_esc(status)}</td>"
+                f"<td class='mini'>{_esc(e.get('evidence') or e.get('quote') or '')}</td></tr>")
+
+    rows = "".join(_row(e, "COSTED") for e in (cc.get("applied") or []))
+    rows += "".join(_row(e, "already as drawn") for e in (cc.get("agreed") or []))
+    rows += "".join(_row(e, f"NOT APPLIED — {e.get('why')}") for e in (cc.get("not_applied")
+                                                                       or []))
+    rows += "".join(_row(e, "declined by the estimator") for e in (cc.get("declined") or []))
+    who = cc.get("accepted_by") or "an estimator"
+    when = f" on {cc.get('accepted_on')}" if cc.get("accepted_on") else ""
+    return ('<div style="border-left:4px solid #B7791F;padding:4px 0 4px 14px;margin:14px 0">'
+            '<p style="margin:4px 0"><b>Changes the customer asked for since the drawings</b> '
+            f'<span class="mini">— accepted by {_esc(who)}{_esc(when)}. These are costed in '
+            'place of what the drawings state; the drawings themselves are unchanged.</span></p>'
+            '<div class="scroll"><table class="dec"><thead><tr><th>Part</th><th>What</th>'
+            '<th>The drawings</th><th>Costed at</th><th>Status</th><th>Evidence</th></tr>'
+            f'</thead><tbody>{rows}</tbody></table></div></div>')
 
 
 def _render_header(h: Dict[str, Any], has_parity: bool,
@@ -896,6 +1063,12 @@ def _unit_text(hl: Dict[str, Any]) -> str:
     the verdict and the footer cannot disagree about whether the total is publishable. They
     could before: the email refused a total the report printed four ways.
     """
+    if hl.get("nothing_to_cost"):
+        # A RUN THAT COSTED NOTHING HAS NO PRICE TO BE PENDING (D-409). "PENDING — NOT
+        # TRACEABLE TO A WORKBOOK CELL" promises a figure somebody can finish; on 12675-01's
+        # empty book it sat over £25.46 of packaging and delivery and said nothing about why.
+        from run_stop import HEADLINE as _NO_PRICE                   # noqa: PLC0415
+        return _NO_PRICE
     if hl.get("unit_publishable") is not None:
         return _money(hl["unit_publishable"])
     return "PENDING — NOT TRACEABLE TO A WORKBOOK CELL"
@@ -935,6 +1108,15 @@ def _extract_parts_count_note(streams: List[Dict[str, Any]]) -> str:
 
 def _render_glance(streams: List[Dict[str, Any]], hl: Dict[str, Any]) -> str:
     # Authoritative workbook-computed figures (the Excel's own SUM) — the single source of truth.
+    if hl.get("nothing_to_cost"):
+        # NOT "LABOUR £29.13" OVER AN EMPTY BOOK (D-409). The 12675-01 report printed the
+        # engine's own labour aggregate here, under a heading calling it the workbook's SUM,
+        # beside a summary tile reading "—" and a sheet reading £0.00. On a run that costed
+        # nothing there is no figure to show, and the glance says why instead.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        return (f"{_h2('glance')}\n<div class=\"callout warn\"><b>{_esc(_unit_text(hl))}.</b> "
+                f"{_esc(_stop_sentence(hl['nothing_to_cost']))} No material or labour figure "
+                f"on this run is a price, so none is shown here.</div>")
     fig_rows = ""
     if hl.get("material") is not None:
         fig_rows += f'<tr><td>Material</td><td class="n">{_money(hl["material"])}</td></tr>'
@@ -1510,11 +1692,22 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
         # The caveat only holds when NOTHING measured the blanks. Native SolidWorks flats
         # are measured geometry, so a native job must not be told its blanks are provisional.
         _no_measured = not (dq.get("dxf_matched") or dq.get("native_flat_parts"))
-        _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
-                   "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
-                   "matched on this job, so blank sizes, bend counts and cut lengths "
-                   "remain provisional.</em>"
-                   if _no_measured else "")
+        _ct = (summary or {}).get("concept_takeoff") if isinstance((summary or {}).get("concept_takeoff"), dict) else {}
+        if _no_measured and _ct.get("source") == "solidworks_model":
+            # NOT "NO MODEL MATCHED" ON A BOOK TAKEN OFF THE MODEL (D-414): the parts came from
+            # the SolidWorks assembly, not from flats or drawings, and the line says so.
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. The parts on this book were taken off "
+                       f"the SolidWorks assembly {_esc(str(_ct.get('design') or ''))}, not read "
+                       "from drawings or flats, so every size is the model's and every operation "
+                       "an assumption.</em>")
+        elif _no_measured:
+            _caveat = ("  <em>This measures how cleanly the PDF vectors were read — it is "
+                       "<b>not</b> flat-pattern coverage. No DXFs or SolidWorks models are "
+                       "matched on this job, so blank sizes, bend counts and cut lengths "
+                       "remain provisional.</em>")
+        else:
+            _caveat = ""
         strengths.append(f"<li><b>PDF vector extraction confidence: {band} ({rel_pct}%).</b> "
                          f"Overall extraction confidence "
                          f"{_num(float(dq['geo_confidence'])*100,0) if isinstance(dq.get('geo_confidence'),(int,float)) else '—'}%."
@@ -1543,6 +1736,24 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
                f'<td>Nothing read these, so nothing costed them. The estimate is priced from '
                f'what was supplied and is <b>not</b> a price for the whole product — ask for '
                f'the detail drawings before quoting the complete job.</td></tr>')
+    # A LINE THAT IS CHARGED IS NOT "NOTHING COSTED" (D-450): the wire frame priced off the
+    # sheet that draws it, the mesh from a catalogue — said as what they are, with the basis.
+    try:
+        from costed_facts import priced_without_a_drawing as _pwd
+        _priced_undrawn = _pwd(summary)
+    except Exception:                                            # noqa: BLE001
+        _priced_undrawn = []
+    if _priced_undrawn:
+        _cells = "; ".join(
+            f"{m['part_number']}" + (f" ({m['description']})" if m.get("description") else "")
+            + f" — {m['basis']}" + (f", £{m['gbp']:,.2f}" if m.get("gbp") else "")
+            for m in _priced_undrawn[:6])
+        wk += (f'<tr><td><b>Priced without a drawing of their own</b></td>'
+               f'<td>{_esc(_cells)}</td>'
+               f'<td>The BOM names a drawing the pack does not contain, and the line is still '
+               f'charged — from the sheet that draws it, a catalogue or the market, as the basis '
+               f'says. Confirm the size and the figure against the detail drawing when it '
+               f'arrives.</td></tr>')
     if dq.get("parts_without_dxf"):
         parts = dq["parts_without_dxf"]
         n = len(parts)
@@ -1566,7 +1777,29 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
                      else ", though reliability stayed high"))
         wk += (f'<tr><td><b>Parts without a DXF</b></td><td>{_esc(", ".join(names_bits))}{"…" if n>6 else ""}</td>'
                f'<td>{n} part(s): {effect}.</td></tr>')
-    if dq.get("dxf_unmatched"):
+    # NAMED, WITH THE REASON, NOT COUNTED (D-408). "1 file(s) — check naming" told a reader
+    # nothing about a file the content reader refused for carrying 22 dimension entities: the
+    # name was fine, the file was a drawing. Each file set aside is listed with what the merge
+    # recorded about it, and a refused drawing export is kept apart from a naming mismatch
+    # because the remedy differs.
+    def _listed(items: List[Tuple[str, str]], cap: int = 6) -> str:
+        shown = "; ".join(f"{n} — {why}" if why else n for n, why in items[:cap])
+        return shown + (f" …and {len(items) - cap} more" if len(items) > cap else "")
+    _refused = dq.get("dxf_refused_drawings") or []
+    if _refused:
+        wk += (f'<tr><td><b>DXFs that are drawings, not flat patterns</b></td>'
+               f'<td>{_esc(_listed(_refused))}</td>'
+               f'<td>{len(_refused)} DXF(s) carry dimensions or a title block, so each is an export '
+               f'of the drawing rather than of the flat pattern. None minted a part and none was '
+               f'measured. A flat-pattern export of the part is what gives measured geometry.</td></tr>')
+    _unm = dq.get("dxf_unmatched_items") or []
+    if _unm:
+        wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{_esc(_listed(_unm))}</td>'
+               f'<td>{len(_unm)} DXF(s) present and tied to no part, each with the reason recorded '
+               f'beside its name. A naming mismatch is fixed by aligning the filename to the part '
+               f'number; a code from another assembly is not this job\'s flat.</td></tr>')
+    elif dq.get("dxf_unmatched") and not _refused:
+        # An older record whose entries carry no name or reason: the count is all there is.
         wk += (f'<tr><td><b>Unmatched DXFs</b></td><td>{dq["dxf_unmatched"]} file(s)</td>'
                f'<td>DXFs present but not tied to a part — check naming/part-number alignment.</td></tr>')
     if dq.get("dxf_ambiguous"):
@@ -1621,6 +1854,31 @@ def _render_drawing_analysis(dq: Dict[str, Any], summary: Optional[Dict[str, Any
     if dq.get("validation_issues"):
         wk += (f'<tr><td><b>Validation issues</b></td><td>{len(dq["validation_issues"])} item(s)</td>'
                f'<td>The manufacturing write-up flagged structural issues (assembly-only parts, missing cues).</td></tr>')
+    # THE PACK DID NOT "READ CLEANLY" BESIDE A FAILED CHECK (D-406). 12675-01's report said so
+    # with three checks failed, the SolidWorks extract refused and two DXFs rejected as
+    # drawings: the callout below is printed only when this table is empty, so what the run
+    # itself found wrong with the pack is written into it.
+    _inv = (summary or {}).get("invariants") if isinstance(summary, dict) else None
+    _viol = [v for v in ((_inv or {}).get("violations") or []) if isinstance(v, dict)]
+    _failed = [v for v in _viol if str(v.get("severity") or "").lower() == "blocking"]
+    if _failed:
+        _codes = ", ".join(sorted({str(v.get("code") or "?") for v in _failed})[:6])
+        wk += (f'<tr><td><b>Consistency checks failed</b></td><td>{len(_failed)} check(s): {_esc(_codes)}</td>'
+               f'<td>Section 13 lists them. A failed check is a fault the run found in what it read; '
+               f'the pack has not read cleanly while any stands.</td></tr>')
+    if any(str(v.get("code") or "") == "native_extract_refused" for v in _viol):
+        wk += (f'<tr><td><b>SolidWorks extract refused</b></td><td>the model files beside the pack</td>'
+               f'<td>Nothing from the model was applied; blanks, gauges and bends rest on the drawings alone.</td></tr>')
+    try:
+        from file_scan import design_intent_pages as _di_pages
+        _di = _di_pages(summary or {})
+    except Exception:                                                # noqa: BLE001
+        _di = []
+    if _di:
+        wk += (f'<tr><td><b>Design-intent sheets</b></td><td>page(s) {_esc(", ".join(str(p) for p in _di))}</td>'
+               f'<td>Concept drawings with no parts list and no part sheets. They mint no part; the design '
+               f'is taken off from its own SolidWorks assembly or detailed by Design into a drawings pack '
+               f'(an LLM scan with a brief is a fallback budget only).</td></tr>')
 
     weaknesses = f"""<h3>{_sub('drawings', 3)} &nbsp;Weaknesses &amp; inconsistencies found</h3>
 <table><thead><tr><th>Finding</th><th>Where</th><th>Effect on estimating</th></tr></thead>
@@ -1661,12 +1919,11 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     dxf = summary.get("dxf_augmentation") or {}
 
     def _names(items) -> List[str]:
-        out = []
+        # By the key the merge writes (`dxf`, `path`, `candidates`), not the keys a fixture
+        # once used — see _dxf_record_names for the report that named no DXF at all.
+        out: List[str] = []
         for it in items or []:
-            nm = (it.get("dxf_name") or it.get("name") or it.get("file")
-                  if isinstance(it, dict) else str(it))
-            if nm:
-                out.append(str(nm))
+            out.extend(_dxf_record_names(it))
         return out
 
     # WHAT ACTUALLY READ EACH FILE, not what kind of file it is.
@@ -1695,8 +1952,14 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
         rows.append((n, "PDF", _pdf_what))
     for n in _names(dxf.get("matched")):
         rows.append((n, "DXF", "matched to a part — measured flat pattern (ezdxf)"))
-    for n in _names(dxf.get("unmatched_dxf")):
-        rows.append((n, "DXF", "present, matched to no part"))
+    # A DXF THE MERGE SET ASIDE IS NAMED WITH THE REASON IT RECORDED (D-408). Matched rows go
+    # first, so a file that was weighed among candidates and then applied keeps its matched
+    # row and the record of the weighing does not list it a second time.
+    for key in ("unmatched_dxf", "skipped", "ambiguous_dxf"):
+        for it in (dxf.get(key) or []):
+            why = _dxf_record_reason(it) or "matched to no part"
+            for n in _dxf_record_names(it):
+                rows.append((n, "DXF", f"present, not used: {why}"))
     for n in (cad.get("solidworks") or []):
         rows.append((str(n), "MODEL",
                      "cut list and assembly structure read from the model (SolidWorks COM)"
@@ -1723,7 +1986,11 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
         if key in seen:
             continue
         seen.add(key)
-        cls = ' style="color:#b3261e;font-weight:600"' if "NOT READ" in what else ""
+        # Red for a file that contributed nothing, however it came to contribute nothing.
+        _nothing = ("NOT READ", "minted no part", "matched to no part", "not attached",
+                    "not measured")
+        cls = (' style="color:#b3261e;font-weight:600"'
+               if any(m in what for m in _nothing) else "")
         body += (f'<tr><td><code>{_esc(name)}</code></td><td>{_esc(kind)}</td>'
                  f'<td{cls}>{_esc(what)}</td></tr>')
 
@@ -1990,14 +2257,22 @@ def _render_verdict(hl: Dict[str, Any], dq: Dict[str, Any], has_parity: bool,
     _open = _out["total"]
     # THE HEADLINE AND ITS PHRASE, TOGETHER (12173-02 printed the phrase alone here, and
     # gated it on a total that left failing checks out). Both are now one count.
-    _open_note = (f" Still to settle: {_out['total']} — {_esc(_out['phrase'])} — listed under "
+    _open_note = (f" Still to confirm: {_out['total']} — {_esc(_out['phrase'])} — listed under "
                   f"Decisions required at the top of this page." if _open else "")
     # "NOTHING IS COUNTED TWICE" ONLY WHERE SECTION 2 ESTABLISHED IT — the same record.
     _dc = {"clear": "nothing is counted twice",
            "found": f"some lines may be counted twice ({_sec('right')})",
            "not_established": f"double-counting is not ruled out ({_sec('right')})"
            }[double_count_status(summary, record=_rec)["state"]]
-    if _inv is not None and not _inv.get("may_quote_firm"):
+    _stop = _rec.get("run_stop") if isinstance(_rec.get("run_stop"), dict) else None
+    if _stop:
+        # THE VERDICT ON AN EMPTY BOOK IS THAT IT IS EMPTY (D-409), not "PROVISIONAL … the
+        # workbook Unit Cost is PENDING" as though a figure were waiting to be finished.
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _lead = (f"<b>No price was produced on this run.</b> {_esc(_stop_sentence(_stop))} "
+                 f"The checks and figures in this document describe an empty book, not a "
+                 f"price; nothing here is to be sent as an estimate.{_open_note}")
+    elif _inv is not None and not _inv.get("may_quote_firm"):
         _sentence = _checks_sentence(summary)
         _lead = (f"<b>This estimate is PROVISIONAL and must not be released as a firm price.</b> "
                  + (f"{_esc(_sentence)} — listed in {_sec('checks')}. " if _sentence else
@@ -2163,7 +2438,7 @@ def _provenance_strip(summary: Dict[str, Any]) -> str:
             f'<tr><td><b>Operations not priced &mdash; nothing in the pack claims them</b></td>'
             f'<td>{own_txt}</td></tr>'
             f'<tr><td><b>Ties left unsettled</b></td><td>{tie_txt}</td></tr>'
-            + (f'<tr><td><b>Still to settle</b></td><td>{settle_txt}</td></tr>'
+            + (f'<tr><td><b>Still to confirm</b></td><td>{settle_txt}</td></tr>'
                if settle_txt else '') +
             f'<tr><td><b>Powder decided by</b></td><td>{pow_txt}</td></tr>'
             '</tbody></table>')
@@ -2205,10 +2480,47 @@ def _concept_assumptions_section(summary: Dict[str, Any]) -> str:
     where = (f'<p>Confirm or correct them in <code>{_esc(path)}</code>. State your reasoning '
              f'against each one — an entry with none is refused, and the render\'s own '
              f'assumption stands.</p>' if path else "")
+    # A SHEET READ SAYS WHAT THE SHEET STATED AND WHETHER THE BILL AGREED (D-415).
+    sheet_html = ""
+    if concept.get("sheet_read"):
+        try:
+            from concept_scan import sheet_check_sentence as _scs
+            _said = _scs(concept.get("sheet_check") or {})
+        except Exception:                                                # noqa: BLE001
+            _said = ""
+        facts = concept.get("sheet_facts") if isinstance(concept.get("sheet_facts"), dict) else {}
+        _body = facts.get("body_mm") if isinstance(facts.get("body_mm"), dict) else {}
+        _stated = [s for s in (
+            ("Body", " × ".join(f"{_body.get(k):g}" for k in ("height", "width", "depth")
+                                if isinstance(_body.get(k), (int, float)) and _body.get(k))
+             + (" mm" if any(_body.get(k) for k in ("height", "width", "depth")) else "")),
+            ("Material", " ".join(str(x) for x in (
+                f"{facts.get('thickness_mm'):g} mm" if isinstance(facts.get("thickness_mm"), (int, float))
+                and facts.get("thickness_mm") else "", facts.get("material") or "") if x)),
+            ("Finish", str(facts.get("finish") or "")),
+            ("Stated weight", (f"{facts.get('stated_weight_kg'):g} kg"
+                               if isinstance(facts.get("stated_weight_kg"), (int, float))
+                               and facts.get("stated_weight_kg") else "")),
+            ("Goods it holds", str(facts.get("goods") or "")),
+        ) if s[1]]
+        aside = [a for a in (concept.get("set_aside_undrawn") or []) if isinstance(a, dict)]
+        sheet_html = (
+            '<p><b>What the sheet states, and whether the bill agrees.</b></p>'
+            + (('<table><tbody>' + "".join(f'<tr><td>{_esc(k)}</td><td>{_esc(v)}</td></tr>'
+                                           for k, v in _stated) + '</tbody></table>')
+               if _stated else '')
+            + (f'<p>{_esc(_said)}</p>' if _said else '')
+            + (('<p>Listed by the read but not drawn on the sheet, so not costed and asked: '
+                + _esc(", ".join(f"{a.get('name')}" + (f" x{a.get('quantity')}" if a.get('quantity') else "")
+                                 for a in aside)) + '.</p>') if aside else ''))
+    _lead = ('This pack is design-intent sheets with no parts list, so <b>every size, material '
+             'and count below was read off the sheet by the vision model</b> and none of it was '
+             'measured. ' if concept.get("sheet_read") else
+             'This pack is a visual, so <b>every size, material and count below was sighted '
+             'from the image</b> and none of it was measured. ')
     return (f'{_h2("concept")}'
-            f'<p class="lead">This pack is a visual, so <b>every size, material and count '
-            f'below was sighted from the image</b> and none of it was measured. '
-            f'{len(rows)} assumption(s) went into the price.</p>{where}'
+            f'<p class="lead">{_lead}'
+            f'{len(rows)} assumption(s) went into the price.</p>{sheet_html}{where}'
             f'<table><thead><tr><th>Part</th><th>Description</th><th>Assumed</th>'
             f'<th>Value</th><th>Sighted because</th></tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table>')
@@ -2982,7 +3294,10 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
     ])
     body = "\n".join([
         _render_header(h, has_parity, summary),
+        _render_run_stop(summary),
+        _render_concept_takeoff(summary),
         _render_product_scope(summary),
+        _render_customer_changes(summary),
         _render_summary(summary, record, h, hl),
         _render_decisions(record),
         _render_bom_tree(summary, record),
@@ -3225,6 +3540,21 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
     rel = record.get("release") or {}
     inv = summary.get("invariants") if isinstance(summary.get("invariants"), dict) else None
     reasons = [str(r) for r in (rel.get("reasons") or []) if r]
+    # NO PRICE IS NOT "N TO SETTLE" (D-409). The 12675-01 book's status read "Not for release —
+    # 3 to settle: 2 market figures to replace (£23.00) + 1 consistency finding failed" over a
+    # run that costed nothing; the stop is the status, and the tally is what it is about.
+    _stop = record.get("run_stop") if isinstance(record.get("run_stop"), dict) else None
+    if _stop is None:
+        try:
+            from run_stop import nothing_to_cost as _ntc             # noqa: PLC0415
+            _stop = _ntc(summary)
+        except Exception:                                            # noqa: BLE001
+            _stop = None
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        _first = _stop_sentence(_stop)
+        return ("t-bad", "No price — this run produced nothing to cost",
+                [_first] + [r for r in reasons if r != _first])
     if rel.get("draft"):
         # THE ONE TALLY. The banner said "3 inputs" over a table of 5 items because it read
         # release.outstanding (blocking only) while the table listed every decision. Both
@@ -3232,12 +3562,12 @@ def _release_words(record: Dict[str, Any], summary: Dict[str, Any]) -> Tuple[str
         from costed_facts import outstanding_summary
         s = outstanding_summary(record)
         return ("t-bad",
-                f"Not for release — {s['total']} to settle: {s['phrase']}",
+                f"Estimator review — {s['total']} item(s) to confirm: {s['phrase']}",
                 reasons)
     if inv is None:
         return "t-warn", "Unverified — the consistency checks did not run", reasons
     if not inv.get("may_quote_firm"):
-        return ("t-bad", "Not for release — a consistency check failed or could not run",
+        return ("t-bad", "Estimator review — an automated check is still to run",
                 reasons)
     if rel.get("status") == "firm":
         return ("t-good", "Releasable — every check passed and nothing is outstanding",
@@ -3271,6 +3601,11 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     unit = run.get("unit_gbp") if calculated else hl.get("unit")
     material = run.get("material_gbp") if calculated else hl.get("material")
     labour = run.get("labour_gbp") if calculated else hl.get("labour")
+    _stop = hl.get("nothing_to_cost")
+    if _stop:
+        # NO FIGURE IS A PRICE ON A RUN THAT COSTED NOTHING (D-409): the tiles say so rather
+        # than show packaging and delivery as the material of a product that was never costed.
+        material = labour = None
     qty = run.get("order_qty") or h.get("quantity")
     cls, head, reasons = _release_words(record, summary)
     gaps = record.get("gaps") or {}
@@ -3280,6 +3615,9 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
     finishes = str(record.get("finishes_charged") or "")
 
     facts: List[str] = []
+    if _stop:
+        from run_stop import sentence as _stop_sentence              # noqa: PLC0415
+        facts.append(f"<b>Nothing was costed on this run.</b> {_esc(_stop_sentence(_stop))}")
     if lines:
         facts.append(f"<b>{len(lines)}</b> lines on the bill of materials, <b>{len(charged)}</b> "
                      f"carrying money on the sheet.")
@@ -3304,7 +3642,9 @@ def _render_summary(summary: Dict[str, Any], record: Dict[str, Any],
         facts.append(f"Plating {_money(plating.get('ext_gbp'))} is priced on <b>{_esc(_mem)}</b>"
                      + (f"; excluded because their own detail states another finish: "
                         f"{_esc(', '.join(_exc))}" if _exc else "") + ".")
-    basis = ("the Estimate sheet's own calculated cells" if calculated else
+    basis = ("not a price — this run costed nothing, so no figure on the sheet is one"
+             if _stop else
+             "the Estimate sheet's own calculated cells" if calculated else
              "the engine's figures — the sheet has not been read back, so nothing here is "
              "the charged money yet")
     # NEVER DROP A REASON (12173-02: the seventh, "1 parts-list row(s) stated and not
@@ -3721,7 +4061,19 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
         blocks.append(f'<h3>Lines outside the assemblies</h3><div class="scroll"><table>{head}'
                       f'<tbody>{loose_rows}</tbody></table></div>')
     run = record.get("run") or {}
-    total = sum(money_of(l) for l in lines if not (l.get("cross_reference") and not l.get("charged_ext_gbp")))
+    # AN ASSEMBLY'S CHARGED £ IS ITS LABOUR ROWS, NOT MATERIAL (D-461). The 19:35 book's bill
+    # summed the four sub-assemblies' read-back labour (£22.00 + £43.04 + £4.85 + £25.99 =
+    # £95.88) into "charged material" and reported a £95.88 difference "on the sheet and on no
+    # line here" — the wrong lines AND the wrong direction. The material tally takes material-
+    # carrying lines only; the assemblies' money is named for what it is.
+    def _is_material_line(l: Dict[str, Any]) -> bool:
+        if l.get("cross_reference") and not l.get("charged_ext_gbp"):
+            return False
+        return str(l.get("kind") or "").lower() != "assembly"
+
+    total = sum(money_of(l) for l in lines if _is_material_line(l))
+    asm_money = round(sum(money_of(l) for l in lines
+                          if str(l.get("kind") or "").lower() == "assembly"), 2)
     sheet = run.get("material_gbp")
     recon = ""
     if sheet is not None:
@@ -3730,7 +4082,12 @@ def _render_bom_tree(summary: Dict[str, Any], record: Dict[str, Any]) -> str:
                  f"sheet's Total Material Cost of {_money(sheet)}"
                  + (" — they agree." if abs(gap) < 0.005 else
                     f" — {_money(abs(gap))} of rounding across the rows." if abs(gap) <= 0.02 else
-                    f", a difference of {_money(abs(gap))} on the sheet and on no line here.")
+                    (f", a difference of {_money(abs(gap))} on the sheet and on no line here."
+                     if gap > 0 else
+                     f", a difference of {_money(abs(gap))} on these lines and not in the "
+                     f"sheet's material total — reconcile before quoting."))
+                 + (f" The assemblies' own rows ({_money(asm_money)}) are labour, compared on "
+                    f"the Manufacturing route table, not here." if asm_money else "")
                  + "</p>")
     return (f'<h2>Bill of materials and hierarchy</h2>'
             f'<p>Every line the sheet carries, under the assembly it belongs to. <b>Charged £</b> is '

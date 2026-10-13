@@ -79,7 +79,7 @@ def test_the_banner_names_assumed_sizes_and_failing_checks():
     out = cf.outstanding_summary(job)
     ph = out["phrase"]
     assert "1 market figure to replace" in ph
-    assert "4 sizes assumed from a render" in ph and "7 consistency findings failed" in ph
+    assert "4 sizes assumed from a render" in ph and "7 automated checks to review" in ph
     assert out["total"] == 12
 
 
