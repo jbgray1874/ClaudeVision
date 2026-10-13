@@ -96,24 +96,53 @@ def test_an_old_tasks_since_1_can_no_longer_narrow_a_run(tmp_path, monkeypatch, 
     assert (out / "BARDON DELIVERY NOTES 7-10-2026-note.pdf").exists()
 
 
-def test_the_first_run_picks_up_everything_missed_since_the_job_began(tmp_path, monkeypatch,
-                                                                      capsys):
-    """No record of how far it got yet (the ledger the laptop task wrote): it starts at the
-    first scan the ledger knows, so whatever the old window let slip since then is filed."""
+def test_a_first_run_reaches_back_a_week_or_as_far_as_asked_and_never_the_back_catalogue(
+        tmp_path, monkeypatch, capsys):
+    """13 October 2026: the first run of the record-keeping version set about OCR-ing all 995
+    scans in the folder, back to 2024. A first run reaches FIRST_RUN_DAYS, or further only
+    when asked - and the ledger knowing an old scan does not drag the start back to it."""
     source, out = tmp_path / "Scans", tmp_path / "Scans" / "SplitScan"
-    _scan(source, "split-long-ago.pdf", hours_old=20 * 24)
+    _scan(source, "split-long-ago.pdf", hours_old=400 * 24)
+    _scan(source, "this-week.pdf", hours_old=3 * 24)
     _scan(source, "missed.pdf", hours_old=12 * 24)
-    _scan(source, "back-catalogue.pdf", hours_old=60 * 24)          # before the job: left
+    _scan(source, "back-catalogue.pdf", hours_old=300 * 24)
     _ledger_with(out, **{"split-long-ago.pdf": {
         "mark": S._fingerprint(source / "split-long-ago.pdf"), "files": ["old-note.pdf"]}})
     (out / "old-note.pdf").write_bytes(b"%PDF-1.4\n")
     calls = []
     assert _main(monkeypatch, source, out, "--since", "1", calls=calls) == 0
     said = capsys.readouterr().out
-    assert calls == ["missed.pdf"], said
-    assert "the first scan this job has a record of" in said, said
+    assert calls == ["this-week.pdf"], said
+    assert "no complete run on record yet, so the last 7 days" in said, said
     meta = json.loads((out / S.LEDGER).read_text())[S.META]
     assert time.time() - meta["covered_to"] < 60, "a complete run records how far it got"
+
+    (out / S.LEDGER).write_text(json.dumps({}))                        # as if never run
+    calls.clear()
+    assert _main(monkeypatch, source, out, "--since", "21", calls=calls) == 0
+    assert sorted(calls) == ["missed.pdf", "this-week.pdf"], "asked: reaches three weeks"
+
+
+def test_arrival_is_the_scanners_time_not_a_copys_created_time(tmp_path):
+    """A folder migrated to another share gets a fresh created time on every file, which made
+    two years of scans read as new. The modified time is what the scanner set."""
+    pdf = _scan(tmp_path, "scan01012025.pdf", hours_old=300 * 24)
+    assert S.arrival(pdf) == pdf.stat().st_mtime
+
+
+def test_a_run_that_would_read_the_back_catalogue_refuses_and_says_why(tmp_path, monkeypatch,
+                                                                      capsys):
+    source, out = tmp_path / "Scans", tmp_path / "Scans" / "SplitScan"
+    out.mkdir(parents=True)
+    for n in range(5):
+        _scan(source, f"scan{n}.pdf", hours_old=1)
+    monkeypatch.setattr(S, "MAX_TO_READ", 3)
+    calls = []
+    assert _main(monkeypatch, source, out, calls=calls) == 2
+    said = capsys.readouterr().out
+    assert calls == [] and "5 scans to read is more than 3" in said and "--no-limit" in said
+    assert _main(monkeypatch, source, out, "--no-limit", calls=calls) == 0
+    assert len(calls) == 5
 
 
 def test_a_machine_off_for_three_weeks_loses_nothing(tmp_path):

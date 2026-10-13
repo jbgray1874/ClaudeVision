@@ -70,8 +70,11 @@ META = "_meta"
 LOCK = ".splitscan.lock"
 # What the service last saw, rewritten every check - the answer to "is it running?".
 STATUS = "service-status.txt"
-# Where a job with no record at all starts, when nobody says otherwise.
+# Where a job with no record of a complete run starts, unless --since / --from reach further.
 FIRST_RUN_DAYS = 7
+# More than this to read in one run is not a day's post or a missed fortnight - it is the
+# back catalogue, or the scope is wrong. The run refuses and says so (--no-limit to override).
+MAX_TO_READ = 100
 # Each run re-checks a day before the point the last complete run reached. Costs a ledger
 # lookup per scan; covers a clock that is a few minutes out, or a copy that lands late.
 OVERLAP = 86400
@@ -611,15 +614,16 @@ def recent(pdfs: List[Path], *, since_days: int = 0,
 
 
 def _arrived(st: os.stat_result) -> float:
-    """When a scan reached the folder: the later of last written and (on Windows) created.
+    """When a scan reached the folder: when the scanner last wrote it.
 
-    A copy keeps the original's modified time, so a scan copied in today from a USB stick
-    reads as last month by that alone. Its created time is today. Only Windows has a created
-    time here - elsewhere st_ctime is a metadata change, and the job runs on Windows."""
-    times = [st.st_mtime]
-    if os.name == "nt":
-        times.append(getattr(st, "st_birthtime", None) or st.st_ctime)
-    return max(times)
+    ── NOT THE CREATED TIME ────────────────────────────────────────────────────────
+    This briefly took the later of modified and (Windows) created, so that a scan copied in
+    with an old date would still count. On the real share it made the WHOLE back catalogue
+    "new": a folder copied or migrated to another location gets a fresh created time on
+    every file, so 995 scans going back to 2024 all read as arriving recently, and the first
+    run set about OCR-ing every one of them (13 October 2026). The modified time is what the
+    scanner sets and what a copy keeps."""
+    return st.st_mtime
 
 
 def arrival(path: Path) -> float:
@@ -647,10 +651,10 @@ def scope_start(ledger: Dict[str, Any], every: List[Path], source_dir: Path,
       * After a run that dealt with every scan in scope, the ledger records when that run
         STARTED. The next run looks at everything that arrived since then, less a day. A
         machine off for a fortnight just has a longer next run; nothing ages out.
-      * With no such record yet (the first run of this version), it starts at the earliest
-        scan the ledger has a record of - where the job's responsibility began - so whatever
-        the old rolling window let slip since then is picked up once.
-      * With no ledger at all, the last FIRST_RUN_DAYS days, unless --since / --from says.
+      * With no such record yet (a first run), the last FIRST_RUN_DAYS days - or further back
+        if --since / --from asks. NOT "from the earliest scan the ledger knows": that reached
+        the whole back catalogue on the real share (see `_arrived`), and a first run that
+        might OCR two years of post is not a safe default.
 
     A scan that FAILED is in scope whatever its age, until it splits (see `in_scope`).
 
@@ -662,20 +666,8 @@ def scope_start(ledger: Dict[str, Any], every: List[Path], source_dir: Path,
     if isinstance(covered, (int, float)):
         start, why = covered - OVERLAP, f"the last complete run, {_when(covered)}, less a day"
     else:
-        recorded = []
-        for pdf in every:
-            if isinstance(_record(ledger, pdf, source_dir), dict):
-                try:
-                    recorded.append(arrival(pdf))
-                except OSError:
-                    continue
-        if recorded:
-            start, why = min(recorded), "the first scan this job has a record of"
-        elif asked is not None:
-            return asked, f"{asked_as} (no record yet)"
-        else:
-            start = time.time() - FIRST_RUN_DAYS * 86400
-            why = f"no record yet, so the last {FIRST_RUN_DAYS} days"
+        start = time.time() - FIRST_RUN_DAYS * 86400
+        why = f"no complete run on record yet, so the last {FIRST_RUN_DAYS} days"
     if asked is not None and asked < start:
         return asked, f"{asked_as}, further back than the job's own record"
     return start, why
@@ -1054,6 +1046,10 @@ def _args(argv=None):
     ap.add_argument("--from", dest="from_date", default="", metavar="YYYY-MM-DD",
                     help="Also take on scans from this date on (by hand, once). Like "
                          "--since, it can only reach further back.")
+    ap.add_argument("--no-limit", action="store_true",
+                    help=f"Read however many scans are in scope. Without it a run with more "
+                         f"than {MAX_TO_READ} to read refuses: that is the back catalogue, "
+                         "or a scope that is wrong, and either is a decision for a person.")
     ap.add_argument("--watch", type=float, default=0, metavar="MINUTES",
                     help="Run as a service: check every MINUTES minutes until stopped.")
     ap.add_argument("--dry-run", action="store_true",
@@ -1180,6 +1176,19 @@ def _main(a=None) -> int:
     if waiting:
         print(f"  {len(waiting)} still being written, left for the next check: "
               + ", ".join(p.name for p, _ in waiting))
+
+    # ── A FLOOD IS A DECISION, NOT A RUN ─────────────────────────────────────────────
+    #
+    # 13 October 2026: a scope bug put all 995 scans in the folder in scope, and the run set
+    # about OCR-ing two years of post into SplitScan. Nothing stopped it but a person reading
+    # the console. A day's post is a handful; a missed fortnight is a few dozen.
+    to_read = len(chosen) - already
+    if to_read > MAX_TO_READ and not a.no_limit and not a.dry_run:
+        print(f"  !! {to_read} scans to read is more than {MAX_TO_READ}: that is the back "
+              "catalogue, or a scope that is wrong. Nothing was read.")
+        print("     Check the line above. To file them anyway, run once by hand with "
+              "--no-limit.")
+        return 2
 
     # ── NO PDFs IS A FINDING, NOT A RESULT ──────────────────────────────────────────
     #
