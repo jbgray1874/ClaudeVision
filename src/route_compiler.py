@@ -2651,6 +2651,7 @@ def build_part_graph(
     _product_issues: List[Dict[str, Any]] = []
     _declared = str(declared_product or "").strip()
     product_root = ""
+    _product_is_leaf = False          # set only by the single-leaf resolution below (D-511)
     outside_product: Dict[str, str] = {}
     if _declared:
         _assemblies_here = set(top_ids) | {i for i, k in children.items() if k} | {
@@ -2687,6 +2688,13 @@ def build_part_graph(
             _leaf_matches = sorted(i for i in _leaves if _names_the_product(_declared, i))
             if len(_leaf_matches) == 1:
                 _candidates = _leaf_matches
+                # THE PRODUCT BEING ONE PART DOES NOT MAKE THAT PART AN ASSEMBLY (D-511).
+                # The node builder presumes the top of the graph is an assembly (a GA whose
+                # parts list went unread still is one); a product resolved to a LEAF must
+                # not inherit that presumption — 12340-01M's first run under this rule had
+                # its laser ruled "assembly parent has no independently measured fabricated
+                # leaf" and its blank refused, which priced the bracket as powder on air.
+                _product_is_leaf = True
         if not _candidates:
             from product_identity import (is_of_the_job, is_under_the_numbering,
                                           job_number_only, numbering_prefix)
@@ -3311,7 +3319,8 @@ def build_part_graph(
         record = records.get(identity) or {}
         _hardware_carrier = identity != top_id and _carries_only_hardware(identity, record)
         is_assembly = bool(
-            identity == top_id
+            (identity == top_id
+             and not (_product_is_leaf and identity == product_root))
             or (not _hardware_carrier and (
                 identity in children
                 or record.get("is_sub_assembly")
