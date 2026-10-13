@@ -557,6 +557,10 @@ class EstimateRequest(BaseModel):
     # checked against the pack BEFORE staging and written into the staged folder as the job's
     # answers file — src/material_confirmation.build_answers, never a price.
     material_answers: Optional[Dict[str, Any]] = None
+    # THE CUSTOMER'S CHANGES SINCE THE DRAWINGS (D-507), ticked on the page. None means the box
+    # was not used. Checked before staging and written into the staged folder as
+    # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
+    customer_changes: Optional[Dict[str, Any]] = None
 
 
 class RecipientsRequest(BaseModel):
@@ -1402,6 +1406,93 @@ def materials_check(req: MaterialCheckRequest, x_sdi_key: Optional[str] = Header
     return {"ok": not errors, "errors": errors, "parts": (data or {}).get("parts") or {}}
 
 
+# ── CUSTOMER CHANGES SINCE THE DRAWINGS (D-507) ────────────────────────────────────────
+#
+# "It happens sometimes and we don't have time to change the drawing pack." The estimator
+# pastes the customer's e-mail; the engine reads it against the pack's own part list and
+# proposes changes — part, field, what the drawing states, what is asked, the e-mail's words.
+# Nothing is applied without a tick and a name, a change typed by hand needs a reason, and
+# whatever this cannot change becomes a question on the book. Never a price.
+_CHANGES_CLI = str(_REPO_ROOT / "src" / "customer_changes.py")
+
+
+def _changes_module():
+    """src/customer_changes, loaded by path like the material step. The checking and writing
+    are pure python; only the e-mail read needs the engine (out of process)."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    if str(src) not in sys.path:
+        sys.path.append(str(src))
+    spec = importlib.util.spec_from_file_location("sdi_customer_changes",
+                                                  src / "customer_changes.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+class ChangesReadRequest(BaseModel):
+    files: List[str] = []
+    email: str = ""
+
+
+@router.post("/changes/read")
+def changes_read(req: ChangesReadRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The e-mail read against the drawings: proposed changes and open questions. Nothing is
+    written. A machine without the engine says so, and the page still takes changes by hand."""
+    import json as _json
+    import subprocess
+    _check_key(x_sdi_key)
+    vocab = _changes_module().vocabulary()
+    if not str(req.email or "").strip():
+        return {"status": "empty", "message": "Paste the customer's e-mail first.",
+                "changes": [], "questions": [], "vocabulary": vocab}
+    resolved = []
+    for raw in req.files or []:
+        ok = _within_a_root(str(raw).strip())
+        if ok is None:
+            raise HTTPException(
+                403, f"That drawing is outside the shares this service may read: {raw}")
+        resolved.append(str(ok))
+    if not Path(_ENGINE_PYTHON).exists():
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the e-mail can only be read on the machine that runs estimates "
+                           "(no engine python here) — add the changes by hand"}
+    try:
+        proc = subprocess.run([_ENGINE_PYTHON, _CHANGES_CLI, "--read", *resolved],
+                              input=str(req.email), capture_output=True, text=True,
+                              encoding="utf-8", timeout=300)
+    except subprocess.TimeoutExpired:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "reading the e-mail took too long — add the changes by hand"}
+    if proc.returncode != 0:
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": f"the reader failed: {(proc.stderr or proc.stdout)[-300:]}"}
+    try:
+        data = _json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return {"status": "unavailable", "changes": [], "questions": [], "vocabulary": vocab,
+                "message": "the reader returned nothing usable — add the changes by hand"}
+    data.setdefault("vocabulary", vocab)
+    return data
+
+
+class ChangesCheckRequest(BaseModel):
+    drawing_number: str = ""
+    customer_changes: Dict[str, Any] = {}
+
+
+@router.post("/changes/check")
+def changes_check(req: ChangesCheckRequest, x_sdi_key: Optional[str] = Header(default=None)):
+    """The ticked changes as the run would take them, or why they would be refused — so the
+    page shows a missing name or reason before Run. The Run checks again."""
+    _check_key(x_sdi_key)
+    data, errors = _changes_module().build_changes_file(req.customer_changes or {},
+                                                        req.drawing_number or "")
+    return {"ok": not errors, "errors": errors,
+            "accepted": len((data or {}).get("changes") or []),
+            "questions": len((data or {}).get("questions") or [])}
+
+
 class BriefRequest(BaseModel):
     """A run queued from a typed brief with no drawings (D-401) — the shape another site
     posts. `reference` is the enquiry or drawing number the job is filed under."""
@@ -1553,6 +1644,16 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(400, "Material confirmation not accepted: " + "; ".join(_merrs))
         _material_file = _mfile
 
+    # THE CUSTOMER'S CHANGES, CHECKED BEFORE STAGING for the same reason: a missing name or
+    # reason is refused while nothing has moved. Part codes are not checked against the pack
+    # here — the engine reports any code that matches no part, on the book.
+    _changes_file: Optional[Dict[str, Any]] = None
+    if req.customer_changes:
+        _cfile, _cerrs = _changes_module().build_changes_file(req.customer_changes, drawing)
+        if _cerrs:
+            raise HTTPException(400, "Customer changes not accepted: " + "; ".join(_cerrs))
+        _changes_file = _cfile or None
+
     try:
         if _brief_only:
             staged = staging.stage_brief_only(client=client, drawing=drawing,
@@ -1599,6 +1700,15 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
         if _material_file:
             raise HTTPException(
                 502, f"The drawings were staged but the material confirmation could not be "
+                     f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+    # The customer's changes, under the same rule: written after staging, and a file the
+    # portal wrote on an earlier run is removed when this run carries none.
+    try:
+        _changes_module().write_changes(folder, drawing, _changes_file)
+    except OSError as exc:
+        if _changes_file:
+            raise HTTPException(
+                502, f"The drawings were staged but the customer changes could not be "
                      f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
 
     job = _within_a_root(folder)

@@ -972,6 +972,47 @@ def _render_product_scope(summary: Dict[str, Any]) -> str:
             + "</ul></div>")
 
 
+def _render_customer_changes(summary: Dict[str, Any]) -> str:
+    """WHAT THE CUSTOMER CHANGED SINCE THE DRAWINGS, BEFORE ANY FIGURE (D-507).
+
+    An estimate costed on a value the drawings do not state has to say so where it is read:
+    the drawn value, the customer's, which was costed, and the e-mail's own words. Changes that
+    could not be applied are on the Decisions list; declined ones are named here so a reader
+    knows they were seen. Empty when the run carried no customer changes."""
+    cc = summary.get("customer_changes") or {}
+    if not isinstance(cc, dict) or not (cc.get("applied") or cc.get("agreed")
+                                        or cc.get("not_applied") or cc.get("declined")):
+        return ""
+    try:
+        from customer_changes import LABELS, describe
+    except Exception:                                                # noqa: BLE001
+        LABELS, describe = {}, (lambda v, f: str(v))                 # type: ignore
+
+    def _row(e: Dict[str, Any], status: str) -> str:
+        f = str(e.get("field") or "")
+        drawn = describe(e.get("from"), f) if "from" in e else "—"
+        return (f"<tr><td><code>{_esc(e.get('part') or 'the order')}</code></td>"
+                f"<td>{_esc(LABELS.get(f, f))}</td><td>{_esc(drawn)}</td>"
+                f"<td><b>{_esc(e.get('applied') or describe(e.get('to'), f))}</b></td>"
+                f"<td>{_esc(status)}</td>"
+                f"<td class='mini'>{_esc(e.get('evidence') or e.get('quote') or '')}</td></tr>")
+
+    rows = "".join(_row(e, "COSTED") for e in (cc.get("applied") or []))
+    rows += "".join(_row(e, "already as drawn") for e in (cc.get("agreed") or []))
+    rows += "".join(_row(e, f"NOT APPLIED — {e.get('why')}") for e in (cc.get("not_applied")
+                                                                       or []))
+    rows += "".join(_row(e, "declined by the estimator") for e in (cc.get("declined") or []))
+    who = cc.get("accepted_by") or "an estimator"
+    when = f" on {cc.get('accepted_on')}" if cc.get("accepted_on") else ""
+    return ('<div style="border-left:4px solid #B7791F;padding:4px 0 4px 14px;margin:14px 0">'
+            '<p style="margin:4px 0"><b>Changes the customer asked for since the drawings</b> '
+            f'<span class="mini">— accepted by {_esc(who)}{_esc(when)}. These are costed in '
+            'place of what the drawings state; the drawings themselves are unchanged.</span></p>'
+            '<div class="scroll"><table class="dec"><thead><tr><th>Part</th><th>What</th>'
+            '<th>The drawings</th><th>Costed at</th><th>Status</th><th>Evidence</th></tr>'
+            f'</thead><tbody>{rows}</tbody></table></div></div>')
+
+
 def _render_header(h: Dict[str, Any], has_parity: bool,
                    summary: Optional[Dict[str, Any]] = None) -> str:
     """THE MEETING FILE GETS A LETTERHEAD.
@@ -3256,6 +3297,7 @@ def build_report_html(summary: Dict[str, Any], bundle: Optional[Dict[str, Any]] 
         _render_run_stop(summary),
         _render_concept_takeoff(summary),
         _render_product_scope(summary),
+        _render_customer_changes(summary),
         _render_summary(summary, record, h, hl),
         _render_decisions(record),
         _render_bom_tree(summary, record),

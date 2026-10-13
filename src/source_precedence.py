@@ -111,6 +111,12 @@ def _walk(part: Dict[str, Any], path, create: bool = False) -> Optional[Dict[str
     return node
 
 SOURCE_RANK: Dict[str, int] = {
+    # THE CUSTOMER CHANGED THE PRODUCT AFTER THE DRAWINGS WERE ISSUED (D-507). Not a reading
+    # of the drawing, so no reading — nor a person reading or correcting one at 100 — can stand
+    # against it: the drawing is right about what was drawn, and the customer has since asked
+    # for something else. Written only from an e-mail line or a stated reason a named estimator
+    # ticked (customer_changes.py), and the book shows the drawn value beside it.
+    "customer_change": 101,
     "estimator_confirmed": 100,
     "knowledge_base": 100,
     # A PRODUCTION RULE THE SHOP CONFIRMED (config.PRODUCTION_MATERIAL_SUBSTITUTIONS —
@@ -490,6 +496,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "vision_concept":         "sighted from the customer's render (assumed, unconfirmed)",
     "enquiry_brief":          "the enquiry brief typed for this job (stated, unconfirmed by a drawing)",
     "production_substitution": "a confirmed production rule (the gauge the shop buys)",
+    "customer_change":        "the customer's change since the drawings, accepted by an estimator",
     "estimator_confirmed":    "an estimator, overruling the files",
     "estimator_read_drawing": "an estimator reading the drawing",
     "estimator_inferred":     "an estimator's stated inference from the drawing",
@@ -799,6 +806,8 @@ EVIDENCE_FAMILY: Dict[str, str] = {
     "llm_extract": "the drawing",
     "llm_full_extract": "the drawing",
     "vision": "the drawing",
+    # The customer, asking for something other than what was drawn.
+    "customer_change": "the customer",
     # A person, however they arrived at it.
     "estimator_confirmed": "a person",
     "estimator_read_drawing": "a person",
@@ -917,7 +926,8 @@ def corroboration_overrules(part: Dict[str, Any], field: str, new_value: Any,
 _DECISION_RANK = 100
 # Nor is a confirmed production rule: it does not dispute what was drawn, it states what is
 # bought. Named by kind, not by rank, so the exemption is a decision rather than a number.
-_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution"})
+_NOT_A_READING = frozenset({"estimator_confirmed", "knowledge_base", "production_substitution",
+                            "customer_change"})
 
 
 def corroboration_defends(part: Dict[str, Any], field: str, new_value: Any,

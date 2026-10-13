@@ -4531,6 +4531,38 @@ def _finalize_scan_summary(
         print(f"   [confirmed] not applied: {type(_ec_err).__name__}: {_ec_err}", flush=True)
 
     try:
+        # WHAT THE CUSTOMER HAS ASKED FOR SINCE THE DRAWINGS WERE ISSUED (D-507), after the
+        # answers file and above it: the drawing is right about what was drawn, and the
+        # customer has since asked for something else. Its own file, so the portal's material
+        # confirmation and an e-mail's changes never shadow one another. No file is the usual
+        # case and is one quiet line.
+        import customer_changes as _cc
+        _cc_drawing = ((summary.get("document_analysis") or {}).get("drawing_number")
+                       or summary.get("drawing_number"))
+        _cc_path = _cc.find_changes_file(job_folder, pdf_path, _cc_drawing)
+        if _cc_path:
+            _cc_data, _cc_problems = _cc.load_changes(_cc_path)
+            for _p in _cc_problems:
+                print(f"   [customer-change] NOT APPLIED — {_p}", flush=True)
+            _cc_rep = _cc.apply_customer_changes(summary["manufacturing_writeup"]["parts"],
+                                                 _cc_data, summary)
+            for _a in _cc_rep["applied"]:
+                print(f"   [customer-change] {_a.get('part') or 'order'}: "
+                      f"{_cc.LABELS.get(_a['field'], _a['field'])} -> "
+                      f"{_cc.describe(_a.get('to'), _a['field'])} — {_a['evidence']}",
+                      flush=True)
+            for _n in _cc_rep["not_applied"]:
+                print(f"   [customer-change] NOT APPLIED — {_n.get('part') or 'order'}: "
+                      f"{_n.get('why')} (asked on the book)", flush=True)
+            summary["customer_changes"] = dict(
+                _cc_rep, file=str(_cc_path), problems=_cc_problems,
+                accepted_by=_cc_data.get("accepted_by"),
+                accepted_on=_cc_data.get("accepted_on"))
+    except Exception as _cc_err:                                       # noqa: BLE001
+        print(f"   [customer-change] not applied: {type(_cc_err).__name__}: {_cc_err}",
+              flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child

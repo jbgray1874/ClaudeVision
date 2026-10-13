@@ -443,6 +443,49 @@
         </div>
       </details>
 
+      <!-- CUSTOMER CHANGES SINCE THE DRAWINGS (D-507). An e-mail asking for a different size,
+           material, finish, quantity or order quantity, when there is no time to change the
+           drawing pack. The e-mail is read against the drawings and each change is proposed
+           with the e-mail's own words; nothing is used until it is ticked and named. A change
+           typed by hand needs a reason. What this cannot change becomes a question on the book.
+           Never a price. Optional: a run without it is exactly as it always was. -->
+      <details id="chgPanel" style="margin:10px 0 4px">
+        <summary style="cursor:pointer;font-weight:600">Customer changes since the drawings
+          <span class="sub" style="font-weight:400">(optional — when the customer asks for a
+          change and the drawings have not been updated)</span></summary>
+        <div style="margin-top:8px">
+          <label for="chgEmail" class="sub">Paste the customer's e-mail</label>
+          <textarea id="chgEmail" rows="6" style="width:100%;margin-top:4px"
+                    placeholder="e.g. Hi — could you re-quote with the side panels in 2mm rather than 1.5mm, and 250 off please?"></textarea>
+          <div style="margin-top:6px">
+            <button type="button" id="chgRead" class="btn-measure">Read the changes from the e-mail</button>
+            <button type="button" id="chgAdd" class="btn-measure">Add a change by hand</button>
+            <span id="chgStatus" class="sub" style="margin-left:8px" aria-live="polite"></span>
+          </div>
+          <div id="chgBody" style="display:none;margin-top:10px">
+            <p class="hint" style="margin:0 0 6px">Tick each change to cost it. The drawings are
+              not altered: the book shows what they state beside what is costed, with the
+              e-mail's words or your reason.</p>
+            <div style="overflow-x:auto">
+              <table id="chgTable" style="width:100%;border-collapse:collapse;font-size:12.5px"></table>
+            </div>
+            <datalist id="chgParts"></datalist>
+            <div id="chgQuestions" style="margin-top:8px"></div>
+            <div class="row2" style="margin-top:10px">
+              <div class="field">
+                <label for="chgWho">Accepted by</label>
+                <input id="chgWho" type="text" autocomplete="off" placeholder="your name">
+              </div>
+              <div class="field">
+                <label style="font-weight:400;display:block;margin-top:22px">
+                  <input id="chgUse" type="checkbox"> Use these changes for the run</label>
+              </div>
+            </div>
+            <div id="chgCheck" class="sub" style="margin-top:6px" aria-live="polite"></div>
+          </div>
+        </div>
+      </details>
+
       <!-- WHO GETS THE FINISHED ESTIMATE.
            Pre-filled from the saved list so the common case is no typing, editable per run
            because one job in ten goes to somebody else, and EMPTY MEANS NOBODY so an engine
@@ -1382,6 +1425,171 @@ function checkMaterials(){
   }, 300);
 }
 document.getElementById("matRead").addEventListener("click", readMaterials);
+
+/* ── CUSTOMER CHANGES SINCE THE DRAWINGS (D-507) ──────────────────────────────────────
+   The e-mail is read on the machine that runs estimates, against the drawings' own part
+   list, and each proposed change comes back with the e-mail's words. The estimator ticks
+   what is accepted, may add changes by hand (each needs a reason), and names themself. The
+   service checks it all again at Run. Rules said here so the page never promises otherwise:
+     - nothing is used without a tick and a name;
+     - an e-mail change must quote the e-mail; a typed change must give a reason;
+     - what the box cannot change is a question on the book, never dropped;
+     - no price is ever accepted. */
+let chgRows = [], chgQs = [], chgVocab = null, _chgSeq = 0;
+const _CHG_PLAIN = ["thickness_mm", "quantity", "blank_length_mm", "blank_width_mm", "order_quantity"];
+async function _chgEnsureVocab(){
+  if(chgVocab) return chgVocab;
+  try{
+    const r = await api("/api/estimate/changes/read", {method:"POST",
+      headers:{"Content-Type":"application/json"}, body: JSON.stringify({files: [], email: ""})});
+    chgVocab = (r.ok ? (await r.json()).vocabulary : null) || null;
+  }catch(e){ chgVocab = null; }
+  return chgVocab || {fields: ["material","thickness_mm","finish","quantity","size_mm",
+    "blank_length_mm","blank_width_mm","operation_off","make_or_buy","order_quantity"],
+    labels: {}, material: [], material_labels: {}, finish: [], operation_off: [], make_or_buy: ["buy","make"]};
+}
+function _chgLabel(f){ return ((chgVocab || {}).labels || {})[f] || String(f).replace(/_/g, " "); }
+function _chgOptions(list, sel, labels){
+  return [""].concat(list || []).map(v => `<option value="${_matEsc(v)}"${String(v) === String(sel) ? " selected" : ""}>${_matEsc(v === "" ? "—" : ((labels || {})[v] || v))}</option>`).join("");
+}
+function _chgValueCell(r, i){
+  const f = r.field, v = r.value;
+  if(f === "size_mm"){
+    const s = (v && typeof v === "object") ? v : {};
+    return `<input data-k="from" data-i="${i}" type="number" step="0.1" style="width:70px" placeholder="from" value="${_matEsc(s.from ?? "")}">
+            → <input data-k="to" data-i="${i}" type="number" step="0.1" style="width:70px" placeholder="to" value="${_matEsc(s.to ?? "")}"> mm`;
+  }
+  if(f === "material") return `<select data-k="value" data-i="${i}">${_chgOptions(chgVocab.material, v, chgVocab.material_labels)}</select>`;
+  if(f === "finish") return `<select data-k="value" data-i="${i}">${_chgOptions(chgVocab.finish, v)}</select>` +
+    (r.note ? `<div class="sub">${_matEsc(r.note)}</div>` : "");
+  if(f === "operation_off") return `<select data-k="value" data-i="${i}">${_chgOptions(chgVocab.operation_off, v)}</select>`;
+  if(f === "make_or_buy") return `<select data-k="value" data-i="${i}">${_chgOptions(chgVocab.make_or_buy, v)}</select>`;
+  return `<input data-k="value" data-i="${i}" type="number" step="${_CHG_PLAIN.includes(f) && /quantity/.test(f) ? 1 : 0.1}" style="width:90px" value="${_matEsc(v ?? "")}">`;
+}
+function renderChanges(){
+  const body = document.getElementById("chgBody");
+  if(!chgRows.length && !chgQs.length){ body.style.display = "none"; return; }
+  body.style.display = "";
+  const head = `<tr><th>Use</th><th style="text-align:left">Part</th><th style="text-align:left">Change</th>
+    <th style="text-align:left">Drawing states</th><th style="text-align:left">Cost it at</th>
+    <th style="text-align:left">The e-mail's words, or your reason</th><th></th></tr>`;
+  document.getElementById("chgTable").innerHTML = head + chgRows.map((r, i) => {
+    const fieldSel = `<select data-k="field" data-i="${i}">` + (chgVocab.fields || []).map(f =>
+      `<option value="${f}"${f === r.field ? " selected" : ""}>${_matEsc(_chgLabel(f))}</option>`).join("") + `</select>`;
+    const part = r.field === "order_quantity" ? `<span class="sub">the order</span>`
+      : `<input data-k="part" data-i="${i}" list="chgParts" style="width:120px" value="${_matEsc(r.part || "")}">`;
+    const drawn = r.drawing_value == null || r.drawing_value === "" ? "—"
+      : (/_mm$/.test(r.field) ? `${r.drawing_value} mm` : r.drawing_value);
+    const warn = [r.not_read_from_pack ? "not among the parts read from the drawings — the run will say if no part carries it" : "",
+                  r.already_drawn ? "the drawings already say this" : ""].filter(Boolean).join("; ");
+    const evid = r.origin === "email"
+      ? `<span title="${_matEsc(r.quote || "")}">“${_matEsc(r.quote || "")}”</span>`
+      : `<input data-k="reason" data-i="${i}" style="width:100%" placeholder="who asked, and how — needed" value="${_matEsc(r.reason || "")}">`;
+    return `<tr style="border-top:1px solid var(--line)">
+      <td style="text-align:center"><input data-k="accepted" data-i="${i}" type="checkbox"${r.accepted ? " checked" : ""}></td>
+      <td>${part}${warn ? `<div class="sub" style="color:var(--bad)">${_matEsc(warn)}</div>` : ""}</td>
+      <td>${fieldSel}</td><td>${_matEsc(drawn)}</td>
+      <td>${_chgValueCell(r, i)}</td><td style="min-width:200px">${evid}</td>
+      <td>${r.origin === "email" ? "" : `<button type="button" data-del="${i}" class="btn-measure" title="remove">✕</button>`}</td></tr>`;
+  }).join("");
+  document.getElementById("chgQuestions").innerHTML = chgQs.length
+    ? `<p class="hint" style="margin:6px 0 2px"><b>Asked for, and not something this box can change</b> — each goes on the book as a question unless you untick it:</p>` +
+      chgQs.map((q, i) => `<div class="sub" style="margin:3px 0">
+        <input type="checkbox" data-q="${i}"${q.keep !== false ? " checked" : ""}>
+        ${q.quote ? `“${_matEsc(q.quote)}” — ` : ""}${_matEsc(q.ask || "")}</div>`).join("")
+    : "";
+  body.querySelectorAll("[data-i]").forEach(el => el.addEventListener("change", _chgEdit));
+  body.querySelectorAll("[data-q]").forEach(el => el.addEventListener("change", e => {
+    chgQs[+e.target.dataset.q].keep = e.target.checked; checkChanges(); }));
+  body.querySelectorAll("[data-del]").forEach(el => el.addEventListener("click", e => {
+    chgRows.splice(+e.target.dataset.del, 1); renderChanges(); checkChanges(); }));
+}
+function _chgEdit(e){
+  const el = e.target, r = chgRows[+el.dataset.i], k = el.dataset.k;
+  if(!r) return;
+  if(k === "accepted"){
+    r.accepted = el.checked;
+    // AN ACCEPTED ORDER QUANTITY IS THE RUN'S QUANTITY: the first number in the box.
+    if(r.accepted && r.field === "order_quantity" && +r.value > 0){
+      const rest = unitList().slice(1).filter(n => n !== +r.value);
+      units.value = [+r.value].concat(rest).join(", ");
+      units.dispatchEvent(new Event("input"));
+    }
+  }else if(k === "from" || k === "to"){
+    r.value = Object.assign({}, (r.value && typeof r.value === "object") ? r.value : {}, {[k]: el.value});
+  }else if(k === "field"){
+    r.field = el.value; r.value = el.value === "size_mm" ? {} : ""; renderChanges();
+  }else{
+    r[k] = el.value;
+  }
+  checkChanges();
+}
+function changesSubmitted(){
+  if(!chgRows.length && !chgQs.length) return null;
+  return {accepted_by: (document.getElementById("chgWho").value || "").trim(),
+          email: document.getElementById("chgEmail").value || "",
+          changes: chgRows.map(r => ({part: r.part || "", field: r.field, value: r.value,
+                                      quote: r.quote || "", reason: r.reason || "",
+                                      origin: r.origin, accepted: !!r.accepted,
+                                      drawing_value: r.drawing_value ?? null})),
+          questions: chgQs.map(q => ({quote: q.quote || "", ask: q.ask || "", part: q.part || "",
+                                      keep: q.keep !== false}))};
+}
+async function readChanges(){
+  const st = document.getElementById("chgStatus");
+  const email = document.getElementById("chgEmail").value || "";
+  if(!email.trim()){ st.textContent = "Paste the customer's e-mail first."; return; }
+  if(!drawings.length){ st.textContent = "Add the drawings first — the e-mail is read against them."; return; }
+  const seq = ++_chgSeq;
+  st.textContent = "Reading the e-mail against the drawings…";
+  try{
+    const r = await api("/api/estimate/changes/read", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({files: drawings.map(d => d.path), email})});
+    const j = r.ok ? await r.json() : {status:"unavailable", message:(await r.text()).slice(0,200)};
+    if(seq !== _chgSeq) return;
+    chgVocab = j.vocabulary || chgVocab || await _chgEnsureVocab();
+    const manual = chgRows.filter(x => x.origin !== "email");
+    chgRows = (j.changes || []).map(c => Object.assign({accepted: false}, c)).concat(manual);
+    chgQs = (j.questions || []).map(q => Object.assign({keep: true}, q));
+    document.getElementById("chgParts").innerHTML = ((j.index || {}).parts || [])
+      .map(p => `<option value="${_matEsc(p.part)}">`).join("");
+    st.textContent = j.status === "ok"
+      ? `${(j.changes || []).length} change(s) proposed, ${(j.questions || []).length} question(s). Tick what the customer has asked for.`
+      : `Could not read the e-mail: ${j.message || j.status}`;
+    renderChanges(); checkChanges();
+  }catch(e){ if(seq === _chgSeq) st.textContent = "Could not read the e-mail: " + e.message; }
+}
+async function addChange(){
+  await _chgEnsureVocab();
+  if(!document.getElementById("chgParts").innerHTML && matReading)
+    document.getElementById("chgParts").innerHTML = (matReading.parts || [])
+      .map(p => `<option value="${_matEsc(p.part)}">`).join("");
+  chgRows.push({part: "", field: "thickness_mm", value: "", origin: "manual", reason: "", accepted: true});
+  renderChanges(); checkChanges();
+}
+let _chgChkTimer = null;
+function checkChanges(){
+  clearTimeout(_chgChkTimer);
+  _chgChkTimer = setTimeout(async () => {
+    const box = document.getElementById("chgCheck");
+    const sub = changesSubmitted();
+    if(!sub){ box.textContent = ""; return; }
+    try{
+      const r = await api("/api/estimate/changes/check", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({drawing_number: safe(drawing.value), customer_changes: sub})});
+      const j = await r.json();
+      box.style.color = j.ok ? "var(--ok)" : "var(--bad)";
+      box.textContent = j.ok
+        ? `${j.accepted} change(s) will be costed; ${j.questions} question(s) go on the book.`
+        : j.errors.join(" · ");
+    }catch(e){ box.textContent = ""; }
+  }, 300);
+}
+document.getElementById("chgRead").addEventListener("click", readChanges);
+document.getElementById("chgAdd").addEventListener("click", addChange);
+document.getElementById("chgWho").addEventListener("input", checkChanges);
 
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
@@ -2633,7 +2841,10 @@ runBtn.onclick = async () => {
     email_quote: document.getElementById("emailQuote").checked,
     // Only when the estimator ticked "Use this confirmation". Checked again by the service,
     // against the drawings, before anything is staged.
-    material_answers: (document.getElementById("matUse") || {}).checked ? materialAnswers() : null
+    material_answers: (document.getElementById("matUse") || {}).checked ? materialAnswers() : null,
+    // Only when the estimator ticked "Use these changes". Checked again by the service before
+    // anything is staged; costed by the engine in place of what the drawings state.
+    customer_changes: (document.getElementById("chgUse") || {}).checked ? changesSubmitted() : null
   };
   try{
     const r = await api("/api/estimate",{method:"POST",

@@ -51,6 +51,8 @@ param(
     # before a run. Left off this list, the server kept the old rule and refused 12645.
     # material_confirmation is loaded the same way for the pre-run material step, and brings
     # the material lexicon and the answers-file rules it checks against.
+    # customer_changes is loaded the same way for the customer-changes box (D-507): the
+    # service checks and writes the ticked changes; only the e-mail read runs on the engine.
     # extractor_patterns comes with json_normaliser, which strips the drawing's specification
     # legend through that one shared reader (it reads only config).
     #
@@ -71,6 +73,7 @@ param(
         "src/part_identity.py",
         "src/product_identity.py",
         "src/material_confirmation.py",
+        "src/customer_changes.py",
         "src/estimator_confirmed.py",
         "src/json_normaliser.py",
         "src/extractor_patterns.py",

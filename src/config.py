@@ -834,6 +834,19 @@ PROVISIONAL_BLANK_FROM_SHEET = {
     # Words on a sheet that say its figures include the DEVELOPED blank — no flange is added.
     "developed_words": r"FLAT\s*PATTERN|DEVELOPED|BLANK\s*SIZE|FLAT\s*BLANK|UNFOLDED",
 }
+# CUSTOMER CHANGES SINCE THE DRAWINGS (D-507): the portal box on the normal Run. The e-mail is
+# read against the pack's own part list and text (capped), the estimator ticks what is accepted,
+# and the engine costs it in place of what the drawings state. A size the customer states
+# (from -> to) changes the blank exactly where one side IS the old size; where no side is, the
+# same change is made to the one side that is the old size plus no more than this allowance for
+# its flanges (a straight span of a folded part), and anything else is asked.
+CUSTOMER_CHANGES = {
+    "email_max_chars": 20000,
+    "pack_context_chars": 30000,
+    "size_span_allowance_mm": 200,
+    # The text model for the read; empty means the engine's default xAI model.
+    "model": "",
+}
 # A SHELF-EDGE STRIP, TRIM OR LIP SIZED FROM THE PART IT EDGES (D-499): when the read gives
 # one line whose count is the total of several host parts of different sizes, it is split
 # into one line per host, each at its host's own length. Words that make a line an edging.
