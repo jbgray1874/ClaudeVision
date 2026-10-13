@@ -1203,7 +1203,9 @@ def consumable_lines(items: List[Any], stem: str,
             record["quantity_counted"] = {
                 "count": _n, "basis": f"{_per_c:g} per component × {_comps} component(s)"}
             record["research_description"] = (
-                f"{said} — price ONE item, each; the quantity is counted separately")
+                f"{said} — the price of one item at this job's volume (bought by the roll, "
+                f"sheet or box at trade price), never a single-item retail listing; the "
+                f"quantity is counted separately")
             record["unit_of_measure"] = "each"
             if any(w in said.lower() for w in applied_words):
                 # ITS APPLICATION AND CHECKING IS LABOUR, CHARGED ONCE, ON THE UNIT.
@@ -1249,12 +1251,16 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
     that hangs or clips — its own words say so (config CONCEPT_FIXING_FREE_WORDS), or a piece
     welded to it does ("HOOKED BRACKET (WELDED TO TRAY)": the trays hang on their brackets)."""
     free = _vocab_list("CONCEPT_FIXING_FREE_WORDS")
+    bonded = _vocab_list("CONCEPT_BONDED_WORDS")
     made = [p for p in (parts or []) if isinstance(p, dict)
             and p.get("concept_kind") == "fabricated"]
 
-    def _says_free(p: Mapping[str, Any]) -> bool:
+    def _says(p: Mapping[str, Any], vocab: List[str]) -> bool:
         low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
-        return any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in free)
+        return any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in vocab)
+
+    def _says_free(p: Mapping[str, Any]) -> bool:
+        return _says(p, free)
     hung_by: Dict[str, str] = {}
     for p in made:
         if p.get("welded_to_hosts") and _says_free(p):
@@ -1268,6 +1274,9 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
             excluded[pn] = "welded to its host"
         elif "welding" in _ops_of(p):
             excluded[pn] = "welded — its joint is the weld"
+        elif _says(p, bonded):
+            # BONDED IS NOT SCREWED (D-500): its adhesive is a different consumable, said.
+            excluded[pn] = "bonded — its adhesive is not in this fixings allowance"
         elif _says_free(p):
             excluded[pn] = "hangs or clips — fitted without fixings"
         elif pn in hung_by:
@@ -1323,7 +1332,9 @@ def fixings_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict
     apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
                 note="a fixings allowance the read did not name, counted per fitted piece")
     record["is_bought_in"] = True
-    record["research_description"] = f"{ref} — price ONE item, each; the quantity is counted separately"
+    record["research_description"] = (f"{ref} — the price of one item at this job's volume "
+                                      f"(bought by the box at trade price), never a single-item "
+                                      f"retail listing; the quantity is counted separately")
     record["unit_of_measure"] = "each"
     record["fixings_allowance"] = mech
     _in = ", ".join(f"{k} ×{v}" for k, v in mech["counted"].items())
@@ -1331,6 +1342,9 @@ def fixings_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict
     record["review_flags"].append(
         f"CONCEPT: NOT NAMED BY THE READ — a provisional fixings allowance of {count} × {ref}: "
         f"{basis}. Counted: {_in}." + (f" Not counted: {_out}." if _out else "")
+        + (" Hung or clipped pieces take no fixings here; if they need retainers or anti-lift "
+           "clips, add them." if any("hang" in w or "clip" in w for w in mech["excluded"].values())
+           else "")
         + " Confirm the fixings and the count before release")
     return record
 
@@ -2198,6 +2212,15 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             f"pages state and the brief, and write \"not dimensioned\" in why_size where it is "
             f"estimated")
 
+    # A COMPONENT NAMED INSIDE ANOTHER LINE IS NOT YET A LINE (D-500): the read is put back
+    # once asking for it, and a component still folded in after that is a question.
+    inside = components_named_inside(list(answer.get("parts") or []))
+    for c in inside:
+        failures.append(
+            f"{c['host']} names {c['phrase']} but no line lists them — give them a line of their "
+            f"own with their size and count, or say in why_size that they are part of that "
+            f"line's blank")
+
     body_checked = len(dims) >= 2 and bool(made)
     if body_checked:
         _body_words = " × ".join(f"{d:g}" for d in dims)
@@ -2423,7 +2446,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
         unverified.append("no body size to hold the parts to")
 
     checked = body_checked or weight_checked or goods_checked or bool(required) \
-        or gauge_checked or finish_checked or bool(sizeless)
+        or gauge_checked or finish_checked or bool(sizeless) or bool(inside)
     verdict = ("disagrees" if failures else "unchecked" if not checked
                else "unverified" if unverified else "agrees")
     return {"checked": checked, "agrees": verdict == "agrees", "verdict": verdict,
@@ -2442,6 +2465,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "ratio": round(ratio, 3) if ratio is not None else None,
             "breaches": breaches, "unweighed": unweighed, "not_on_sheet": not_on_sheet,
             "sizeless": sizeless,
+            "components_inside": [f"{c['host']}: {c['phrase']}" for c in inside],
             "read_gave_facts": read_gave_facts, "facts_from_sheet_text": from_text}
 
 
@@ -2828,6 +2852,32 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     return out
 
 
+def change_flags(changes: List[str], baseline: str = "") -> List[str]:
+    """What this read changed, as lines ON THE BOOK (D-500), not only in the run log.
+
+    The 20:49 K-Wellness read folded thirty hooked brackets into the trays' names and dropped
+    their line; the change list said so in the log and nowhere an estimator reads. Every dropped
+    line is its own decision — a made part that leaves the bill takes its material and cutting
+    with it — and the read's baseline status says whether this book is a replay of the last
+    read or a new interpretation."""
+    out: List[str] = []
+    if baseline:
+        out.append(f"CONCEPT READ: {baseline} — "
+                   + ("the same read as the previous book; differences are the engine's"
+                      if baseline.startswith("unchanged") else
+                      "a different read from the previous book; differences may be the read's"))
+    rest = [c for c in (changes or []) if not str(c).startswith("dropped: ")]
+    if rest:
+        out.append("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(rest[:20])
+                   + (f"; and {len(rest) - 20} more" if len(rest) > 20 else ""))
+    for c in changes or []:
+        if str(c).startswith("dropped: "):
+            out.append(f"DROPPED FROM THE PREVIOUS READ: {str(c)[len('dropped: '):]} — not on "
+                       f"this book. If it is still part of the product, its material and work "
+                       f"are missing: confirm it in the answers file or have the read redone")
+    return out
+
+
 def _flange_allowance_mm() -> float:
     try:
         import config                                               # noqa: WPS433
@@ -2933,7 +2983,7 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
     A slot or opening is cut round its perimeter; a hole round its circumference. Each is a
     pierce. The outer blank's own perimeter is not included — the caller adds it."""
-    internal, pierces, said = 0.0, 0, []
+    internal, pierces, said, open_area = 0.0, 0, [], 0.0
     for c in (sighted.get("cutouts") or []):
         if not isinstance(c, Mapping):
             continue
@@ -2945,8 +2995,12 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
         each = (3.14159 * max(a, b)) if what.startswith("hole") else 2.0 * (a + (b or a))
         internal += n * each
         pierces += n
+        # THE OPEN AREA, so the coat is not charged on metal that was cut away (D-500).
+        open_area += n * ((3.14159 / 4.0) * max(a, b) ** 2 if what.startswith("hole")
+                          else a * (b or a))
         said.append(f"{n} × {what} {a:g}" + (f" × {b:g}" if b and what != "hole" else "") + " mm")
-    return {"internal_mm": round(internal, 1), "pierces": pierces, "said": said}
+    return {"internal_mm": round(internal, 1), "pierces": pierces, "said": said,
+            "open_area_mm2": round(open_area, 1)}
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
@@ -3185,6 +3239,8 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             _gr["estimated_hole_count"] = int(_cuts["pierces"])
             _gr["estimated_pierce_count"] = int(_cuts["pierces"])
             record["concept_cutouts"] = list(_cuts["said"])
+            if _cuts.get("open_area_mm2"):
+                record["concept_open_area_mm2"] = float(_cuts["open_area_mm2"])
             _assume("", ", ".join(_cuts["said"]),
                     f"internal cut-outs given by the concept read — {_cuts['internal_mm']:g} mm "
                     f"of internal cutting and {_cuts['pierces']} pierce(s), provisional",
@@ -3389,6 +3445,70 @@ def _qty_of(p: Mapping[str, Any]) -> int:
         return max(1, int(p.get("quantity") or 1))
     except (TypeError, ValueError):
         return 1
+
+
+def components_named_inside(lines: List[Any]) -> List[Dict[str, str]]:
+    """Components a line's own name says it carries, which no line of the bill lists (D-500).
+
+    "FRONT SHELF TRAY (with welded hooked brackets)": the 20:49 read named the brackets inside
+    the trays' names and gave them no line, so no material, cutting or forming was costed for
+    them — only the weld that joins them. A "with … / including …" phrase that names a joining
+    word (config CONCEPT_JOINED_COMPONENT_WORDS) names a component; its last word, unless it is
+    a feature of the host (CONCEPT_FEATURE_WORDS — a seam, a lip, a cut-out), must appear in
+    another line's name, or it is reported."""
+    joins = set(_vocab_list("CONCEPT_JOINED_COMPONENT_WORDS"))
+    features = {_word_root(w) for w in _vocab_list("CONCEPT_FEATURE_WORDS")}
+    names = [str((l.get("name") if isinstance(l, Mapping) else "") or
+                 (l.get("description") if isinstance(l, Mapping) else "") or "").strip()
+             for l in (lines or [])]
+    out: List[Dict[str, str]] = []
+    for i, name in enumerate(names):
+        low = name.lower()
+        for m in re.finditer(r"\b(?:with|including|incl\.?)\s+([^()\[\];,]+)", low):
+            phrase = " ".join(m.group(1).split())
+            words = re.findall(r"[a-z][a-z\-]{2,}", phrase)
+            if not words or not (set(words) & joins):
+                continue
+            noun = _word_root(words[-1])
+            if noun in features or noun in {_word_root(j) for j in joins}:
+                continue
+            listed = any(j != i and noun in _roots(n) for j, n in enumerate(names))
+            if not listed:
+                out.append({"host": name, "phrase": phrase, "component": noun})
+    return out
+
+
+def question_components_inside(records: List[Dict[str, Any]],
+                               previous: Optional[Mapping[str, Any]] = None) -> List[str]:
+    """A component still folded into another line after the read is a QUESTION on that line,
+    with the material at stake said (D-500). What the previous read listed is named as
+    information for the estimator — never carried forward as a costed line, because the
+    previous bill is a baseline, not evidence."""
+    from source_precedence import raise_manufacturing_question      # noqa: WPS433
+    prev_rows = [r for r in ((previous or {}).get("parts") or []) if isinstance(r, Mapping)]
+    asked: List[str] = []
+    by_name = {str(r.get("description") or "").strip(): r for r in records or []
+               if isinstance(r, dict)}
+    for c in components_named_inside(list(by_name.values())):
+        host = by_name.get(c["host"])
+        if host is None:
+            continue
+        _was = [r for r in prev_rows if c["component"] in _roots(r.get("name"))]
+        _info = "".join(
+            f"; the previous read listed {r.get('name')} x{_num(r.get('quantity')):g}"
+            + (f" at {_num(r.get('length')):g} × {_num(r.get('width')):g} mm"
+               if _num(r.get("length")) else "")
+            + " (information only, not costed)" for r in _was[:2])
+        raise_manufacturing_question(
+            host,
+            f"{c['host']} names {c['phrase']} that no line of the bill costs",
+            "not costed — no material, cutting or forming for them is in this estimate, only "
+            "any joining work on this line" + _info,
+            f"list them as their own part (size and count) in the answers file, or confirm they "
+            f"are part of this line's blank",
+            "concept_bill_check")
+        asked.append(f"{host.get('part_number')}: {c['phrase']}")
+    return asked
 
 
 def mark_welded_to_hosts(parts: List[Dict[str, Any]]) -> List[str]:
@@ -3842,9 +3962,26 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
     # different things, each with its own basis — a welded bracket is none of them at the
     # unit, a magnetic graphic is handled but not a labelled component, a hooked tray is
     # handled and labelled but never screwed.
-    record["components_labelled"] = sum(
-        _qty(p) for p in fitted
-        if p.get("concept_kind") == "fabricated" and not p.get("welded_to_hosts"))
+    try:
+        import config as _cfg_l                                     # noqa: WPS433
+        _min_face = float(getattr(_cfg_l, "CONCEPT_LABEL_MIN_FACE_MM", None) or 0)
+    except Exception:                                               # noqa: BLE001
+        _min_face = 0.0
+
+    def _too_small(p: Mapping[str, Any]) -> bool:
+        dims = [_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm"))]
+        dims = [d for d in dims if d]
+        return bool(_min_face and dims and min(dims) < _min_face)
+    _labelled = [p for p in fitted
+                 if p.get("concept_kind") == "fabricated" and not p.get("welded_to_hosts")]
+    _small = [p for p in _labelled if _too_small(p)]
+    record["components_labelled"] = sum(_qty(p) for p in _labelled if not _too_small(p))
+    _label_exc = (f"; {sum(_qty(p) for p in _small)} too small to carry one (under "
+                  f"{_min_face:g} mm, config CONCEPT_LABEL_MIN_FACE_MM): "
+                  + ", ".join(str(p.get('part_number')) for p in _small)
+                  if _small else
+                  ("" if _min_face else "; no too-small exception applied — the customer's "
+                   "minimum size is not stated (config CONCEPT_LABEL_MIN_FACE_MM)"))
     _mech = mechanically_fitted(parts)
     record["fitting_counts"] = {
         "handled": {"count": record["pieces_fitted"],
@@ -3852,7 +3989,7 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
                              "counted with that host"},
         "labelled": {"count": record["components_labelled"],
                      "basis": "every MADE component fitted at the unit — not a bought or "
-                              "printed line, not a piece welded to its host"},
+                              "printed line, not a piece welded to its host" + _label_exc},
         "fastened": {"count": _mech["pieces"],
                      "basis": "made pieces not welded, not welded to a host and not hung or "
                               "clipped — the pieces a fixing allowance may count"},

@@ -261,6 +261,18 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                 if _u is not None:
                     ws.cell(row=head + 9, column=col,
                             value=round(_u * int(r["quantity"]) + _here, 2))
+            # ONE BATCH AT EVERY QUANTITY IS A WEAK FALLBACK, SAID ON THE TAB (D-500): a
+            # per-batch cost with no batch size stated is counted once in every column.
+            _unsized = [str(_l.get("code") or _l.get("name") or "a per-batch line")
+                        for _l in ((project_costs or {}).get("lines") or [])
+                        if isinstance(_l, dict) and _l.get("scope") == "per_batch"
+                        and not _l.get("batch_size")]
+            if _unsized:
+                ws.cell(row=head + 10, column=1, value=(
+                    "Per-batch cost(s) " + ", ".join(_unsized) + ": the batch size is not "
+                    "stated, so ONE batch is taken at every quantity — a provisional "
+                    "assumption. Set estimator_decisions.project_batch_size and each column "
+                    "counts its own batches.")).font = Font(italic=True, size=9, color="C00000")
 
         ws.column_dimensions["A"].width = 22
         for col in range(2, len(rows) + 2):

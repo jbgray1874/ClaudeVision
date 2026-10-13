@@ -2270,7 +2270,11 @@ def coated_sheet_area_m2(parts, says_coated) -> float:
         if _sl and _sw and ((_sl / 1000.0) * (_sw / 1000.0)) > 3.5:
             continue
         if _sl and _sw:
-            total += (_sl / 1000.0) * (_sw / 1000.0) * 2.0 * float(_sq)
+            # LESS THE OPENINGS CUT THROUGH IT (D-500): a sighted slot or opening is metal that
+            # is not there to coat, on both faces. Never below nothing.
+            _open = float(_safe(_sp.get("concept_open_area_mm2")) or 0.0) / 1e6
+            _faces = max(0.0, (_sl / 1000.0) * (_sw / 1000.0) - _open) * 2.0
+            total += _faces * float(_sq)
             if _sq_pn:
                 _seen_squash.add(_sq_pn)
     return total

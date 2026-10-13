@@ -725,6 +725,21 @@ CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "
 CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
                              "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
                              "snap", "magnet", "magnetic", "tool-free"]
+# A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
+# different consumable, named on the line as not in the fixings allowance.
+CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
+# WHICH COMPONENTS CARRY A PER-COMPONENT LABEL (D-500): made components fitted at the unit,
+# less any too small to carry one — the smaller blank dimension under this many mm. None until
+# the customer's rule states it; the count says the exception was not applied.
+CONCEPT_LABEL_MIN_FACE_MM = None
+# A COMPONENT NAMED INSIDE ANOTHER LINE (D-500): "TRAY (with welded hooked brackets)". A
+# "with …" phrase naming a joining word names a component, which must have a line of its own —
+# unless its last word is a feature of the host, not a part. Vocabulary, not logic.
+CONCEPT_JOINED_COMPONENT_WORDS = ["welded", "riveted", "bonded", "fitted", "attached",
+                                  "screwed", "bolted", "glued"]
+CONCEPT_FEATURE_WORDS = ["seam", "joint", "corner", "edge", "lip", "return", "flange", "fold",
+                         "hem", "bead", "cut-out", "cutout", "slot", "hole", "opening", "notch",
+                         "stud", "nut", "insert", "rivet", "fixing", "finish", "coat"]
 # A PIECE WELDED TO A NAMED HOST IS PART OF THAT HOST'S COMPONENT (D-499): "<piece> welded
 # to <host>". It is not fitted, labelled or fixed at the unit on its own, and it is coated
 # with its host. The joining words that name the host:
