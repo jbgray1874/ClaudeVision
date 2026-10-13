@@ -261,8 +261,25 @@ def canonical_pricing_status(part: Mapping[str, Any], price: Any) -> str:
         return NOT_APPLICABLE
     if str(part.get("_canonical_kind") or "").strip().lower() == "assembly":
         return NOT_APPLICABLE
+    # A PROJECT COST CHARGED ONCE ON THE ORDER IS NOT A RATE TO ENTER (D-501). The 20:49
+    # K-Wellness rows for the six per-order project lines read "MATERIAL UNPRICED: enter a unit
+    # rate" beside the £3,800 the Quantity Breaks tab charged for them — an invitation to charge
+    # them a second time, in every unit. Their £0 in the unit column is the rule (D-476).
+    if _charged_once_on_the_order(part):
+        return NOT_APPLICABLE
     numeric = _num(price)
     return PRICED if numeric is not None and numeric > 0 else UNPRICED
+
+
+def _charged_once_on_the_order(part: Mapping[str, Any]) -> bool:
+    _pcl = part.get("project_cost_line") if isinstance(part, Mapping) else None
+    if not (isinstance(_pcl, Mapping)
+            and str(_pcl.get("scope") or "") in ("per_order", "per_batch")):
+        return False
+    try:
+        return float(_pcl.get("order_gbp") or 0.0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def unpriced_reason_for_row(part: Mapping[str, Any]) -> Dict[str, Any]:

@@ -2936,6 +2936,8 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  "unit_of_measure": part.get("unit_of_measure"),
                  # A COUNTED LINE IS ASKED AT THE JOB'S VOLUME (D-500).
                  "quantity_counted": part.get("quantity_counted"),
+                 # A SET IS ASKED AS THE WHOLE SET (D-501).
+                 "sold_as_set": _is_set_line(part),
                  "mass_kg": part.get("normalized_weight_kg"),
                  # THE ORIGIN IS THE TRUE ONE, so the guard judges the brief on what it
                  # actually is. A sighted description is not a drawing's reading and must
@@ -2943,14 +2945,41 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                  "input_origins": dict(part.get("input_origins") or {},
                                        **({"description": "vision_concept_sighted"}
                                           if _sighted_desc else {}))},
-                order_qty=int(_safe_float(part.get("job_quantity")) or 1),
+                order_qty=_order_qty_of(part),
                 as_of=str(part.get("run_date") or ""),
                 ask=_researcher,
             )
         except Exception:                                        # noqa: BLE001
             _ind = {}
         _ind_price = _safe_float((_ind or {}).get("price_gbp"))
+        # THE ITEM'S PRICE, NOT THE LINE'S TOTAL (D-501). A bought-in line is charged as its
+        # item price × its quantity downstream; the researched `price_gbp` already carries
+        # the quantity, so a line of 48 QR labels was charged 48 × (48 × 12p). Take the item
+        # price, and keep the line total as the working it is.
+        if (_ind or {}).get("applies_per_item") and _safe_float(_ind.get("unit_price_gbp")):
+            _ind_price = _safe_float(_ind.get("unit_price_gbp"))
+        # A SET PRICED AS ONE PIECE OF IT DOES NOT RECONCILE, AND IS NOT USED (D-501). The 20:49
+        # K-Wellness "REPLACEABLE CARD / MAGNETIC GRAPHIC SET" took £18 for one panel as the
+        # price of the set. The answer must say it priced the set; one that says it priced a
+        # single panel, card or piece is refused here, the figure named on the line.
+        _scope_gap = _set_priced_as_one_piece(part, _ind) if _ind_price else ""
+        if _scope_gap:
+            _ind = dict(_ind, missing=(
+                f"PRICE SCOPE MISMATCH — this line is a set and the researched answer priced "
+                f"{_scope_gap} (£{_ind_price:,.2f}); a piece's price is not the set's, so it is not "
+                f"used. Ask for the price of the complete set and what it contains"))
+            _ind_price = None
         if _ind_price is not None and _ind_price > 0:
+            # PRICED AT THE JOB'S VOLUME, AND SAID FOR EVERY QUANTITY (D-501). A counted line
+            # is asked its price at the order's volume; the quantity breaks re-use that item
+            # price, which a smaller order may not get.
+            _vol = ((_ind or {}).get("brief") or {}).get("volume_needed")
+            if _vol:
+                part.setdefault("review_flags", []).append(
+                    f"PRICED AT VOLUME: £{_ind_price:,.4f} each was asked at "
+                    f"{float(_vol):g} items in all (this order's quantity); every Quantity "
+                    f"Breaks column re-uses that item price, and a smaller order may pay more "
+                    f"per item — confirm the break pricing with the supplier")
             # WHAT WAS ACTUALLY PRICED, on the line. £126.04 for "a screw" is obviously wrong
             # only once somebody can see the model priced something else; said here, it is
             # visible before anyone reaches the total.
@@ -2996,6 +3025,40 @@ def _resolve_part_system_cost(part: Dict[str, Any]) -> Dict[str, Any]:
                 "matched_part_code": zero_code}
 
     return {"result": best_result, "applied_unit_cost": best_price, "matched_part_code": matched_part_code}
+
+
+def _order_qty_of(part: Dict[str, Any]) -> int:
+    """The order quantity a research question is asked at (D-501). estimate_part stamps it as
+    `assumed_job_quantity`; the research rungs read only `job_quantity`, which nothing sets, so
+    every researched price was asked at an order of ONE — the 20:49 K-Wellness labels' "price
+    at this job's volume" asked for 48, not 48 × 200."""
+    for key in ("job_quantity", "assumed_job_quantity"):
+        q = _safe_float((part or {}).get(key))
+        if q and q > 0:
+            return int(q)
+    return 1
+
+
+def _words_in(text: str, words: Any) -> List[str]:
+    low = f" {text.lower()} "
+    return [w for w in (words or []) if str(w).strip()
+            and re.search(rf"(?<![a-z0-9]){re.escape(str(w).lower())}(?![a-z0-9])", low)]
+
+
+def _is_set_line(part: Dict[str, Any]) -> bool:
+    """Is this line a set — bought, and priced, as the whole set (config CONCEPT_SET_WORDS)?"""
+    text = " ".join(str(part.get(k) or "") for k in ("description", "research_description"))
+    return bool(_words_in(text, getattr(config, "CONCEPT_SET_WORDS", [])))
+
+
+def _set_priced_as_one_piece(part: Dict[str, Any], ind: Any) -> str:
+    """For a set line, the words in the researched answer that say it priced ONE piece of the
+    set (config PRICE_SINGLE_PIECE_WORDS); '' when it did not, or the line is not a set."""
+    if not (isinstance(ind, dict) and _is_set_line(part)):
+        return ""
+    said = str(ind.get("item_priced") or "")
+    hit = _words_in(said, getattr(config, "PRICE_SINGLE_PIECE_WORDS", []))
+    return f"'{said}'" if hit else ""
 
 
 def _model_bends_agree(part: Dict[str, Any], count: Any) -> bool:
@@ -4397,7 +4460,7 @@ def _researched_board_rate_m2(material: Optional[str], thickness: Optional[float
              # laundered into a researched answer.
              "input_origins": {"description": "drawing_or_measurement",
                                "quantity": "drawing_or_measurement"}},
-            order_qty=int(_safe_float(part.get("job_quantity")) or 1),
+            order_qty=_order_qty_of(part),
             as_of=str(part.get("run_date") or ""),
             ask=_rung4_researcher,
         )
@@ -11792,7 +11855,7 @@ def apply_consumable_allowances(part_estimates: List[Dict[str, Any]],
             continue
         ref_line = {"part_number": "", "description": ref, "quantity": 1,
                     "page_roles": ["bought_in"], "is_bought_in": True,
-                    "job_quantity": pe.get("job_quantity"), "run_date": pe.get("run_date")}
+                    "job_quantity": _order_qty_of(pe), "run_date": pe.get("run_date")}
 
         def _priced(line: Dict[str, Any], _ref=ref_line, _count=count, _rule=rule,
                     _name=ref) -> Optional[float]:
@@ -11852,11 +11915,15 @@ def _made_part_material_allowance(pe: Dict[str, Any]) -> Optional[float]:
         _ind = _rung4({"code": "", "description": question, "quantity": pe.get("quantity"),
                        "unit_of_measure": "each",
                        "input_origins": dict(pe.get("input_origins") or {})},
-                      order_qty=int(_safe_float(pe.get("job_quantity")) or 1),
+                      order_qty=_order_qty_of(pe),
                       as_of=str(pe.get("run_date") or ""), ask=_rung4_researcher)
     except Exception:                                            # noqa: BLE001
         _ind = {}
     price = _safe_float((_ind or {}).get("price_gbp"))
+    # ONE PART'S ALLOWANCE, NOT THE LINE'S (D-501): asked with the line's quantity, the answer's
+    # price_gbp is the allowance × that quantity, and this returns a per-each price.
+    if (_ind or {}).get("applies_per_item") and _safe_float(_ind.get("unit_price_gbp")):
+        price = _safe_float(_ind.get("unit_price_gbp"))
     if price is None or price <= 0:
         pe.setdefault("review_flags", []).append(
             f"{pe.get('part_number') or what}: NOT PRICED — a part SDI makes with no size, so "

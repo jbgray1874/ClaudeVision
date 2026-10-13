@@ -728,6 +728,35 @@ CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung",
 # A PIECE JOINED BY ADHESIVE TAKES NO SCREWS (D-500): bonded, taped or glued — its adhesive is a
 # different consumable, named on the line as not in the fixings allowance.
 CONCEPT_BONDED_WORDS = ["bonded", "bond", "adhesive", "glued", "taped", "tape", "vhb"]
+# THE ADHESIVE A BONDED PIECE NEEDS, SO EXCLUDING ITS SCREWS NEVER LEAVES IT UNPRICED (D-501):
+# a run of the reference tape along the bonded piece's length, once. A COUNT RULE AND AN ITEM,
+# never a price — the item is priced per metre by the ordinary chain. AN ASSUMPTION TO CONFIRM.
+CONCEPT_ADHESIVE_ALLOWANCE = {
+    "reference_item": "double-sided acrylic foam mounting tape, 12 mm wide",
+    "unit_of_measure": "m",
+    "basis": "an assumption to confirm — one run along each bonded piece's length",
+}
+# A LINE THAT IS A SET IS PRICED AS THE WHOLE SET (D-501). Words that make a line a set, and
+# words in a price answer that say it priced one piece of it. Vocabulary, not logic. ("pack"
+# is not here: a pack of an each-bought item is divided down to one, not priced whole.)
+CONCEPT_SET_WORDS = ["set", "sets", "kit", "kits", "pair", "pairs", "suite"]
+PRICE_SINGLE_PIECE_WORDS = ["one panel", "single panel", "one piece", "single piece",
+                            "one sheet", "single sheet", "one card", "single card",
+                            "1 x panel", "1x panel", "per panel", "each panel"]
+# A SMALL JOINED COMPONENT NAMED INSIDE ANOTHER LINE, WHICH NOTHING SIZES (D-501): priced as a
+# house allowance per component at its host's gauge, rather than left knowingly unpriced. The
+# count per host is the brief's or the read's own number ("two hooked brackets"), else the
+# plural said as an assumption. Components outside this list stay a question. AN ASSUMPTION TO
+# CONFIRM WITH ESTIMATING — said on the line it charges.
+CONCEPT_JOINED_COMPONENT_ALLOWANCE = {
+    "components": ["bracket", "hook", "tab", "lug", "cleat", "gusset", "clip", "stiffener"],
+    "blank_mm": {"length": 60, "width": 40},
+    "folds": 1,
+    "basis": "a house allowance for a small folded component — an assumption to confirm",
+}
+# A SPACING IS NOT A SIZE (D-501). Words that make a figure in the brief or the read a pitch —
+# the distance between features — so a cut-out read at exactly that figure is questioned.
+CONCEPT_PITCH_WORDS = ["pitch", "spacing", "spaced", "centres", "centers", "c/c", "crs"]
 # WHICH COMPONENTS CARRY A PER-COMPONENT LABEL (D-500): made components fitted at the unit,
 # less any too small to carry one — the smaller blank dimension under this many mm. None until
 # the customer's rule states it; the count says the exception was not applied.

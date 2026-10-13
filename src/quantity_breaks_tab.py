@@ -137,7 +137,8 @@ def _write_basis(ws, rows: List[Dict[str, Any]], top: int, bold, Alignment) -> i
 def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
                               requested: Optional[List[int]] = None,
                               warning: Optional[str] = None,
-                              project_costs: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                              project_costs: Optional[Dict[str, Any]] = None,
+                              volume_priced: Optional[List[str]] = None) -> Optional[str]:
     """Add (or replace) the one-sheet break table. Returns the sheet name, or None.
 
     `warning` is printed in red above the figures when the run knows the comparison is
@@ -296,6 +297,15 @@ def write_quantity_breaks_tab(xlsx_path: Any, swept: Any,
             "prices itself — the Material Price Break tab carries each line across the "
             "breaks. This sheet is the comparison."))
         ws.cell(row=_n, column=1).font = Font(italic=True, size=9)
+        # A LINE PRICED AT THIS ORDER'S VOLUME IS THE SAME ITEM PRICE IN EVERY COLUMN (D-501):
+        # the 20:49 K-Wellness labels were asked at 9,600 off; the smaller columns re-use that
+        # price, which a smaller order may not get. Said beside the columns, not only on the line.
+        if volume_priced:
+            ws.cell(row=_n + 1, column=1, value=(
+                "Priced at this order's volume and re-used in every column: "
+                + "; ".join(str(v) for v in volume_priced)
+                + " — a smaller order may pay more per item; confirm the break pricing with "
+                  "the supplier.")).font = Font(italic=True, size=9, color="C00000")
 
         wb.save(str(xlsx_path))
         return SHEET_NAME

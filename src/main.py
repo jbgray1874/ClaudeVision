@@ -1872,7 +1872,16 @@ def main() -> None:
                                 # shown beside the order values, never in the unit price.
                                 project_costs=(summary.get("project_costs")
                                                if isinstance(summary.get("project_costs"),
-                                                             dict) else None))
+                                                             dict) else None),
+                                # Lines researched at this order's volume (D-501).
+                                volume_priced=[
+                                    f"{_pe.get('part_number')} "
+                                    f"({str(_f).split(':', 1)[1].split(';')[0].strip()})"
+                                    for _pe in ((summary.get("estimate_summary") or {})
+                                                .get("part_estimates") or [])
+                                    if isinstance(_pe, dict)
+                                    for _f in (_pe.get("review_flags") or [])
+                                    if str(_f).startswith("PRICED AT VOLUME:")])
                             if _tab:
                                 summary["quantity_breaks_tab"] = _tab
                             # The same request's other half. A view, not a change to a cell:
