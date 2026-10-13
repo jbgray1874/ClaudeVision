@@ -197,6 +197,10 @@ def research_brief(line: Any, *, order_qty: int = 1) -> Dict[str, Any]:
                 " This line is a SET: give the price of the COMPLETE set as one item — every "
                 "panel, card or piece in it — and say what the set contains. The price of one "
                 "panel or piece of it is not usable.")
+            # ASKED AGAIN, WITH THE REFUSED ANSWER NAMED (D-502).
+            if line.get("set_previous_answer"):
+                brief["ask"] += (f" A previous answer priced only {line['set_previous_answer']}"
+                                 f" — one piece of the set. Price the WHOLE set.")
         # A COUNTED ITEM IS PRICED AT THE JOB'S VOLUME (D-500). The K-Wellness 20:49 book asked
         # for "ONE item" of a 20 x 20 mm label and got a single-label retail listing — £5.76,
         # where the 18:17 book had found 12p — multiplied by 48 labels a unit. A line whose
