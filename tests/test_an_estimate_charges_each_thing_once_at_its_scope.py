@@ -584,26 +584,35 @@ def test_the_sheet_check_puts_the_read_back_naming_the_folded_component():
                for f in chk["failures"])
 
 
-def test_a_component_still_folded_in_is_a_question_with_the_previous_line_as_information():
+def _folded(*hosts):
+    """The 20:49 shape: brackets named inside the trays' names, no line of their own."""
     ans = _fsdu()
     ans["parts"] = [p for p in ans["parts"] if "BRACKET" not in p["name"]]
     for p in ans["parts"]:
+        if p["name"] in hosts:
+            p["name"] = p["name"].replace("TRAY", "TRAY (with welded hooked brackets)", 1)
+    return ans
+
+
+_PREV_BRACKET = {"name": "HOOKED BRACKET (WELDED TO TRAY)", "kind": "fabricated",
+                 "quantity": 30, "material": "MILD STEEL", "length": 40, "width": 30,
+                 "thickness": 2.0, "folds": 1}
+
+
+def test_a_component_still_folded_in_with_nothing_to_size_it_is_a_question():
+    """D-500, kept by D-501 where no allowance can be reasoned: nothing sizes the component and
+    it is not a small joined component the house allowance covers."""
+    ans = _fsdu()
+    for p in ans["parts"]:
         if p["name"] == "FRONT SHELF TRAY":
-            p["name"] = "FRONT SHELF TRAY (with welded hooked brackets)"
+            p["name"] = "FRONT SHELF TRAY (with welded mesh panels)"
     parts = cs.parts_from_concept(ans, "J")
-    prev = {"parts": [{"name": "HOOKED BRACKET (WELDED TO TRAY)", "quantity": 30,
-                       "length": 40, "width": 30}]}
-    asked = cs.question_components_inside(parts, prev)
-    assert len(asked) == 1
+    res = cs.allow_components_inside(parts, {"parts": [{"name": "MESH PANEL", "quantity": 5}]},
+                                     "J")
+    assert res["minted"] == [] and len(res["asked"]) == 1
     tray = [p for p in parts if p["description"].startswith("FRONT SHELF TRAY")][0]
     (q,) = tray["manufacturing_questions"]
-    text = str(q)
-    assert "no line of the bill costs" in text and "not costed" in text
-    assert "previous read listed HOOKED BRACKET (WELDED TO TRAY) x30 at 40 × 30 mm" in text
-    assert "information only" in text
-    assert not any(p["description"].startswith("HOOKED") for p in parts)   # nothing minted
-    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
-    assert "concept_scan.question_components_inside(_sighted, _prev_bill)" in src
+    assert "no line of the bill costs" in str(q) and "nothing on this read or the previous" in str(q)
 
 
 def test_a_bonded_piece_takes_no_screws_and_hung_pieces_carry_the_retainer_note():
@@ -666,3 +675,343 @@ def test_the_coat_is_net_of_the_openings_cut_through_it():
     L, Wd = pe["material_estimate"]["blank_length_mm"], pe["material_estimate"]["blank_width_mm"]
     area = W.coated_sheet_area_m2([pe], W.route_coated_membership(None))
     assert abs(area - ((L / 1000) * (Wd / 1000) - 0.022) * 2) < 1e-9
+
+
+# ── D-501: the 20:49 review — an answer reconciles before it is used, and every component the
+#    read names reaches a charged line, an identified allowance, or a reasoned exclusion ──────
+
+def _label_answer(**over):
+    """The researched answer behind the 20:49 labels: 12p a label, found at the job's volume."""
+    a = {"price_gbp": 0.12, "unit": "each", "source": "https://example-labels.co.uk/qr-20",
+         "as_of": "2026-10-12", "quantity_basis": "9600 off, on rolls",
+         "item_priced": "20 x 20 mm printed QR label, one label",
+         "price_is_reproducible": True}
+    a.update(over)
+    return a
+
+
+_LABEL = {"part_number": "J-NV02", "description": "QR component label 20x20mm",
+          "is_bought_in": True, "concept": True, "concept_kind": "bought_in",
+          "normalized_material": "BOUGHT_IN", "quantity": 48, "unit_of_measure": "each",
+          "quantity_counted": {"count": 48, "basis": "1 per labelled component x 48"},
+          "research_description": "20 x 20 mm QR label — the price of one item at this "
+                                  "job's volume"}
+
+
+def test_the_2049_label_answer_is_twelve_pence_each_and_its_working_is_the_line_total():
+    import indicative_price as ip
+    got = ip.resolve_indicative(dict(_LABEL), order_qty=200, ask=lambda b: _label_answer())
+    assert got["calculation"]["working"] == "48 off x GBP 0.1200 each = GBP 5.7600 a unit"
+    assert got["price_gbp"] == 5.76                 # the LINE's cost on one unit
+    assert got["unit_price_gbp"] == 0.12            # the ITEM's price
+    assert got["applies_per_item"] is True
+
+
+def test_the_engine_charges_the_label_twelve_pence_each_once_not_twice(monkeypatch):
+    import estimator as E
+    asked = []
+    monkeypatch.setattr(E, "_rung4_researcher",
+                        lambda brief: (asked.append(brief), _label_answer())[1])
+    pe = E.estimate_part(dict(_LABEL, review_flags=[]), job_quantity=200)
+    me = pe["material_estimate"]
+    assert me["unit_material_cost_gbp"] == 0.12     # was 5.76 — the line total taken as each
+    assert me["extended_material_cost_gbp"] == 5.76  # was 276.48 — 48 × 5.76
+    # Asked at THIS order's volume: estimate_part stamps assumed_job_quantity, and the
+    # research rung used to read only job_quantity — every question went out at an order of 1.
+    assert asked[0]["order_quantity"] == 200 and asked[0]["volume_needed"] == 9600
+    (vol,) = [f for f in pe["review_flags"] if f.startswith("PRICED AT VOLUME")]
+    assert "£0.1200 each was asked at 9600 items in all" in vol
+    assert "every Quantity Breaks column re-uses that item price" in vol
+
+
+def test_a_pack_price_is_divided_by_the_stated_pack_and_refused_without_one():
+    import indicative_price as ip
+    line = {"description": "M5 x 12 pan head screw", "quantity": 100, "unit_of_measure": "each"}
+    per_box = _label_answer(price_gbp=9.00, unit="per box", quantity_basis="box of 200",
+                            item_priced="box of 200 screws")
+    got = ip.resolve_indicative(dict(line), ask=lambda b: per_box)
+    assert got["unit_price_gbp"] == 0.045
+    assert "GBP 9.0000 a box ÷ 200 = GBP 0.0450 each" in got["evidence"]["quantity_basis"]
+    assert got["calculation"]["working"] == "100 off x GBP 0.0450 each = GBP 4.5000 a unit"
+    no_size = ip.resolve_indicative(dict(line), ask=lambda b: dict(per_box, quantity_basis="trade"))
+    assert no_size["price_gbp"] is None and "no pack size stated" in no_size["missing"]
+
+
+def test_a_made_part_allowance_is_one_parts_price_not_the_lines(monkeypatch):
+    import estimator as E
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: _label_answer(
+        price_gbp=3.50, item_priced="one folded steel bracket"))
+    pe = {"part_number": "J-CPT09", "description": "BRACKET", "quantity": 30,
+          "assumed_job_quantity": 200, "review_flags": []}
+    assert E._made_part_material_allowance(pe) == 3.50
+
+
+def test_a_set_is_asked_as_the_whole_set_and_a_one_panel_answer_is_not_used(monkeypatch):
+    import estimator as E
+    import indicative_price as ip
+    b = ip.research_brief({"description": "REPLACEABLE CARD / MAGNETIC GRAPHIC SET",
+                           "quantity": 1, "sold_as_set": True})
+    assert "COMPLETE set" in b["ask"] and b["sold_as_set"]
+    gset = {"part_number": "J-CPT12", "description": "REPLACEABLE CARD / MAGNETIC GRAPHIC SET",
+            "is_bought_in": True, "concept": True, "concept_kind": "graphic", "quantity": 1,
+            "normalized_material": "PRINTED_PAPER", "assumed_job_quantity": 200,
+            "review_flags": []}
+    asked = []
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: (asked.append(brief), _label_answer(
+        price_gbp=18.00, quantity_basis="200 off", item_priced="single panel magnetic graphic"))[1])
+    res = E._resolve_part_system_cost(gset)
+    assert asked and asked[0].get("sold_as_set") is True
+    assert res["applied_unit_cost"] in (None, 0.0)
+    assert any("PRICE SCOPE MISMATCH" in f and "£18.00" in f for f in gset["review_flags"])
+    # The whole set, said so, is used.
+    whole = dict(gset, review_flags=[])
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: _label_answer(
+        price_gbp=64.00, quantity_basis="200 sets", item_priced="complete set of 5 panels"))
+    assert E._resolve_part_system_cost(whole)["applied_unit_cost"] == 64.00
+    # And a line that is not a set is never refused for a one-piece answer.
+    panel = dict(gset, description="REAR GRAPHIC PANEL", review_flags=[])
+    monkeypatch.setattr(E, "_rung4_researcher", lambda brief: _label_answer(
+        price_gbp=18.00, quantity_basis="200 off", item_priced="single panel"))
+    assert E._resolve_part_system_cost(panel)["applied_unit_cost"] == 18.00
+
+
+def test_a_bracket_folded_into_its_trays_is_priced_once_from_the_previous_reads_line():
+    parts = cs.parts_from_concept(_folded("FRONT SHELF TRAY", "SIDE SHELF TRAY (LEFT)"), "J")
+    res = cs.allow_components_inside(parts, {"parts": [_PREV_BRACKET]}, "J")
+    (cpa,) = res["minted"]                            # ONE line across both hosts
+    assert cpa["part_number"] == "J-CPA01" and res["asked"] == []
+    assert cpa["quantity"] == 30
+    assert (cpa["blank_length_mm"], cpa["blank_width_mm"]) == (40.0, 30.0)
+    assert cpa["normalized_thickness_mm"] == 2.0 and cpa["normalized_material"] == "MILD STEEL"
+    hosts = [p["part_number"] for p in parts if "brackets" in p["description"]]
+    assert cpa["welded_to_hosts"] == hosts and len(hosts) == 2
+    assert cpa["coated_with_host"] == hosts           # the trays are powder coated
+    # The trays carry no weld in this read, so the joint is charged once — on the allowance.
+    assert "welding" in cpa["inferred_operations"] and "laser_cutting" in cpa["inferred_operations"]
+    assert "folding" in cpa["inferred_operations"]
+    assert cpa["provisional_allowance"]["from_previous_read"]["name"] == _PREV_BRACKET["name"]
+    flag = cpa["review_flags"][-1]
+    assert flag.startswith("PROVISIONAL ALLOWANCE") and "Charged ONCE here" in flag
+    assert "not confirmed by this read" in flag and "30 × 40 × 30 × 2 mm MILD STEEL" in flag
+    for p in parts:
+        if p["part_number"] in hosts:
+            assert "charged on J-CPA01 as a provisional allowance" in p["review_flags"][-1]
+            assert not p.get("manufacturing_questions")
+    assert res["allowed"] == {_PREV_BRACKET["name"]: "J-CPA01"}
+    assert not any("no size could be sighted" in f for f in cpa["review_flags"])
+
+
+def test_a_host_row_in_the_previous_bill_never_sizes_the_component_it_names():
+    """The 20:49 bill itself lists 'FRONT SHELF TRAY (with welded hooked brackets)' 460 × 300
+    × 5 — a tray. It is not the brackets' size or count."""
+    parts = cs.parts_from_concept(_folded("FRONT SHELF TRAY"), "J")
+    host_row = {"name": "FRONT SHELF TRAY (with welded hooked brackets)", "kind": "fabricated",
+                "quantity": 5, "material": "MILD STEEL", "length": 460, "width": 300,
+                "thickness": 1.5, "folds": 3}
+    (cpa,) = cs.allow_components_inside(parts, {"parts": [host_row]}, "J")["minted"]
+    assert "house_allowance" in cpa["provisional_allowance"]
+    assert cpa["blank_length_mm"] != 460.0 and cpa["quantity"] == 2 * 5
+
+
+def test_the_joint_stays_on_a_host_that_already_welds():
+    ans = _folded("FRONT SHELF TRAY")
+    for p in ans["parts"]:
+        if p["name"].startswith("FRONT SHELF TRAY"):
+            p["operations"] = p["operations"] + ["welding"]
+    parts = cs.parts_from_concept(ans, "J")
+    (cpa,) = cs.allow_components_inside(parts, {"parts": [_PREV_BRACKET]}, "J")["minted"]
+    assert "welding" not in cpa["inferred_operations"]
+    assert "the joint is charged on the host, which carries the weld" in cpa["review_flags"][-1]
+
+
+def test_a_dropped_line_that_is_allowed_says_where_it_is_charged():
+    flags = cs.change_flags(["dropped: HOOKED BRACKET (WELDED TO TRAY) x30",
+                             "dropped: TOP CAP x1"],
+                            baseline="new interpretation with the previous bill",
+                            allowed={"HOOKED BRACKET (WELDED TO TRAY)": "J-CPA01"})
+    drops = [f for f in flags if f.startswith("DROPPED FROM THE PREVIOUS READ")]
+    assert "charged as a PROVISIONAL ALLOWANCE on J-CPA01" in drops[0]
+    assert "not confirmed" in drops[0]
+    assert "its material and work are missing" in drops[1]       # TOP CAP: still a gap
+
+
+def test_two_hosts_naming_the_same_component_do_not_list_it_for_each_other():
+    lines = [{"name": "FRONT SHELF TRAY (with welded hooked brackets)"},
+             {"name": "SIDE SHELF TRAY (mirrored, with welded hooked brackets)"}]
+    assert [h["host"] for h in cs.components_named_inside(lines)] == [l["name"] for l in lines]
+
+
+def test_file_scan_prices_the_folded_component_and_asks_the_pitch():
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "concept_scan.allow_components_inside(_sighted, _prev_bill, _job_name," in src
+    assert '_sighted.extend(_inside["minted"])' in src
+    assert "concept_scan.pitch_as_size_questions(_sighted, _brief" in src
+    at = src.index("concept_scan.allow_components_inside(")
+    assert at < src.index("concept_scan.save_bill(job_folder, _bill_job, _answer, records=_sighted")
+
+
+def test_a_bonded_joint_is_priced_as_adhesive_not_left_out():
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if "STRIP" in p["name"]:
+            p["name"] = "35MM SHELF EDGE STRIP (bonded)"
+    parts = cs.parts_from_concept(ans, "J")
+    adh = cs.adhesive_allowance_line(parts, "J", 3)
+    assert adh["part_number"] == "J-NV03" and adh["unit_of_measure"] == "m"
+    assert adh["quantity"] == round((5 * 460 + 5 * 300 + 5 * 300) / 1000.0, 2)   # 5.3 m
+    assert adh["quantity_counted"]["count"] == adh["quantity"]
+    assert config.CONCEPT_ADHESIVE_ALLOWANCE["reference_item"] in adh["description"]
+    assert "price per m" in adh["research_description"]
+    assert "provisional adhesive allowance" in adh["review_flags"][-1]
+    # No bonded piece, no adhesive line.
+    assert cs.adhesive_allowance_line(cs.parts_from_concept(_fsdu(), "J"), "J", 3) is None
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    assert "concept_scan.adhesive_allowance_line(_sighted, _job_name" in src
+
+
+def test_a_cut_out_read_at_the_stated_pitch_is_asked_and_still_priced():
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if p["name"] == "CORNER POST":
+            p["cutouts"] = [{"what": "slot", "count": 40, "length_mm": 31.75, "width_mm": 5}]
+    parts = cs.parts_from_concept(ans, "J")
+    post = [p for p in parts if p["description"] == "CORNER POST"][0]
+    cut_before = post["manufacturing_features"]["cut_length_mm"]
+    brief = ("Shelving positions to be fixed to standard slotted upright vertical pitch of "
+             "31.75mm. Body 500 x 500 mm.")
+    asked = cs.pitch_as_size_questions(parts, brief)
+    assert asked == ["J-CPT01: slot 31.75 × 5 mm = pitch 31.75 mm"]
+    (q,) = post["manufacturing_questions"]
+    assert "31.75 mm is stated as a pitch" in q["issue"] and "priced as read" in q["assumption"]
+    assert post["manufacturing_features"]["cut_length_mm"] == cut_before      # no money moved
+    # A slot that is not the pitch is not asked; a figure in another sentence is not a pitch.
+    assert cs._pitch_figures(brief) == [{"mm": 31.75, "said":
+                                         "standard slotted upright vertical pitch of 31.75mm"}]
+    for p in ans["parts"]:
+        if p["name"] == "CORNER POST":
+            p["cutouts"] = [{"what": "slot", "count": 40, "length_mm": 20, "width_mm": 5}]
+    assert cs.pitch_as_size_questions(cs.parts_from_concept(ans, "J"), brief) == []
+
+
+def test_cutting_and_coating_take_the_same_opening_once():
+    """The 20:49 cap's opening is 460 × 20 mm (960 mm of internal cut). The laser takes its
+    perimeter and the coat its area — the same opening, deducted once, by the coat only."""
+    import estimator as E
+    import wb_populate as W
+    ans = _fsdu()
+    for p in ans["parts"]:
+        if p["name"] == "TOP CAP":
+            p["cutouts"] = [{"what": "opening", "count": 1, "length_mm": 460, "width_mm": 20}]
+    cap = [p for p in cs.parts_from_concept(ans, "J") if p["description"] == "TOP CAP"][0]
+    L, Wd = cap["blank_length_mm"], cap["blank_width_mm"]
+    assert cap["manufacturing_features"]["cut_length_mm"] == round(2 * (L + Wd) + 960, 1)
+    assert cap["concept_open_area_mm2"] == 9200.0
+    pe = E.estimate_part(dict(cap), job_quantity=10)
+    me = pe["material_estimate"]
+    assert (me["blank_length_mm"], me["blank_width_mm"]) == (L, Wd)   # the blank is not cut down
+    area = W.coated_sheet_area_m2([pe], W.route_coated_membership(None))
+    assert abs(area - ((L / 1000) * (Wd / 1000) - 0.0092) * 2) < 1e-9
+
+
+def test_a_project_cost_charged_once_is_not_an_unpriced_rate():
+    import estimator_inputs as ei
+    line = {"part_number": "PROJECT-02", "description": "Prototype",
+            "project_cost_line": {"scope": "per_order", "state": "provisional",
+                                  "order_gbp": 1200.0}}
+    assert ei.canonical_pricing_status(line, 0.0) == ei.NOT_APPLICABLE
+    open_line = dict(line, project_cost_line={"scope": "per_order", "order_gbp": None})
+    assert ei.canonical_pricing_status(open_line, 0.0) == ei.UNPRICED
+
+
+def test_the_banner_says_the_report_adds_the_checks_it_had_not_seen():
+    import costed_facts as cf
+    src = (ROOT / "src" / "costed_facts.py").read_text(encoding="utf-8")
+    assert "the consistency checks had not run when this was counted — the report's" in src
+    assert "total adds any check they raise" in src
+    assert hasattr(cf, "outstanding_summary")
+
+
+def test_the_quantity_breaks_tab_says_what_was_priced_at_this_orders_volume(tmp_path):
+    import openpyxl
+    from quantity_breaks_tab import write_quantity_breaks_tab, SHEET_NAME
+    p = tmp_path / "v.xlsx"
+    openpyxl.Workbook().save(p)
+    swept = {"rows": [{"quantity": 1, "material": 10, "labour": 5, "unit": 20.0},
+                      {"quantity": 200, "material": 10, "labour": 3, "unit": 16.0}]}
+    write_quantity_breaks_tab(p, swept, requested=[1, 200],
+                              volume_priced=["J-NV02 (£0.1200 each was asked at 9600 items "
+                                             "in all (this order's quantity))"])
+    ws = openpyxl.load_workbook(p)[SHEET_NAME]
+    text = " ".join(str(c.value) for row in ws.iter_rows() for c in row if c.value)
+    assert "Priced at this order's volume and re-used in every column: J-NV02" in text
+    src = (ROOT / "src" / "main.py").read_text(encoding="utf-8")
+    assert 'str(_f).startswith("PRICED AT VOLUME:")' in src
+
+
+def test_the_d501_vocabulary_lives_in_config_and_holds_no_job():
+    for name in ("CONCEPT_SET_WORDS", "PRICE_SINGLE_PIECE_WORDS", "CONCEPT_PITCH_WORDS"):
+        words = getattr(config, name)
+        assert words and all(isinstance(w, str) for w in words)
+    assert config.CONCEPT_JOINED_COMPONENT_ALLOWANCE["components"]
+    assert "pack" not in config.CONCEPT_SET_WORDS        # a pack is divided, not priced whole
+    blob = repr([config.CONCEPT_SET_WORDS, config.PRICE_SINGLE_PIECE_WORDS,
+                 config.CONCEPT_PITCH_WORDS, config.CONCEPT_ADHESIVE_ALLOWANCE,
+                 config.CONCEPT_JOINED_COMPONENT_ALLOWANCE]).lower()
+    for job_word in ("boots", "wellness", "kwellness", "31.75"):
+        assert job_word not in blob
+
+
+def test_with_no_read_sizing_it_a_small_component_is_a_house_allowance_counted_from_the_brief():
+    """The 20:49 shape on the NEXT run: its saved bill no longer has the bracket line, so no
+    read sizes them. They are not left unpriced: the count from the brief's own words, the size
+    a house allowance at the host's gauge, every figure said, charged once."""
+    parts = cs.parts_from_concept(_folded("FRONT SHELF TRAY", "SIDE SHELF TRAY (LEFT)"), "J")
+    brief = ("Each shelf is a folded steel tray with a front lip, with two hooked\n"
+             "brackets welded or riveted to the tray (not separate brackets).")
+    res = cs.allow_components_inside(parts, {}, "J", brief=brief)
+    (cpa,) = res["minted"]
+    rule = config.CONCEPT_JOINED_COMPONENT_ALLOWANCE
+    assert cpa["quantity"] == 2 * (5 + 5)
+    assert (cpa["blank_length_mm"], cpa["blank_width_mm"]) == (
+        float(rule["blank_mm"]["length"]), float(rule["blank_mm"]["width"]))
+    assert cpa["normalized_thickness_mm"] == 1.5                  # the hosts' gauge
+    assert "folding" in cpa["inferred_operations"] and "welding" in cpa["inferred_operations"]
+    flag = cpa["review_flags"][-1]
+    assert "2 per host from the enquiry brief ('two hooked brackets')" in flag
+    assert rule["basis"] in flag and "Charged ONCE here" in flag
+    assert "house_allowance" in cpa["provisional_allowance"]
+    # No count anywhere: the plural is the assumption, and it says so.
+    (cpa2,) = cs.allow_components_inside(
+        cs.parts_from_concept(_folded("FRONT SHELF TRAY"), "J"), {}, "J")["minted"]
+    assert cpa2["quantity"] == 2 * 5
+    assert "the read names them in the plural and nothing states a count" in cpa2["review_flags"][-1]
+
+
+def test_a_line_a_read_dropped_is_kept_as_history_and_sizes_a_later_allowance(tmp_path,
+                                                                               monkeypatch):
+    monkeypatch.setattr(cs, "_cache_dir", lambda: tmp_path / "engine" / "cache" / "vision_concept")
+    job = tmp_path / "staged" / "Client" / "JOB"
+    job.mkdir(parents=True)
+    cs.save_bill(job, "JOB", _fsdu(), read_key="r1")                    # lists the brackets
+    cs.save_bill(job, "JOB", _folded("FRONT SHELF TRAY"), read_key="r2")  # folds them in
+    prev = cs.load_previous_bill(job, "JOB")
+    (h,) = [r for r in prev["history"] if r["name"] == "HOOKED BRACKET (WELDED TO TRAY)"]
+    assert h["dropped_by_read"] == "r2" and h["length"] == 40 and h["quantity"] == 30
+    # History is a basis for an allowance, never a line of the read the model is shown.
+    assert "HOOKED BRACKET (WELDED TO TRAY)" not in cs.previous_bill_text(prev)
+    parts = cs.parts_from_concept(_folded("FRONT SHELF TRAY"), "J")
+    res = cs.allow_components_inside(parts, prev, "J")
+    (cpa,) = res["minted"]
+    assert (cpa["blank_length_mm"], cpa["blank_width_mm"], cpa["quantity"]) == (40.0, 30.0, 30)
+    assert "an earlier read's (dropped since, kept in the bill's history)" in cpa["review_flags"][-1]
+    assert res["allowed"] == {"HOOKED BRACKET (WELDED TO TRAY)": cpa["part_number"]}
+    # A third read that lists them again takes them out of history.
+    cs.save_bill(job, "JOB", _fsdu(), read_key="r3")
+    assert not [r for r in cs.load_previous_bill(job, "JOB")["history"]
+                if r["name"] == "HOOKED BRACKET (WELDED TO TRAY)"]
+
+
+def test_file_scan_hands_the_brief_to_the_component_allowance():
+    src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
+    at = src[src.index("concept_scan.allow_components_inside("):][:200]
+    assert 'brief=_brief or ""' in at

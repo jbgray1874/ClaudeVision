@@ -306,7 +306,7 @@ def test_the_unit_owns_its_fitted_lines_in_the_hierarchy():
 
 def test_file_scan_hangs_the_consumables_on_the_unit():
     src = (SRC / "file_scan.py").read_text(encoding="utf-8")
-    at = src[src.index("_nv_lines = concept_scan.consumable_lines("):][:2000]
+    at = src[src.index("_nv_lines = concept_scan.consumable_lines("):][:3200]
     assert "pieces_fitted=" in at and "assembly_fitted_items" in at
 
 

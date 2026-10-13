@@ -1286,6 +1286,55 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
     return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded}
 
 
+def adhesive_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict[str, Any]]:
+    """The adhesive a bonded piece needs, priced — excluding its screws must not leave the joint
+    unpriced (D-501). Metres of the reference tape (config CONCEPT_ADHESIVE_ALLOWANCE) along each
+    bonded piece's length, once, priced per metre by the ordinary chain; every piece named."""
+    from document_builder import _empty_part_record                 # noqa: WPS433
+    from source_precedence import apply_field                       # noqa: WPS433
+    try:
+        import config                                               # noqa: WPS433
+        rule = dict(getattr(config, "CONCEPT_ADHESIVE_ALLOWANCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        rule = {}
+    ref = str(rule.get("reference_item") or "").strip()
+    unit = str(rule.get("unit_of_measure") or "m").strip()
+    bonded = _vocab_list("CONCEPT_BONDED_WORDS")
+    pieces = []
+    for p in parts or []:
+        if not (isinstance(p, dict) and p.get("concept_kind") == "fabricated"):
+            continue
+        low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
+        if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low) for w in bonded):
+            length = max(_num(p.get("blank_length_mm")), _num(p.get("blank_width_mm")))
+            if length:
+                pieces.append((str(p.get("part_number")), _qty_of(p), length))
+    if not ref or not pieces:
+        return None
+    metres = round(sum(q * L for _, q, L in pieces) / 1000.0, 2)
+    basis = (" + ".join(f"{pn} {q} × {L:g} mm" for pn, q, L in pieces)
+             + f" = {metres:g} m ({rule.get('basis') or 'config'})")
+    record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}", item_number=None,
+                                description=f"Adhesive allowance — {ref}", quantity=None)
+    record["concept"] = True
+    record["concept_kind"] = "bought_in"
+    record["concept_not_visible"] = True
+    record["page_roles"] = ["render"]
+    apply_field(record, "quantity", metres, SOURCE,
+                note=f"PROVISIONAL — {basis}; the bonded pieces take no screws")
+    record["quantity_counted"] = {"count": metres, "basis": basis}
+    apply_field(record, "normalized_material", "BOUGHT_IN", SOURCE,
+                note="an adhesive allowance for the pieces the read says are bonded")
+    record["is_bought_in"] = True
+    record["unit_of_measure"] = unit
+    record["research_description"] = (f"{ref} — the price per {unit} at this job's volume, "
+                                      f"bought by the roll at trade price")
+    record["review_flags"].append(
+        f"CONCEPT: a provisional adhesive allowance for the bonded piece(s): {basis}. Confirm the "
+        f"bonding method and the quantity before release")
+    return record
+
+
 def read_names_fixings(items: List[Any], parts: List[Any]) -> bool:
     """Did the read itself name fixings — as a not-visible item or as a line of its own?"""
     words = _vocab_list("CONCEPT_FIXING_WORDS")
@@ -2777,8 +2826,23 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
     for row in rows:
         rec = by_name.get(re.sub(r"[^a-z0-9]+", " ", row["name"].lower()).strip())
         row["approved"] = _approved_fields(rec) if rec else []
+    # WHAT THIS READ DROPPED IS KEPT AS HISTORY (D-501). The 20:49 read dropped the 18:17
+    # bracket line and its save overwrote the bill, so the next read had nothing to size the
+    # brackets from. A dropped line is kept here as a BASIS a provisional allowance may name —
+    # never a line of the read: previous_bill_text shows `parts` only, so the model is not
+    # prompted with it, and it is never costed except by an allowance that says where it came from.
+    _key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n or "").lower()).strip()      # noqa: E731
+    _now = {_key(r["name"]) for r in rows}
+    _old = load_previous_bill(folder, job)
+    history: List[Dict[str, Any]] = []
+    for r in list(_old.get("parts") or []) + list(_old.get("history") or []):
+        if (isinstance(r, Mapping) and _key(r.get("name")) not in _now
+                and _key(r.get("name")) not in {_key(h.get("name")) for h in history}):
+            history.append(dict(r, dropped_by_read=str(r.get("dropped_by_read") or read_key
+                                                       or "a later read")))
     payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
-                          "base_key": base_key, "read_key": read_key, "parts": rows}, indent=1)
+                          "base_key": base_key, "read_key": read_key, "parts": rows,
+                          "history": history[:40]}, indent=1)
     written = None
     for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
         if path is None:
@@ -2852,7 +2916,8 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     return out
 
 
-def change_flags(changes: List[str], baseline: str = "") -> List[str]:
+def change_flags(changes: List[str], baseline: str = "",
+                 allowed: Optional[Mapping[str, str]] = None) -> List[str]:
     """What this read changed, as lines ON THE BOOK (D-500), not only in the run log.
 
     The 20:49 K-Wellness read folded thirty hooked brackets into the trays' names and dropped
@@ -2870,9 +2935,19 @@ def change_flags(changes: List[str], baseline: str = "") -> List[str]:
     if rest:
         out.append("CONCEPT READ CHANGED FROM THE PREVIOUS READ: " + "; ".join(rest[:20])
                    + (f"; and {len(rest) - 20} more" if len(rest) > 20 else ""))
+    _allowed = {re.sub(r"[^a-z0-9]+", " ", str(k).lower()).strip(): v
+                for k, v in (allowed or {}).items()}
     for c in changes or []:
         if str(c).startswith("dropped: "):
-            out.append(f"DROPPED FROM THE PREVIOUS READ: {str(c)[len('dropped: '):]} — not on "
+            _what = str(c)[len('dropped: '):]
+            _key = re.sub(r"[^a-z0-9]+", " ", re.sub(r"\s+x[\d.]+$", "", _what).lower()).strip()
+            if _key in _allowed:
+                out.append(f"DROPPED FROM THE PREVIOUS READ: {_what} — this read named it inside "
+                           f"another line; it is charged as a PROVISIONAL ALLOWANCE on "
+                           f"{_allowed[_key]} from the previous read's size and count, not "
+                           f"confirmed")
+                continue
+            out.append(f"DROPPED FROM THE PREVIOUS READ: {_what} — not on "
                        f"this book. If it is still part of the product, its material and work "
                        f"are missing: confirm it in the answers file or have the read redone")
     return out
@@ -2983,7 +3058,7 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
     A slot or opening is cut round its perimeter; a hole round its circumference. Each is a
     pierce. The outer blank's own perimeter is not included — the caller adds it."""
-    internal, pierces, said, open_area = 0.0, 0, [], 0.0
+    internal, pierces, said, open_area, items = 0.0, 0, [], 0.0, []
     for c in (sighted.get("cutouts") or []):
         if not isinstance(c, Mapping):
             continue
@@ -2999,8 +3074,9 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
         open_area += n * ((3.14159 / 4.0) * max(a, b) ** 2 if what.startswith("hole")
                           else a * (b or a))
         said.append(f"{n} × {what} {a:g}" + (f" × {b:g}" if b and what != "hole" else "") + " mm")
+        items.append({"what": what, "count": n, "length_mm": a, "width_mm": b})
     return {"internal_mm": round(internal, 1), "pierces": pierces, "said": said,
-            "open_area_mm2": round(open_area, 1)}
+            "open_area_mm2": round(open_area, 1), "items": items}
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
@@ -3239,6 +3315,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             _gr["estimated_hole_count"] = int(_cuts["pierces"])
             _gr["estimated_pierce_count"] = int(_cuts["pierces"])
             record["concept_cutouts"] = list(_cuts["said"])
+            record["concept_cutout_dims"] = [dict(i) for i in _cuts.get("items") or []]
             if _cuts.get("open_area_mm2"):
                 record["concept_open_area_mm2"] = float(_cuts["open_area_mm2"])
             _assume("", ", ".join(_cuts["said"]),
@@ -3349,13 +3426,16 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                 f"({why}) — confirm "
                 f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
                 f"{blank.get('thickness', '?')}mm before release")
-        if sheet:
-            record["concept_drawn"] = str(sighted.get("drawn") or "")
-        elif not unclassified:
+        elif not unclassified and kind == "fabricated":
             # An unclassified line already carries its one action; "enter the dimensions"
-            # on top of it asks for a size before anybody has said what the thing is.
+            # on top of it asks for a size before anybody has said what the thing is. Only a
+            # part we MAKE needs a size (a bought item is priced by the each), and only when
+            # none was written — the `if sheet:` below once sat inside this chain and put the
+            # flag on every sized line of a render read (D-501).
             record["review_flags"].append(
                 "CONCEPT: no size could be sighted — enter this part's dimensions")
+        if sheet:
+            record["concept_drawn"] = str(sighted.get("drawn") or "")
         if sighted.get("_minted_print_for"):
             record["concept_print_assumed"] = True
             record["review_flags"].append(
@@ -3447,6 +3527,14 @@ def _qty_of(p: Mapping[str, Any]) -> int:
         return 1
 
 
+_WITH_PHRASE = r"\b(?:with|including|incl\.?)\s+([^()\[\];,]+)"
+
+
+def _own_roots(name: Any) -> set:
+    """The roots of what a line IS, without the components its name says it carries."""
+    return _roots(re.sub(_WITH_PHRASE, " ", str(name or "").lower()))
+
+
 def components_named_inside(lines: List[Any]) -> List[Dict[str, str]]:
     """Components a line's own name says it carries, which no line of the bill lists (D-500).
 
@@ -3461,10 +3549,14 @@ def components_named_inside(lines: List[Any]) -> List[Dict[str, str]]:
     names = [str((l.get("name") if isinstance(l, Mapping) else "") or
                  (l.get("description") if isinstance(l, Mapping) else "") or "").strip()
              for l in (lines or [])]
+    # WHAT EACH LINE IS, without what it says it carries (D-501): two trays that both name
+    # "with welded hooked brackets" do not list the brackets for each other — the 20:49 read
+    # did exactly that, and each tray counted the other as the line that listed them.
+    own = [_own_roots(n) for n in names]
     out: List[Dict[str, str]] = []
     for i, name in enumerate(names):
         low = name.lower()
-        for m in re.finditer(r"\b(?:with|including|incl\.?)\s+([^()\[\];,]+)", low):
+        for m in re.finditer(_WITH_PHRASE, low):
             phrase = " ".join(m.group(1).split())
             words = re.findall(r"[a-z][a-z\-]{2,}", phrase)
             if not words or not (set(words) & joins):
@@ -3472,42 +3564,239 @@ def components_named_inside(lines: List[Any]) -> List[Dict[str, str]]:
             noun = _word_root(words[-1])
             if noun in features or noun in {_word_root(j) for j in joins}:
                 continue
-            listed = any(j != i and noun in _roots(n) for j, n in enumerate(names))
+            listed = any(j != i and noun in own[j] for j in range(len(names)))
             if not listed:
                 out.append({"host": name, "phrase": phrase, "component": noun})
     return out
 
 
-def question_components_inside(records: List[Dict[str, Any]],
-                               previous: Optional[Mapping[str, Any]] = None) -> List[str]:
-    """A component still folded into another line after the read is a QUESTION on that line,
-    with the material at stake said (D-500). What the previous read listed is named as
-    information for the estimator — never carried forward as a costed line, because the
-    previous bill is a baseline, not evidence."""
+_COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
+                "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "pair": 2}
+
+
+def _count_per_host(noun: str, phrase: str, brief: str = "") -> tuple:
+    """How many of a folded component each host carries, and the words that say so: the read's
+    own phrase first, then the brief ("with two hooked brackets"), else the plural as an
+    assumption (2) or the singular (1)."""
+    words = "|".join(list(_COUNT_WORDS) + [r"\d+"])
+    for text, where in ((phrase, "the read's own words"), (brief, "the enquiry brief")):
+        flat = " ".join(str(text or "").lower().split())
+        m = re.search(rf"\b({words})\s+(?:of\s+)?(?:[a-z\-]+\s+){{0,2}}{re.escape(noun)}s?\b", flat)
+        if m:
+            n = int(m.group(1)) if m.group(1).isdigit() else _COUNT_WORDS[m.group(1)]
+            if n > 0:
+                return n, f"{n} per host from {where} ('{m.group(0)}')"
+    if re.search(rf"\b{re.escape(noun)}s\b", str(phrase or "").lower()):
+        return 2, ("2 per host — the read names them in the plural and nothing states a count; "
+                   "an assumption to confirm")
+    return 1, "1 per host — named in the singular; an assumption to confirm"
+
+
+def allow_components_inside(records: List[Dict[str, Any]],
+                            previous: Optional[Mapping[str, Any]] = None,
+                            stem: str = "CONCEPT", brief: str = "") -> Dict[str, Any]:
+    """A component still folded into other lines after the read is PRICED as a provisional
+    allowance where there is a basis, and asked where there is none (D-500, reviewed D-501).
+
+    "FRONT SHELF TRAY (with welded hooked brackets)": welding the brackets to the trays does not
+    remove their steel, cutting or forming. Where the previous read itemised the component,
+    its line — size, count, material, gauge, folds — is the basis of ONE provisional allowance
+    line, charged once across every host that names it, said to be the previous read's figures
+    and NOT confirmed (the previous bill is a baseline, not evidence; the estimator confirms or
+    corrects it in the answers file). A line an EARLIER read listed and a later one dropped is
+    kept in the bill's history for exactly this. Where no read sized it and it is a small joined
+    component (config CONCEPT_JOINED_COMPONENT_ALLOWANCE), it is a house allowance at the host's
+    gauge, counted per host from the read's or the brief's own words. Its joint is charged once:
+    on the host where the host already carries the weld, else on the allowance. It is coated
+    with its host. Anything else nothing sizes is a question on the host — never a silent
+    omission.
+
+    Returns {"minted": [records], "asked": [str], "allowed": {previous line name: code}}."""
     from source_precedence import raise_manufacturing_question      # noqa: WPS433
     prev_rows = [r for r in ((previous or {}).get("parts") or []) if isinstance(r, Mapping)]
-    asked: List[str] = []
+    hist_rows = [r for r in ((previous or {}).get("history") or []) if isinstance(r, Mapping)]
+    try:
+        import config                                               # noqa: WPS433
+        house = dict(getattr(config, "CONCEPT_JOINED_COMPONENT_ALLOWANCE", {}) or {})
+    except Exception:                                               # noqa: BLE001
+        house = {}
+    small = {_word_root(w) for w in (house.get("components") or [])}
     by_name = {str(r.get("description") or "").strip(): r for r in records or []
                if isinstance(r, dict)}
+    groups: Dict[str, Dict[str, Any]] = {}
     for c in components_named_inside(list(by_name.values())):
         host = by_name.get(c["host"])
         if host is None:
             continue
-        _was = [r for r in prev_rows if c["component"] in _roots(r.get("name"))]
-        _info = "".join(
-            f"; the previous read listed {r.get('name')} x{_num(r.get('quantity')):g}"
-            + (f" at {_num(r.get('length')):g} × {_num(r.get('width')):g} mm"
-               if _num(r.get("length")) else "")
-            + " (information only, not costed)" for r in _was[:2])
-        raise_manufacturing_question(
-            host,
-            f"{c['host']} names {c['phrase']} that no line of the bill costs",
-            "not costed — no material, cutting or forming for them is in this estimate, only "
-            "any joining work on this line" + _info,
-            f"list them as their own part (size and count) in the answers file, or confirm they "
-            f"are part of this line's blank",
-            "concept_bill_check")
-        asked.append(f"{host.get('part_number')}: {c['phrase']}")
+        g = groups.setdefault(c["component"], {"hosts": [], "phrase": c["phrase"]})
+        g["hosts"].append(host)
+    out: Dict[str, Any] = {"minted": [], "asked": [], "allowed": {}}
+    n = 0
+    for comp, g in groups.items():
+        hosts = g["hosts"]
+        # A row that IS the component — not a host whose name says it carries one (the 20:49
+        # bill's own "FRONT SHELF TRAY (with welded hooked brackets)" is a tray, not a bracket).
+        row = next((r for r in prev_rows + hist_rows if comp in _own_roots(r.get("name"))
+                    and _concept_kind(r.get("kind")) == "fabricated"
+                    and _num(r.get("length")) and _num(r.get("quantity"))), None)
+        named = row or next((r for r in prev_rows + hist_rows
+                             if comp in _own_roots(r.get("name"))), None)
+        _from = ("the previous read's" if row is not None and row in prev_rows
+                 else "an earlier read's (dropped since, kept in the bill's history)")
+        if row is None and comp in small and (house.get("blank_mm") or {}).get("length"):
+            # A REASONED ALLOWANCE, NOT A BLANK (D-501): the count from the words, the size a
+            # house allowance at the host's gauge, every figure said.
+            per, how = _count_per_host(comp, g["phrase"], brief)
+            _gauge = max((_num(h.get("normalized_thickness_mm")) for h in hosts), default=0.0)
+            _mat = next((str(h.get("normalized_material")) for h in hosts
+                         if h.get("normalized_material")), "")
+            _bm = house["blank_mm"]
+            row = {"name": f"{comp.upper()} ({g['phrase']})", "kind": "fabricated",
+                   "quantity": sum(per * _qty_of(h) for h in hosts),
+                   "material": _mat.replace("_", " "), "length": _num(_bm.get("length")),
+                   "width": _num(_bm.get("width")), "thickness": _gauge,
+                   "folds": _num(house.get("folds")), "blank_basis": "developed",
+                   "_house": f"{how}; each {_num(_bm.get('length')):g} × "
+                             f"{_num(_bm.get('width')):g} mm at the host's {_gauge:g} mm gauge — "
+                             f"{house.get('basis') or 'a house allowance'}"}
+            _from = "a house allowance (no read sized it)"
+        if row is None:
+            for host in hosts:
+                raise_manufacturing_question(
+                    host,
+                    f"{host.get('description')} names {g['phrase']} that no line of the bill "
+                    f"costs",
+                    "not costed — nothing on this read or the previous one sizes them, so no "
+                    "allowance can be reasoned: no material, cutting or forming for them is in "
+                    "this estimate, only any joining work on this line",
+                    "list them as their own part (size and count) in the answers file, or "
+                    "confirm they are part of this line's blank",
+                    "concept_bill_check")
+                out["asked"].append(f"{host.get('part_number')}: {g['phrase']}")
+            continue
+        n += 1
+        _welded = "welded" in g["phrase"]
+        _host_welds = any("welding" in _ops_of(h) for h in hosts)
+        _ops = ["laser_cutting"] + (["folding"] if _num(row.get("folds")) else []) + (
+            ["welding"] if _welded and not _host_welds else [])     # dressing follows the weld
+        _hosts_said = ", ".join(str(h.get("part_number")) for h in hosts)
+        _basis = (f"PROVISIONAL ALLOWANCE — this read named {g['phrase']} inside {_hosts_said} and "
+                  f"listed no line; "
+                  + (f"{row['_house']}" if row.get("_house") else
+                     f"{_from} line '{row.get('name')}' gives the size and count (not confirmed "
+                     f"by this read)"))
+        sighted = {"name": str(row.get("name")), "kind": "fabricated",
+                   "quantity": _num(row.get("quantity")),
+                   "material_guess": str(row.get("material") or ""),
+                   "assumed_blank_mm": {"length": _num(row.get("length")),
+                                        "width": _num(row.get("width")),
+                                        "thickness": _num(row.get("thickness"))},
+                   "folds": _num(row.get("folds")),
+                   "blank_basis": str(row.get("blank_basis") or ""),
+                   "operations": _ops,
+                   "why_size": ("a house allowance — no read sized it" if row.get("_house")
+                                else f"{_from} line '{row.get('name')}' — a provisional "
+                                     f"allowance, not confirmed by this read")}
+        (rec,) = parts_from_concept({"product": {}, "parts": [sighted]}, stem)[:1]
+        rec["part_number"] = f"{_slug(stem, 'CONCEPT')}-CPA{n:02d}"
+        rec["welded_to_hosts"] = [str(h.get("part_number")) for h in hosts]
+        _coated = [str(h.get("part_number")) for h in hosts if "powder_coating" in _ops_of(h)]
+        if _coated and "powder_coating" not in _ops_of(rec):
+            rec["coated_with_host"] = _coated
+        rec["provisional_allowance"] = {
+            "basis": _basis, "hosts": rec["welded_to_hosts"],
+            ("house_allowance" if row.get("_house") else "from_previous_read"):
+                {k: v for k, v in row.items() if k != "_house"}}
+        rec["review_flags"].append(
+            f"{_basis}. Charged ONCE here: {_num(row.get('quantity')):g} × "
+            f"{_num(row.get('length')):g} × {_num(row.get('width')):g} × "
+            f"{_num(row.get('thickness')):g} mm {row.get('material') or ''}, "
+            f"{' + '.join(_ops)}"
+            + ("; the joint is charged on the host, which carries the weld" if _welded
+               and _host_welds else "")
+            + ("; coated with its host" if rec.get("coated_with_host") else "")
+            + ". Confirm or correct it in the answers file")
+        for h in hosts:
+            h.setdefault("review_flags", []).append(
+                f"CONCEPT: the {g['phrase']} this line names are charged on {rec['part_number']} "
+                f"as a provisional allowance — not in this line's blank")
+        out["minted"].append(rec)
+        if named is not None:
+            out["allowed"][str(named.get("name"))] = rec["part_number"]
+    return out
+
+
+def question_components_inside(records: List[Dict[str, Any]],
+                               previous: Optional[Mapping[str, Any]] = None,
+                               stem: str = "CONCEPT") -> List[str]:
+    """allow_components_inside, appending any allowance lines to `records`; returns what was
+    allowed or asked, for the run log."""
+    res = allow_components_inside(records, previous, stem)
+    records.extend(res["minted"])
+    return ([f"{r['part_number']}: provisional allowance ({r['description']})"
+             for r in res["minted"]] + res["asked"])
+
+
+def _pitch_figures(text: str) -> List[Dict[str, Any]]:
+    """Figures the text states as a pitch — a spacing between features (config
+    CONCEPT_PITCH_WORDS) — each with the words it was read from. A number counts when it sits
+    within a few words of the pitch word, either side."""
+    out: List[Dict[str, Any]] = []
+    words = _vocab_list("CONCEPT_PITCH_WORDS")
+    # One sentence or clause at a time: a figure in the next sentence is not this pitch.
+    for clause in re.split(r"(?<=[.;!?])\s+|\n|\|", str(text or "")):
+        flat = " ".join(clause.split())
+        low = flat.lower()
+        for w in words:
+            for m in re.finditer(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low):
+                lo, hi = max(0, m.start() - 30), min(len(low), m.end() + 30)
+                lo = low.rfind(" ", 0, lo) + 1 if lo else 0          # whole words only
+                hi = (low.find(" ", hi) if low.find(" ", hi) > 0 else len(low))
+                for n in re.finditer(r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:mm)?(?![\d.])",
+                                     low[lo:hi]):
+                    v = float(n.group(1))
+                    if v > 0 and not any(abs(v - o["mm"]) < 1e-6 for o in out):
+                        out.append({"mm": v, "said": flat[lo:hi].strip(" .;,")})
+    return out
+
+
+def pitch_as_size_questions(records: List[Dict[str, Any]], brief: str = "") -> List[str]:
+    """A cut-out read at exactly a stated PITCH is questioned (D-501).
+
+    The 20:49 K-Wellness read gave the corner post's slots at 31.75 mm — the figure the brief
+    states as the upright's slot pitch, the spacing between slot centres, not a slot's size.
+    The slot's cut length, its pierce count and the open area taken off the coat all rest on
+    that figure, so a size that equals a stated spacing is asked, never taken quietly. The
+    charge is not moved: what the read gave stays priced, and the question says what rests
+    on it."""
+    from source_precedence import raise_manufacturing_question      # noqa: WPS433
+    asked: List[str] = []
+    brief_pitches = _pitch_figures(brief)
+    for r in records or []:
+        if not isinstance(r, dict) or not r.get("concept_cutout_dims"):
+            continue
+        own = " ".join(str(r.get(k) or "") for k in ("concept_why_size", "concept_seen"))
+        pitches = brief_pitches + [p for p in _pitch_figures(own)
+                                   if not any(abs(p["mm"] - b["mm"]) < 1e-6
+                                              for b in brief_pitches)]
+        for c in r["concept_cutout_dims"]:
+            dims = [d for d in (_num(c.get("length_mm")), _num(c.get("width_mm"))) if d]
+            hit = next((p for p in pitches for d in dims if abs(d - p["mm"]) < 0.01), None)
+            if hit is None:
+                continue
+            size = " × ".join(f"{d:g}" for d in dims)
+            if raise_manufacturing_question(
+                    r,
+                    f"{r.get('description')}: the {c.get('what') or 'cut-out'} is read as {size} "
+                    f"mm, and {hit['mm']:g} mm is stated as a pitch (\"{hit['said']}\")",
+                    f"priced as read — {int(_num(c.get('count')))} × {size} mm. A pitch is the "
+                    f"spacing between centres, not a cut-out's size: the internal cut length, "
+                    f"the pierce count and the open area taken off the coat all rest on it",
+                    "confirm the cut-out's size (length × width) and how many there are along "
+                    "the part, in the answers file",
+                    "concept_bill_check"):
+                asked.append(f"{r.get('part_number')}: {c.get('what')} {size} mm = pitch "
+                             f"{hit['mm']:g} mm")
     return asked
 
 

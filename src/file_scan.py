@@ -5041,12 +5041,25 @@ def _finalize_scan_summary(
                 if _kept_strip:
                     print(f"   [confirmed] an approved edging line stands whole — per-host "
                           f"line(s) withdrawn: {', '.join(_kept_strip)}", flush=True)
-            # A COMPONENT STILL FOLDED INTO ANOTHER LINE IS A QUESTION ON THAT LINE (D-500), with
-            # the material at stake said and the previous read's line named as information.
-            _inside_q = concept_scan.question_components_inside(_sighted, _prev_bill)
-            if _inside_q:
-                print(f"   [concept] named inside another line and costed by none: "
-                      f"{'; '.join(_inside_q)} — a question on the line, no money moved",
+            # A COMPONENT STILL FOLDED INTO ANOTHER LINE (D-500, D-501): priced once as a
+            # provisional allowance where the previous read sized it, else a question on the line.
+            _inside = concept_scan.allow_components_inside(_sighted, _prev_bill, _job_name,
+                                                           brief=_brief or "")
+            _sighted.extend(_inside["minted"])
+            for _m in _inside["minted"]:
+                print(f"   [concept] named inside another line and listed by none: "
+                      f"{_m['description']} x{_m.get('quantity')} — a PROVISIONAL ALLOWANCE "
+                      f"{_m['part_number']}, charged once: "
+                      f"{_m['provisional_allowance']['basis']}", flush=True)
+            if _inside["asked"]:
+                print(f"   [concept] named inside another line, costed by none and with nothing "
+                      f"to size it: {'; '.join(_inside['asked'])} — a question on the line",
+                      flush=True)
+            # A CUT-OUT READ AT A STATED PITCH IS ASKED (D-501): a spacing is not a size.
+            _pitch_q = concept_scan.pitch_as_size_questions(_sighted, _brief or "")
+            if _pitch_q:
+                print(f"   [concept] cut-out size equal to a stated pitch: "
+                      f"{'; '.join(_pitch_q)} — a question on the line, priced as read",
                       flush=True)
             # THE BILL, SAVED AFTER THE ANSWERS FILE (review of D-492): each line says which
             # values an estimator APPROVED, and the bill names the question and the answer it
@@ -5068,7 +5081,8 @@ def _finalize_scan_summary(
             _chg_host = _unit or (_sighted[0] if _sighted else None)
             if _chg_host is not None and (_changes or _prev_bill):
                 _chg_host.setdefault("review_flags", []).extend(concept_scan.change_flags(
-                    _changes, str(_read.get("baseline") or "") if _prev_bill else ""))
+                    _changes, str(_read.get("baseline") or "") if _prev_bill else "",
+                    allowed=_inside.get("allowed") if isinstance(_inside, dict) else None))
             if _sheet_read and _unit:
                 # THE SHEET'S OWN WELD NOTE IS THE UNIT'S (D-418): "WELDED AND FINISHED FLUSH"
                 # is a stated weld on the product the sheet draws, not an inference.
@@ -5192,6 +5206,15 @@ def _finalize_scan_summary(
                     print(f"   [concept] the read named no fixings — a provisional allowance "
                           f"of {_fx.get('quantity')} × the reference fixing for "
                           f"{_mech['pieces']} mechanically fitted piece(s)", flush=True)
+            # A BONDED JOINT IS PRICED TOO (D-501): its adhesive, not screws.
+            if _unit:
+                _adh = concept_scan.adhesive_allowance_line(_sighted, _job_name,
+                                                            len(_nv_lines) + 1)
+                if _adh:
+                    _nv_lines = list(_nv_lines) + [_adh]
+                    print(f"   [concept] bonded piece(s): a provisional adhesive allowance of "
+                          f"{_adh.get('quantity')} {_adh.get('unit_of_measure')} of the reference "
+                          f"tape", flush=True)
             if _nv_lines:
                 summary["manufacturing_writeup"]["parts"].extend(_nv_lines)
                 if _unit:

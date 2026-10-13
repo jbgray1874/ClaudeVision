@@ -67,6 +67,7 @@ not money, and method is what the register was always for.
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 __all__ = [
@@ -188,6 +189,14 @@ def research_brief(line: Any, *, order_qty: int = 1) -> Dict[str, Any]:
                f"pack or coil must be divided down to one {_unit} and the division shown."))
         brief["wanted_unit"] = _unit
         brief["quantity_needed"] = _num(line.get("quantity")) or 1
+        # A SET IS PRICED AS THE WHOLE SET (D-501): the 20:49 K-Wellness graphics set came
+        # back as the price of one panel. The caller says the line is a set; the ask says so.
+        if line.get("sold_as_set"):
+            brief["sold_as_set"] = True
+            brief["ask"] += (
+                " This line is a SET: give the price of the COMPLETE set as one item — every "
+                "panel, card or piece in it — and say what the set contains. The price of one "
+                "panel or piece of it is not usable.")
         # A COUNTED ITEM IS PRICED AT THE JOB'S VOLUME (D-500). The K-Wellness 20:49 book asked
         # for "ONE item" of a 20 x 20 mm label and got a single-label retail listing — £5.76,
         # where the 18:17 book had found 12p — multiplied by 48 labels a unit. A line whose
@@ -383,10 +392,44 @@ def resolve_indicative(line: Any, *, order_qty: int = 1, as_of: str = "",
                                 f"nothing has stated it. Ask for the price per "
                                 f"{_want_unit}.")}
 
+    # ── A PACK PRICE IS ONE ITEM'S PRICE ONLY ONCE IT IS DIVIDED BY THE PACK (D-501) ────────
+    #
+    # A line bought by the each that comes back priced per pack, roll, box, reel or bag is
+    # divided by the pack size the answer STATES (its quantity basis or pack_size), with the
+    # division written into the evidence; with no size stated it is refused, for the same
+    # reason the unit refusal above exists: nothing may invent the pack.
+    _packs = {"pack": "pack", "packet": "pack", "roll": "roll", "box": "box", "reel": "reel",
+              "bag": "bag", "tub": "tub", "carton": "carton"}
+    if brief["kind"] == BOUGHT_IN_COMPONENT and _want_unit == "each":
+        _raw_u = _clean(found.get("unit")).lower().replace("per_", "").replace("per ", "")
+        _pack_word = next((v for k, v in _packs.items() if re.search(rf"\b{k}s?\b", _raw_u)), "")
+        if _pack_word:
+            _size = _num(found.get("pack_size"))
+            if not _size:
+                _m = re.search(r"(\d[\d,]*)", _clean(found.get("quantity_basis")))
+                _size = _num(_m.group(1).replace(",", "")) if _m else None
+            if not _size or _size <= 0:
+                return {"price_gbp": None, "status": "not priced", "brief": brief,
+                        "evidence": evidence,
+                        "missing": (f"this line is bought by the each and the figure returned "
+                                    f"is per {_pack_word} with no pack size stated. It is not "
+                                    f"divided here: nothing has said how many the {_pack_word} "
+                                    f"holds. Ask for the price of one, or the pack size.")}
+            evidence["quantity_basis"] = (
+                f"{evidence['quantity_basis']} — GBP {unit_price:,.4f} a {_pack_word} ÷ "
+                f"{_size:g} = GBP {unit_price / _size:,.4f} each")
+            unit_price = unit_price / _size
+
     calc = _calculation(brief["kind"], unit_price, brief, _num(found.get("minimum_gbp")))
     return {
         "price_gbp": calc["per_unit_gbp"],
+        # ONE ITEM'S PRICE, KEPT APART FROM THE LINE'S TOTAL (D-501). `price_gbp` is what the
+        # line costs on one product — the item price × the line's quantity. The engine charges
+        # a bought-in line as its item price × its quantity, so it must take THIS figure:
+        # taking price_gbp charged 48 QR labels at 48 × 12p each — "48 off × GBP 0.1200 each
+        # = GBP 5.7600 a unit", then × 48 again on the sheet.
         "unit_price_gbp": round(unit_price, 4),
+        "applies_per_item": brief["kind"] == BOUGHT_IN_COMPONENT,
         "rung": "llm_indicative",
         "status": LLM_INDICATIVE_STATUS,
         "evidence": evidence,
