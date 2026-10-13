@@ -1916,6 +1916,21 @@ class PricingService:
             })
         return result
 
+    @staticmethod
+    def assembly_scope_exists(parts: Any) -> bool:
+        """A BAY RATE NEEDS A BAY (D-511). 12340-01M — one flat bracket, nothing to
+        assemble — was given £29.13/bay of historical assembly labour because the caller
+        never asked whether the job holds assembly work. It does when there is more than
+        one made part, or any record the pack calls an assembly; a single component's
+        packing is the commercial PACKAGING line, not a bay of bench work."""
+        rows = [p for p in (parts or []) if isinstance(p, dict)]
+        made = [p for p in rows
+                if "bought_in" not in (p.get("page_roles") or [])
+                and not str(p.get("part_number") or "").upper().startswith(("BI-", "P/P-"))]
+        return (len(made) > 1
+                or any(p.get("is_assembly_parent") or p.get("is_sub_assembly")
+                       or p.get("assembly_children") for p in rows))
+
     def estimate_assembly_pack_labour(self, quantity: int = 1) -> Dict[str, Any]:
         """E2: per-bay assembly/pack labour, learned from dbo.historical_quote_operation.
         Takes the median run_min_per_unit of ASSEMBLE/PACK/COLLATE/PALLET/BULK operations

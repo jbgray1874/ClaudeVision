@@ -2198,12 +2198,19 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     flags.append(f"material '{new_mat}' from the SolidWorks model "
                                  f"(applied material: {nat.material})")
                     out["material"] += 1
-            elif new_mat and cur_mat and new_mat == cur_mat:
+            # ONE MATERIAL, TWO SPELLINGS, NO CONFLICT (D-511). The drawing reads
+            # "MILD STEEL" and the model "MILD_STEEL"; flagging that as a material
+            # disagreement sends an estimator to check a difference that does not exist.
+            # Equality is judged with separators collapsed; the recorded value keeps the
+            # spelling it arrived with.
+            _same_mat = (new_mat and cur_mat
+                         and re.sub(r"[\s_\-]+", " ", new_mat) == re.sub(r"[\s_\-]+", " ", cur_mat))
+            if new_mat and cur_mat and _same_mat:
                 # Same answer from a stronger source. Nothing changes on screen; what changes
                 # is that the value now rests on the model rather than on the drawing text,
                 # and a later pass can no longer quietly replace it.
-                _apply_field(part, "normalized_material", new_mat, _mat_src)
-            elif new_mat and cur_mat and new_mat != cur_mat:
+                _apply_field(part, "normalized_material", cur_mat, _mat_src)
+            elif new_mat and cur_mat and not _same_mat:
                 _cross_family = (
                     (new_mat in _NON_METAL_FAMILIES and cur_mat in _METAL_FAMILIES)
                     or (new_mat in _METAL_FAMILIES and cur_mat in _NON_METAL_FAMILIES)

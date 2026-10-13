@@ -11304,6 +11304,28 @@ def _job_identity_tokens(summary: Dict[str, Any]) -> set:
             _v = _da.get(_k)
             if isinstance(_v, str) and _v.strip():
                 cands.append(_v)
+    # THE TITLE THE JOB ACTUALLY CARRIES (D-511). 12340-01M's identity lives in the PDF's
+    # filename ("KD V2 Gondola Shelf Bracket_12340-01M_Rev B.pdf"), the title block's
+    # description and the declared product — none of which this read, so the prose
+    # recogniser bought the drawing's own bracket back for £48. Every place the job
+    # names ITSELF feeds the token set.
+    for _src in (summary.get("job_source_pdfs") or []):
+        _nm = _src.get("name") if isinstance(_src, dict) else _src
+        if isinstance(_nm, str) and _nm.strip():
+            cands.append(_nm)
+    _tb = _da.get("title_block") if isinstance(_da, dict) else None
+    if isinstance(_tb, dict):
+        for _k in ("descriptions", "project_titles"):
+            for _v in (_tb.get(_k) or []):
+                if isinstance(_v, str) and _v.strip():
+                    cands.append(_v)
+    for _p in ((summary.get("manufacturing_writeup") or {}).get("parts") or []):
+        if isinstance(_p, dict) and isinstance(_p.get("description"), str) \
+                and "bought_in" not in (_p.get("page_roles") or []):
+            cands.append(_p["description"])
+    _dp = summary.get("declared_product")
+    if isinstance(_dp, str) and _dp.strip():
+        cands.append(_dp)
     toks: set = set()
     for _c in cands:
         for _t in _re.findall(r"[A-Za-z]{3,}", _c.upper()):

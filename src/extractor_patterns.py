@@ -50,6 +50,63 @@ def normalize_text(text: str) -> str:
     return " ".join((text or "").replace("\x00", " ").replace("\n", " ").replace("\r", " ").split())
 
 
+# ── THE REVISION TABLE IS THE DRAWING'S HISTORY, NOT ITS CONTENT (D-511) ─────────────────
+# 12340-01M's sheet prints "REVISION TABLE REV DRG NO DESCRIPTION DATE BY / A 12341-01M
+# INITIAL RELEASE 12/03/2026 GS / B 12340-01M PART / DRAWING NUMBER CORRECTED 13/05/2026 GS".
+# The old number in row A was read as the drawing's number: it took the page, acquired
+# folding and £12.90 of fabrication, pushed the page's role to "assembly" (two unique codes),
+# which fed the title to the prose recogniser (a £48 bought-in "Shelf Bracket"), and left the
+# real part a DXF orphan. The finish field swallowed the row's words whole.
+#
+# A number printed in a revision row is a PRIOR IDENTITY of this drawing — the last row's is
+# the current one — and a revision row's words belong to no field at all. So the table is
+# parsed once, kept as history, and struck from the text every field reader sees.
+_REVISION_TABLE_CONTEXT = re.compile(
+    r"REVISION\s+TABLE|REV\s+DRG\s*NO|DRG\s*NO\s+DESCRIPTION\s+DATE", re.IGNORECASE)
+_REVISION_TABLE_HEADER = re.compile(
+    r"REVISION\s+TABLE|REV\s+DRG\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?"
+    r"|DRG\s*NO\s+DESCRIPTION\s+DATE(?:\s+BY)?", re.IGNORECASE)
+
+
+def _revision_row_re() -> "re.Pattern":
+    # rev letter · the drawing number of that issue · what changed · date · initials
+    from config import PART_NUMBER_PATTERN as _PN
+    return re.compile(
+        r"\b([A-Z]\d?)\s+(" + _PN + r")\s+"
+        r"((?:(?!\d{1,2}/\d{1,2}/\d{2,4}).){3,90}?)\s+"
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+([A-Z]{1,3})\b")
+
+
+def parse_revision_table(text: str) -> Dict[str, Any]:
+    """The table's rows in print order, the current number (last row's), and which prior
+    numbers it supersedes. Empty when the text carries no revision-table header — a bare
+    code-date-initials run elsewhere is not treated as history."""
+    t = normalize_text(text or "")
+    if not _REVISION_TABLE_CONTEXT.search(t):
+        return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
+    rows = [{"rev": m.group(1).upper(), "number": m.group(2).strip(),
+             "description": " ".join(m.group(3).split()), "date": m.group(4),
+             "by": m.group(5)} for m in _revision_row_re().finditer(t)]
+    if not rows:
+        return {"rows": [], "current_number": "", "current_revision": "", "superseded": {}}
+    current = rows[-1]
+    superseded = {r["number"]: current["number"] for r in rows[:-1]
+                  if r["number"] and r["number"] != current["number"]}
+    return {"rows": rows, "current_number": current["number"],
+            "current_revision": current["rev"], "superseded": superseded}
+
+
+def strip_revision_table(text: str) -> str:
+    """The same text with the revision table's header and rows blanked, so no field reader
+    can take a prior issue's number for a part or its words for a finish. A text with no
+    revision-table header comes back untouched."""
+    t = normalize_text(text or "")
+    if not _REVISION_TABLE_CONTEXT.search(t):
+        return t
+    t = _revision_row_re().sub(" ", t)
+    return " ".join(_REVISION_TABLE_HEADER.sub(" ", t).split())
+
+
 # ── THE SPECIFICATION LEGEND IS NOT WORK — ONE READER FOR EVERY DOOR ─────────────────────
 # document_builder learned this on 10975-02 (EPDM tape welded and powder coated from the border
 # text) and stripped the legend before ITS operation scan. The page-level scan below never did,
@@ -1264,7 +1321,11 @@ def fold_note_count(text: str) -> Dict[str, Any]:
 
 
 def extract_title_block_fields(text: str) -> Dict[str, Any]:
-    raw_text = text or ""
+    # THE REVISION TABLE FIRST (D-511): parsed as the drawing's history, then struck from
+    # the text every field below reads — a prior issue's number is not a part, and a
+    # revision row's words are not a finish, a colour or a description.
+    revision_table = parse_revision_table(text or "")
+    raw_text = strip_revision_table(text or "") if revision_table["rows"] else (text or "")
     normalized_text = normalize_text(raw_text)
     part_number_values = _extract_part_number_candidates(normalized_text)
     # Material is read PRIMARY from the labelled "MATERIAL:" field (authoritative, the
@@ -1292,7 +1353,20 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         material_scan_text = _strip_material_boilerplate(strip_specification_legend(normalized_text))
         materials = [canonical_material(value) for value in _findall_unique(MATERIAL_PATTERN, material_scan_text, flags=re.IGNORECASE)]
     drawing_numbers = _extract_drawing_number_candidates(raw_text) or _findall_unique(DRAWING_NUMBER_PATTERN, normalized_text, flags=re.IGNORECASE)
+    # The revision table corroborates and corrects the number: a superseded issue's number
+    # maps onto the current one, and a sheet whose fields gave nothing still has the last
+    # row's number — the identity the correction row exists to state (D-511).
+    if revision_table["superseded"]:
+        drawing_numbers = _dedupe_strings(
+            [revision_table["superseded"].get(value, value) for value in drawing_numbers])
+        part_number_values = _dedupe_strings(
+            [revision_table["superseded"].get(value, value) for value in part_number_values])
+    if revision_table["current_number"] and not drawing_numbers:
+        drawing_numbers = [revision_table["current_number"]]
     revisions = _extract_revision_candidates(raw_text)
+    if revision_table["current_revision"]:
+        revisions = [revision_table["current_revision"]] + [
+            value for value in revisions if value != revision_table["current_revision"]]
     dates = _findall_unique(DATE_PATTERN, normalized_text, flags=re.IGNORECASE)
     material_values = [material for material in materials if material]
     finishes = _extract_finish_candidates(raw_text) or [_normalize_finish(value) for value in _findall_unique(FINISH_PATTERN, normalized_text, flags=re.IGNORECASE)]
@@ -1334,6 +1408,8 @@ def extract_title_block_fields(text: str) -> Dict[str, Any]:
         "descriptions_refused": descriptions_refused,
         "clients": clients,
         "project_titles": project_titles,
+        "revision_table": revision_table["rows"],
+        "superseded_numbers": revision_table["superseded"],
         "quantities": _findall_unique(QUANTITY_PATTERN, normalized_text, flags=re.IGNORECASE),
         "thicknesses_mm": thicknesses,
         "normalized": {
@@ -1382,6 +1458,10 @@ def merge_title_block_fields(primary: Dict[str, Any], fallback: Dict[str, Any]) 
         "project_titles": _pick_preferred(primary, fallback, "project_titles"),
         "quantities": _pick_preferred(primary, fallback, "quantities"),
         "thicknesses_mm": thicknesses,
+        # The drawing's history travels whole from whichever read saw the table (D-511).
+        "revision_table": (primary.get("revision_table") or fallback.get("revision_table") or []),
+        "superseded_numbers": (primary.get("superseded_numbers")
+                               or fallback.get("superseded_numbers") or {}),
     }
     merged["normalized"] = {
         "primary_material": _prefer_best_scalar(primary.get("normalized", {}).get("primary_material"), fallback.get("normalized", {}).get("primary_material")),
@@ -1771,12 +1851,13 @@ def infer_operations_from_text(
     if hole_cue and not is_sheet_steel:
         operations.append("hole_machining")
 
-    if (
-        "FOLD" in text
-        or "BEND" in text
-        or has_fold_geometry
-        or re.search(ANGLE_PATTERN, text, flags=re.IGNORECASE)
-    ):
+    # AN ANGLE IS NOT A FOLD (D-511). 12340-01M, a flat 4 mm bracket with zero detected bend
+    # lines, was given folding (and a fictitious flange allowance) because the page's angle
+    # callouts matched ANGLE_PATTERN — but a chamfer, a mitre, a tolerance block or an
+    # angled profile edge all print angles on parts that are never folded. Folding needs
+    # bend-specific evidence: the words FOLD/BEND, a bend callout, or bend geometry (bend
+    # lines, model bend features) — which has_fold_geometry carries.
+    if "FOLD" in text or "BEND" in text or has_fold_geometry:
         operations.append("folding")
 
     powder_text = "POWDER COAT" in text or "POWDER COATED" in text or "P/C" in text

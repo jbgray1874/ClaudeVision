@@ -1050,13 +1050,26 @@ def main() -> None:
         _bay = summary.get("bay_estimate")
         try:
             from pricing_service import PricingService as _PS
-            _qty = int(summary.get("quantity") or _es.get("assumed_job_quantity") or 1)
-            _asm = _PS().estimate_assembly_pack_labour(quantity=_qty)
-            _assembly_cost = float(_asm.get("cost_per_bay_gbp") or 0.0)
-            if isinstance(_bay, dict):
-                _bay["assembly_pack_labour"] = _asm
-            print(f"  Assembly/pack labour: \u00a3{_assembly_cost:.2f}/bay ({_asm.get('basis')})"
-                  + (f" \u2014 {_asm['flag']}" if _asm.get("flag") else ""))
+            # A BAY RATE NEEDS A BAY (D-511). 12340-01M \u2014 one flat bracket, nothing to
+            # assemble \u2014 was given \u00a329.13/bay of historical assembly labour because this
+            # call was never gated: the historical median describes assembling and packing
+            # a BAY of parts, and a job with nothing to assemble has no claim on it. There
+            # is assembly work when the job holds more than one made part, or any record
+            # the graph calls an assembly. Packing a single component is the carton the
+            # commercial PACKAGING line already carries, not a bay of bench work.
+            _has_assembly = _PS.assembly_scope_exists(
+                (summary.get("manufacturing_writeup") or {}).get("parts"))
+            if _has_assembly:
+                _qty = int(summary.get("quantity") or _es.get("assumed_job_quantity") or 1)
+                _asm = _PS().estimate_assembly_pack_labour(quantity=_qty)
+                _assembly_cost = float(_asm.get("cost_per_bay_gbp") or 0.0)
+                if isinstance(_bay, dict):
+                    _bay["assembly_pack_labour"] = _asm
+                print(f"  Assembly/pack labour: \u00a3{_assembly_cost:.2f}/bay ({_asm.get('basis')})"
+                      + (f" \u2014 {_asm['flag']}" if _asm.get("flag") else ""))
+            else:
+                print("  Assembly/pack labour: none \u2014 a single made part with nothing to "
+                      "assemble takes no per-bay assembly rate (packing is the PACKAGING line)")
         except Exception as _exc:
             print(f"  (assembly labour estimate skipped: {_exc})")
         # FIX 3: prefer Tim's INGESTED per-drawing assemble/pack labour over the E2 median.

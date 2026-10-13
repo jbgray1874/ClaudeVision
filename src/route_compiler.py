@@ -2674,6 +2674,19 @@ def build_part_graph(
         # about a name decides it: one root is the product, two are a choice, and a choice
         # is refused below as before (product_identity.tops_of_the_job, the same rule pre-run).
         _job_top = ""
+        # A PRODUCT CAN BE ONE PART (D-511). 12340-01M is a single bracket: one PDF, one
+        # DXF, zero BOM rows — so there are no assemblies, no children, no roots, and the
+        # candidate search above (assemblies only) finds nothing although the record the
+        # declared number names is sitting in the job. Where the job holds NO assemblies at
+        # all, the declared product may resolve to exactly one LEAF record that names it;
+        # ambiguity (two matches) still refuses as everywhere else, and a job that has any
+        # assembly keeps the assembly-only rule unchanged.
+        if not _candidates and not _assemblies_here:
+            _leaves = {i for i in set(records) | set(raw) | set(extracted)
+                       if i and not str(i).upper().startswith(("BI-", "P/P-"))}
+            _leaf_matches = sorted(i for i in _leaves if _names_the_product(_declared, i))
+            if len(_leaf_matches) == 1:
+                _candidates = _leaf_matches
         if not _candidates:
             from product_identity import (is_of_the_job, is_under_the_numbering,
                                           job_number_only, numbering_prefix)
