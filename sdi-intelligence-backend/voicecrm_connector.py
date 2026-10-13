@@ -301,9 +301,15 @@ def get_records(search: str = "") -> dict:
     note = ""
     if words and not found:                     # a misheard name: give everything, match by sound
         found, note = rows, "No record matched that word; these are all the records. Match by sound."
-    _timed("get_records", started, user, f"search={search!r} n={len(found)}")
+    copy = data.get("source") == "copy"
+    if copy:                                    # Excel Online refused the file: read from a copy
+        note = (note + " " if note else "") + (
+            "These were read from a copy of the tracker because Excel Online can't open the file "
+            "right now. Say so, and that changes can't be saved until it's repaired.")
+    _timed("get_records", started, user, f"search={search!r} n={len(found)}" + (" source=copy" if copy else ""))
     return {"state": "ok", "today": voicecrm._spoken_value(date.today().isoformat()),
-            "today_iso": date.today().isoformat(), "count": len(found), "records": found, "note": note}
+            "today_iso": date.today().isoformat(), "count": len(found), "records": found, "note": note,
+            "changes_possible": not copy}
 
 
 @apps.tool(resource_uri=UI_CHANGE, meta=_ui(UI_CHANGE, "Preparing the read-back…", "Read-back ready"),
@@ -326,7 +332,7 @@ def propose_changes(changes: list[Change]) -> dict:
         r = voicecrm.propose_change(user, get_token, c.record_id, field, c.new_value, source="connector")
         if r.get("state") != "proposed":
             if r.get("state") in ("not_a_writer", "writes_disabled", "not_approved", "not_configured",
-                                  "no_token"):
+                                  "no_token", "tracker_unavailable"):
                 _timed("propose_changes", started, user, f"refused={r.get('state')}")
                 return {"state": "nothing_to_save", "problems": [str(r.get("detail", r.get("state")))]}
             problems.append(f"{c.field}: {r.get('detail') or r.get('state')}")

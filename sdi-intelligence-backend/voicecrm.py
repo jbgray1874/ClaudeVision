@@ -171,6 +171,9 @@ def records_for(token: str) -> dict:
                 continue
             rows.append(item)
         out = {"state": "ok", "items": rows, "owner_filter": OWNER,
+               # "copy" when Excel Online refused the workbook and the rows were
+               # read from a downloaded copy: lookups work, changes can't save.
+               "source": data.get("source", "live"), "note": data.get("note", ""),
                "skipped_other_owner": skipped, "sheet": data.get("sheet", ""),
                "owner_field_found": OWNER_FIELD in data.get("headers", []),
                "columns": data.get("headers", [])}

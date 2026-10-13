@@ -1608,7 +1608,9 @@ async function _loadRecords(){
         +'<code>SDI_VOICECRM_OWNER</code> to it.</p>':''));
   }else{
     PROJECTS=d.items; COLUMNS=d.columns||[];
-    h='<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';
+    h=(d.source==='copy'?'<p style="text-align:left;font-size:14px;margin:6px 0 4px;padding:10px 12px;border-left:3px solid #c77700;background:rgba(199,119,0,.08)">'
+        +'<b>Read-only for now.</b> '+esc(d.note||'')+'</p>':'')
+      +'<div style="margin-top:6px">'+d.items.map(record).join('')+'</div>';
     if(d.skipped_other_owner)
       h+='<p class="msg">'+d.skipped_other_owner+' record(s) hidden — owned by someone other than '
         +esc(d.owner_filter)+'.</p>';

@@ -84,6 +84,57 @@ def _fingerprint(cells: list) -> str:
     ).hexdigest()[:16]
 
 
+# Excel Online can refuse to open a workbook that is still a perfectly good
+# file: one rewritten outside Excel (downloaded, edited, uploaded back), caught
+# mid-save, or locked. Graph then answers 5xx / 423, or one of these codes.
+_REFUSAL_CODES = ("FileCorrupt", "resourceLocked", "EditModeCannotAcquireLock",
+                  "FileOpen", "ServiceUnavailable", "WorkbookNotSupported")
+
+
+def excel_refused(err: Optional[dict]) -> bool:
+    """True when the workbook service, not the person's access, is the problem."""
+    if not err or err.get("state") != "graph_error":
+        return False
+    status = int(err.get("status") or 0)
+    detail = str(err.get("detail", ""))
+    return status >= 500 or status == 423 or any(code in detail for code in _REFUSAL_CODES)
+
+
+def unavailable(err: dict) -> dict:
+    """A refusal, in words for the person: nothing was changed, lookups still work."""
+    return {"state": "tracker_unavailable", "status": err.get("status"),
+            "graph_detail": str(err.get("detail", ""))[:300],
+            "detail": ("Excel Online can't open the tracker right now, so changes can't be "
+                       "saved. Nothing was changed. Looking things up still works, from a copy "
+                       "of the file; changes will work again once the file is repaired.")}
+
+
+def _display(value, fmt: str = "General") -> str:
+    """A cell as Excel shows it, near enough for reading back: dates month-first
+    (as the sheet shows them, and as the rest of the app reads them), percentages
+    and money as formatted, whole numbers without a trailing .0."""
+    import datetime as _dt
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (_dt.datetime, _dt.date)):
+        return f"{value.month}/{value.day}/{value.year}"
+    if isinstance(value, (int, float)):
+        first = (fmt or "General").split(";")[0]          # the positive-number section
+        decimals = min(sum(ch == "0" for ch in first.split(".", 1)[1]), 6) if "." in first else 0
+        if "%" in first:
+            return f"{value * 100:.{decimals}f}%"
+        if "£" in first or "#,##" in first:
+            text = f"{abs(value):,.{decimals}f}"
+            sign = "-" if value < 0 else ""
+            return f"{sign}£{text}" if "£" in first else f"{sign}{text}"
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
+        return f"{value:.{decimals}f}" if decimals else str(value)
+    return str(value)
+
+
 class ExcelStore:
     """Read/write access to one worksheet, shaped like the List backend:
 
@@ -111,7 +162,6 @@ class ExcelStore:
         # in front of the data, and "first row with text on the first tab" read
         # Nick's title row as headings and matched none of his 76 records.
         self.key_columns: list[str] = []
-        self._download_only = False
         self._chosen_sheet: Optional[str] = None
 
     # ── Graph plumbing ──────────────────────────────────────────────────────
@@ -130,7 +180,8 @@ class ExcelStore:
         return {"state": "graph_error", "status": response.status_code,
                 "detail": self._graph_detail(response)}
 
-    def _workbook(self, client: httpx.Client, token: str) -> tuple[Optional[dict], Optional[dict]]:
+    def _workbook(self, client: httpx.Client, token: str,
+                  download_only: bool = False) -> tuple[Optional[dict], Optional[dict]]:
         """Resolve site -> drive item -> workbook base URL + file metadata."""
         headers = self._headers(token)
         site = client.get(f"{GRAPH}/sites/{self.site}", headers=headers)
@@ -159,7 +210,7 @@ class ExcelStore:
                 return None, self._err(item)
         drive_id = (meta.get("parentReference") or {}).get("driveId", "")
         self._located = (drive_id, meta.get("id"))
-        if self._download_only:
+        if download_only:
             return {"drive_id": drive_id, "item_id": meta.get("id"),
                     "modified": meta.get("lastModifiedDateTime", "")}, None
 
@@ -332,6 +383,8 @@ class ExcelStore:
             with httpx.Client(timeout=30) as client:
                 wb, err = self._load(client, token)
                 if err:
+                    if excel_refused(err):
+                        return self._rows_from_copy(token, err)
                     return {**err, "items": []}
         except httpx.HTTPError as exc:
             return {"state": "unreachable", "items": [],
@@ -377,7 +430,7 @@ class ExcelStore:
             with httpx.Client(timeout=30) as client:
                 wb, err = self._load(client, token)
                 if err:
-                    return None, err
+                    return None, (unavailable(err) if excel_refused(err) else err)
         except httpx.HTTPError as exc:
             return None, {"state": "unreachable",
                           "detail": f"Could not reach Microsoft Graph: {exc}"}
@@ -449,8 +502,8 @@ class ExcelStore:
             return {"state": "unreachable",
                     "detail": f"Could not reach Microsoft Graph: {exc}"}
         if res.status_code >= 300:
-            return {"state": "failed", "status": res.status_code,
-                    "detail": self._graph_detail(res)}
+            err = {"state": "failed", "status": res.status_code, "detail": self._graph_detail(res)}
+            return unavailable(err) if excel_refused({**err, "state": "graph_error"}) else err
         return None
 
     def download(self, token: str) -> tuple[Optional[bytes], Optional[dict]]:
@@ -462,11 +515,7 @@ class ExcelStore:
         """
         try:
             with httpx.Client(timeout=60, follow_redirects=True) as client:
-                self._download_only = True
-                try:
-                    loc, err = self._workbook(client, token)
-                finally:
-                    self._download_only = False
+                loc, err = self._workbook(client, token, download_only=True)
                 if err:
                     return None, err
                 res = client.get(f"{GRAPH}/drives/{loc['drive_id']}/items/{loc['item_id']}/content",
@@ -476,3 +525,51 @@ class ExcelStore:
         if res.status_code != 200:
             return None, self._err(res)
         return res.content, None
+
+    def _rows_from_copy(self, token: str, refused: dict) -> dict:
+        """rows(), read from a downloaded copy because Excel Online refused the
+        workbook. Same shape and the same xl<row> ids; marked source="copy" so
+        callers can say so. Read-only: fetch() and apply() still go through Excel
+        Online, so nothing can be saved until it opens the file again."""
+        data, err = self.download(token)
+        if err:
+            return {**refused, "items": []}
+        import io
+        import warnings
+        import openpyxl
+        warnings.filterwarnings("ignore", message="Data Validation extension", category=UserWarning)
+        try:
+            book = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        except Exception as exc:  # noqa: BLE001 - genuinely unreadable: report the original refusal
+            return {**refused, "items": [], "copy_error": str(exc)[:200]}
+        names = [ws.title for ws in book.worksheets]
+        order = [self.sheet] if self.sheet in names else \
+            ([self._chosen_sheet] if self._chosen_sheet in names else []) + \
+            [n for n in names if n != self._chosen_sheet]
+        chosen = None
+        for name in order[:12]:
+            grid = [[_display(c.value, getattr(c, "number_format", "General")) for c in row]
+                    for row in book[name].iter_rows(min_row=1, min_col=1)]
+            off, headers, found = self._headers_row(grid)
+            if found or not self.key_columns:
+                chosen = (name, grid, off, headers, found)
+                break
+            chosen = chosen or (name, grid, off, headers, found)
+        book.close()
+        if not chosen or not chosen[3]:
+            return {**refused, "items": []}
+        name, grid, off, headers, found = chosen
+        items = []
+        for i, row in enumerate(grid[off + 1:]):
+            if not any(c.strip() for c in row):
+                continue
+            sheet_row = off + 1 + i + 1                     # grid[0] is sheet row 1
+            fields = {h: row[j] if j < len(row) else "" for j, h in enumerate(headers) if h}
+            items.append({"id": f"xl{sheet_row}", "etag": _fingerprint(row),
+                          "modified": "", "fields": fields})
+        return {"state": "ok", "items": items, "sheet": name, "sheets": names,
+                "header_row": off + 1, "headers": [h for h in headers if h],
+                "key_columns_found": found, "source": "copy",
+                "refused": str(refused.get("detail", ""))[:300],
+                "note": ("Read from a copy of the tracker: Excel Online can't open the file "
+                         "right now, so changes can't be saved until it's repaired.")}
