@@ -54,10 +54,11 @@ def _island():
              _p("9001-03-02X", "LIGHTING"), _p("FIXING-3.5", "SCREW", page_roles=["bought_in"]),
              _p("9001-03-01M-H", "WING H", normalized_material="MILD_STEEL"),
              _p("9001-03-02X-H", "LIGHTING H"),
-             _p("9001-04-GA", "HEADER"), _p("9001-04-201", "FASCIA ASSY"),
+             _p("9001-04-GA", "ISLAND NEW / PACKOUT HEADER"),
+             _p("9001-04-201", "NEW FASCIA ASSEMBLY"),
              _p("9001-04-02M", "FASCIA", normalized_material="MILD_STEEL"),
              _p("9001-04-01M", "HEADER FRAME", normalized_material="MILD_STEEL"),
-             _p("9001-04-301", "PACKOUT ASSY"),
+             _p("9001-04-301", "PACKOUT FASCIA ASSEMBLY"),
              _p("9001-04-04M", "PACKOUT FRONT", normalized_material="MILD_STEEL")]
     extract = {"top_assembly": {"part_number": "9001-01-GA"}, "assemblies": [
         {"part_number": "9001-01-GA", "children": [
@@ -98,6 +99,25 @@ def test_nothing_the_product_needs_is_set_aside_any_more():
     assert g["quantities"]["9001-04-02M"] == 1.0 and g["quantities"]["9001-04-04M"] == 1.0
 
 
+def test_numbering_alone_proposes_a_member_but_does_not_charge_it():
+    parts, extract = _island()
+    parts.append(_p("9001-04-99M", "SPARE BRACKET", normalized_material="MILD_STEEL"))
+    g = rc.build_part_graph(parts, extract, declared_product="9001-01-GA")
+    assert "9001-04-99M" not in _kids(g, "9001-04-GA")
+    proposed = next(i for i in g["issues"] if i.get("code") == "members_proposed_by_numbering")
+    assert proposed["candidates"] == ["9001-04-99M"]
+    assert "9001-04-99M" in rc.outside_product_identities(g["issues"]), "kept out of the price"
+
+
+def test_the_assemblys_description_can_come_from_the_parts_list_row_alone():
+    parts, extract = _island()
+    parts = [p for p in parts if p["part_number"] != "9001-04-GA"]
+    rows = [{"part_number": "9001-04-GA", "description": "ISLAND NEW / PACKOUT HEADER",
+             "quantity": 1, "bom_parent": "9001-01-GA"}]
+    g = rc.build_part_graph(parts, extract, bom_rows=rows, declared_product="9001-01-GA")
+    assert set(_kids(g, "9001-04-GA")) == {"9001-04-01M", "9001-04-201", "9001-04-301"}
+
+
 def test_a_drawing_another_assembly_owns_is_never_adopted():
     parts, extract = _island()
     extract["assemblies"].append({"part_number": "9001-03-GA",
@@ -110,7 +130,9 @@ def test_the_adopted_line_says_so_on_its_record():
     parts, extract = _island()
     rc.apply_canonical_evidence_to_parts(parts, extract, summary={"declared_product": "9001-01-GA"})
     frame = next(p for p in parts if p["part_number"] == "9001-04-01M")
-    assert any("whose drawing is not in the pack" in str(f) for f in frame.get("review_flags") or [])
+    flag = next(f for f in frame.get("review_flags") or []
+                if "whose drawing is not in the pack" in str(f))
+    assert "shares HEADER" in flag, "the corroboration is said, not just the numbering"
 
 
 # ── a handed kit is the kit mirrored ─────────────────────────────────────────────────
@@ -122,6 +144,22 @@ def test_a_handed_assembly_takes_its_bases_members_by_their_own_hands():
     kinds = {n.part_number: n.kind for n in g["nodes"]}
     assert kinds["9001-03-GA-H"] == "assembly"
     assert g["quantities"]["FIXING-3.5"] == 4.0, "two screws in each hand"
+
+
+def test_hardware_the_parent_already_lists_is_not_copied_into_the_hand():
+    parts, extract = _island()
+    extract["assemblies"][0]["children"].append({"part_number": "FIXING-3.5", "qty": 4})
+    g = rc.build_part_graph(parts, extract, declared_product="9001-01-GA")
+    assert "FIXING-3.5" not in _kids(g, "9001-03-GA-H")
+    assert {"9001-03-01M-H", "9001-03-02X-H"} <= set(_kids(g, "9001-03-GA-H"))
+
+
+def test_a_hand_with_any_stated_member_keeps_its_own_list():
+    parts, extract = _island()
+    extract["assemblies"].append({"part_number": "9001-03-GA-H",
+                                  "children": [{"part_number": "9001-03-01M-H", "qty": 1}]})
+    g = rc.build_part_graph(parts, extract, declared_product="9001-01-GA")
+    assert _kids(g, "9001-03-GA-H") == {"9001-03-01M-H": 1.0}
 
 
 def test_a_hand_of_a_cut_part_with_hardware_stays_a_part():
@@ -250,7 +288,48 @@ def test_a_folded_part_gets_a_developed_provisional_blank(tmp_path):
     blank = dpg.provisional_blank_from_sheets(part, [page])
     assert blank["formed"] == (1500.0, 400.0)
     assert (blank["length"], blank["width"]) == (1500.0, 450.0), "two 25 mm flanges"
-    assert "house flange allowance" in blank["working"]
+    assert "house allowance" in blank["working"]
+
+
+def test_figures_that_run_one_way_give_no_blank(tmp_path):
+    import detail_page_geometry as dpg
+    page = _sheet(tmp_path, [((200, 200), "1500", 0), ((300, 300), "400", 0)])
+    part = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 1.5}
+    assert dpg.provisional_blank_from_sheets(part, [page]) is None
+    assert "two axes" in part["_provisional_blank_refused"]
+
+
+def test_a_flat_pattern_on_the_sheet_is_not_developed_again(tmp_path):
+    import detail_page_geometry as dpg
+    page = _sheet(tmp_path, [((200, 200), "1550", 0), ((150, 400), "450", 90),
+                             ((200, 120), "FLAT PATTERN", 0)])
+    part = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 1.5, "fold_count_textual": 2}
+    blank = dpg.provisional_blank_from_sheets(part, [page])
+    assert (blank["length"], blank["width"]) == (1550.0, 450.0) and blank["developed"]
+
+
+def test_stated_flange_depths_are_used_before_the_allowance(tmp_path):
+    import detail_page_geometry as dpg
+    page = _sheet(tmp_path, [((200, 200), "1500", 0), ((150, 400), "400", 90)])
+    part = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 1.5, "fold_count_textual": 2,
+            "fold_values_mm": ["40", "40"]}
+    blank = dpg.provisional_blank_from_sheets(part, [page])
+    assert (blank["length"], blank["width"]) == (1500.0, 480.0)
+    assert "the drawing states" in blank["working"] and "house allowance" not in blank["working"]
+
+
+def test_a_stated_weight_that_disagrees_refuses_the_blank(tmp_path):
+    import detail_page_geometry as dpg
+    page = _sheet(tmp_path, [((200, 200), "1500", 0), ((150, 400), "400", 90)])
+    part = {"part_number": "9001-03-01M", "normalized_material": "MILD_STEEL",
+            "normalized_thickness_mm": 1.5, "stated_weight_g": 1500}       # ~0.13 m² of steel
+    assert dpg.provisional_blank_from_sheets(part, [page]) is None
+    assert "stated" in part["_provisional_blank_refused"]
+    ok = dict(part, stated_weight_g=7000)                                   # ~0.59 m²
+    assert dpg.provisional_blank_from_sheets(ok, [page]) is not None
 
 
 def test_a_refused_overall_is_replaced_by_the_provisional_blank(tmp_path):
@@ -314,6 +393,14 @@ def test_a_fold_count_the_drawing_office_wrote_still_stands():
     part = {"fold_count_textual": 2, "drawing_bend_callouts": 7}
     out = fc.press_brake_folds(part)
     assert out["count"] == 2 and "callouts" in (out["disagreement"] or "")
+
+
+def test_callouts_past_the_drawn_bend_lines_are_not_charged():
+    import fold_count as fc
+    part = {"angles_deg": ["90"], "drawing_bend_callouts": 7,
+            "geometry_rollup": {"dashed_long_axis_lines": 4}}
+    out = fc.press_brake_folds(part)
+    assert out["count"] == 1 and "callouts" in (out["disagreement"] or "")
 
 
 def test_a_model_still_has_to_confirm_callouts_over_a_flat():

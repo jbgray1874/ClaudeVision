@@ -203,8 +203,12 @@ def press_brake_folds(part: Dict[str, Any]) -> Dict[str, Any]:
     # flat pattern and no model exist, and the drawing office wrote no fold COUNT, the sheet's
     # own per-bend callouts are the fuller count of the same printed statements — charged, not
     # measured, and still asked.
+    # NOT A COUNT OF REPEATED VIEWS (review of D-505): the same bend called out in two views
+    # reads twice. Where the sheet's drawn bend lines were counted (the dashed-line reading),
+    # the callouts may not exceed them; past that ceiling they stay a reading, not the charge.
     elif (_callouts and not _model and _callouts > count and source == DRAWING_NOTE
-          and not _int(part.get("fold_count_textual"))):
+          and not _int(part.get("fold_count_textual"))
+          and (dashed_line_proxy(part) is None or _callouts <= dashed_line_proxy(part))):
         count, source = _callouts, CALLOUTS_ONLY
 
     # EVERY READING THAT LOST IS STILL ON THE RECORD. A rung that disagreed with the charge is

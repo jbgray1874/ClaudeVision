@@ -818,6 +818,22 @@ CONCEPT_WELDED_TO_WORDS = ["welded to", "welded onto", "welded on to"]
 # A FLANGE DEPTH FOR A CONCEPT BLANK WHOSE READ GAVE NONE (D-499) — a typical return on a
 # folded sheet-steel display part. AN ASSUMPTION TO CONFIRM, recorded on every part it sizes.
 CONCEPT_FLANGE_ALLOWANCE_MM = 25
+
+# A PROVISIONAL BLANK FROM A DRAWING SHEET'S PRINTED FIGURES (D-505, tightened on review). Used
+# only where the sheet prints no usable overall pair, and only when its figures can be put on
+# two perpendicular axes (the text's own orientation). A flange depth the drawing states is
+# used first; this allowance only where it states none. A stated weight must agree with the
+# result within the ratio bounds, else no provisional blank is made (the weight then speaks
+# through the mass-implied allowance instead).
+PROVISIONAL_BLANK_FROM_SHEET = {
+    "flange_allowance_mm": 25,
+    "weight_ratio_bounds": (0.6, 1.6),
+    "density_kg_m3": {"STEEL": 7850, "MILD": 7850, "STAINLESS": 8000, "GALV": 7850,
+                      "ZINTEC": 7850, "CR4": 7850, "ALUMIN": 2700, "ACRYLIC": 1190,
+                      "PERSPEX": 1190, "POLYCARBONATE": 1200},
+    # Words on a sheet that say its figures include the DEVELOPED blank — no flange is added.
+    "developed_words": r"FLAT\s*PATTERN|DEVELOPED|BLANK\s*SIZE|FLAT\s*BLANK|UNFOLDED",
+}
 # A SHELF-EDGE STRIP, TRIM OR LIP SIZED FROM THE PART IT EDGES (D-499): when the read gives
 # one line whose count is the total of several host parts of different sizes, it is split
 # into one line per host, each at its host's own length. Words that make a line an edging.
