@@ -4597,6 +4597,23 @@ def _finalize_scan_summary(
               f"{len(_canon_pre.get('nodes') or [])} node(s)"
               + (f"; {len(_roots)} assemblies ship on this enquiry ({', '.join(_roots)})"
                  if len(_roots) > 1 else ""), flush=True)
+        # A HANDED BOM ROW THE PACK NEVER DREW (D-509). The graph just proved which stated
+        # rows no record answers to; a row that is another part's hand is minted from that
+        # part HERE, while the mint can still be costed — and the mirror rule runs again so
+        # the new record takes its base's provisional blank like a hand that was drawn.
+        from detail_page_geometry import (mint_missing_hand_records,
+                                          mirror_provisional_blanks)
+        _minted_hands = mint_missing_hand_records(
+            summary["manufacturing_writeup"]["parts"], _canon_pre)
+        if _minted_hands:
+            print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
+                  f"hand of an existing part — a BOM row the pack never drew", flush=True)
+            _mirrored_late = mirror_provisional_blanks(
+                summary["manufacturing_writeup"]["parts"])
+            if _mirrored_late:
+                print(f"   [detail-geometry] {', '.join(_mirrored_late)} take their other "
+                      f"hand's provisional blank — the same flat, labelled and asked",
+                      flush=True)
     except Exception as _canon_pre_err:
         print(f"   [canonical-part-graph] pre-cost application skipped: "
               f"{type(_canon_pre_err).__name__}: {_canon_pre_err}", flush=True)
