@@ -1073,7 +1073,12 @@ def design_intent_pages(summary: Any) -> List[Any]:
 
 
 def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Dict[str, Any]:
-    full_text = normalize_text(f"{page_text} {bom_text} {title_block_text}")
+    # THE REVISION TABLE DOES NOT MAKE A SHEET AN ASSEMBLY (D-511). 12340-01M's table lists
+    # the superseded 12341-01M, which read as a second unique code and flipped this single
+    # bracket's sheet to "assembly" — the role that feeds its title to the prose recogniser.
+    # History is struck before anything here is counted.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    full_text = _strip_rev(normalize_text(f"{page_text} {bom_text} {title_block_text}"))
     part_numbers = re.findall(config.PART_NUMBER_PATTERN, full_text, flags=re.IGNORECASE)
     _junk_sfx = (
         " - ALUMINIUM", " - ALUMINUM", " - STEEL", " - TIMBER", " - PLYWOOD",
@@ -1091,7 +1096,9 @@ def _infer_page_role(page_text: str, bom_text: str, title_block_text: str) -> Di
     unique_part_numbers = sorted(set(part_numbers))
     detail_cues = any(token in full_text.upper() for token in ["FLAT PATTERN", "DETAIL "])
     drawing_assembly_hint = "ASSEMBLY" in normalize_text(title_block_text).upper()
-    title_block_drawing_numbers = re.findall(config.DRAWING_NUMBER_PATTERN, normalize_text(title_block_text), flags=re.IGNORECASE)
+    title_block_drawing_numbers = re.findall(
+        config.DRAWING_NUMBER_PATTERN, _strip_rev(normalize_text(title_block_text)),
+        flags=re.IGNORECASE)
     title_block_drawing_number_count = len(title_block_drawing_numbers)
     page_text_upper = normalize_text(page_text).upper()
     bom_header_detected = all(token in page_text_upper for token in ["ITEM", "DWG NO", "QTY"])
@@ -1277,7 +1284,12 @@ def extract_patterns(text: str) -> Dict[str, Any]:
             return False
         return True
 
-    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, normalized, flags=re.IGNORECASE)
+    # A SUPERSEDED NUMBER IS NOT A PART (D-511): codes are harvested with the revision
+    # table struck, so a prior issue's number never joins the job's part-number list —
+    # the current number still prints in the DRAWING No field and survives.
+    from extractor_patterns import strip_revision_table as _strip_rev
+    _raw_pns = re.findall(config.PART_NUMBER_PATTERN, _strip_rev(normalized),
+                          flags=re.IGNORECASE)
     return {
         "part_numbers": sorted(set(p for p in _raw_pns if _valid_pn(p))),
         "dates": sorted(set(re.findall(config.DATE_PATTERN, normalized, flags=re.IGNORECASE))),

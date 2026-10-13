@@ -194,13 +194,31 @@ def behind_origin_warning() -> Optional[str]:
         _upstream = _git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
         if not _upstream:
             return None
-        _behind = _git("rev-list", "--count", "HEAD..@{u}")
-        _n = int(_behind) if _behind and _behind.isdigit() else 0
+        # EVERY REMOTE THAT TRACKS THIS BRANCH GETS A SAY (D-511). The laptop pulls from
+        # `jbg` while its configured upstream is `origin`, whose copy of the branch holds
+        # the same work under different merge hashes — so a checkout that genuinely
+        # contained the GitHub tip was banner-warned "9 commits behind" on every run, and
+        # the warning taught people to ignore it. The checkout is behind only when it is
+        # behind EVERY remote's copy of the branch: if any remote's tip is already in
+        # HEAD's history, the work has arrived, whatever another remote calls it.
+        _branch = _upstream.split("/", 1)[1] if "/" in _upstream else _upstream
+        _remote_refs = [r for r in (_git("for-each-ref", "--format=%(refname:short)",
+                                         "refs/remotes") or "").splitlines()
+                        if r.strip() and r.strip().split("/", 1)[-1] == _branch
+                        and not r.strip().endswith("/HEAD")]
+        _counts = {}
+        for _ref in (_remote_refs or [_upstream]):
+            _c = _git("rev-list", "--count", f"HEAD..{_ref}")
+            _counts[_ref] = int(_c) if _c and _c.isdigit() else 0
+        _nearest = min(_counts, key=lambda r: _counts[r])
+        _n = _counts[_nearest]
         if _n <= 0:
             return None
-        _subject = _git("log", "-1", "--format=%h %s", "@{u}") or _upstream
-        return (f"BEHIND THE BRANCH — this checkout is {_n} commit(s) behind {_upstream}, "
-                f"whose tip is {_subject}. Those commits are not in this run and anything "
+        _subject = _git("log", "-1", "--format=%h %s", _nearest) or _nearest
+        _others = ", ".join(f"{r} by {c}" for r, c in sorted(_counts.items()) if r != _nearest)
+        return (f"BEHIND THE BRANCH — this checkout is {_n} commit(s) behind {_nearest}"
+                + (f" (and {_others})" if _others else "")
+                + f", whose tip is {_subject}. Those commits are not in this run and anything "
                 f"they fixed is still broken here. `git pull` and restart the runner. "
                 f"(Read from the last fetch, so the real gap may be larger.)")
     except Exception:                                                # noqa: BLE001
