@@ -135,6 +135,31 @@ def _display(value, fmt: str = "General") -> str:
     return str(value)
 
 
+def _cell_format(cell) -> str:
+    """A cell's number format, or "General" when the workbook points at a style it
+    doesn't define (common in a file edited outside Excel - reading the format then
+    fails, though the value itself is fine)."""
+    try:
+        return cell.number_format or "General"
+    except Exception:  # noqa: BLE001
+        return "General"
+
+
+def _date_column(header: str) -> bool:
+    h = _norm(header)
+    return "date" in h or h in ("end", "start", "end date", "start date")
+
+
+def _serial_date(value) -> str:
+    """An Excel date serial shown as a date (month-first, as the sheet shows dates),
+    for date columns whose date format was lost with a broken style."""
+    import datetime as _dt
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and 20000 < value < 80000:
+        d = _dt.date(1899, 12, 30) + _dt.timedelta(days=int(value))
+        return f"{d.month}/{d.day}/{d.year}"
+    return ""
+
+
 class ExcelStore:
     """Read/write access to one worksheet, shaped like the List backend:
 
@@ -384,7 +409,10 @@ class ExcelStore:
                 wb, err = self._load(client, token)
                 if err:
                     if excel_refused(err):
-                        return self._rows_from_copy(token, err)
+                        try:
+                            return self._rows_from_copy(token, err)
+                        except Exception as exc:  # noqa: BLE001 - a fallback must never crash a lookup
+                            return {**err, "items": [], "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
                     return {**err, "items": []}
         except httpx.HTTPError as exc:
             return {"state": "unreachable", "items": [],
@@ -540,29 +568,38 @@ class ExcelStore:
         warnings.filterwarnings("ignore", message="Data Validation extension", category=UserWarning)
         try:
             book = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+            names = [ws.title for ws in book.worksheets]
+            order = [self.sheet] if self.sheet in names else \
+                ([self._chosen_sheet] if self._chosen_sheet in names else []) + \
+                [n for n in names if n != self._chosen_sheet]
+            chosen = None
+            for name in order[:12]:
+                ws = book[name]
+                # Bounded: a file written outside Excel can claim a sheet of a
+                # million rows; the tracker is a few hundred.
+                raw = [[(c.value, _cell_format(c)) for c in row]
+                       for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row or 20000, 20000),
+                                               min_col=1, max_col=min(ws.max_column or 200, 200))]
+                grid = [[_display(v, f) for v, f in row] for row in raw]
+                off, headers, found = self._headers_row(grid)
+                if found or not self.key_columns:
+                    chosen = (name, raw, grid, off, headers, found)
+                    break
+                chosen = chosen or (name, raw, grid, off, headers, found)
+            book.close()
         except Exception as exc:  # noqa: BLE001 - genuinely unreadable: report the original refusal
-            return {**refused, "items": [], "copy_error": str(exc)[:200]}
-        names = [ws.title for ws in book.worksheets]
-        order = [self.sheet] if self.sheet in names else \
-            ([self._chosen_sheet] if self._chosen_sheet in names else []) + \
-            [n for n in names if n != self._chosen_sheet]
-        chosen = None
-        for name in order[:12]:
-            grid = [[_display(c.value, getattr(c, "number_format", "General")) for c in row]
-                    for row in book[name].iter_rows(min_row=1, min_col=1)]
-            off, headers, found = self._headers_row(grid)
-            if found or not self.key_columns:
-                chosen = (name, grid, off, headers, found)
-                break
-            chosen = chosen or (name, grid, off, headers, found)
-        book.close()
-        if not chosen or not chosen[3]:
+            return {**refused, "items": [], "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
+        if not chosen or not chosen[4]:
             return {**refused, "items": []}
-        name, grid, off, headers, found = chosen
+        name, raw, grid, off, headers, found = chosen
+        dated = [j for j, h in enumerate(headers) if h and _date_column(h)]
         items = []
         for i, row in enumerate(grid[off + 1:]):
             if not any(c.strip() for c in row):
                 continue
+            for j in dated:                                 # a date that lost its date format
+                if j < len(row) and _serial_date(raw[off + 1 + i][j][0]):
+                    row[j] = _serial_date(raw[off + 1 + i][j][0])
             sheet_row = off + 1 + i + 1                     # grid[0] is sheet row 1
             fields = {h: row[j] if j < len(row) else "" for j, h in enumerate(headers) if h}
             items.append({"id": f"xl{sheet_row}", "etag": _fingerprint(row),
