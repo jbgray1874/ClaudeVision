@@ -137,6 +137,48 @@ def test_a_single_part_job_resolves_its_declared_product():
     assert graph.get("product_root") == "12340-01M"
     assert not [i for i in (graph.get("issues") or [])
                 if isinstance(i, dict) and "not_resolved" in str(i.get("code") or "")]
+    # THE PRODUCT BEING ONE PART DOES NOT MAKE THAT PART AN ASSEMBLY. The first run under
+    # this rule classified the bracket "assembly" because it was the top of the graph, which
+    # ruled its laser not-applicable and refused its blank — powder on air at £121.48.
+    node = next(n for n in graph["nodes"] if n.part_number == "12340-01M")
+    assert node.kind == "leaf"
+    assert not parts[0].get("is_assembly_parent")
+
+
+def test_the_leaf_product_keeps_its_laser_through_route_compilation():
+    """THE 19:10 BOOK'S REGRESSION, replayed on the record's own facts: £121.48 of powder on
+    air, because the leaf-resolved product was classed an assembly and its laser ruled
+    'assembly parent has no independently measured fabricated leaf'. The compiled route must
+    REQUIRE the laser on the leaf, and nothing may call it an assembly."""
+    from route_compiler import compile_route_without_pricing
+    part = {"part_number": "12340-01M", "description": "KD V2 GONDOLA SHELF BRACKET",
+            "quantity": 1, "normalized_material": "MILD STEEL",
+            "normalized_thickness_mm": 4.0, "normalized_finish": "POWDER COATING",
+            "blank_length_mm": 396.21, "blank_width_mm": 90.0,
+            "blank_length_mm_source": "dxf_flat_pattern",
+            "blank_width_mm_source": "dxf_flat_pattern",
+            "dxf_measured_outline": True, "dxf_augmented": True,
+            "dxf_measured_cut_length": 1050.6,
+            "operations": ["laser_cutting", "powder_coating", "handling"],
+            "normalized_geometry": {"blank_length_mm": 396.21, "blank_width_mm": 90.0,
+                                    "estimated_cut_length_mm": 1050.6,
+                                    "estimated_pierce_count": 2, "estimated_hole_count": 1},
+            "pages": [1], "page_roles": ["detail"]}
+    summary = {"declared_product": "12340-01M", "drawing_number": "12340-01M",
+               "manufacturing_writeup": {"parts": [part]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    by_op = {}
+    for d in (compiled.get("decisions") or compiled.get("claims") or []):
+        t = d if isinstance(d, dict) else d.__dict__
+        if "12340" in str(t.get("target_id") or t.get("part_number") or ""):
+            by_op[t.get("operation")] = (t.get("status"), str(t.get("reason") or ""))
+    assert by_op.get("laser_cutting", ("", ""))[0] == "required", by_op
+    assert "assembly parent" not in by_op.get("laser_cutting", ("", ""))[1]
+    assert by_op.get("powder_coating", ("", ""))[0] == "required"
+    nodes = [(n if isinstance(n, dict) else n.__dict__) for n in (compiled.get("nodes") or [])]
+    assert all(t.get("kind") == "leaf" for t in nodes if t.get("part_number") == "12340-01M")
+    assert not part.get("is_assembly_parent")
 
 
 def test_two_matching_leaves_still_refuse_to_choose():
