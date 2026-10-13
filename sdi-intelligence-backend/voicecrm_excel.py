@@ -412,6 +412,8 @@ class ExcelStore:
                         try:
                             return self._rows_from_copy(token, err)
                         except Exception as exc:  # noqa: BLE001 - a fallback must never crash a lookup
+                            print(f"[voicecrm.excel] copy fallback crashed: {type(exc).__name__}: {exc}"[:300],
+                                  flush=True)
                             return {**err, "items": [], "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
                     return {**err, "items": []}
         except httpx.HTTPError as exc:
@@ -561,7 +563,9 @@ class ExcelStore:
         Online, so nothing can be saved until it opens the file again."""
         data, err = self.download(token)
         if err:
-            return {**refused, "items": []}
+            print(f"[voicecrm.excel] copy fallback: download refused: {err.get('status')} "
+                  f"{str(err.get('detail', ''))[:200]}", flush=True)
+            return {**refused, "items": [], "copy_error": f"download: {str(err.get('detail', ''))[:180]}"}
         import io
         import warnings
         import openpyxl
@@ -588,9 +592,11 @@ class ExcelStore:
                 chosen = chosen or (name, raw, grid, off, headers, found)
             book.close()
         except Exception as exc:  # noqa: BLE001 - genuinely unreadable: report the original refusal
+            print(f"[voicecrm.excel] copy fallback: unreadable copy: {type(exc).__name__}: {exc}"[:300], flush=True)
             return {**refused, "items": [], "copy_error": f"{type(exc).__name__}: {exc}"[:200]}
         if not chosen or not chosen[4]:
-            return {**refused, "items": []}
+            print(f"[voicecrm.excel] copy fallback: no header row found (sheets {names[:6]})", flush=True)
+            return {**refused, "items": [], "copy_error": "no header row found in the copy"}
         name, raw, grid, off, headers, found = chosen
         dated = [j for j, h in enumerate(headers) if h and _date_column(h)]
         items = []
