@@ -4597,14 +4597,17 @@ def _finalize_scan_summary(
               f"{len(_canon_pre.get('nodes') or [])} node(s)"
               + (f"; {len(_roots)} assemblies ship on this enquiry ({', '.join(_roots)})"
                  if len(_roots) > 1 else ""), flush=True)
-        # A HANDED BOM ROW THE PACK NEVER DREW (D-509). The graph just proved which stated
-        # rows no record answers to; a row that is another part's hand is minted from that
-        # part HERE, while the mint can still be costed — and the mirror rule runs again so
-        # the new record takes its base's provisional blank like a hand that was drawn.
+        # A HANDED BOM ROW THE PACK NEVER DREW (D-509). Read off the RAW BOM ROWS, not the
+        # compiled graph: a row whose owner the graph refuses (12665-03-01M-H under the
+        # handed assembly 12665-03-GA-H) gets no edge and NO NODE, so the graph cannot name
+        # it — the printed row is the evidence. A row that is another part's hand is minted
+        # from that part HERE, while the mint can still be costed — and the mirror rule runs
+        # again so the new record takes its base's provisional blank like a drawn hand.
         from detail_page_geometry import (mint_missing_hand_records,
                                           mirror_provisional_blanks)
         _minted_hands = mint_missing_hand_records(
-            summary["manufacturing_writeup"]["parts"], _canon_pre)
+            summary["manufacturing_writeup"]["parts"],
+            (summary.get("document_analysis") or {}).get("bom_rows") or [])
         if _minted_hands:
             print(f"   [canonical-part-graph] {', '.join(_minted_hands)} minted as the other "
                   f"hand of an existing part — a BOM row the pack never drew", flush=True)

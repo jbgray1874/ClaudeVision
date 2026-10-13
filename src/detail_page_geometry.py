@@ -737,7 +737,7 @@ def mirror_provisional_blanks(parts: Any) -> List[str]:
     return filled
 
 
-def mint_missing_hand_records(parts: Any, graph: Any) -> List[str]:
+def mint_missing_hand_records(parts: Any, bom_rows: Any) -> List[str]:
     """A HANDED BOM ROW THE PACK NEVER DREW BECOMES A RECORD OF ITS OWN (D-509).
 
     12665's GA lists 12665-03-01M-H — the side wing built the other way round — and the pack
@@ -747,14 +747,22 @@ def mint_missing_hand_records(parts: Any, graph: Any) -> List[str]:
     it AFTER costing. mirror_provisional_blanks (D-508) fills a hand's geometry, but it walks
     the part records: a hand with no record is invisible to it.
 
-    So the record is minted where the graph proves the row: a BOM-stated leaf, reached under
-    a parent, whose code mirrors an existing cut part's and which no record answers to under
-    any of its spellings, gets a record of its own — the base's material, gauge and finish at
-    the mirror's gap-fill standing, the row's own quantity, and NO geometry of its own: the
+    THE PARTS-LIST ROW ITSELF IS THE SOURCE, NOT THE COMPILED GRAPH. The first version of
+    this mint walked the pre-cost graph's nodes, and the 18:13 run proved that wrong twice
+    over: 12665-03-01M-H hangs under 12665-03-GA-H, a handed ASSEMBLY the graph refuses to
+    own ("name an owner this job does not recognise"), and a row whose owner is refused gets
+    no edge AND NO NODE — the hand was invisible to the very pass written for it. The
+    drawing's printed row and the mirrorable base ARE the evidence; disconnection is the
+    symptom this mint exists to price through.
+
+    So: a stated BOM row whose code mirrors an existing cut part's and which no record
+    answers to gets a record of its own — the base's material, gauge and finish at the
+    mirror's gap-fill standing, the row's own quantity, and NO geometry of its own: the
     mirror pass that runs next fills the blank at provisional standing, labelled and asked,
-    exactly as for a hand that was drawn. A hand of an assembly, a bought-in row, and a code
-    a record already answers to are left alone. Returns the codes minted."""
-    if not isinstance(parts, list) or not isinstance(graph, Mapping):
+    exactly as for a hand that was drawn. A hand of an assembly, a hand of a part that cuts
+    no blank (bought in, supplied), and a code a record already answers to are left alone.
+    Returns the codes minted."""
+    if not isinstance(parts, list) or not isinstance(bom_rows, Sequence):
         return []
     try:
         from part_code_conventions import carries_assembly_role, mirror_base
@@ -765,22 +773,13 @@ def mint_missing_hand_records(parts: Any, graph: Any) -> List[str]:
     def _key(pn: Any) -> str:
         return re.sub(r"\s+", "", str(pn or "")).upper()
 
-    def _nv(node: Any, name: str, default: Any = None) -> Any:
-        if isinstance(node, Mapping):
-            return node.get(name, default)
-        return getattr(node, name, default)
-
     by_key = {_key(p.get("part_number")): p for p in parts if isinstance(p, dict)}
     minted: List[str] = []
-    for node in (graph.get("nodes") or []):
-        pn = str(_nv(node, "part_number") or "").strip()
-        if not pn or str(_nv(node, "kind") or "") != "leaf" or not _nv(node, "parents"):
+    for row in bom_rows:
+        if not isinstance(row, Mapping):
             continue
-        evidence = _nv(node, "evidence") or {}
-        if not (isinstance(evidence, Mapping) and evidence.get("bom_stated")):
-            continue                           # a name the tree inferred is not a stated row
-        spellings = [pn] + [str(a) for a in (evidence.get("raw_aliases") or [])]
-        if any(_key(s) in by_key for s in spellings):
+        pn = str(row.get("part_number") or "").strip()
+        if not pn or _key(pn) in by_key:
             continue                           # a record already answers to this row
         if carries_assembly_role(pn):
             continue                           # a handed ASSEMBLY mirrors as a route, not a blank
@@ -788,14 +787,13 @@ def mint_missing_hand_records(parts: Any, graph: Any) -> List[str]:
         if base is None or not_cut_from_a_blank(base):
             continue                           # nothing to be the other hand OF
         base_pn = str(base.get("part_number") or "")
-        qty = _nv(node, "qty_own")
         try:
-            qty = float(qty) if qty else 1.0
+            qty = float(row.get("quantity") or 1.0) or 1.0
         except (TypeError, ValueError):
             qty = 1.0
         rec: Dict[str, Any] = {
             "part_number": pn,
-            "description": (str(_nv(node, "description") or "").strip()
+            "description": (str(row.get("description") or "").strip()
                             or f"{str(base.get('description') or base_pn).strip()} (opposite hand)"),
             "quantity": qty,
             "mirror_of": base_pn,
