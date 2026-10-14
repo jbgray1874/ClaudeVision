@@ -4971,8 +4971,7 @@ def _finalize_scan_summary(
                         "the standards document and run again")
                     print(f"   [concept] {_why} — declaration set aside", flush=True)
             # THE ENQUIRY BRIEF FILED WITH THE PACK (D-360): stated facts for the model.
-            _brief, _brief_file = concept_scan.find_brief(
-                [job_folder, summary.get("job_folder")]
+            _run_folders = ([job_folder, summary.get("job_folder")]
             + [_render_source_dir(p) for p in
                (list(summary.get("scanned_documents") or [])
                 + list(summary.get("staged_inputs") or [])
@@ -4983,6 +4982,7 @@ def _finalize_scan_summary(
                 + [Path(str(p)).parent for p in (summary.get("staged_inputs") or [])]
                 + [Path(str(p)).parent for p in (summary.get("scanned_documents") or [])]
                 + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+            _brief, _brief_file = concept_scan.find_brief(_run_folders)
             if _brief:
                 summary["enquiry_brief"] = {"text": _brief, "file": _brief_file}
                 summary.setdefault("review_flags", []).append(
@@ -5017,7 +5017,35 @@ def _finalize_scan_summary(
                 print(f"   [concept] the previous read's bill ({len(_prev_bill.get('parts') or [])} "
                       f"line(s), prompt {_prev_bill.get('prompt_version') or '?'}) goes with any "
                       f"new read, to keep unless the pages say otherwise", flush=True)
-            if _sheet_read:
+            # AN ACCEPTED CONSTRUCTION IS PRICED, NOT RE-READ (D-534): a member schedule a person
+            # checked against the drawing, filed beside the pack, is the read — in its shape, so
+            # everything downstream prices it as it would the model's; the model is not asked.
+            _acc, _acc_file, _acc_problems = concept_scan.find_accepted_construction(
+                _run_folders, job=_bill_job)
+            if _acc_file and not _acc:
+                _acc_note = ("ACCEPTED CONSTRUCTION REFUSED — " + _acc_file + ": "
+                             + "; ".join(_acc_problems) + " — the drawing was read by the model "
+                             "instead")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                print(f"   [concept] {_acc_note}", flush=True)
+            if _acc:
+                _ac = _acc["accepted_construction"]
+                _answer = _acc
+                _read = {"parsed": _acc, "accepted_construction": _acc_file}
+                _sr = {"read": _read, "answer": _acc, "check": {}, "set_aside": [],
+                       "base_key": "accepted:" + Path(_acc_file).name}
+                summary["accepted_construction"] = dict(_ac)
+                _acc_note = (f"ACCEPTED CONSTRUCTION — {len(_acc.get('parts') or [])} line(s) from "
+                             f"{Path(_acc_file).name}, accepted by {_ac.get('accepted_by')}"
+                             + (f" on {_ac['accepted_on']}" if _ac.get("accepted_on") else "")
+                             + " — the member schedule checked against the drawing is priced; "
+                               "the model was not asked to read the pack")
+                summary.setdefault("review_flags", []).append(_acc_note)
+                for _ex in _ac.get("excluded") or []:
+                    summary.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION — not part of the product: {_ex}")
+                print(f"   [concept] {_acc_note}", flush=True)
+            elif _sheet_read:
                 _door_rec = (summary.get("model_takeoff_door")
                              if isinstance(summary.get("model_takeoff_door"), dict) else {})
                 # THE STANDARDS RIDE ON A SHEET READ TOO (D-483): the manual's requirements
@@ -5111,6 +5139,15 @@ def _finalize_scan_summary(
                 Path(_pack[0]).stem if _pack else "CONCEPT")
             _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
                                                           brief=_brief or "")
+            if _acc:
+                # EVERY LINE SAYS WHOSE SCHEDULE IT CAME FROM (D-534).
+                for _rec in _sighted:
+                    _rec["accepted_construction"] = Path(_acc_file).name
+                    _rec.setdefault("review_flags", []).append(
+                        f"ACCEPTED CONSTRUCTION: this line is from {Path(_acc_file).name}, "
+                        f"accepted by {_acc['accepted_construction'].get('accepted_by')} — its "
+                        f"sizes are the schedule's; anything the schedule marks CONFIRM is "
+                        f"still an assumption")
             _unit_ops = concept_scan.unit_operations(_answer)
             # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
             #
