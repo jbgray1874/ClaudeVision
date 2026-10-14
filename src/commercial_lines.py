@@ -554,34 +554,36 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
     _counted = [p for p in (order.get("counted_parts") or []) if isinstance(p, dict)]
     if not _counted:
-        return {"not_applicable": "no part was measured, so the unit has no envelope "
-                                  "to size a box around"}
-    if len(_counted) != 1 or _num(_counted[0].get("per_assembly")) not in (None, 1):
-        return {"not_applicable": (f"the unit is {len(_counted)} measured part(s)"
-                                   + ("" if len(_counted) != 1 else " x"
-                                      f"{_counted[0].get('per_assembly')}")
-                                   + " — how several pieces share a box is the packer's "
-                                     "decision, not a formula's")}
-    _structural_left_out = [p for p in (order.get("left_out_parts") or [])
-                            if isinstance(p, dict)
-                            and not p.get("is_assembly") and not p.get("bought_in")]
-    if _structural_left_out:
-        return {"not_applicable": (f"{_structural_left_out[0].get('part_number')} was left "
-                                   f"out of the count — an unmeasured structural part "
-                                   f"leaves the unit's envelope unproven")}
-    _p = _counted[0]
-    L, B = _num(_p.get("length_mm")), _num(_p.get("width_mm"))
-    H = _num(_p.get("thickness_mm"))
-    if not (L and B and H):
-        return {"not_applicable": f"{_p.get('part_number')} has no complete L x W x T"}
+        return {"not_applicable": "no part was measured, so there is nothing to size a "
+                                  "box around"}
     try:
         import box_costing
     except Exception:                                                # noqa: BLE001
         return None
     qty = max(1, int(_num(order.get("order_quantity")) or 1))
-    _r = box_costing.price_box(L, B, H, qty)
-    if not _r.get("priced"):
-        return {"not_applicable": str(_r.get("reason") or "the calculator declined")}
+    _structural_left_out = [p for p in (order.get("left_out_parts") or [])
+                            if isinstance(p, dict)
+                            and not p.get("is_assembly") and not p.get("bought_in")]
+    # ONE MEASURED PART IS ITS OWN BOX; SEVERAL ARE THE COUNTED CARTONS (James, 14 Oct:
+    # "our boxing calculation needs to be in the calculation of the estimate and written
+    # back to the s/sheet" — the cost is the NUMBER and SIZE of boxes). A single-part unit
+    # sizes the carton around the part. A multi-part unit takes the shipment plan the
+    # engine already counts (palletising: cartons from the measured blanks' volume and
+    # weight at the declared packing factor) and prices each standard carton with the same
+    # formula. An order the plan says is flat-packed to pallets (a blank larger than the
+    # carton) has no cartons to price and declines by name to the proven ladder.
+    if len(_counted) == 1 and _num(_counted[0].get("per_assembly")) in (None, 1) \
+            and not _structural_left_out:
+        _p = _counted[0]
+        L, B = _num(_p.get("length_mm")), _num(_p.get("width_mm"))
+        H = _num(_p.get("thickness_mm"))
+        if not (L and B and H):
+            return {"not_applicable": f"{_p.get('part_number')} has no complete L x W x T"}
+        _r = box_costing.price_box(L, B, H, qty)
+        if not _r.get("priced"):
+            return {"not_applicable": str(_r.get("reason") or "the calculator declined")}
+    else:
+        return _box_cartons_from_shipment(order, qty, box_costing, _c)
     # WHICH FORMULA IS A CONFIG DECISION WITH THE EVIDENCE BESIDE IT (D-522). The sheet's
     # own two-pair total tracked the Harley's history at median +0.4%; the three-pair sum
     # ran 22% high. Neither is declared "correct" here — config.BOX_COSTING["formula"]
@@ -607,6 +609,70 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "working": (f"a PROVISIONAL allowance: one {_r.get('stock_board')} carton "
                         f"per unit at {_fname}, £{_unit:.4f} each x {qty} = "
                         f"£{_unit * qty:,.2f} the order. {_r.get('basis')}")}
+
+
+def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any,
+                               cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """A multi-part unit's boxing: the counted cartons, each priced by the box formula.
+
+    The shipment plan already answers "the number and size of boxes": palletising counts
+    cartons from the measured blanks' volume and weight at the declared packing factor,
+    against the configured standard carton. Each carton is priced as that carton, set-up
+    spread across the order's cartons, and the count is re-planned at every break so fifty
+    units are priced on fifty units' cartons. An order the plan flat-packs to pallets (a
+    blank larger than the carton) has no cartons and declines by name."""
+    plan = order.get("shipment") or {}
+    n = _num(plan.get("carton_count"))
+    ci = list(plan.get("carton_internal_mm") or [])
+    if not n or len(ci) < 3:
+        _why = next((str(a) for a in (plan.get("assumptions") or [])
+                     if "carton" in str(a).lower()), "")
+        return {"not_applicable": ("the counted shipment has no cartons to price — "
+                                   + (_why or "nothing was counted"))}
+    n = max(1, int(n))
+    L, B, H = float(ci[0]), float(ci[1]), float(ci[2])
+    _use_sheet = str(cfg.get("formula") or "sheet").lower() != "three_pair"
+    _fkey = "sheet_total_gbp" if _use_sheet else "unit_gbp"
+    _fname = ("the sheet's own two-pair total (K7:K8)" if _use_sheet
+              else "the three-pair sum (all six panels)")
+    r = box_costing.price_box(L, B, H, n)        # set-up spread across the order's cartons
+    if not r.get("priced"):
+        return {"not_applicable": str(r.get("reason") or "the standard carton does not "
+                                                         "fit the stock sheet")}
+    per = float(r[_fkey])
+    order_gbp = round(per * n, 2)
+    at: Dict[int, float] = {}
+    ship_parts = order.get("shippable_parts") or []
+    for q in sorted(set([1, qty]) | set(_BREAKS_DEFAULT)):
+        nq: Optional[float] = float(n) if q == qty else None
+        if nq is None and ship_parts:
+            try:
+                import palletising
+                nq = _num((palletising.plan_shipment(ship_parts, q) or {})
+                          .get("carton_count"))
+            except Exception:                                        # noqa: BLE001
+                nq = None
+        if nq:
+            _nq = max(1, int(nq))
+            rq = box_costing.price_box(L, B, H, _nq)
+            if rq.get("priced"):
+                at[q] = round(float(rq[_fkey]) * _nq, 2)
+    _unm = _num(plan.get("parts_without_a_blank")) or 0
+    working = (f"a PROVISIONAL allowance: {n} x {cfg.get('stock_board')} carton(s) "
+               f"{L:g} x {B:g} x {H:g} mm — the configured standard carton, counted from "
+               f"the measured blanks' volume and weight at packing factor "
+               f"{plan.get('packing_factor')} — at £{per:.4f} a carton ({_fname}) = "
+               f"£{order_gbp:,.2f} the order; the carton's internal size is used as the "
+               f"cut size, an allowance rather than a carton drawing. {r.get('basis')}"
+               + (f" {int(_unm)} part(s) had no blank to count, so the carton count is a "
+                  f"lower bound — confirm with the packer." if _unm else ""))
+    return {"order_gbp": order_gbp, "order_gbp_at_breaks": at,
+            "source_class": "box_calculator",
+            "source_name": "box_calculator_config_rates",
+            "applied": True, "affects_total": True,
+            "reproducible": True, "indicative": True,
+            "method_source": f"{cfg.get('stated_by')}, {cfg.get('stated_on')}",
+            "working": working}
 
 
 def _held_rate(key: str) -> Optional[float]:

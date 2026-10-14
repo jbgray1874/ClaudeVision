@@ -56,17 +56,19 @@ def test_the_harleys_descriptions_parse_including_the_run_together_style():
     assert p["dims_mm"] == [610.0, 430.0, 1830.0] and p["style"] is None
 
 
-def test_the_method_is_opt_in_and_silent_while_held_out():
-    """The 14 Oct review: 'keep D-521 explicitly opt-in as a provisional panel-based
-    allowance'. Disabled (the shipped default), the rung returns None and the proven
-    ladder prices the line exactly as before — the shelf repairs stay isolated."""
+def test_enabled_by_default_and_silent_when_switched_off(monkeypatch):
+    """James, 14 Oct: 'our boxing calculation needs to be in the calculation of the
+    estimate and written back to the s/sheet' — so the switch ships ON, with the
+    two-formula comparison recorded beside it in config. Off, the rung is silent and
+    the proven ladder prices the line exactly as before."""
     import config
-    assert config.BOX_COSTING.get("enabled") is False
+    assert config.BOX_COSTING.get("enabled") is True
     order = {"order_quantity": 20,
              "counted_parts": [{"part_number": "12399-77J", "length_mm": 1198.0,
                                 "width_mm": 398.0, "thickness_mm": 18.0,
                                 "material": "MFC", "per_assembly": 1}],
              "left_out_parts": []}
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
     assert _box_method_price(order) is None
 
 
@@ -105,27 +107,53 @@ def test_the_configured_formula_decides_the_figure(monkeypatch):
     assert "three-pair" in three["working"]
 
 
-def test_a_many_part_unit_is_the_packers_decision_not_a_formulas(monkeypatch):
-    import config
-    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+def test_a_many_part_unit_prices_its_counted_cartons():
+    """James, 14 Oct: the boxing cost is the NUMBER and SIZE of boxes. A multi-part unit
+    takes the shipment plan's carton count (the measured blanks' volume and weight at the
+    declared packing factor) and prices each standard carton with the same formula,
+    set-up spread across the order's cartons."""
     order = {"order_quantity": 10,
              "counted_parts": [
                  {"part_number": "A", "length_mm": 500, "width_mm": 300,
                   "thickness_mm": 18, "per_assembly": 1},
                  {"part_number": "B", "length_mm": 400, "width_mm": 200,
                   "thickness_mm": 18, "per_assembly": 2}],
-             "left_out_parts": []}
+             "left_out_parts": [],
+             "shipment": {"carton_count": 3, "carton_internal_mm": [1200, 800, 600],
+                          "packing_factor": 0.8, "parts_without_a_blank": 0}}
     r = _box_method_price(order)
-    assert r and r.get("not_applicable"), r
-    assert "packer" in r["not_applicable"]
+    assert r and not r.get("not_applicable"), r
+    assert r["source_class"] == "box_calculator" and r["order_gbp"] > 0
+    assert "3 x" in r["working"] and "1200 x 800 x 600" in r["working"]
+    assert "PROVISIONAL" in r["working"]
 
 
-def test_an_unmeasured_structural_part_leaves_the_envelope_unproven(monkeypatch):
-    import config
-    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+def test_an_order_the_plan_flat_packs_has_no_cartons_to_price():
+    """A blank larger than the carton flat-packs to pallets: carton_count is None and the
+    rung declines by the plan's own words — the proven ladder prices it as before."""
+    order = {"order_quantity": 10,
+             "counted_parts": [
+                 {"part_number": "A", "length_mm": 1800, "width_mm": 1200,
+                  "thickness_mm": 1.5, "per_assembly": 1},
+                 {"part_number": "B", "length_mm": 400, "width_mm": 200,
+                  "thickness_mm": 18, "per_assembly": 2}],
+             "left_out_parts": [],
+             "shipment": {"carton_count": None, "carton_internal_mm": [1200, 800, 600],
+                          "assumptions": ["1 part(s) are larger than the carton (1200 x "
+                                          "800 mm), so the order is flat-packed onto "
+                                          "pallets rather than boxed; carton count does "
+                                          "not apply."]}}
+    r = _box_method_price(order)
+    assert r and r.get("not_applicable") and "flat-packed" in r["not_applicable"], r
+
+
+def test_an_unmeasured_structural_part_routes_to_the_counted_cartons(monkeypatch):
+    """A one-part unit with an unmeasured structural sibling no longer sizes a box around
+    the one part (its envelope is unproven) — it goes to the counted-shipment path, and
+    with nothing counted there it declines honestly."""
     order = {"order_quantity": 10,
              "counted_parts": [{"part_number": "A", "length_mm": 500, "width_mm": 300,
                                 "thickness_mm": 18, "per_assembly": 1}],
              "left_out_parts": [{"part_number": "C", "reason": "no blank size recorded"}]}
     r = _box_method_price(order)
-    assert r and r.get("not_applicable") and "unproven" in r["not_applicable"]
+    assert r and r.get("not_applicable") and "no cartons to price" in r["not_applicable"]
