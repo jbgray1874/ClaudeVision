@@ -2284,6 +2284,39 @@ CONCEPT_SHEET_WEIGHT_BAND = (0.8, 2.0)
 # the sheet's envelope.
 CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
 
+# ── STOCK THAT IS NOT SHEET KEEPS ITS OWN SIZES (D-528) ─────────────────────────────────────
+#
+# 0356456 tote trolley, 14 Oct 2026: the read had three numbers per part — length, width,
+# thickness — and a 25 x 25 box section, a 60 x 40 angle and a 25 x 25 mesh each went into
+# them as a 25, 40 and 25 mm plate. The engine then lasered plate, nested 25 mm steel for the
+# mesh at £2,870 and weighed the order at over a tonne. The read now names the stock form and
+# keeps a section's outside size, wall, a mesh's aperture and wire in fields of their own.
+#
+# The words that name a form, longest first within each form; checked in this order, so
+# "WIRE MESH" is mesh before it is wire and "BOX SECTION" is a box before it is a tube.
+CONCEPT_STOCK_FORM_WORDS = (
+    ("mesh", ("WELDED MESH", "WELDMESH", "WELD MESH", "WIRE MESH", "MESH")),
+    ("box_section", ("BOX SECTION", "SQUARE TUBE", "RECTANGULAR TUBE", "BOX TUBE", "SHS", "RHS")),
+    ("angle", ("ANGLE IRON", "ANGLE")),
+    ("channel", ("CHANNEL",)),
+    ("flat_bar", ("FLAT BAR",)),
+    ("round_bar", ("ROUND BAR", "ROD")),
+    ("tube", ("ROUND TUBE", "CHS", "TUBE", "PIPE")),
+    ("wire", ("WIRE",)),
+)
+# A section's wall where the pack states none: a working figure, costed and SAID on the line as
+# assumed, never presented as read. Light-gauge display stock.
+CONCEPT_SECTION_DEFAULT_WALL_MM = {"box_section": 1.5, "tube": 1.5, "angle": 3.0, "channel": 3.0}
+# A mesh's wire where the pack states none, and its grid where neither the read nor the words
+# give one — light welded mesh, costed as assumed.
+CONCEPT_MESH_DEFAULT_WIRE_MM = 3.0
+CONCEPT_MESH_DEFAULT_APERTURE_MM = 25.0
+# A made metal part sighted thicker than this is not costed as plate on the read's word alone:
+# display work is cut from sheet, and a plate figure this heavy from a picture is far more often
+# a section's size or a mesh's grid written into the thickness. Above it, the line is costed as
+# the section its own size describes, or held and asked.
+CONCEPT_PLATE_THICKNESS_LIMIT_MM = 12.0
+
 # What a design sheet LABELS must be on the bill (D-417). A callout of at most
 # CONCEPT_LABEL_MAX_WORDS words on its own line that names one of these components is a part the
 # product has ("ADJUSTABLE FEET", "CENTRAL SOLID DIVIDER" on 12675-01's GA); a bill with no line

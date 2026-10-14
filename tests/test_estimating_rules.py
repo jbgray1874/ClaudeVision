@@ -4239,7 +4239,7 @@ def test_a_round_tube_does_not_weigh_what_a_square_one_weighs():
     # and the estimator weigh a section the same way; the estimator passes the form to it.
     _src = open(__import__("estimator").__file__, encoding="utf-8").read()
     _sec = open(__import__("section_profile").__file__, encoding="utf-8").read()
-    ok('str(profile_form or "").upper() == "CHS"' in _sec
+    ok('form = str(profile_form or "").upper()' in _sec and 'form == "CHS"' in _sec
        and '_ss.get("profile_form"), density)' in _src,
        "the estimator actually branches on it — a formula nothing selects is not a fix")
     import section_profile as _sp_mod

@@ -156,7 +156,15 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
                 me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
                 L, W = _num(me.get("blank_length_mm")), _num(me.get("blank_width_mm"))
         T = _num(part.get("normalized_thickness_mm"))
-        if not (L and W and T):
+        # SECTION AND WIRE WEIGH WHAT THEIR COSTING WEIGHED (D-528). Length x width x thickness
+        # is a plate's weight: a 25 x 25 box section 880 long counted as solid, or a mesh panel
+        # as a slab of its wire's gauge, put a tote trolley's order at over a tonne. The costing
+        # weighed the section by the metre and the mesh by its wire; that mass is the weight.
+        _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
+        _linear = str(_me.get("stock_form") or part.get("stock_form") or "").lower() in (
+            "tube", "wire", "section", "bar")
+        _mass = _num(_me.get("unit_material_mass_kg")) if _linear else None
+        if not (L and W and (T or _mass)):
             skipped += 1
             continue
         counted += 1
@@ -165,9 +173,9 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         except (TypeError, ValueError):
             per = 1
         n = per * qty
-        vol = (L / 1000.0) * (W / 1000.0) * (T / 1000.0)
+        vol = (L / 1000.0) * (W / 1000.0) * ((T or 1.0) / 1000.0)
         solid_vol_m3 += vol * n
-        weight_kg += vol * _density_for(part.get("normalized_material")) * n
+        weight_kg += (_mass * n) if _mass else vol * _density_for(part.get("normalized_material")) * n
         longest, widest = max(longest, L), max(widest, W)
         if not _footprint_fits([L, W], carton_fp):
             oversize_for_carton += 1
