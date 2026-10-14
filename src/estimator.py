@@ -3753,8 +3753,15 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         if not (L and W and t and stated) or L <= 0 or W <= 0 or t <= 0 or stated <= 0:
             return None
         mat = str(part.get("normalized_material") or part.get("material") or "").upper().replace("_", " ")
+        # A faced board is deliberately absent from the costing density table — a board is
+        # bought by the sheet, not the kilo — but a CHECK is not a price, and without a figure
+        # this check stood down silently on 12343-01J's provisional 18 mm against a stated
+        # 5,573 g. The weighing-only table (config BOARD_WEIGHT_DENSITY_KG_PER_M3, D-513)
+        # answers here and nowhere that costs.
+        _weigh_only = dict(getattr(config, "BOARD_WEIGHT_DENSITY_KG_PER_M3", {}) or {})
         dens = (MATERIAL_DENSITY_KG_PER_M3.get(mat)
-                or MATERIAL_DENSITY_KG_PER_M3.get(mat.replace(" ", "_")))
+                or MATERIAL_DENSITY_KG_PER_M3.get(mat.replace(" ", "_"))
+                or _weigh_only.get(mat) or _weigh_only.get(mat.replace(" ", "_")))
         if not dens:
             return None
         # THE CUT OUTLINE WHERE ONE WAS MEASURED (D-396). Harrods 9439-01-04-001 is a
@@ -3769,6 +3776,23 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         over = float(getattr(config, "BLANK_WEIGHT_CHECK_OVER_PCT", 60.0)) / 100.0
         under = float(getattr(config, "BLANK_WEIGHT_CHECK_UNDER_PCT", 20.0)) / 100.0
         if stated * (1.0 - under) <= blank_kg <= stated * (1.0 + over):
+            # A CHECK THAT PASSES ON A PROVISIONAL GAUGE SAYS SO (D-513). Everywhere else a
+            # pass is rightly silent — the gauge was stated and the weight agrees, nothing to
+            # read. But a gauge this engine PROPOSED from the model's smallest extent has
+            # exactly one independent witness, the sheet's stated weight, and "the weight
+            # check passed quietly" is indistinguishable on the book from "the weight check
+            # never ran". 12343-01J's 18 mm fallback was promised a weight check against
+            # 5,573 g and the record showed no comparison at all. The comparison is stated,
+            # as a note that asks nothing and moves no figure.
+            try:
+                from source_precedence import source_of as _src_of
+                if _src_of(part, "normalized_thickness_mm") == "model_extents_board_gauge":
+                    return (f"WEIGHT NOTE: the {L:g} x {W:g} blank at the PROVISIONAL "
+                            f"{t:g} mm gauge weighs {blank_kg:.3f} kg in {mat.lower()} "
+                            f"against the stated {stated:.3f} kg — the weight supports the "
+                            f"gauge read from the model's smallest extent")
+            except Exception:                                         # noqa: BLE001
+                pass
             return None
         # THE SHEET'S WEIGHT MAY BE THE MODEL'S MASS IN ANOTHER MATERIAL (D-451). 8188-08's
         # acrylic parts 008, 011, 014 and 015 each "weighed" 6.6 times their blank — exactly
@@ -9013,6 +9037,8 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _ng_cnc = part.get("normalized_geometry") if isinstance(
             part.get("normalized_geometry"), dict) else {}
         _hole_n = int(_safe_float(_ng_cnc.get("estimated_hole_count"))
+                      or _safe_float((part.get("geometry_rollup") or {})
+                                     .get("estimated_hole_count"))
                       or len(part.get("hole_sizes_mm") or []) or 0)
         _hole_sizes = sorted({_safe_float(h) for h in (part.get("hole_sizes_mm") or [])
                               if _safe_float(h)})

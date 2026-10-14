@@ -70,6 +70,8 @@ from typing import Any, Dict, List, Optional, Tuple
 __all__ = [
     "EDGE_LAYER_WORDS",
     "banded_length_mm",
+    "finish_states_banding",
+    "harvest_banding_statements",
     "is_banding_row",
     "layer_means_edging",
     "stated_edging_length_mm",
@@ -157,8 +159,11 @@ def _text_of(part: Dict[str, Any]) -> str:
         bits.append(_clean(part.get(key)))
     # stated_banding_rows: an edging row on the part's own parts list that gives no length
     # (D-383) — the drawing says the part is banded, and the extent is still to be stated.
+    # banding_statements: the sheet's own sentences about the edges, harvested from the
+    # part's pages by document_builder (harvest_banding_statements, D-513) — the path by
+    # which "EDGED ALL AROUND" written on the drawing reaches this reader.
     for key in ("drawing_notes", "textual_notes", "notes_text", "surface_finishes",
-                "callouts", "stated_banding_rows"):
+                "callouts", "stated_banding_rows", "banding_statements"):
         _v = part.get(key)
         if isinstance(_v, (list, tuple)):
             bits.extend(_clean(x) for x in _v)
@@ -269,6 +274,90 @@ def stated_edging_length_mm(description: Any) -> Optional[float]:
     return v if v > 0 else None
 
 
+# THE SHEET'S OWN WORDS ABOUT THE EDGES, AS A STATEMENT ON THE RECORD (D-513). 12343-01J's
+# drawing says "EDGED ALL AROUND" and writes the bander's order "2S/SL" — and neither ever
+# reached a field this module reads. The finish box harvested "EDGED" alone, the note snippets
+# keep only deburr/weld/tap words, and so a stated whole-perimeter instruction arrived here as
+# extent-unknown: the labour was flagged a CEILING and no edging material line was built. The
+# fix is not another field reader guessing; it is carrying the sheet's own sentence. This
+# harvester takes the part's OWN page text (legend-stripped by the caller) and returns short
+# windows around each banding word or edging-order code, so "EDGED ALL AROUND" survives whole.
+# "2S/SL" is two short sides, then the long sides: the second leg of the code can be TWO
+# letters, which the first spelling of this pattern ([SL] alone, D-512) could never match —
+# the exact code 12343-01J writes was unreadable by the rule built for it. A leading digit is
+# required so "S/S" (a stainless shorthand) is never read as a banding order.
+_ORDER_CODE_RE = re.compile(r"\b\d{1,2}\s*[SL]{1,2}\s*/\s*\d{0,2}\s*[SL]{1,2}(?![A-Z])")
+_BANDING_WORD_RES = [
+    re.compile(r"(?<![A-Z])" + re.escape(w).replace(r"\ ", r"[\s]+") + r"(?![A-Z])")
+    for w in sorted(_BANDING_WORDS, key=len, reverse=True)
+]
+
+
+def harvest_banding_statements(text: Any, *, window: int = 40, cap: int = 8) -> List[str]:
+    """Short statements of banding found in a sheet's text, for the part record.
+
+    Each hit of a banding word or an edging-order code is kept with `window` characters of
+    its own context either side, so the extent words beside it ("ALL AROUND", "TWO LONG
+    EDGES", "2S/SL") travel with the word that makes them a banding statement. A window that
+    also names a bought trim (EDGE_BANDING_NOT_BANDING_WORDS) is a thing we buy, not this
+    part's banding, and is dropped — the same refusal is_banding_row makes for a row."""
+    t = " ".join(str(text or "").split()).upper().replace("-", " ")
+    if not t:
+        return []
+    spans: List[Tuple[int, int]] = []
+    for rx in _BANDING_WORD_RES:
+        spans.extend(m.span() for m in rx.finditer(t))
+    spans.extend(m.span() for m in _ORDER_CODE_RE.finditer(t))
+    if not spans:
+        return []
+    out: List[str] = []
+    last_end = -1
+    for s, e in sorted(spans):
+        if s < last_end:                       # overlapping hits share one window
+            continue
+        frag = t[max(0, s - window): min(len(t), e + window)].strip()
+        last_end = e + window
+        if not frag or _NOT_BANDING_RE.search(frag):
+            continue
+        if frag not in out:
+            out.append(frag)
+        if len(out) >= cap:
+            break
+    return out
+
+
+# The words an extent statement is allowed to add around the banding nouns — "ALL", "AROUND",
+# "TWO LONG EDGES" — plus the fillers a finish box writes. A finish made only of these and the
+# banding vocabulary states the edging the route charges; it is not an unknown process.
+_BANDING_FILLER_WORDS = {
+    "ALL", "ROUND", "AROUND", "EDGE", "EDGES", "SIDE", "SIDES", "FACE", "FACES",
+    "ONE", "TWO", "THREE", "FOUR", "BOTH", "LONG", "SHORT", "FRONT", "TOP", "LEADING",
+    "VISIBLE", "EXPOSED", "AND", "THE", "TO", "BE", "ABS", "PVC", "FINISH", "FINISHED",
+    "AS", "ORDER",
+}
+
+
+def finish_states_banding(text: Any) -> bool:
+    """Is this stated finish a statement of edge banding, and nothing else?
+
+    "EDGED", "EDGED ALL AROUND", "EDGE BANDED 2S/SL" — the work the route's Edge Banding row
+    already charges, stated in the finish box. Reported as "a finish this engine has no
+    vocabulary for" it tells an estimator to price work twice (D-513, 12343-01J's "EDGED
+    EDGED"). False as soon as any other word of substance remains ("EDGED & POWDER COATED"
+    still has its powder judged by the caller)."""
+    t = " ".join(str(text or "").split()).upper().replace("-", " ")
+    if not t:
+        return False
+    hit = any(rx.search(t) for rx in _BANDING_WORD_RES) or bool(_ORDER_CODE_RE.search(t))
+    if not hit:
+        return False
+    for rx in _BANDING_WORD_RES:
+        t = rx.sub(" ", t)
+    t = _ORDER_CODE_RE.sub(" ", t)
+    leftover = [w for w in re.findall(r"[A-Z]{2,}", t) if w not in _BANDING_FILLER_WORDS]
+    return not leftover
+
+
 def banded_length_mm(part: Any) -> Dict[str, Any]:
     """How many millimetres of this part take ABS, and on whose authority.
 
@@ -354,7 +443,7 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
     # sequence the bander runs (two short, then the long sides) — a drawing that writes one
     # has decided the part is banded, whatever other words it used.
     says_banding = (any(w in text for w in _BANDING_WORDS)
-                    or bool(re.search(r"\b\d{1,2}\s*[SL]\s*/\s*\d{0,2}\s*[SL]\b", text)))
+                    or bool(_ORDER_CODE_RE.search(text)))
 
     # 2 ── A NOTE THAT NAMES THE EDGES. "All round" is a statement, not a default.
     if says_banding and any(w in text for w in _ALL_ROUND):

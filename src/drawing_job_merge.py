@@ -3586,6 +3586,71 @@ def augment_summary_with_dxf(
                     }
                 )
                 _apply_and_report(part, chosen, report, matched_keys)
+                # A SECOND VIEW'S HOLES ARE EVIDENCE, NOT A SECOND BLANK (D-513).
+                # 12343-01J's pack carries UNDERSIDE and REAR exports of one shelf; the
+                # blanks differ so this branch rightly costs ONE of them — and then dropped
+                # the other whole, bores and all. The REAR view held the part's four drilled
+                # holes, the record reached costing with NO hole inventory, and the book
+                # could only say "nothing here demonstrates the bores reached the program".
+                # Where the costed record holds no hole inventory of its own, the unchosen
+                # views' measured circles are read as that inventory — labelled with the
+                # file they came from, never re-measuring the blank, and only into a gap
+                # (a flat that measured its own holes is not second-guessed).
+                _own_holes = (int((part.get("geometry_rollup") or {})
+                                  .get("estimated_hole_count") or 0)
+                              or int((part.get("dxf_raw_geometry") or {})
+                                     .get("estimated_hole_count") or 0)
+                              or bool(part.get("hole_sizes_mm")))
+                if not _own_holes:
+                    _sv_total, _sv_dias, _sv_files = 0, [], []
+                    for _p2 in paths:
+                        if _p2 == chosen:
+                            continue
+                        try:
+                            _g2 = extract_dxf_geometry(_p2) or {}
+                        except Exception:                            # noqa: BLE001
+                            continue
+                        _n2 = int(_g2.get("estimated_hole_count") or 0)
+                        if _n2 <= 0:
+                            continue
+                        _sv_total += _n2
+                        _sv_dias.extend(float(d) for d in
+                                        (_g2.get("hole_diameters_mm") or []))
+                        _sv_files.append(_p2.name)
+                        report.setdefault("secondary_view_holes", []).append(
+                            {"part_number": part.get("part_number"),
+                             "dxf": str(_p2.resolve()),
+                             "hole_count": _n2,
+                             "hole_diameters_mm": sorted(set(
+                                 round(float(d), 3)
+                                 for d in (_g2.get("hole_diameters_mm") or [])))})
+                    if _sv_total > 0:
+                        _dias = sorted(set(round(d, 3) for d in _sv_dias if d > 0))
+                        # Into the rollup and the part's own hole list — the fields that
+                        # survive _interpret_part rebuilding normalized_geometry — never
+                        # into the blank, the cut length or the pierce count, which stay
+                        # the CHOSEN flat's measurements.
+                        _gr = part.get("geometry_rollup")
+                        if isinstance(_gr, dict):
+                            _gr["estimated_hole_count"] = max(
+                                int(_gr.get("estimated_hole_count") or 0), _sv_total)
+                        if _dias:
+                            _hs = [float(h) for h in (part.get("hole_sizes_mm") or [])
+                                   if h is not None]
+                            part["hole_sizes_mm"] = sorted(set(_hs + _dias))
+                        part["secondary_view_hole_inventory"] = {
+                            "files": list(_sv_files), "hole_count": _sv_total,
+                            "hole_diameters_mm": _dias}
+                        part.setdefault("review_flags", []).append(
+                            f"HOLE INVENTORY FROM A SECOND VIEW: the costed flat "
+                            f"({chosen.name}) measured no holes; "
+                            f"{', '.join(_sv_files)} — a different view of this part, not "
+                            f"costed as a blank — measures {_sv_total} hole(s)"
+                            + (f" (Ø{', Ø'.join(f'{d:g}' for d in _dias)} mm)"
+                               if _dias else "")
+                            + ". The count is a view's reading, not the program's: confirm "
+                              "the bores, their faces and depths against the drawing.")
+                        _interpret_part(part)   # the rollup changed; re-derive the features
 
     for key, part in parts_by_key.items():
         if key not in matched_keys and part.get("geometry_rollup", {}).get("confidence", {}).get(

@@ -1955,11 +1955,28 @@ def _files_read_section(summary: Dict[str, Any]) -> str:
     # A DXF THE MERGE SET ASIDE IS NAMED WITH THE REASON IT RECORDED (D-408). Matched rows go
     # first, so a file that was weighed among candidates and then applied keeps its matched
     # row and the record of the weighing does not list it a second time.
+    # A SECOND VIEW THAT CONTRIBUTED ITS HOLES IS NOT "NOT USED" (D-513): the merge reads an
+    # unchosen view's measured circles into a part whose costed flat held no hole inventory,
+    # and the file's row says what it gave rather than only what it was not.
+    _sv_holes: Dict[str, Dict[str, Any]] = {}
+    for _sv in (dxf.get("secondary_view_holes") or []):
+        if isinstance(_sv, dict):
+            for _nm in _dxf_record_names(_sv):
+                _sv_holes[_nm] = _sv
     for key in ("unmatched_dxf", "skipped", "ambiguous_dxf"):
         for it in (dxf.get(key) or []):
             why = _dxf_record_reason(it) or "matched to no part"
             for n in _dxf_record_names(it):
-                rows.append((n, "DXF", f"present, not used: {why}"))
+                _sv = _sv_holes.get(n)
+                if _sv:
+                    _ds = [f"Ø{float(d):g}" for d in (_sv.get("hole_diameters_mm") or [])]
+                    rows.append((n, "DXF",
+                                 f"a second view of {_sv.get('part_number')} — not costed as "
+                                 f"a blank; its {_sv.get('hole_count')} measured hole(s)"
+                                 + (f" ({', '.join(_ds)} mm)" if _ds else "")
+                                 + " joined the part's boring inventory"))
+                else:
+                    rows.append((n, "DXF", f"present, not used: {why}"))
     for n in (cad.get("solidworks") or []):
         rows.append((str(n), "MODEL",
                      "cut list and assembly structure read from the model (SolidWorks COM)"
