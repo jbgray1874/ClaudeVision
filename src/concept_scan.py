@@ -578,7 +578,9 @@ def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], Lis
     key anywhere; and a file nobody has accepted ("accepted_by" empty, or still a DRAFT)."""
     problems: List[str] = []
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        # utf-8-sig: Windows Notepad and PowerShell 5's Set-Content write a byte-order mark,
+        # and a schedule refused for an invisible character is a wasted run.
+        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
     except Exception as exc:                                         # noqa: BLE001
         return None, [f"could not be read ({type(exc).__name__}: {exc})"]
     if not isinstance(data, dict) or not isinstance(data.get("parts"), list) or not data["parts"]:
