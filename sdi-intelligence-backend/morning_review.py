@@ -640,6 +640,8 @@ def rows_from_xlsx(data: bytes, key_columns: list[str]) -> tuple[list[dict], lis
     # which a read of the values does not need. Raised while rows are read
     # (read-only mode parses lazily), so filtered for the whole run.
     warnings.filterwarnings("ignore", message="Data Validation extension", category=UserWarning)
+    # 14 October 2026: text in a cell typed as a number stopped the 07:50 run.
+    voicecrm_excel.accept_text_in_number_cells()
     wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
     store = voicecrm_excel.ExcelStore.__new__(voicecrm_excel.ExcelStore)
     store.key_columns = key_columns
