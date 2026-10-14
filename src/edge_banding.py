@@ -180,6 +180,21 @@ def _blank(part: Dict[str, Any]) -> Tuple[Optional[float], Optional[float]]:
     _ng = part.get("normalized_geometry") or {}
     _l = part.get("blank_length_mm") or _ng.get("blank_length_mm")
     _w = part.get("blank_width_mm") or _ng.get("blank_width_mm")
+    # THE REBUILT RECORD'S OWN SPELLING (D-515). _interpret_part rebuilds
+    # normalized_geometry with the flat blank under bounding_box_flat_mm / developed_*,
+    # and blank_length_mm is gone — so on 12343-01J's SAVED record a stamped
+    # "EDGED ALL AROUND" reached this module, says_banding fired, and the all-round
+    # branch still returned extent-unknown: the statement needs the perimeter and this
+    # reader could not see a blank the record plainly holds. The estimator's own locals
+    # knew it (the CEILING flag printed 3192 mm); only this reader was blind.
+    if not (_l and _w):
+        _bb = _ng.get("bounding_box_flat_mm")
+        if isinstance(_bb, dict):
+            _l = _l or _bb.get("length")
+            _w = _w or _bb.get("width")
+    if not (_l and _w):
+        _l = _l or _ng.get("developed_length_mm")
+        _w = _w or _ng.get("developed_width_mm")
     try:
         _l = float(_l) if _l else None
         _w = float(_w) if _w else None

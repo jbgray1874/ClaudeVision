@@ -989,17 +989,29 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         # the part's own DETAIL pages only (a note stays on the sheet it is written on; an
         # assembly sheet's note names a member this pass cannot resolve), with the pack-wide
         # specification legend stripped first.
-        if not part.get("banding_statements"):
+        _detail_text = " ".join(
+            page_lookup[pn]["text"] for pn in page_nums
+            if pn in page_lookup
+            and str(page_lookup[pn].get("role") or "") == "detail")
+        if not part.get("banding_statements") and _detail_text:
             try:
                 from edge_banding import harvest_banding_statements as _harvest_banding
-                _bs_text = " ".join(
-                    page_lookup[pn]["text"] for pn in page_nums
-                    if pn in page_lookup
-                    and str(page_lookup[pn].get("role") or "") == "detail")
-                _stmts = _harvest_banding(_strip_specification_legend(_bs_text)) \
-                    if _bs_text else []
+                _stmts = _harvest_banding(_strip_specification_legend(_detail_text))
                 if _stmts:
                     part["banding_statements"] = _stmts
+            except Exception:                                        # noqa: BLE001
+                pass
+        # THE DRAWING'S OWN BORE CALLOUTS, AS EVIDENCE (D-515). 12343-01J states
+        # "2 x Ø8.5 ↧11" and "2 x Ø6.5 ↧10"; the Ø and depth glyphs do not survive the text
+        # layer, so the Ø-anchored hole reader saw nothing and the record reached costing
+        # with half the boring. The surviving count-x-diameter-depth shape is kept as
+        # stated_bore_callouts — flags and questions only, never charged time.
+        if not part.get("stated_bore_callouts") and _detail_text:
+            try:
+                from extractor_patterns import extract_stated_bore_callouts as _bores
+                _calls = _bores(_strip_specification_legend(_detail_text))
+                if _calls:
+                    part["stated_bore_callouts"] = _calls
             except Exception:                                        # noqa: BLE001
                 pass
 
