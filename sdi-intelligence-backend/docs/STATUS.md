@@ -45,6 +45,43 @@ match. `curl` falls back to `CN` and appeared to prove otherwise. Fixed with
 certificate is still verified, only its name is not. See
 `docs/INVENTRY_API_NOTES.md`.
 
+## 1a. First live contact — 14 Oct 2026
+
+Authentication passed with the site's own partner secret. Two dry runs, about
+30 minutes apart, end of the working day. Counts only - no names in the repo.
+
+| | Run 1 | Run 2 |
+|---|---|---|
+| BrightHR clocked in | 48 | 41 |
+| Forgotten clock-outs excluded (oldest 78 days) | 16 | 15 |
+| **Actually on site** | **32** | **26** |
+| **InVentry showed on site** | **3** | **3** |
+| Matched by PersonID / email / name | 0 / 6 / 16 | 0 / 2 / 16 |
+| Unmatched | 10 | 8 |
+| Would sign in | 22 | 18 |
+
+Findings:
+
+* **InVentry's register is close to empty for staff** - 3 against 26-32
+  actually present. That gap is the case for this project.
+* **PersonID matched nobody.** The 151 PersonIDs already in InVentry are not
+  BrightHR's - almost certainly AD sync. **Do not backfill PersonID.**
+* **Email is rarely populated in InVentry**, so most matching is by name. Ask
+  InVentry whether their AD sync can carry email addresses: the single most
+  effective improvement to matching.
+* **InVentry holds 255 staff records against ~192 in BrightHR.** Duplicates
+  exist (several people on two records), and one email address is shared by
+  two different people. Run 1 exposed that the matcher assumed a shared
+  identifier meant one person; fixed in `1fff1c9` - identifier matches must
+  now agree with the name, and clashes are reported as CONFLICT.
+* **8 people clocked in have no matching InVentry record at all** - missing
+  from a fire roll until fixed in InVentry. Named in the dry-run output.
+
+**Before `--apply`:** sign-out. With it off, everyone signed in stays on site
+after they leave, unless an InVentry system rule signs them out. Prove the
+marker round-trips with `probe_inventry.py --sign-in` on one record, then
+enable `INVENTRY_ENABLE_SIGN_OUT`.
+
 ## 2. The moment the secret lands
 
 | # | Item | Notes |
