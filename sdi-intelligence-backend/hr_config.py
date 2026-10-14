@@ -138,6 +138,16 @@ INVENTRY_INCLUDE_NON_STAFF = _opt("INVENTRY_INCLUDE_NON_STAFF", "false").lower()
 INVENTRY_EVENT_TYPE_IN = _opt("INVENTRY_EVENT_TYPE_IN", "IN")
 INVENTRY_EVENT_TYPE_OUT = _opt("INVENTRY_EVENT_TYPE_OUT", "OUT")
 
+# Times sent in ActionDateTime. InVentry keeps personnel actions in LOCAL time,
+# even though its GetSystemTime endpoint reports UTC. Proven 14 Oct 2026 (BST):
+# a sign-in InVentry stamped itself read back as 19:34 while GetSystemTime and
+# UTC both said 18:34-ish. Sending UTC would record every sign-in an hour early
+# while the clocks are forward.
+#   "local" - convert to the local time of the machine running the sync, which
+#             must therefore be on UK time. DST-correct for each timestamp.
+#   "utc"   - send UTC unchanged.
+INVENTRY_TIME_MODE = _opt("INVENTRY_TIME_MODE", "local").lower()
+
 # LastActivity values meaning "currently on site".
 INVENTRY_ACTIVITY_IN_VALUES = [
     v.strip().upper() for v in _opt("INVENTRY_ACTIVITY_IN_VALUES", "IN").split(",") if v.strip()

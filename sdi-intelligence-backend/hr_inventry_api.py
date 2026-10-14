@@ -130,12 +130,26 @@ def _utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _to_local(value):
+    """An aware datetime in this machine's local time.
+
+    astimezone() with no argument applies the OS's rules for that particular
+    instant, so a time from before the clocks changed converts correctly. No
+    tz database needed, which matters on Windows.
+    """
+    return value.astimezone()
+
+
 def format_datetime(value) -> str:
     """Format a timestamp for InVentry's datetime fields.
 
     Their own examples use 1983-07-08T00:00:00 and their responses
-    2020-12-22T18:08:46.307: a "T" separator and no timezone. Anything with a
-    trailing Z or an offset is converted to naive UTC first.
+    2020-12-22T18:08:46.307: a "T" separator and no timezone. The missing
+    timezone means LOCAL time - InVentry records actions in local time, though
+    its GetSystemTime reports UTC (see INVENTRY_TIME_MODE). So anything carrying
+    a Z or an offset is converted to local, or to UTC if configured, and the
+    offset dropped. A string with no offset is assumed already right and passed
+    through.
     """
     if value is None:
         value = _utc_now()
@@ -146,7 +160,11 @@ def format_datetime(value) -> str:
         except ValueError:
             return value if isinstance(value, str) else str(value)
     if value.tzinfo is not None:
-        value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        if cfg.INVENTRY_TIME_MODE == "utc":
+            value = value.astimezone(datetime.timezone.utc)
+        else:
+            value = _to_local(value)
+        value = value.replace(tzinfo=None)
     return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 

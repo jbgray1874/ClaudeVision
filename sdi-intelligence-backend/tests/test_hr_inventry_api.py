@@ -104,7 +104,10 @@ def test_post_sends_form_encoded_not_json():
     assert call["data"]["ActionType"] == cfg.INVENTRY_EVENT_TYPE_IN
 
 
-def test_sign_in_uses_the_documented_datetime_format():
+def test_sign_in_uses_the_documented_datetime_format(monkeypatch):
+    # The format is what is under test here, so the timezone is pinned: in
+    # local mode the answer would depend on the machine running the tests.
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "utc")
     client, session = make_client([StubResponse({"response": "OK"})])
     client.sign_in("INV-1", when="2026-09-21T07:45:00Z")
     # Their own examples: "T" separator, no timezone.
@@ -844,3 +847,32 @@ def test_different_people_sharing_an_identifier_are_reported_as_a_conflict(snaps
     result = push.run_push(apply=False, client=client)
     conflict = [w for w in result["warnings"] if "different people" in w]
     assert conflict and "Alex Fenn" in conflict[0] and "Sam Holt" in conflict[0]
+
+
+
+# ── times are sent in local time ─────────────────────────────────────────
+# InVentry keeps personnel actions in local time; its GetSystemTime is UTC.
+# Live, 14 Oct (BST): a self-stamped sign-in read back 19:34 at 18:34 UTC.
+
+BST = datetime.timezone(datetime.timedelta(hours=1))
+
+
+def test_a_utc_clock_in_is_sent_as_local_time(monkeypatch):
+    """05:54 BST arrives from BrightHR as 04:54Z. Sending 04:54 would record
+    the person an hour before they got here."""
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "local")
+    monkeypatch.setattr(api, "_to_local", lambda v: v.astimezone(BST))
+    assert api.format_datetime("2026-10-14T04:54:06Z") == "2026-10-14T05:54:06"
+
+
+def test_utc_mode_still_sends_utc(monkeypatch):
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "utc")
+    assert api.format_datetime("2026-10-14T04:54:06Z") == "2026-10-14T04:54:06"
+
+
+def test_a_time_with_no_offset_is_trusted_as_given(monkeypatch):
+    """No offset means someone already chose the zone - converting again
+    would shift it twice."""
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "local")
+    monkeypatch.setattr(api, "_to_local", lambda v: v.astimezone(BST))
+    assert api.format_datetime("2026-10-14T05:54:06") == "2026-10-14T05:54:06"

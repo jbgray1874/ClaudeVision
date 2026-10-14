@@ -22,6 +22,7 @@ the person and reports what InVentry actually stored, which is the only way to
 learn whether the marker survived.
 """
 import argparse
+import datetime
 import json
 import sys
 from pathlib import Path
@@ -126,11 +127,15 @@ def main():
         return
 
     ident = before["ID"]
+    # An explicit time, through the same conversion the live sync uses, so the
+    # read-back below proves the timezone handling as well as the write.
+    sent_at = datetime.datetime.now(datetime.timezone.utc)
+    sent = api.format_datetime(sent_at)
     if args.sign_in:
-        client.sign_in(ident)
+        client.sign_in(ident, when=sent_at)
     else:
-        client.sign_out(ident)
-    print("  sent.")
+        client.sign_out(ident, when=sent_at)
+    print(f"  sent. ActionDateTime={sent}  (INVENTRY_TIME_MODE={cfg.INVENTRY_TIME_MODE})")
 
     # Re-read. What InVentry stored is the only answer that counts - a 200 on
     # the POST does not prove the location survived.
@@ -152,6 +157,23 @@ def main():
     else:
         print("  * Accepted and discarded - no LastEventLocation came back. Sign-ins work;")
         print("    automatic sign-out must stay off, as we cannot recognise our own writes.")
+
+    # Did InVentry record the time we sent? An hour out means the timezone is
+    # wrong for this site - every live sign-in would be recorded an hour off.
+    recorded = str(after["LastActivityDate"])[:19]
+    try:
+        drift = (datetime.datetime.fromisoformat(recorded)
+                 - datetime.datetime.fromisoformat(sent)).total_seconds()
+    except ValueError:
+        drift = None
+    if drift is None:
+        print(f"  * Could not compare times (recorded {recorded!r}).")
+    elif abs(drift) <= 120:
+        print(f"  * Time recorded as sent ({recorded}). Timezone handling is right.")
+    else:
+        print(f"  * TIME MISMATCH: sent {sent}, InVentry recorded {recorded} - out by "
+              f"{drift / 3600:+.1f} h. Live sign-ins would be recorded wrongly. Try "
+              f"INVENTRY_TIME_MODE={'utc' if cfg.INVENTRY_TIME_MODE == 'local' else 'local'}.")
 
     for w in client.warnings:
         print(f"\nwarning: {w}")
