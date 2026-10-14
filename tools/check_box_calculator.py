@@ -77,6 +77,8 @@ def main() -> int:
     styles_priced = set((getattr(config, "BOX_COSTING", {}) or {})
                         .get("styles_priced") or ("0201",))
     three_pair, two_pair, cells = [], [], []
+    by_code_3: dict = {}
+    by_code_2: dict = {}
     total, no_dims, declined = 0, 0, 0
     out_of_scope: dict = {}
     for r in ws.iter_rows(min_row=2):
@@ -98,10 +100,13 @@ def main() -> int:
         if not res.get("priced"):
             declined += 1
             continue
-        for rows, calc in ((three_pair, res["unit_gbp"]),
-                           (two_pair, res["sheet_total_gbp"])):
+        code = str(r[2].value or f"row{r[0].row}").strip()
+        for rows, by_code, calc in ((three_pair, by_code_3, res["unit_gbp"]),
+                                    (two_pair, by_code_2, res["sheet_total_gbp"])):
             diff = ((float(paid) - calc) / float(paid)) if paid else None
             rows.append((r[0].row, desc, qty, paid, calc, diff))
+            if diff is not None:
+                by_code.setdefault(code, []).append(diff)
         if paid:
             cells.append((r[0].row, round(res["unit_gbp"], 2),
                           round((float(paid) - res["unit_gbp"]) / float(paid), 4)))
@@ -114,6 +119,18 @@ def main() -> int:
     print(f"declined (oversize/bad dims): {declined}")
     _report("THREE-PAIR sum (all six panels)", three_pair)
     _report("TWO-PAIR sum (the sheet's own K10 = SUM(K7:K8))", two_pair)
+
+    # DISTINCT BOX DESIGNS, NOT REPEAT ORDERS. The same box ordered five times is one
+    # design matched five times: counting every row lets a frequently reordered box
+    # weight the medians. One figure per part code (that code's median), then the
+    # median over designs.
+    for label, by_code in (("THREE-PAIR", by_code_3), ("TWO-PAIR", by_code_2)):
+        per_design = [statistics.median(ds) for ds in by_code.values()]
+        if per_design:
+            w = sum(1 for d in per_design if abs(d) <= 0.25)
+            print(f"\n{label}, one figure per DISTINCT DESIGN ({len(per_design)} part "
+                  f"codes): median {statistics.median(per_design):+.1%}   "
+                  f"within +/-25%: {w} ({w / len(per_design):.0%})")
 
     worst = sorted(three_pair, key=lambda t: -abs(t[5] or 0))[:8]
     if worst:

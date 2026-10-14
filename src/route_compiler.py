@@ -3261,6 +3261,8 @@ def build_part_graph(
             print(f"   [graph] {identity}: rolled up to {_rolled:g} per unit, the model "
                   f"counts {_total:g} — CHECK", flush=True)
 
+    _role_conflict_issues: List[Dict[str, Any]] = []
+
     def _carries_only_hardware(identity: str, record: Mapping[str, Any]) -> bool:
         """A measured part whose every child is something we BUY is a part carrying
         hardware, not an assembly.
@@ -3288,14 +3290,42 @@ def build_part_graph(
         # the stamps (is_sub_assembly et al.) are deliberately NOT consulted here, since
         # overriding a BOM edge's stamp on a measured PART is this gate's whole point
         # (D-264's END CAP).
+        _role_says_assembly = ""
         if any(str(r).lower() == "assembly" for r in (record.get("page_roles") or [])):
+            _role_says_assembly = "its pages carry the assembly role"
+        else:
+            try:
+                from part_code_conventions import carries_assembly_role as _is_ga_code
+                if _is_ga_code(identity):
+                    _role_says_assembly = "its code convention names an assembly drawing"
+            except Exception:                                        # noqa: BLE001
+                pass
+        if _role_says_assembly:
+            # AND THE CONFLICT IS SURFACED, NEVER SILENTLY SETTLED (D-523, the reviewer's
+            # proviso). A role that says assembly beside measured fabrication fields on
+            # the same record is two claims about one thing: the role is kept, and the
+            # disagreement goes on the issues list so a person decides whether the
+            # geometry belongs to a member rather than the assembly.
+            try:
+                from bought_in_policy import has_fabrication_evidence as _hfe
+                _conflicted = _hfe(dict(record))
+            except Exception:                                        # noqa: BLE001
+                _conflicted = False
+            if _conflicted:
+                _role_conflict_issues.append({
+                    "code": "assembly_role_carries_fabrication_evidence",
+                    "identity": identity,
+                    "detail": (f"{identity} is an assembly ({_role_says_assembly}) and "
+                               f"its record carries measured fabrication fields "
+                               f"(geometry source "
+                               f"{(record.get('normalized_geometry') or {}).get('geometry_source') or 'unstated'}). "
+                               f"The role is kept — it stays an assembly — but the "
+                               f"geometry may belong to a member: confirm which part "
+                               f"the measured outline is of."),
+                })
+                print(f"   [graph] {identity}: assembly role kept over measured geometry "
+                      f"on the same record — conflict surfaced for a person", flush=True)
             return False
-        try:
-            from part_code_conventions import carries_assembly_role as _is_ga_code
-            if _is_ga_code(identity):
-                return False
-        except Exception:                                            # noqa: BLE001
-            pass
         try:
             from bought_in_policy import has_fabrication_evidence, is_bought_in
         except Exception:                                            # noqa: BLE001
@@ -3423,7 +3453,7 @@ def build_part_graph(
     graph_issues = (list(_interleave_issues) + list(_minted_root_issues)
                     + list(_version_issues)
                     + list(_product_issues) + list(_family_issues)
-                    + list(_clash_issues))
+                    + list(_clash_issues) + list(_role_conflict_issues))
     # A JOIN WE DECLINED IS EVIDENCE, NOT A NON-EVENT. The naming convention said these
     # two codes are one part and their kinds said otherwise. Either the convention matched
     # a spelling rather than a part — the case this guard exists for — or one of the two
