@@ -4724,6 +4724,32 @@ def check_stated_bores_reach_the_inventory(summary: Any) -> List[Dict[str, Any]]
         count=len(offenders), parts=offenders[:20])]
 
 
+
+def check_a_callout_weld_is_assigned(summary: Any) -> List[Dict[str, Any]]:
+    """A route keyed to a materials-list item number that names no part (D-533).
+
+    0356455's list reads "6. 2MM U-CHANNEL BAR CONNECTOR OTHER SIDE WELDED TO UPRIGHT", and the
+    extract keyed that weld to "6". The route no longer charges a part that does not exist;
+    where the line resolves to a part the work is charged there (or on the welded assembly
+    whose joints it is). Where it resolves to nothing, the work it states is not lost: it is
+    asked here, under Decisions required, until a person assigns it."""
+    if not isinstance(summary, dict):
+        return []
+    shadow = ((summary.get("estimate_summary") or {}).get("canonical_route_shadow")
+              or summary.get("canonical_route_shadow") or {})
+    out: List[Dict[str, Any]] = []
+    for iss in (shadow.get("issues") or []) if isinstance(shadow, dict) else []:
+        if not isinstance(iss, dict) or iss.get("code") != "route_participant_is_a_callout_number":
+            continue
+        _ids = ", ".join(str(i) for i in (iss.get("identities") or []))
+        out.append(_violation(
+            "route_participant_is_a_callout_number", WARNING,
+            f"{iss.get('operation') or 'An operation'} is stated against materials-list item "
+            f"{_ids}, which names no part in this job — not charged. Assign it to the part it "
+            f"belongs to, or confirm it is already covered.",
+            operation=iss.get("operation"), callout=_ids, needs_ruling=True))
+    return out
+
 CHECKS = (
     check_a_banded_board_buys_its_edging,
     check_stated_bores_reach_the_inventory,
@@ -4773,6 +4799,7 @@ CHECKS = (
     check_uncorroborated_route_operations,
     check_the_quantity_costed_is_the_quantity_ordered,
     check_an_operation_is_not_charged_on_a_parent_and_its_child,
+    check_a_callout_weld_is_assigned,
     check_the_pack_contains_the_drawings_its_bom_names,
 )
 

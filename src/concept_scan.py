@@ -4379,7 +4379,11 @@ def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
     posts", "five front shelves". A count in a sentence that says each / per (other than per
     unit) is a count per something else, not a part's count, and is skipped."""
     out: List[Dict[str, Any]] = []
-    flat = " ".join(str(brief or "").split())
+    # A LIST LINE ENDS WHERE THE NEXT ONE STARTS (D-533). Flattened, "- four wire hooks, one on
+    # each end of each bar" ran into "- four U-channel bar connectors" as one clause, and the
+    # first line's "each" cancelled the second line's count.
+    _lines = re.sub(r"\n\s*(?=(?:[-•*•]|\d{1,2}[.)])\s)", ".\n", str(brief or ""))
+    flat = " ".join(_lines.split())
     _per = r"\beach\b|\bevery\b|\bper (?!unit\b|product\b|fixture\b)"
     for sentence in re.split(r"(?<=[.;:])\s+", flat):
         low = sentence.lower()

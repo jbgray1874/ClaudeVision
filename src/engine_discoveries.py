@@ -88,6 +88,9 @@ _ESTIMATOR = {
     # face nobody drew; whether the CNC program covers them is confirmed with the drawing
     # open, or the drawing office exports the face.
     "stated_bores_not_in_inventory",
+    # Work stated against a materials-list item number that names no part (D-533): which part
+    # it belongs to is read off the drawing by a person.
+    "route_participant_is_a_callout_number",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
