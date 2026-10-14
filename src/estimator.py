@@ -9141,9 +9141,11 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 part.setdefault("review_flags", []).append(
                     f"STATED BORES EXCEED THE RECORDED INVENTORY: the drawing's callouts "
                     f"state {_stated_n} bore(s) ({_stated_txt}); the record holds "
-                    f"{_hole_n or 0}. The missing bores sit on faces no measured view "
-                    f"shows — confirm the full set, their faces and depths are covered by "
-                    f"the CNC program, or add the machining once.")
+                    f"{_hole_n or 0}. The diameters are the TEXT LAYER's reading — the Ø "
+                    f"marks do not survive extraction, so Ø8 here may be Ø8.5 on the "
+                    f"drawing: check the callout itself. The missing bores sit on faces no "
+                    f"measured view shows — confirm the full set, their faces, diameters "
+                    f"and depths are covered by the CNC program, or add the machining once.")
 
     if "edge_banding" in ops:
         eb_rule = LABOUR_RULES.get("edge_banding") or {}
@@ -13386,6 +13388,9 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             _bm_per_part = {str(k).upper(): v
                             for k, v in (_bm_dec.get("per_part") or {}).items()}
             _edge_mm, _edge_from = 0.0, set()
+            _edge_for: List[str] = []       # the parts whose banded lengths create the line
+            _edge_boards: List[str] = []    # every board the gate admitted, for a per-unit
+                                            # confirmation whose metres name no single part
             for _p in (parts or []):
                 if not isinstance(_p, dict):
                     continue
@@ -13403,6 +13408,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                             "costing_material_family")):
                     continue
                 _pn_e = str(_p.get("part_number") or "").strip().upper()
+                if _pn_e and _pn_e not in _edge_boards:
+                    _edge_boards.append(_pn_e)
                 if _pn_e in _bm_per_part:
                     _p["_confirmed_banded_mm"] = float(_bm_per_part[_pn_e]) * 1000.0
                     _p["_confirmed_banded_by"] = _bm_who
@@ -13410,6 +13417,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 if _v.get("mm"):
                     _edge_mm += float(_v["mm"]) * float(_safe_float(_p.get("quantity")) or 1)
                     _edge_from.add(str(_v.get("basis") or ""))
+                    if _pn_e and _pn_e not in _edge_for:
+                        _edge_for.append(_pn_e)
             _edge_m = round(_edge_mm / 1000.0, 3)
             # A PER-UNIT CONFIRMATION IS THE WHOLE ANSWER, NOT A CONTRIBUTION TO IT. Tony's
             # 5.0 m is the banded edge across every component of one tray, so adding it to
@@ -13418,6 +13427,8 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             if _bm_unit is not None:
                 _edge_m = round(float(_bm_unit), 3)
                 _edge_from = {"estimator_confirmed"}
+                if not _edge_for:
+                    _edge_for = list(_edge_boards)   # the unit's boards carry the metres
             _already = any(str((_x or {}).get("part_number") or "").upper() == _edge_code
                            for _x in (parts or []) if isinstance(_x, dict))
             # WHERE THE METRES CAME FROM, IN THE WORDS OF WHOEVER SUPPLIED THEM. A
@@ -13436,6 +13447,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 _stub["supplier"] = _spec.get("supplier") or ""
                 _stub["_edging_line"] = True
                 _stub["_edging_basis"] = sorted(b for b in _edge_from if b)
+                # WHOSE EDGES THESE METRES ARE (D-516). The product-scope rule keeps this
+                # line only on this provenance: the parts whose banded lengths created it,
+                # validated against the graph at write-out — never a blanket exemption.
+                _stub["_edging_for"] = sorted(set(_edge_for))
                 _stub.setdefault("review_flags", []).append(
                     f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
                     f"({_spec.get('description') or 'ABS edging'}). The METRES are "

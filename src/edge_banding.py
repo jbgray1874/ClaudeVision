@@ -392,22 +392,50 @@ def stamp_banding_statements_from_pages(parts: Any, summary: Any) -> int:
     if not page_texts:
         return 0
 
+    # THE SAME CARRIER STAMPS THE BORE CALLOUTS (D-516). The 11:22 book proved the pattern:
+    # the build-time stamp does not reliably reach the costed record — the banding survived
+    # only because THIS pass re-reads the pages at estimate time, and the bores, which had
+    # no estimate-time carrier, arrived nowhere although the reader finds them in the same
+    # text. One carrier, both statements.
+    try:
+        from extractor_patterns import extract_stated_bore_callouts as _bores
+    except Exception:                                                # noqa: BLE001
+        _bores = None
+
     stamped = 0
     for p in (parts or []):
-        if not isinstance(p, dict) or p.get("banding_statements"):
+        if not isinstance(p, dict):
             continue
         pn = _norm_code(p.get("part_number"))
         if not pn:
             continue
-        stmts: List[str] = []
-        for codes, text in page_texts:
-            if pn not in codes:
-                continue
-            for s in harvest_banding_statements(_strip_legend(text)):
-                if s not in stmts:
-                    stmts.append(s)
-        if stmts:
-            p["banding_statements"] = stmts[:8]
+        touched = False
+        if not p.get("banding_statements"):
+            stmts: List[str] = []
+            for codes, text in page_texts:
+                if pn not in codes:
+                    continue
+                for s in harvest_banding_statements(_strip_legend(text)):
+                    if s not in stmts:
+                        stmts.append(s)
+            if stmts:
+                p["banding_statements"] = stmts[:8]
+                touched = True
+        if _bores is not None and not p.get("stated_bore_callouts"):
+            calls: List[Dict[str, float]] = []
+            seen = set()
+            for codes, text in page_texts:
+                if pn not in codes:
+                    continue
+                for c in _bores(_strip_legend(text)):
+                    key = (c.get("count"), c.get("diameter_mm"), c.get("depth_mm"))
+                    if key not in seen:
+                        seen.add(key)
+                        calls.append(c)
+            if calls:
+                p["stated_bore_callouts"] = calls
+                touched = True
+        if touched:
             stamped += 1
     return stamped
 
