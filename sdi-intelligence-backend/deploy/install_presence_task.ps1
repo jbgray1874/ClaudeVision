@@ -119,7 +119,9 @@ Then re-run this installer.
 "@
 }
 
-$arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Python `"$Python`""
+# Every location passed explicitly. The runner cannot rely on $PSScriptRoot
+# when Task Scheduler starts it - on the live desktop it resolved to C:\.
+$arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$runner`" -Python `"$Python`" -BackendDir `"$BackendDir`""
 if ($Apply) {
     Write-Warning "LIVE MODE: this task will sign staff in and out on the reception system."
     $arguments += " -Apply"
