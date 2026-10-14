@@ -55,7 +55,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -568,6 +568,9 @@ class EstimateRequest(BaseModel):
     # engine's DELIVERY line honours it, and the postcode is what the per-mile delivery
     # calculator will price from when it lands.
     delivery: Optional[Dict[str, Any]] = None
+    # SET ONLY BY THE PARTNER ENDPOINT (D-529). The estimating page never sends it, so its runs
+    # are exactly as they were; a partner run reports its stage and where its time went.
+    partner_api: bool = False
 
 
 class RecipientsRequest(BaseModel):
@@ -1715,6 +1718,18 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
     except OSError as exc:
         raise HTTPException(502, f"Could not file the delivery declaration: {exc}. "
                                  f"Nothing queued.")
+    # The partner marker (D-529), reset every run: only a run the partner endpoint queued
+    # carries it, so a folder an API run once used gives a later portal run nothing extra.
+    _partner_marker = Path(folder) / "PARTNER_API_RUN.json"
+    try:
+        if req.partner_api:
+            _partner_marker.write_text(json.dumps({"queued_by": "partner_api"}) + "\n",
+                                       encoding="utf-8")
+        elif _partner_marker.exists():
+            _partner_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the partner-run marker: {exc}. "
+                                 f"Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern
     # a new job; a file somebody wrote by hand is left alone.
@@ -1955,6 +1970,7 @@ async def start_llm_estimate(
         enquiry_brief=_prompt, deliverables=True,
         delivery=({"requested": True, "postcode": str(delivery_postcode).strip()}
                   if str(delivery_postcode or "").strip() else None),
+        partner_api=True,
     )
     try:
         out = dict(start(req, x_sdi_key))
@@ -1985,8 +2001,10 @@ def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
     with _LOCK:
         run = _RUNS.get(run_id)
         items = list(run.deliverables) if run is not None else []
+        log = list(run.log) if run is not None else []
     if run is None:
         raise HTTPException(404, "No such run. The service may have restarted.")
+    stage, stages, timing = _partner_progress(run.status, log)
     delivs = []
     for d in items:
         _n = str((d or {}).get("name") or "")
@@ -2006,6 +2024,12 @@ def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
         "unit_cost_gbp": run.engine_price_gbp,
         "provisional": _looks_provisional(run),
         "error": run.error or None,
+        # Where the run is (reading → checking → pricing → workbook → filing → done), each
+        # stage with the seconds since the engine started; and, once done, where the time
+        # went: the phase table and every model call — count, seconds, cache hits, failures.
+        "stage": stage,
+        "stages": stages,
+        "timing": timing,
         # The covering note is the summary a person wrote nothing for: the run's own
         # figure, open items and workings as one self-contained HTML page.
         "summary_html": _first(lambda n: "covering" in n and n.endswith(".html")),
@@ -2017,6 +2041,35 @@ def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
                     "what it cannot. The total must not be quoted. The customer "
                     "quotation is withheld until an estimator releases it."),
     }
+
+
+_API_STAGE_RE = re.compile(r"\[api-stage\]\s+(.+?)\s+\+(\d+)s\s*$")
+
+
+def _partner_progress(status: str, log: List[str]) -> Tuple[str, List[Dict[str, Any]], Any]:
+    """A partner run's stage, the stages it has passed with their elapsed seconds, and the
+    timing data its engine printed at the end (D-529) — read from the run's own log lines."""
+    stages: List[Dict[str, Any]] = []
+    timing: Any = None
+    for text in log or []:
+        line = str(text or "")
+        m = _API_STAGE_RE.search(line)
+        if m:
+            stages.append({"stage": m.group(1), "elapsed_s": int(m.group(2))})
+            continue
+        at = line.find("[api-timing] ")
+        if at >= 0:
+            try:
+                timing = json.loads(line[at + len("[api-timing] "):])
+            except ValueError:
+                timing = None
+    if status in ("done", "error", "cancelled"):
+        current = status
+    elif status == "queued" or not stages:
+        current = "queued" if status == "queued" else "starting"
+    else:
+        current = stages[-1]["stage"]
+    return current, stages, timing
 
 
 @router.post("/override")

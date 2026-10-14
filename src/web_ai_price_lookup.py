@@ -419,11 +419,20 @@ def _llm_market_estimate(spec: Dict[str, Any], provider: str = "auto",
     import generated_price_cache as _gpc
 
     _model = os.environ.get("XAI_MODEL", "grok-4.3") if provider != "anthropic" else "anthropic"
-    return _gpc.cached_estimate(
+    _t0 = time.time()
+    _res = _gpc.cached_estimate(
         spec, provider, _model,
         lambda: _llm_market_estimate_uncached(spec, provider),
         use_cache=use_cache, refresh=refresh,
     )
+    try:                                     # a partner run's call count (D-529); else nothing
+        import run_timing as _rt
+        _rt.count("market research", time.time() - _t0,
+                  cache_hit=bool((_res or {}).get("price_from_cache")),
+                  failed=not (_res or {}).get("found"))
+    except Exception:                                                # noqa: BLE001
+        pass
+    return _res
 
 
 def _llm_market_estimate_uncached(spec: Dict[str, Any], provider: str = "auto") -> Dict[str, Any]:

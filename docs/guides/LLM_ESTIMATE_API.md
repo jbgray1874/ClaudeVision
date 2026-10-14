@@ -67,10 +67,26 @@ const {run_id, poll, summary} = await r.json();
 Returns `{run_id, poll, summary, note, ...}`. A `503` means no estimating runner is
 connected — the run machine is off; try again when it is up.
 
-## 2. Poll until done
+## 2. Poll until done — and show the stage
 
-`GET {base}/api/estimate/{run_id}` → `{status: "queued" | "running" | "done" | "error", ...}`.
-Poll every 15–30 s. A run takes minutes, not seconds — the model reads every page.
+Poll `GET {base}/api/estimate/{run_id}/summary` every 10–15 s. While the run works it returns:
+
+```json
+{"status": "running", "stage": "pricing",
+ "stages": [{"stage": "reading", "elapsed_s": 0},
+            {"stage": "checking", "elapsed_s": 38},
+            {"stage": "pricing", "elapsed_s": 52}]}
+```
+
+`stage` moves through `queued` → `reading` → `checking` (the read held against the sheet; a
+`re-reading …` stage appears if the first read did not agree) → `pricing` → `workbook` →
+`checking the workbook` → `filing` → `done` (or `error`). Show it as a progress line with the
+seconds; a run takes minutes, not seconds — the model reads every page, then every bought line
+is priced with its evidence.
+
+Once `done`, `timing` says where the time went — the phase table and every model call:
+`timing.model_calls["vision read"]` and `["market research"]` each give `calls`, `seconds`,
+`cache_hits` and `failed`. A repeat of the same enquiry answers mostly from the cache.
 
 ## 3. Read the summary and render it
 
@@ -85,7 +101,10 @@ Poll every 15–30 s. A run takes minutes, not seconds — the model reads every
   "workbook_xlsx": "/api/estimate/<id>/deliverables/<...>.xlsx",
   "report_html":   "/api/estimate/<id>/deliverables/<...report.html>",
   "deliverables":  [{"name": "...", "download": "/api/estimate/<id>/deliverables/..."}],
-  "caution": "..."
+  "caution": "...",
+  "stage": "done",
+  "stages": [...],
+  "timing": {"total_seconds": 190.2, "phases": [...], "model_calls": {...}}
 }
 ```
 

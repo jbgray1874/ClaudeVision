@@ -72,6 +72,46 @@ def test_a_prompt_and_an_image_queue_an_llm_run(harness, monkeypatch):
     assert req.units == 1 and req.quantity_breaks == [25, 50]
     assert req.drawing_number == "0356456" and req.client == "M&S"
     assert req.files and req.files[0].endswith(".png")
+    assert req.partner_api is True, "the partner run is not marked as one (D-529)"
+
+
+def test_a_portal_run_is_never_a_partner_run(harness):
+    """D-529: the estimating page never sends the flag, so its runs carry no marker."""
+    _tc, _er, _h = harness
+    req = _er.EstimateRequest(client="M&S", drawing_number="X", units=1)
+    assert req.partner_api is False
+    src = open(_er.__file__, encoding="utf-8").read()
+    at = src.index('"PARTNER_API_RUN.json"')
+    block = src[at:at + 700]
+    assert "if req.partner_api:" in block and ".unlink()" in block, (
+        "the marker is not reset on a non-partner run")
+
+
+def test_the_summary_says_the_stage_and_where_the_time_went(harness):
+    tc, _er, headers = harness
+    run = _er.Run(run_id="r-stage-1", client="M&S", drawing_number="0356456", units=1,
+                  job_folder="", output_path="")
+    run.status = "running"
+    for line in ["engine banner", "[api-stage] reading +0s", "   [pricing] something",
+                 "[api-stage] checking +38s", "[api-stage] pricing +52s"]:
+        run.line(line)
+    with _er._LOCK:
+        _er._RUNS["r-stage-1"] = run
+    try:
+        s = tc.get("/api/estimate/r-stage-1/summary", headers=headers).json()
+        assert s["stage"] == "pricing"
+        assert [x["stage"] for x in s["stages"]] == ["reading", "checking", "pricing"]
+        assert s["stages"][1]["elapsed_s"] == 38 and s["timing"] is None
+        run.line('[api-timing] {"total_seconds": 190.2, "phases": [], '
+                 '"model_calls": {"vision read": {"calls": 1, "seconds": 41.0, '
+                 '"cache_hits": 0, "failed": 0}}}')
+        run.status = "done"
+        s = tc.get("/api/estimate/r-stage-1/summary", headers=headers).json()
+        assert s["stage"] == "done"
+        assert s["timing"]["model_calls"]["vision read"]["seconds"] == 41.0
+    finally:
+        with _er._LOCK:
+            _er._RUNS.pop("r-stage-1", None)
 
 
 def test_the_gate_refuses_what_cannot_be_estimated(harness, monkeypatch):

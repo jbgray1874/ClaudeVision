@@ -673,6 +673,15 @@ def main() -> None:
         args.search_root = str(_job_root)
         args.folder_as_job = True
         args.no_folder_as_job = False
+        # A PARTNER RUN SAYS WHERE IT IS AND WHERE ITS TIME WENT (D-529). Only a run Muhammad's
+        # endpoint queued carries this marker; every other run is untouched.
+        if (_job_root / "PARTNER_API_RUN.json").is_file():
+            try:
+                import run_timing as _rt_api
+                _rt_api.enable_detail()
+                _rt_api.stage("reading")
+            except Exception:                                    # noqa: BLE001
+                pass
 
     drawing_arg = args.pdf or args.drawing
     dxf_from_cli = [Path(d) for d in (args.dxf or [])] + [Path(p) for p in (args.attach_dxf or [])]
@@ -2468,6 +2477,9 @@ if __name__ == "__main__":
             _report = _rt.report()
             if _report:
                 print("\n" + _report, flush=True)
+            if _rt.detail_on():
+                import json as _json_api
+                print("[api-timing] " + _json_api.dumps(_rt.report_json()), flush=True)
         except Exception:                                        # noqa: BLE001
             # Never let instrumentation take down a run that otherwise finished.
             pass
