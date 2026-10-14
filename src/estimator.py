@@ -13451,6 +13451,30 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 # line only on this provenance: the parts whose banded lengths created it,
                 # validated against the graph at write-out — never a blanket exemption.
                 _stub["_edging_for"] = sorted(set(_edge_for))
+                # AND THE LINE HANGS UNDER THE PART IT BANDS (D-517). The 11:58 book proved
+                # the set-aside was the COMPILER's own not_linked issue, not the late-line
+                # filter: the stub is in the parts list when the canonical route compiles,
+                # and a record with no edge to anything is rightly refused. bom_parent is
+                # the record-level edge the compiler already reads (D-277, minted
+                # fasteners), so the edging links under its first banded part and is scoped
+                # like any bought-in under the product — no exemption anywhere.
+                if _edge_for:
+                    _stub["bom_parent"] = sorted(set(_edge_for))[0]
+                # THE SPEC NAMES ONE DECOR AND THE DRAWING MAY NAME ANOTHER. Config's
+                # edging spec is Tony Ford's identified product (W1001 ST9); this job's
+                # drawing states its own decor, and matching them is a person's call —
+                # said on the line, never silently assumed compatible.
+                _decors = sorted({str(c).strip() for _pp in (parts or [])
+                                  if isinstance(_pp, dict)
+                                  and str(_pp.get("part_number") or "").strip().upper()
+                                  in set(_edge_for)
+                                  for c in (_pp.get("colours") or []) if str(c).strip()})
+                if _decors:
+                    _stub.setdefault("review_flags", []).append(
+                        f"EDGING SPEC VS THE DRAWING'S DECOR: this line is the config "
+                        f"edging specification ({_spec.get('description') or _edge_code}) "
+                        f"while the banded part states {', '.join(_decors)} — confirm the "
+                        f"edging matches the decor before quoting.")
                 _stub.setdefault("review_flags", []).append(
                     f"EDGING {_edge_m:g} m a unit on code {_edge_code} "
                     f"({_spec.get('description') or 'ABS edging'}). The METRES are "

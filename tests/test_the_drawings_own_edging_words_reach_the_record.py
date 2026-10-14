@@ -454,11 +454,49 @@ def test_the_config_code_alone_exempts_nothing():
 
 def test_the_minted_stub_carries_its_provenance():
     """estimate_document's edging block stamps _edging_for with the parts whose banded
-    lengths created the line — the fact the scope rule validates."""
+    lengths created the line — the fact the scope rule validates — and bom_parent, the
+    record-level edge the compiler reads, so the line LINKS instead of needing keeping."""
     import inspect
     import estimator as E
     src = inspect.getsource(E.estimate_document)
     assert '_stub["_edging_for"]' in src
+    assert '_stub["bom_parent"]' in src
+
+
+def test_the_edging_line_links_under_its_part_in_the_compiled_graph():
+    """THE 11:58 BOOK'S FAILURE, replayed at the compiler: the stub was in the parts list
+    when the canonical route compiled, carried no edge, and the COMPILER's own
+    not_linked_to_the_product issue set it aside — a gate the late-line filter never sees.
+    With bom_parent set to the banded part (D-517), the compiler links the line under the
+    shelf and no not-linked issue names it."""
+    import config
+    from route_compiler import compile_route_without_pricing
+    shelf = {"part_number": "12399-77J", "description": "KD V2 SHELF", "quantity": 1,
+             "normalized_material": "MFC", "normalized_thickness_mm": 18.0,
+             "blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+             "operations": ["cnc_routing", "edge_banding", "handling"],
+             "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+                                     "estimated_cut_length_mm": 3192.0},
+             "pages": [1], "page_roles": ["detail"]}
+    edging = {"part_number": config.FACED_BOARD_EDGING_CODE,
+              "description": "ABS edging — 3.192 m a unit", "quantity": 3.192,
+              "page_roles": ["bought_in"], "textual_operations": ["handling"],
+              "_edging_line": True, "_edging_for": ["12399-77J"],
+              "bom_parent": "12399-77J", "pages": []}
+    summary = {"declared_product": "12399-77J", "drawing_number": "12399-77J",
+               "manufacturing_writeup": {"parts": [shelf, edging]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    assert any(t.get("part_number") == config.FACED_BOARD_EDGING_CODE for t in nodes), \
+        [t.get("part_number") for t in nodes]
+    bad = [i for i in (compiled.get("issues") or [])
+           if isinstance(i, dict)
+           and str(i.get("code") or "") in ("not_linked_to_the_product",
+                                            "bom_node_disconnected")
+           and config.FACED_BOARD_EDGING_CODE in str(i)]
+    assert not bad, bad
 
 
 # ── D-516: the estimate-time carrier stamps the bore callouts too ─────────────────────────
