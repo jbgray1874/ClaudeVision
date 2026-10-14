@@ -13098,6 +13098,21 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
         _dec_block = (summary or {}).get("estimator_decisions") or {}
         _excluded_cl = {str(c).strip().upper()
                         for c in (_dec_block.get("commercial_excluded") or [])}
+        # THE RUN FORM'S DELIVERY DECLARATION (D-524). Tim, 14 Oct, on 12665-01-GA: "There
+        # is £125 delivery when there is no delivery requested." Whether an order is
+        # delivered is the ENQUIRY'S fact, not the drawings', so the portal asks it: a
+        # checkbox and a postcode, carried on summary['delivery_declared']
+        # {requested: bool|None, postcode: str}. Declared NOT required -> the line stays on
+        # the sheet at a deliberate £0 naming the declaration (absence would read as
+        # forgotten, exactly like an estimator's exclusion). Declared required with a
+        # postcode -> the postcode rides the line and the record, so the per-mile
+        # calculator (cost per mile by the number and size of boxes — to come) has its
+        # destination the day it lands; until then the market basis prices it as before
+        # and says so. Undeclared -> unchanged.
+        _dd = (summary or {}).get("delivery_declared") or {}
+        _dd_requested = _dd.get("requested") if isinstance(_dd, dict) else None
+        _dd_postcode = (str(_dd.get("postcode") or "").strip().upper()
+                        if isinstance(_dd, dict) else "")
         # NOTHING TO PACK, NO PACKAGING (D-409). "Always-present" assumed a product. The
         # 12675-01 run of 8 Oct 2026 minted no part — the pack was design-intent sheets and
         # the run said so — and still carried £14.50 packaging and £8.50 delivery, which the
@@ -13137,6 +13152,26 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                           f"re-chosen on this run's own shipment and rates", flush=True)
                 else:
                     continue
+            # THE RUN'S OWN DECLARATION BEATS A GUESS (D-524): no delivery requested is an
+            # answer, given before the run, and the line carries it as a deliberate £0.
+            if _code == "DELIVERY" and _dd_requested is False:
+                _stub = _bought_in_part_stub(
+                    _code, "Delivery — NOT REQUIRED for this order (declared on the Run: "
+                           "collection / no delivery; a declaration, not a missing price)", 1)
+                _stub["source"] = "commercial_placeholder"
+                _stub["_commercial_excluded"] = True
+                _stub["price_verified"] = True
+                _stub["unit_cost_gbp"] = 0.0
+                _stub["unit_material_cost_gbp"] = 0.0
+                _stub["extended_total_cost_gbp"] = 0.0
+                _stub.setdefault("review_flags", []).append(
+                    "DELIVERY: the Run declared no delivery for this order — the £0 is "
+                    "the declaration, not a gap. If that changes, tick Delivery on the "
+                    "Run (with the postcode) and re-run.")
+                parts.append(_stub)
+                print("   [commercial] DELIVERY declared NOT REQUIRED on the Run — "
+                      "deliberate £0 on the sheet", flush=True)
+                continue
             # AN ESTIMATOR'S "NOT REQUIRED" IS AN ANSWER, NOT A GAP. Tony: "Delivery is
             # not required" — and the line still went out as "estimator to price", an
             # open question on every run of a job whose answer was already given. An
@@ -13191,6 +13226,26 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                       f"({type(_cl_exc).__name__}: {_cl_exc}) — held at £0, estimator "
                       f"to price", flush=True)
                 _cline = None
+            # THE DECLARED DESTINATION RIDES THE LINE (D-524). The per-mile delivery
+            # calculator (cost per mile by the number and size of boxes) does not exist
+            # yet; its one input the drawings can never supply — where the order goes —
+            # is captured now so every saved record from today carries it. Said on the
+            # line, so the basis is readable: the figure is still the market's until the
+            # calculator lands.
+            if _code == "DELIVERY" and _cline is not None and (_dd_requested or _dd_postcode):
+                if _dd_postcode:
+                    _cline["delivery_postcode"] = _dd_postcode
+                    if not re.match(r"^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$", _dd_postcode):
+                        _cline.setdefault("review_flags", []).append(
+                            f"the declared delivery postcode {_dd_postcode!r} does not read "
+                            f"as a UK postcode — check it on the Run form")
+                _cline["delivery_declared"] = True
+                _cline["note"] = (str(_cline.get("note") or "")
+                                  + f" Delivery DECLARED on the Run"
+                                  + (f" to {_dd_postcode}" if _dd_postcode else "")
+                                  + " — distance-based pricing (per mile, by the number and "
+                                    "size of boxes) awaits the delivery calculator; the "
+                                    "figure here is the basis stated above meanwhile.")
             _unit = (_cline or {}).get("unit_gbp")
             # A LINE AND A ZERO ON THE SHEET — NOT AN ESSAY. Packaging and delivery are the two
             # deliberate £0 order-lever lines; the estimator wants a clean row, not the
