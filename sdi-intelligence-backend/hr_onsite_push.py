@@ -80,22 +80,52 @@ def _write_status(summary):
     _atomic_write_json(p, cur)
 
 
+def _pick(records):
+    """Of several InVentry records that are evidently one person, the one to use.
+
+    Currently on site first: reception has already signed them in on that copy,
+    and choosing another would sign them in a second time. Then the most
+    recently used. Then the lowest ID, so the answer never depends on the order
+    the API happens to list them in - otherwise a different copy could be
+    signed in on different days.
+    """
+    ordered = sorted(records, key=api.inventry_id)
+    return max(ordered, key=lambda r: (api.is_on_site(r),
+                                       str(api._field(r, "LastActivityDate"))))
+
+
 def _index_personnel(people):
-    """Build lookups from InVentry's personnel list."""
-    by_person_id, by_email, by_name = {}, {}, {}
+    """Build lookups from InVentry's personnel list.
+
+    A shared email or PersonID means one person with more than one record -
+    real data has them, e.g. two "James Gray"s. Those are resolved with _pick
+    and returned for reporting. A shared NAME is different: it may be two
+    different people, so it stays ambiguous and is never guessed.
+    """
+    pid_groups, email_groups, by_name = {}, {}, {}
     for record in people:
         key = api.person_key(record)
         if key:
-            by_person_id[key] = record
+            pid_groups.setdefault(key, []).append(record)
         email = str(api._field(record, "EmailAddress")).strip().lower()
         if email:
-            by_email[email] = record
+            email_groups.setdefault(email, []).append(record)
         name = source_loader._name_key(
             api._field(record, "FirstName"), api._field(record, "Surname"))
         if name:
             # A duplicated name is ambiguous, so mark it rather than pick one.
             by_name[name] = None if name in by_name else record
-    return by_person_id, by_email, by_name
+
+    by_person_id = {k: _pick(v) for k, v in pid_groups.items()}
+    by_email = {k: _pick(v) for k, v in email_groups.items()}
+
+    duplicates, seen = [], set()
+    for group in list(pid_groups.values()) + list(email_groups.values()):
+        ids = frozenset(api.inventry_id(r) for r in group)
+        if len(group) > 1 and ids not in seen:
+            seen.add(ids)
+            duplicates.append(group)
+    return by_person_id, by_email, by_name, duplicates
 
 
 def _match(person, by_person_id, by_email, by_name):
@@ -203,7 +233,19 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
     except api.InVentryAPIError as exc:
         return abort(f"Could not read InVentry personnel: {exc}")
 
-    by_person_id, by_email, by_name = _index_personnel(people)
+    by_person_id, by_email, by_name, duplicates = _index_personnel(people)
+    if duplicates:
+        names = sorted({f"{api._field(g[0], 'FirstName')} {api._field(g[0], 'Surname')}".strip()
+                        for g in duplicates})
+        summary["warnings"].append(
+            f"{len(duplicates)} person(s) have more than one InVentry record sharing an "
+            f"email or PersonID ({', '.join(names[:5])}{', ...' if len(names) > 5 else ''}). "
+            f"The copy already on site, else the most recently used, is the one matched. "
+            f"Worth merging in InVentry: reception may sign people in on the other copy."
+        )
+        for g in duplicates:
+            _log(f"  DUPLICATE {api._field(g[0], 'FirstName')} {api._field(g[0], 'Surname')}: "
+                 f"{len(g)} records {', '.join(sorted(api.inventry_id(r) for r in g))}")
     inventry_on_site = {api.inventry_id(r): r for r in people if api.is_on_site(r)}
     summary["inventry_on_site_before"] = len(inventry_on_site)
     summary["inventry_personnel"] = len(people)

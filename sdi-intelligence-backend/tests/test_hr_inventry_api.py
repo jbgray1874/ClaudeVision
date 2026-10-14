@@ -722,3 +722,47 @@ def test_skipping_the_hostname_check_against_the_public_ca_store_is_called_out()
     client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
                              verify=True, check_hostname=False, limiter=NoWaitLimiter())
     assert any("any publicly-issued certificate" in w for w in client.warnings)
+
+
+# ── duplicate InVentry records for one person ────────────────────────────
+# Real data, 14 Oct: 255 InVentry staff records against ~192 BrightHR staff,
+# and two records for "James Gray" with different PersonIDs. Names were already
+# treated as ambiguous; a shared email or PersonID silently took whichever
+# record the API happened to list last.
+
+def test_duplicate_email_prefers_the_record_reception_already_signed_in(snapshot):
+    """Picking the other copy would sign the person in a second time."""
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-A", person_id="AD-1", activity="IN"),   # at reception
+        person(inventry_id="INV-B", person_id="AD-2", activity="OUT"),  # listed last
+    ])
+    result = push.run_push(apply=True, client=client)
+    assert client.signed_in == []
+    assert result["already_on_site"] == 1
+
+
+def test_duplicate_email_is_resolved_the_same_way_whatever_the_api_order(snapshot):
+    """Order-dependent matching would sign in a different copy on different days."""
+    a = person(inventry_id="INV-A", person_id="AD-1", activity="")
+    b = person(inventry_id="INV-B", person_id="AD-2", activity="")
+    b["LastActivityDate"] = "2026-10-01T08:00:00.000"   # more recently used
+    a["LastActivityDate"] = "0001-01-01T00:00:00"       # never used
+
+    picks = []
+    for order in ([a, b], [b, a]):
+        snapshot([clocked_in(bh_id="BH-9")])
+        client = FakeAPI(order)
+        push.run_push(apply=True, client=client)
+        picks.append(client.signed_in)
+    assert picks[0] == picks[1] == ["INV-B"]
+
+
+def test_duplicate_records_are_reported_for_cleanup(snapshot):
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-A", person_id="AD-1"),
+        person(inventry_id="INV-B", person_id="AD-2"),
+    ])
+    result = push.run_push(apply=False, client=client)
+    assert any("more than one InVentry record" in w for w in result["warnings"])
