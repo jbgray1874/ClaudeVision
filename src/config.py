@@ -1913,6 +1913,21 @@ JUNK_PART_TOKENS = [
     "THIS DRAWING", "TOLERANCE", "UNLESS STATED", "REMOVE BURRS",
 ]
 
+# ── A CODE WHOSE TAIL IS A FINISH, COLOUR OR SPACING WORD IS NOT A PART (D-512) ──────────
+#
+# 12343-01J minted "ST7-PLATINUM" (the EGGER W980 ST7 Platinum White decor) and
+# "600-CENTRES" (a hole-spacing note) as part codes: both were excluded from costing but
+# raised missing-drawing questions nobody could answer. A real code's last segment is a
+# role or an index (GA, 01M, 02); a decor colour, a finish participle or a layout word in
+# the tail says the token is prose that happens to carry a hyphen. Vocabulary, not logic —
+# extend it as the packs teach new ones.
+CODE_TAIL_NOISE_WORDS = {
+    "PLATINUM", "CENTRES", "CENTERS", "CTRS", "GLOSS", "MATT", "MATTE", "SATIN",
+    "WHITE", "BLACK", "GREY", "GRAY", "CLEAR", "CHROME", "ZINC", "NICKEL", "SILVER",
+    "GOLD", "OAK", "WALNUT", "BIRCH", "BEECH", "COATED", "PLATED", "BRUSHED",
+    "POLISHED", "ANODISED", "ANODIZED", "EDGED", "PITCH", "MICRON", "THICK",
+}
+
 # E3: optional overhead/downtime uplift. Default OFF so the engine reports true
 # manufacturing cost; toggle on for an FD "sell" view. Inheritable.
 OVERHEAD_POLICY = {

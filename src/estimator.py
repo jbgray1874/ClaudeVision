@@ -9006,6 +9006,27 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         sec_per_mm = float(cnc_rule.get("sec_per_mm_contour", 0.04))
         run_sec = max(float(cnc_rule.get("min_run_min", 8.0)) * 60.0, cut_length_mm * sec_per_mm)
         run_times_min["cnc_routing"] = round(run_sec / 60.0, 2)
+        # THE HOLES THE PROGRAM COVERS, NAMED (D-512). "Holes are in the CNC program" was a
+        # bare assertion the 12343-01J review could not verify — the workbook's hole inputs
+        # were blank and nothing listed what the routing is claimed to include. The claim
+        # now carries its inventory, or says the record holds none.
+        _ng_cnc = part.get("normalized_geometry") if isinstance(
+            part.get("normalized_geometry"), dict) else {}
+        _hole_n = int(_safe_float(_ng_cnc.get("estimated_hole_count"))
+                      or len(part.get("hole_sizes_mm") or []) or 0)
+        _hole_sizes = sorted({_safe_float(h) for h in (part.get("hole_sizes_mm") or [])
+                              if _safe_float(h)})
+        if _hole_n or _hole_sizes:
+            part.setdefault("review_flags", []).append(
+                f"CNC ROUTING COVERS THE BORING: {_hole_n or len(_hole_sizes)} hole(s)"
+                + (f" (Ø{', Ø'.join(f'{h:g}' for h in _hole_sizes)} mm)" if _hole_sizes else "")
+                + " are in the program — no separate drilling row. Confirm the count against "
+                  "the drawing's hole callouts.")
+        else:
+            part.setdefault("review_flags", []).append(
+                "CNC ROUTING: the record holds NO hole inventory — if the drawing calls up "
+                "bores, nothing here demonstrates they reached the program; check the hole "
+                "callouts against the DXF views.")
 
     if "edge_banding" in ops:
         eb_rule = LABOUR_RULES.get("edge_banding") or {}
@@ -12143,6 +12164,21 @@ def apply_last_resort_prices(part_estimates: List[Dict[str, Any]],
                 "market was asked for its RAW MATERIAL ONLY — never the finished part, whose "
                 "cutting, forming, joining and finishing the route charges. NON-FIRM — give the "
                 "blank length × width × gauge and it costs as a nested part.")
+            # THE ALLOWANCE REACHES THE CHARGED ROW (D-512). 12343-01J's board allowance
+            # (£4.25) was computed and then shown "not charged": the workbook's Other Sheet
+            # row prices from sheet_price_gbp / parts_per_sheet, and the rescue set neither,
+            # so the sheet wrote £0 beside an engine figure nobody charged. A board-family
+            # part's allowance is written in the row's own terms — the allowance as one
+            # part's share of a one-part sheet — so the sheet charges what the engine says,
+            # still flagged NON-FIRM.
+            try:
+                from costed_facts import is_other_sheet_material as _osm_lr
+                if (_osm_lr(pe.get("normalized_material") or "")
+                        and not _safe_float(_me.get("sheet_price_gbp"))):
+                    _me["sheet_price_gbp"] = _unit
+                    _me.setdefault("parts_per_sheet", 1)
+            except Exception:                                        # noqa: BLE001
+                pass
         else:
             pe.setdefault("review_flags", []).append(
                 "AI/MARKET LAST-RESORT PRICE: no catalogue/UDEF/derived price was found, so an "
@@ -13221,7 +13257,16 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             for _p in (parts or []):
                 if not isinstance(_p, dict):
                     continue
-                if not (_p.get("_laminate_in_board")
+                # A board whose own material went UNPRICED still has banded edges (D-512):
+                # 12343-01J's MFC had no gauge, so no costing_material_family — and the
+                # stated "EDGED ALL AROUND" built no edging line. The metres are a fact
+                # about the part, not about whether its sheet price resolved.
+                try:
+                    from costed_facts import is_other_sheet_material as _osm_e
+                    _board_e = _osm_e(_p.get("normalized_material") or "")
+                except Exception:                                    # noqa: BLE001
+                    _board_e = False
+                if not (_p.get("_laminate_in_board") or _board_e
                         or (_p.get("material_estimate") or {}).get(
                             "costing_material_family")):
                     continue

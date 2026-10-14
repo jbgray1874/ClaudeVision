@@ -590,6 +590,15 @@ def _looks_like_part_number(value: str) -> bool:
     # one regex that happened to produce the fault.
     if parts and not any(ch.isdigit() for ch in parts[0]):
         return False
+    # A TAIL THAT IS A FINISH, COLOUR OR SPACING WORD IS PROSE (D-512). "ST7-PLATINUM" is
+    # the EGGER decor, "600-CENTRES" a hole-spacing note — both raised missing-drawing
+    # questions nobody could answer. Vocabulary in config (CODE_TAIL_NOISE_WORDS).
+    try:
+        from config import CODE_TAIL_NOISE_WORDS as _tail_noise
+        if parts and parts[-1].isalpha() and parts[-1] in _tail_noise:
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
     return bool(re.fullmatch(r"[A-Z0-9_]+(?:\s*-\s*[A-Z0-9_]+){1,4}", normalized))
 
 
