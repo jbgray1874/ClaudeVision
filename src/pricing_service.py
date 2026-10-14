@@ -107,6 +107,12 @@ _PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
 _STOCK_FORM_CATEGORY_WORDS = (
     "SHEET", "SHEETS", "PLATE", "BOARD", "BOARDS", "SECTION", "SECTIONS", "BAR", "TUBE",
     "ROD", "MDF", "PLY", "PLYWOOD", "EXTRUSION", "EXTRUSIONS", "ANGLE", "CHANNEL", "MESH",
+    # THE LAMINATE FAMILY IS STOCK TOO (D-519). The edging line's own description says
+    # "to match Egger W1001 ST9 LAMINATE"; the purchase search's longest word hit a
+    # laminate row at £18 and charged a metre of 23 x 1 ABS as a laminate SHEET —
+    # £56.16 of edging on a £5.00 board. A row whose category names laminate or a faced
+    # board is a material's price, whatever word led to it; the search keeps looking.
+    "LAMINATE", "LAMINATES", "LAMINATED", "MFC", "CHIPBOARD", "MELAMINE",
 )
 
 

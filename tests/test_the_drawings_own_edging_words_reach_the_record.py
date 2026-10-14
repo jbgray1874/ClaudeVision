@@ -525,6 +525,84 @@ def test_existing_callouts_are_not_overwritten_by_the_carrier():
     assert part["stated_bore_callouts"][0]["diameter_mm"] == 5.0
 
 
+# ── D-519: a bought item fitted to a part does not make the part an assembly ─────────────
+
+def test_the_edging_child_does_not_make_the_shelf_an_assembly():
+    """The 12:45 book: hanging EDGE23X1ABS under the shelf flipped the one-board product
+    into a packed assembly — a £7.57 Packing Joinery row 'covering' the ABS, and the hole
+    ruling re-worded to 'assembly parent has no independently measured fabricated leaf'.
+    The edge stands (the line is linked and charged); assembly-ness needs a MADE child."""
+    import config
+    from route_compiler import compile_route_without_pricing
+    shelf = {"part_number": "12399-77J", "description": "KD V2 SHELF", "quantity": 1,
+             "normalized_material": "MFC", "normalized_thickness_mm": 18.0,
+             "blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+             "dxf_measured_outline": True, "dxf_augmented": True,
+             "flat_pattern_detected": True,
+             "operations": ["cnc_routing", "edge_banding", "handling"],
+             "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+                                     "estimated_cut_length_mm": 3192.0,
+                                     "geometry_source": "dxf_flat_pattern"},
+             "pages": [1], "page_roles": ["detail"]}
+    edging = {"part_number": config.FACED_BOARD_EDGING_CODE,
+              "description": "ABS edging — 3.192 m a unit", "quantity": 3.192,
+              "page_roles": ["bought_in"], "textual_operations": ["handling"],
+              "_edging_line": True, "_edging_for": ["12399-77J"],
+              "bom_parent": "12399-77J", "pages": []}
+    summary = {"declared_product": "12399-77J", "drawing_number": "12399-77J",
+               "manufacturing_writeup": {"parts": [shelf, edging]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    shelf_nodes = [t for t in nodes if t.get("part_number") == "12399-77J"]
+    assert shelf_nodes and all(t.get("kind") == "leaf" for t in shelf_nodes), shelf_nodes
+    assert not shelf.get("is_sub_assembly")
+    asm = [d for d in (compiled.get("decisions") or compiled.get("claims") or [])
+           for t in [(d if isinstance(d, dict) else d.__dict__)]
+           if t.get("operation") == "assembly" and t.get("status") == "required"
+           and "12399-77J" in str(t.get("target_id") or "")]
+    assert not asm, asm
+
+
+def test_a_made_child_still_makes_its_parent_an_assembly():
+    """The gate must not widen: a MADE child under the same BOM edge keeps the parent an
+    assembly, even when the parent carries fabrication evidence of its own (a welded frame
+    is cut AND joins its plate — _carries_only_hardware refuses the made child)."""
+    from route_compiler import compile_route_without_pricing
+    parent = {"part_number": "12399-80GA", "description": "FRAME", "quantity": 1,
+              "dxf_measured_outline": True, "dxf_augmented": True,
+              "flat_pattern_detected": True,
+              "normalized_geometry": {"geometry_source": "dxf_flat_pattern"},
+              "pages": [1], "page_roles": ["detail"]}
+    child = {"part_number": "12399-80-01M", "description": "PLATE", "quantity": 2,
+             "bom_parent": "12399-80GA", "pages": [2], "page_roles": ["detail"],
+             "normalized_material": "MILD STEEL"}
+    summary = {"declared_product": "12399-80GA",
+               "manufacturing_writeup": {"parts": [parent, child]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    frame = [t for t in nodes if t.get("part_number") == "12399-80GA"]
+    assert frame and all(t.get("kind") == "assembly" for t in frame), frame
+
+
+# ── D-519: a laminate row is stock, never a purchased component's price ──────────────────
+
+def test_a_laminate_catalogue_row_reads_as_stock():
+    """The 12:45 book charged 23 x 1 ABS at £18/m: the purchase search's longest word —
+    LAMINATE, from the spec's own "to match Egger W1001 ST9 laminate" — hit a laminate
+    row, a sheet price on a metre line (£56.16 of edging on a £5.00 board)."""
+    from pricing_service import _names_stock_form
+    assert _names_stock_form("LAMINATE")
+    assert _names_stock_form("Laminates - Egger catalogue")
+    assert _names_stock_form("MFC BOARD 18MM")
+    assert _names_stock_form("MELAMINE FACED CHIPBOARD")
+    assert not _names_stock_form("CASTORS")
+    assert not _names_stock_form("EDGE TAPE / EDGING")
+
+
 # ── D-518: a line bought by the metre keeps its fraction ─────────────────────────────────
 
 def test_a_metre_quantity_is_not_floored_to_a_count():

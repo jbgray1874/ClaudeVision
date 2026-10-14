@@ -2094,8 +2094,20 @@ def build_part_graph(
                 continue
             children.setdefault(_bp, {})[_pid] = _q
             parents.setdefault(_pid, set()).add(_bp)
-            records.setdefault(_bp, {})["is_sub_assembly"] = True
-            records[_bp]["hierarchy_source"] = "bom_table"
+            # A BOUGHT ITEM FITTED TO A PART DOES NOT MAKE THE PART AN ASSEMBLY (D-519).
+            # Hanging the edging under the shelf flipped a one-board product into a packed
+            # assembly: a Packing Joinery row covering the ABS, and the hole ruling
+            # re-worded to "assembly parent has no independently measured fabricated leaf"
+            # — the D-511 class of defect, re-opened by the new edge. The EDGE stands (the
+            # line is linked, scoped and charged); assembly-ness needs a MADE child or the
+            # parent's own evidence, exactly as D-508 holds that a parts list alone does
+            # not make an assembly.
+            _child_bought = bool(
+                _part.get("is_bought_in") or _part.get("_edging_line")
+                or "bought_in" in [str(r) for r in (_part.get("page_roles") or [])])
+            if not _child_bought:
+                records.setdefault(_bp, {})["is_sub_assembly"] = True
+                records[_bp]["hierarchy_source"] = "bom_table"
             print(f"   [bom] '{_pid}' owned by '{_bp}' (qty {_q:g}) — the record carries "
                   f"the parent BOM whose table listed it", flush=True)
 
@@ -3317,15 +3329,23 @@ def build_part_graph(
     nodes: List[PartNode] = []
     for identity in sorted(identities):
         record = records.get(identity) or {}
-        _hardware_carrier = identity != top_id and _carries_only_hardware(identity, record)
-        is_assembly = bool(
+        # THE TOP MAY BE A HARDWARE CARRIER TOO (D-519). The gate used to exempt the top
+        # outright, to keep a genuine GA packing whatever joined it — but a GA has no
+        # fabrication evidence of its own, and _carries_only_hardware already refuses any
+        # record without it, so the exemption protected nothing and cost the END CAP case
+        # at the root: hanging EDGE23X1ABS under 12343-01J flipped the one-board shelf to
+        # "assembly", minted a Packing Joinery row covering the ABS, and re-worded the
+        # hole ruling to "assembly parent has no independently measured fabricated leaf"
+        # — D-511's defect, re-opened by the line D-517 linked. A measured part whose
+        # every child is bought is a cut part with inserts wherever it sits in the graph.
+        _hardware_carrier = _carries_only_hardware(identity, record)
+        is_assembly = bool(not _hardware_carrier and (
             (identity == top_id
              and not (_product_is_leaf and identity == product_root))
-            or (not _hardware_carrier and (
-                identity in children
-                or record.get("is_sub_assembly")
-                or record.get("is_assembly_parent")))
-        )
+            or identity in children
+            or record.get("is_sub_assembly")
+            or record.get("is_assembly_parent")
+        ))
         if _hardware_carrier:
             _hw = ", ".join(sorted(children.get(identity) or {}))
             print(f"   [graph] {identity} carries hardware ({_hw}) on its own sheet — a cut "
