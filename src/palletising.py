@@ -115,6 +115,49 @@ def _footprint_fits(blank: List[float], footprint: List[float]) -> bool:
     return bl <= fl and bw <= fw
 
 
+def _plan_assembled(unit: Dict[str, Any], qty: int, lim: Dict[str, Any]) -> Dict[str, Any]:
+    """AN ASSEMBLED PRODUCT SHIPS AS ITSELF (D-530). A welded unit cannot be split into
+    25 kg cartons of loose parts: it is one pack per unit, the pack sized from the product's
+    own overall dimensions, and the pallets are how many of those packs a pallet footprint
+    takes, stacked to the height limit and inside the weight limit."""
+    env = [float(v) for v in (unit.get("envelope_mm") or []) if _num(v)]
+    if len(env) < 3:
+        return {"schema": SCHEMA, "order_quantity": qty, "carton_count": None,
+                "pallet_count": None, "flags": ["shipment_not_countable"],
+                "assumptions": ["The assembled product has no overall size to pack by."]}
+    L, B, H = env[:3]
+    w = _num(unit.get("unit_weight_kg")) or 0.0
+    pallet_fp = lim["pallet_footprint_mm"]
+    per_layer = _fit_per_layer(pallet_fp, [L, B])
+    flags: List[str] = ["ships_assembled"]
+    if per_layer == 0:
+        per_pallet = 1
+        flags.append("unit_exceeds_pallet")
+    else:
+        layers = max(1, int(math.floor(lim["pallet_max_height_mm"] / H))) if H else 1
+        per_pallet = per_layer * layers
+    if w and lim["pallet_max_weight_kg"]:
+        per_pallet = max(1, min(per_pallet, int(math.floor(lim["pallet_max_weight_kg"] / w))))
+    pallets = int(math.ceil(qty / per_pallet))
+    return {
+        "schema": SCHEMA, "order_quantity": qty, "parts_measured": 1,
+        "parts_without_a_blank": 0, "ships_assembled": True,
+        "order_weight_kg": round(w * qty, 2) if w else None,
+        "packing_factor": lim["packing_factor"],
+        "largest_blank_mm": [round(L, 1), round(B, 1)],
+        "carton_internal_mm": [L, B, H],
+        "carton_count": qty, "pallet_count": pallets, "units_per_pallet": per_pallet,
+        "assumptions": [
+            f"Ships assembled — {unit.get('basis') or 'a welded unit'}: one carton per unit, "
+            f"sized from the product's overall {L:g} x {B:g} x {H:g} mm, and "
+            f"{per_pallet} unit(s) to a {pallet_fp[0]:.0f} x {pallet_fp[1]:.0f} mm pallet"
+            + (" (the unit is larger than the pallet: one per pallet, oversize)"
+               if "unit_exceeds_pallet" in flags else "")
+            + ". A working count, not a packing plan — confirm with the packer."],
+        "flags": flags,
+    }
+
+
 def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]:
     """The order as cartons and pallets, with the measured figures and the one assumption apart.
 
@@ -128,6 +171,10 @@ def plan_shipment(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any]
         qty = max(1, int(order_qty))
     except (TypeError, ValueError):
         qty = 1
+    _unit = next((p for p in parts or () if isinstance(p, dict) and p.get("_assembled_unit")),
+                 None)
+    if _unit is not None:
+        return _plan_assembled(_unit, qty, lim)
 
     weight_kg = 0.0
     solid_vol_m3 = 0.0

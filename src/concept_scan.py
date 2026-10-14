@@ -4973,6 +4973,18 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
     record["is_assembly_parent"] = True
     record["canonical_kind"] = "assembly"
     record["assembly_children"] = [str(p.get("part_number") or "") for p in made]
+    # THE PRODUCT'S OWN SIZE, FOR PACKING IT AS ITSELF (D-530): the drawn body where the sheet
+    # gives one, else the read's overall size. Footprint longest first, then height.
+    _facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
+    for _src, _box in (("the sheet's body dimensions", _facts.get("body_mm")),
+                       ("the read's overall size",
+                        (answer.get("product") or {}).get("assumed_overall_mm"))):
+        if isinstance(_box, Mapping):
+            _h, _w, _d = (_num(_box.get(k)) for k in ("height", "width", "depth"))
+            if _h and _w and _d:
+                record["product_envelope_mm"] = {"length": max(_w, _d), "width": min(_w, _d),
+                                                 "height": _h, "source": _src}
+                break
     if material:
         apply_field(record, "normalized_material", material, SOURCE,
                     note=f"the board most of the sighted panels are made of ({material})")
