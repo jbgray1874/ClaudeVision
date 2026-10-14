@@ -246,6 +246,48 @@ def _stated_weight_kg_for_part(part: Dict[str, Any]) -> Optional[float]:
     return _parse_stated_weight_kg(part)
 
 
+def _stated_weight_reference(part: Dict[str, Any]) -> Tuple[Optional[float], str]:
+    """The weight the check compares against, WITH THE NAME OF WHOSE FIGURE IT IS (D-514).
+
+    12343-01J's book said "against the stated 5.496 kg" — the MODEL's mass, written into
+    stated_weight_g by the SolidWorks extract, presented as drawing corroboration while the
+    drawing itself prints 5.573 kg. Same number the check always used; its origin now travels
+    with it, so "the model's 5.496 kg" and "the sheet's stated 5.573 kg" cannot be confused.
+    Returns (kg, label) — label is a possessive phrase ("the sheet's stated", "the model's",
+    "the flat pattern's computed"), or (None, "") when nothing states a weight."""
+    dxf_g = _safe_float(part.get("dxf_weight_g"))
+    dxf_kg = _safe_float(part.get("dxf_weight_kg"))
+    if (dxf_g or 0) > 0:
+        return round(float(dxf_g) / 1000.0, 4), "the flat pattern's computed"
+    if (dxf_kg or 0) > 0:
+        return round(float(dxf_kg), 4), "the flat pattern's computed"
+    kg = _parse_stated_weight_kg(part)
+    if kg is None:
+        return None, ""
+    if (_safe_float(part.get("stated_weight_g"))
+            and str(part.get("stated_weight_source") or "") == "solidworks_model_mass"):
+        return kg, "the model's"
+    return kg, "the sheet's stated"
+
+
+def _sheet_printed_weight_kg(part: Dict[str, Any]) -> Optional[float]:
+    """The weight printed on the SHEET alone — the title-block WEIGHT field's figure, read
+    from the extracted `weights` list and never from stated_weight_g (which a model fills).
+    Used to say "the sheet itself prints X" beside a model-mass comparison (D-514)."""
+    weights = part.get("weights") or (part.get("title_block") or {}).get("weights") or []
+    if isinstance(weights, str):
+        weights = [weights]
+    for w in weights:
+        m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*(KG|G)$",
+                     str(w).strip().upper().replace(",", ""))
+        if not m:
+            continue
+        val = float(m.group(1)) / (1000.0 if m.group(2) == "G" else 1.0)
+        if 0.001 <= val <= 500.0:
+            return round(val, 4)
+    return None
+
+
 def _price_per_kg_for_material(part: Optional[Dict[str, Any]], material) -> Optional[float]:
     """The GBP/kg for this material, including when the rate table is not keyed by its name.
 
@@ -3749,9 +3791,19 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         L = _safe_float(_cb[0]) if _cb else _safe_float(ng.get("blank_length_mm") or part.get("blank_length_mm"))
         W = _safe_float(_cb[1]) if _cb else _safe_float(ng.get("blank_width_mm") or part.get("blank_width_mm"))
         t = _safe_float(part.get("normalized_thickness_mm"))
-        stated = _stated_weight_kg_for_part(part)
+        # THE REFERENCE, NAMED (D-514): the same figure the check always weighed against,
+        # carried with whose figure it is — the model's mass is not "the sheet's stated".
+        stated, _wlab = _stated_weight_reference(part)
         if not (L and W and t and stated) or L <= 0 or W <= 0 or t <= 0 or stated <= 0:
             return None
+        # Where the reference is NOT the sheet's own printed weight and the sheet prints a
+        # different figure, both are said: a comparison against the model alone must not
+        # read as drawing corroboration (12343-01J: model 5.496 kg, sheet 5.573 kg).
+        _sheet_kg = _sheet_printed_weight_kg(part)
+        _also_sheet = ""
+        if (_sheet_kg and _wlab != "the sheet's stated"
+                and abs(_sheet_kg - stated) > stated * 0.005):
+            _also_sheet = f" (the sheet itself prints {_sheet_kg:.3f} kg)"
         mat = str(part.get("normalized_material") or part.get("material") or "").upper().replace("_", " ")
         # A faced board is deliberately absent from the costing density table — a board is
         # bought by the sheet, not the kilo — but a CHECK is not a price, and without a figure
@@ -3789,8 +3841,8 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                 if _src_of(part, "normalized_thickness_mm") == "model_extents_board_gauge":
                     return (f"WEIGHT NOTE: the {L:g} x {W:g} blank at the PROVISIONAL "
                             f"{t:g} mm gauge weighs {blank_kg:.3f} kg in {mat.lower()} "
-                            f"against the stated {stated:.3f} kg — the weight supports the "
-                            f"gauge read from the model's smallest extent")
+                            f"against {_wlab} {stated:.3f} kg{_also_sheet} — the weight "
+                            f"supports the gauge read from the model's smallest extent")
             except Exception:                                         # noqa: BLE001
                 pass
             return None
@@ -3813,7 +3865,7 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
             if abs(_alt_kg - stated) <= stated * _tol:
                 _what0 = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
                           if _measured_area else f"the {L:g} x {W:g} blank")
-                return (f"WEIGHT NOTE: the sheet's {stated:.3f} kg is {_what0} at {t:g} mm in "
+                return (f"WEIGHT NOTE: {_wlab} {stated:.3f} kg{_also_sheet} is {_what0} at {t:g} mm in "
                         f"{_alt_u.lower()} ({_alt_kg:.3f} kg), not in {mat.lower()} "
                         f"({blank_kg:.3f} kg) — which suggests the model carries {_alt_u.lower()} "
                         f"as its material and printed that mass. If so, the weight cannot test the "
@@ -3848,7 +3900,7 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                 # WEIGHT IT ALREADY EXPLAINS (D-460): the weight's equivalent rectangle
                 # sitting INSIDE the extents is what a shaped part looks like.
                 if (part.get("_blank_provisional") and _w_impl <= _short * 1.05):
-                    return (f"WEIGHT NOTE: the sheet's {stated:.3f} kg read in {_alt_u.lower()} "
+                    return (f"WEIGHT NOTE: {_wlab} {stated:.3f} kg{_also_sheet} read in {_alt_u.lower()} "
                             f"at {t:g} mm is an equivalent rectangle {_long:g} x {_w_impl:.0f} mm "
                             f"— inside the {_long:g} x {_short:g} provisional blank from the "
                             f"part's measured extents, as a shaped part should be. The weight "
@@ -3856,8 +3908,8 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
                             f"already raised")
                 if _short < _w_impl <= _long:
                     return (f"WEIGHT CHECK: the {L:g} x {W:g} blank was not measured (no cut "
-                            f"outline) and at {t:g} mm weighs {blank_kg:.3f} kg against the "
-                            f"sheet's {stated:.3f} kg. The blank is the first suspect, not the "
+                            f"outline) and at {t:g} mm weighs {blank_kg:.3f} kg against "
+                            f"{_wlab} {stated:.3f} kg{_also_sheet}. The blank is the first suspect, not the "
                             f"gauge: read in {_alt_u.lower()} (a model's default material), the "
                             f"stated weight fits {_long:g} x {_w_impl:.0f} mm at {t:g} mm. "
                             f"Confirm the blank from the model or the DXF; the line is priced on "
@@ -3866,7 +3918,7 @@ def _blank_weight_check(part: Dict[str, Any]) -> Optional[str]:
         _what = (f"the cut outline ({area:,.0f} mm² inside the {L:g} x {W:g} blank)"
                  if _measured_area else f"the {L:g} x {W:g} blank")
         return (f"WEIGHT CHECK: {_what} at {t:g} mm weighs {blank_kg:.3f} kg; "
-                f"the sheet states {stated:.3f} kg. "
+                f"{_wlab} weight is {stated:.3f} kg{_also_sheet}. "
                 + (f"A blank cannot weigh less than its part, so the gauge is too thin: "
                    if blank_kg < stated else
                    f"A blank weighs more than its part but not this much more unless most of "
@@ -9042,12 +9094,31 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                       or len(part.get("hole_sizes_mm") or []) or 0)
         _hole_sizes = sorted({_safe_float(h) for h in (part.get("hole_sizes_mm") or [])
                               if _safe_float(h)})
+        # WHAT THE EVIDENCE PROVES, NOT MORE (D-514). An inventory the costed flat measured
+        # can say the holes are in the work this routing covers. An inventory that reached
+        # the record from a SECOND VIEW proves only that the drawing shows holes — "are in
+        # the program" was an assertion the 12343-01J review rightly refused: no machining
+        # program has been demonstrated, and the two Ø8.5 bores were still absent.
+        _sv_inv = part.get("secondary_view_hole_inventory") \
+            if isinstance(part.get("secondary_view_hole_inventory"), dict) else None
         if _hole_n or _hole_sizes:
-            part.setdefault("review_flags", []).append(
-                f"CNC ROUTING COVERS THE BORING: {_hole_n or len(_hole_sizes)} hole(s)"
-                + (f" (Ø{', Ø'.join(f'{h:g}' for h in _hole_sizes)} mm)" if _hole_sizes else "")
-                + " are in the program — no separate drilling row. Confirm the count against "
-                  "the drawing's hole callouts.")
+            if _sv_inv:
+                part.setdefault("review_flags", []).append(
+                    f"CNC ROUTING COVERS THE BORING on this route, and the record's "
+                    f"inventory is {_hole_n or len(_hole_sizes)} hole(s)"
+                    + (f" (Ø{', Ø'.join(f'{h:g}' for h in _hole_sizes)} mm)"
+                       if _hole_sizes else "")
+                    + f" measured on a second view "
+                      f"({', '.join(_sv_inv.get('files') or [])}) — holes the drawing "
+                      f"SHOWS, not a demonstrated program. Confirm the full bore count, "
+                      f"faces and depths against the drawing's callouts.")
+            else:
+                part.setdefault("review_flags", []).append(
+                    f"CNC ROUTING COVERS THE BORING: {_hole_n or len(_hole_sizes)} hole(s)"
+                    + (f" (Ø{', Ø'.join(f'{h:g}' for h in _hole_sizes)} mm)"
+                       if _hole_sizes else "")
+                    + " are in the program — no separate drilling row. Confirm the count "
+                      "against the drawing's hole callouts.")
         else:
             part.setdefault("review_flags", []).append(
                 "CNC ROUTING: the record holds NO hole inventory — if the drawing calls up "
@@ -12793,6 +12864,21 @@ def cost_uncosted_bought_in_records(summary: Dict[str, Any]) -> int:
 def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     debug = os.getenv("SCAN_DEBUG", "").lower() in {"1", "true", "yes"}
     if summary is not None:
+        # THE SHEET'S BANDING STATEMENT, READ WHERE THE MONEY IS COMPUTED (D-514). The
+        # document-build stamp (D-513) can be lost between the build and the costing —
+        # 12343-01J's 09:36 record held "EDGED ALL AROUND EDGING ORDER: 2S/SL" in its own
+        # page text and the costed part still arrived without it, so the banding was
+        # ceilinged and no edging material line could build. Filled only into a gap, from
+        # the pages as saved, so a replay of the record proves the same stamp.
+        try:
+            from edge_banding import stamp_banding_statements_from_pages as _stamp_band
+            _nb = _stamp_band(parts, summary)
+            if _nb:
+                print(f"   [edging] banding statements read off the sheets of {_nb} "
+                      f"part(s) at estimate time", flush=True)
+        except Exception as _bexc:                                   # noqa: BLE001
+            print(f"   [edging] page banding stamp skipped "
+                  f"({type(_bexc).__name__}: {_bexc})", flush=True)
         bought_in_items = extract_bought_in_from_pages(summary, existing_part_records=parts)
         if bought_in_items:
             parts.extend(bought_in_items)
