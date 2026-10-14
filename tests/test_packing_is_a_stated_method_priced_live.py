@@ -350,8 +350,15 @@ def test_an_unmeasured_fabricated_leaf_blocks_the_method(monkeypatch):
                          "normalized_material": "MILD STEEL", "quantity": 1,
                          "flat_pattern_detected": True}]        # fabricated, no blank dims
     line = CL.packaging_line(parts, 50)
-    assert line.get("order_gbp") is None
-    assert "10975-02-B01" in line["note"]
+    assert "10975-02-B01" in str(line.get("method_status") or ""), \
+        "Howard's method still names the part that blocked it"
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator", \
+            "only the counted-carton rung may price past the veto, disclosed (D-525)"
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(parts, 50)
+    assert bare.get("order_gbp") is None
+    assert "10975-02-B01" in bare["note"]
 
 
 def test_an_unmeasured_fabricated_leaf_with_no_material_blocks_it_too(monkeypatch):
@@ -362,8 +369,13 @@ def test_an_unmeasured_fabricated_leaf_with_no_material_blocks_it_too(monkeypatc
     parts = _parts() + [{"part_number": "10975-02-C01", "description": "STIFFENER",
                          "quantity": 1, "flat_pattern_detected": True}]
     line = CL.packaging_line(parts, 50)
-    assert line.get("order_gbp") is None
-    assert "could not be assessed" in line["note"]
+    assert "could not be assessed" in str(line.get("method_status") or "")
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator"
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(parts, 50)
+    assert bare.get("order_gbp") is None
+    assert "could not be assessed" in bare["note"]
 
 
 def test_an_unmeasured_bought_in_rides_along(monkeypatch):
@@ -533,5 +545,10 @@ def test_a_structural_unknown_still_vetoes(monkeypatch):
     parts = _parts() + [{"part_number": "10975-02-C01", "description": "STIFFENER",
                          "quantity": 1, "flat_pattern_detected": True}]
     line = CL.packaging_line(parts, 50)
-    assert line.get("order_gbp") is None
-    assert "structural" in line["method_status"]
+    assert "structural" in line["method_status"], \
+        "the veto on Howard's method is narrower, not gone"
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator"
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(parts, 50)
+    assert bare.get("order_gbp") is None

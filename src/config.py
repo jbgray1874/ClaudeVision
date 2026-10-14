@@ -505,8 +505,11 @@ PACKING_METHOD = {
 # its assumptions stated on the line (one unit per carton, 0201 style, +20 mm the only
 # clearance, no protection or orientation modelled); disabled, the proven ladder
 # (SDI Live, history, the counted shipment) runs unchanged.
+# ENABLED ON JAMES'S INSTRUCTION, 14 Oct 2026: "our boxing calculation needs to be in the
+# calculation of the estimate and written back to the s/sheet." The two-formula comparison
+# above sits beside the switch; "sheet" is the formula that tracked the Harley's history.
 BOX_COSTING = {
-    "enabled": False,        # OPT-IN: hold out until the two-formula comparison is judged
+    "enabled": True,
     "formula": "sheet",      # "sheet" = the sheet's own K7:K8 total; "three_pair" = all six panels
     "stated_by": "James Gray (SDI), AI BOX CALCULATOR.xlsx",
     "stated_on": "14 Oct 2026",

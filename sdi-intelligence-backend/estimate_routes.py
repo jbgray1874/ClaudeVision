@@ -1890,6 +1890,135 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             "concept_document": bool(req.concept_document)}
 
 
+@router.post("/llm")
+async def start_llm_estimate(
+    prompt: str = Form(...),
+    image: Optional[UploadFile] = File(default=None),
+    client: str = Form(default="SDI"),
+    reference: str = Form(default=""),
+    quantities: str = Form(default="1"),
+    delivery_postcode: str = Form(default=""),
+    x_sdi_key: Optional[str] = Header(default=None),
+):
+    """ONE CALL FOR A CONCEPT ESTIMATE (D-526): a prompt and an image in, a queued LLM run out.
+
+    Built for a partner page (Muhammad's portal): the full /api/estimate endpoint wants file
+    paths this service can already see, which a remote caller does not have. This one takes
+    the image AS AN UPLOAD and the prompt AS THE ENQUIRY BRIEF, stages them, and queues the
+    same LLM-only run the estimating page queues — nothing new is costed here, and every
+    rule of that path holds: the figure is a MEASUREMENT of the model, not an estimate, the
+    workbook says DRAFT, and the customer quotation stays behind the release gate. The
+    caller polls GET /api/estimate/{run_id}, reads GET /{run_id}/summary, and downloads the
+    deliverables by name — the covering-note HTML is the summarised estimate, ready to embed.
+    """
+    _check_key(x_sdi_key)
+    _prompt = " ".join(str(prompt or "").split())
+    if len(_prompt) < 10:
+        raise HTTPException(400, "The prompt is the enquiry brief — say what the product is, "
+                                 "its size, its materials and anything the image cannot show. "
+                                 "A few words is not enough to estimate from.")
+    if image is None or not (image.filename or "").strip():
+        raise HTTPException(400, "An image of the product is required: PNG, JPG, WEBP or a "
+                                 "PDF sheet, as multipart field 'image'.")
+    _suffix = Path(str(image.filename)).suffix.lower()
+    if _suffix not in {".png", ".jpg", ".jpeg", ".webp", ".pdf"}:
+        raise HTTPException(400, f"{_suffix or 'that file'} is not an image the read accepts "
+                                 f"— send PNG, JPG, WEBP or PDF.")
+    _data = await image.read()
+    if not _data:
+        raise HTTPException(400, "The image upload is empty.")
+    if len(_data) > 40 * 1024 * 1024:
+        raise HTTPException(400, "The image is over 40 MB — send the sheet or render, not "
+                                 "the whole pack archive.")
+    _qs: List[int] = []
+    for _t in re.split(r"[^0-9]+", str(quantities or "")):
+        if _t:
+            _n = int(_t)
+            if not 1 <= _n <= 100000:
+                raise HTTPException(400, f"Quantity {_n} is outside 1..100000.")
+            _qs.append(_n)
+    if not _qs:
+        _qs = [1]
+    # The reference is the folder and workbook name. A caller with an enquiry number gives
+    # it; one without gets a timestamped one rather than a refusal — this path exists so a
+    # person with nothing but a picture can still ask.
+    _ref = safe_segment(reference) or time.strftime("ENQ-LLM-%d%H%M%S", time.gmtime())
+    import tempfile
+    _inbox = Path(tempfile.mkdtemp(prefix="llm_api_"))
+    _img_name = (safe_segment(Path(str(image.filename)).stem) or "enquiry") + _suffix
+    _img_path = _inbox / _img_name
+    _img_path.write_bytes(_data)
+    req = EstimateRequest(
+        client=safe_segment(client) or "SDI", drawing_number=_ref,
+        units=_qs[0], quantity_breaks=_qs[1:],
+        files=[str(_img_path)], method="llm", fresh_read=False,
+        enquiry_brief=_prompt, deliverables=True,
+        delivery=({"requested": True, "postcode": str(delivery_postcode).strip()}
+                  if str(delivery_postcode or "").strip() else None),
+    )
+    try:
+        out = dict(start(req, x_sdi_key))
+    finally:
+        # stage() copied the upload into the job folder; the temp inbox has done its job.
+        import shutil
+        shutil.rmtree(_inbox, ignore_errors=True)
+    _rid = str(out.get("run_id") or "")
+    out.update({
+        "reference": _ref,
+        "poll": f"/api/estimate/{_rid}",
+        "summary": f"/api/estimate/{_rid}/summary",
+        "note": ("Queued as an LLM-only concept read. Poll until status is 'done', then read "
+                 "/summary for the figure, the embeddable covering note and the workbook "
+                 "download. The figure is a measurement of the vision model, not a "
+                 "quotation, and the workbook says so."),
+    })
+    return out
+
+
+@router.get("/{run_id}/summary")
+def run_summary(run_id: str, x_sdi_key: Optional[str] = Header(default=None)):
+    """A finished run reduced to what a partner page renders (D-526): the figure, the
+    caveats, and each deliverable as a download URL — never a disk path. The covering-note
+    HTML is the summarised estimate itself, written for a reader, self-contained and safe
+    to embed; the workbook is the SDI estimate sheet."""
+    _check_key(x_sdi_key)
+    with _LOCK:
+        run = _RUNS.get(run_id)
+        items = list(run.deliverables) if run is not None else []
+    if run is None:
+        raise HTTPException(404, "No such run. The service may have restarted.")
+    delivs = []
+    for d in items:
+        _n = str((d or {}).get("name") or "")
+        if _n:
+            delivs.append({"name": _n,
+                           "download": f"/api/estimate/{run_id}/deliverables/{_n}"})
+
+    def _first(pred) -> Optional[str]:
+        return next((d["download"] for d in delivs if pred(d["name"].lower())), None)
+
+    return {
+        "run_id": run_id,
+        "status": run.status,
+        "client": run.client,
+        "drawing_number": run.drawing_number,
+        "units": run.units,
+        "unit_cost_gbp": run.engine_price_gbp,
+        "provisional": _looks_provisional(run),
+        "error": run.error or None,
+        # The covering note is the summary a person wrote nothing for: the run's own
+        # figure, open items and workings as one self-contained HTML page.
+        "summary_html": _first(lambda n: "covering" in n and n.endswith(".html")),
+        "workbook_xlsx": _first(lambda n: n.endswith(".xlsx")),
+        "report_html": _first(lambda n: n.endswith(".html") and "covering" not in n),
+        "deliverables": delivs,
+        "caution": ("An LLM-only read is a measurement of the vision model, not an "
+                    "estimate: it prices the work it can see and is silently short of "
+                    "what it cannot. The total must not be quoted. The customer "
+                    "quotation is withheld until an estimator releases it."),
+    }
+
+
 @router.post("/override")
 async def estimate_override(
     units: int = Form(...),
