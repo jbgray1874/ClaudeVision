@@ -5039,6 +5039,8 @@ def _finalize_scan_summary(
                     previous_base_key=str(_prev_bill.get("base_key") or ""),
                     previous_read_key=str(_prev_bill.get("read_key") or ""))
                 _answer = _read.get("parsed") or {}
+            if (_read or {}).get("cache_hit"):
+                run_timing.count("vision read", cache_hit=True)     # a partner run only (D-529)
             # WHAT THIS READ CHANGED, SAID (D-492): parts added or dropped, counts and sizes
             # moved against the previous read — on the book, not only in the log.
             _changes = concept_scan.bill_changes(_prev_bill, _answer) if _answer else []

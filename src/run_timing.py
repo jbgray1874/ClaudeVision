@@ -32,6 +32,73 @@ _done: List[Tuple[str, float]] = []
 _spans: List[Tuple[float, float]] = []
 _run_started: Optional[float] = None
 
+# ── A PARTNER RUN ONLY (D-529) ───────────────────────────────────────────────────────────
+#
+# Muhammad's endpoint (POST /api/estimate/llm) needs to show where a run is and, once it has
+# finished, where its time went down to the model call — the estimating portal does not, and
+# its runs must not change. So all of this is off unless main.py finds the partner marker the
+# endpoint files beside the drawings (PARTNER_API_RUN.json): with it off, stage() and count()
+# do nothing and print nothing, and the [timing] table is exactly what it was.
+_detail = False
+_last_stage = ""
+# name -> {"calls", "seconds", "cache_hits", "failed"}
+_counters: Dict[str, Dict[str, float]] = {}
+# The phases file_scan and main already bracket, as the stage a partner page shows.
+STAGE_OF = {"extract_pdf_summary": "reading", "estimate_document": "pricing",
+            "job_level_pricing_and_rewrite": "pricing", "populate_workbook": "workbook",
+            "invariants": "checking the workbook", "deliverables": "filing"}
+
+
+def enable_detail() -> None:
+    global _detail, _run_started
+    _detail = True
+    if _run_started is None:
+        _run_started = time.time()
+
+
+def detail_on() -> bool:
+    return _detail
+
+
+def stage(name: str) -> None:
+    """Say which stage a partner run has reached, once per change, with its elapsed time."""
+    _say_stage(name)
+
+
+def _say_stage(name: str) -> None:
+    global _last_stage
+    if not _detail or not name or name == _last_stage:
+        return
+    _last_stage = name
+    began = _run_started if _run_started is not None else time.time()
+    print(f"[api-stage] {name} +{time.time() - began:.0f}s", flush=True)
+
+
+def count(name: str, seconds: float = 0.0, *, cache_hit: bool = False,
+          failed: bool = False) -> None:
+    """One model call (or one answer from the cache) on a partner run — nothing otherwise."""
+    if not _detail:
+        return
+    c = _counters.setdefault(name, {"calls": 0, "seconds": 0.0, "cache_hits": 0, "failed": 0})
+    if cache_hit:
+        c["cache_hits"] += 1
+    else:
+        c["calls"] += 1
+        c["seconds"] = round(c["seconds"] + float(seconds or 0.0), 2)
+        if failed:
+            c["failed"] += 1
+
+
+def report_json() -> Dict[str, object]:
+    """The timing table and the call counters as data, for the partner summary."""
+    now = time.time()
+    phases = [{"phase": n, "seconds": round(s, 1)} for n, s in sorted(_done, key=lambda kv: -kv[1])]
+    phases += [{"phase": n, "seconds": round(now - b, 1), "unfinished": True}
+               for n, b in _open.items()]
+    total = round(now - _run_started, 1) if _run_started is not None else None
+    return {"total_seconds": total, "phases": phases,
+            "model_calls": {k: dict(v) for k, v in _counters.items()}}
+
 
 def _union_seconds(spans: List[Tuple[float, float]]) -> float:
     """Total seconds covered by at least one span — overlapping spans count once."""
@@ -51,10 +118,12 @@ def _union_seconds(spans: List[Tuple[float, float]]) -> float:
 
 def reset() -> None:
     """Begin a fresh run. Safe to call more than once; a job-per-process never needs it."""
-    global _run_started
+    global _run_started, _detail, _last_stage
     _open.clear()
     _done.clear()
     _spans.clear()
+    _counters.clear()
+    _detail, _last_stage = False, ""
     _run_started = time.time()
 
 
@@ -72,6 +141,8 @@ def mark(stage: str) -> None:
     now = time.time()
     if text.startswith("start "):
         _open.setdefault(text[6:].strip(), now)
+        if _detail and text[6:].strip() in STAGE_OF:
+            _say_stage(STAGE_OF[text[6:].strip()])
     elif text.startswith("done "):
         name = text[5:].strip()
         began = _open.pop(name, None)

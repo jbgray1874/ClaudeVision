@@ -1614,9 +1614,19 @@ def _call_vision_llm(png_pages: List[bytes], model: str, brief: str = "",
         b64 = base64.b64encode(png).decode("ascii")
         content.append({"type": "image_url",
                         "image_url": {"url": f"data:image/png;base64,{b64}"}})
-    resp = client.chat.completions.create(
-        model=model, temperature=0,
-        messages=[{"role": "user", "content": content}])
+    import time as _time                                            # noqa: WPS433
+    _t0, _failed = _time.time(), True
+    try:
+        resp = client.chat.completions.create(
+            model=model, temperature=0,
+            messages=[{"role": "user", "content": content}])
+        _failed = False
+    finally:
+        try:                                 # a partner run's call count (D-529); else nothing
+            import run_timing as _rt                                # noqa: WPS433
+            _rt.count("vision read", _time.time() - _t0, failed=_failed)
+        except Exception:                                           # noqa: BLE001
+            pass
     return resp.choices[0].message.content or ""
 
 
@@ -2969,6 +2979,15 @@ def set_aside_undrawn(answer: Dict[str, Any]) -> tuple:
     return out, aside
 
 
+def _stage(name: str) -> None:
+    """A partner run's stage (D-529); nothing on any other run."""
+    try:
+        import run_timing as _rt                                    # noqa: WPS433
+        _rt.stage(name)
+    except Exception:                                               # noqa: BLE001
+        pass
+
+
 def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
                        brief: str = "", model: Optional[str] = None, envelope: Any = None,
                        envelope_of: str = "",
@@ -2989,9 +3008,11 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     first_base_key = str(read.get("base_key") or "")
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
+    _stage("checking")
     check = sheet_check(answer, words, envelope=envelope, brief=brief)
     # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
     if check.get("failures") and read.get("baseline") != "unchanged read reused":
+        _stage("re-reading — the first read did not agree with the sheet")
         first = list(check["failures"])
         again = read_concept(pdf_paths, model=model, refresh=refresh, brief=brief, sheet=True,
                              recheck=recheck_text(check), **_env)
