@@ -388,6 +388,105 @@ def test_stated_bores_beyond_the_inventory_are_said_on_the_routing():
     assert "state 4 bore(s)" in flags and "the record holds 2" in flags
 
 
+# ── D-516: the minted edging line is generated work, not an unlinked stranger ────────────
+
+def _scope_payload():
+    return {"product_root": "12399-77J",
+            "nodes": [{"part_number": "12399-77J", "evidence": {}}]}
+
+
+def _edging_pe(**over):
+    import config
+    pe = {"part_number": config.FACED_BOARD_EDGING_CODE, "_edging_line": True,
+          "_edging_for": ["12399-77J"], "quantity": 3.192,
+          "extended_total_cost_gbp": 0.0}
+    pe.update(over)
+    return pe
+
+
+def test_the_edging_line_survives_the_product_scope_on_its_provenance():
+    """The 11:22 book minted EDGE23X1ABS at 3.192 m and then set it aside: "Not linked to
+    12399-77J, so not priced". The line is kept because the parts whose banded lengths
+    created it (_edging_for) are IN the graph — not by any blanket exemption."""
+    import config
+    import route_compiler as rc
+    pes = [{"part_number": "12399-77J", "extended_total_cost_gbp": 5.0},
+           _edging_pe(),
+           {"part_number": "STRAY-99X", "extended_total_cost_gbp": 9.0}]
+    rc.set_aside_late_lines(pes, _scope_payload(), {})
+    kept = {p["part_number"] for p in pes}
+    assert config.FACED_BOARD_EDGING_CODE in kept, kept
+    assert "STRAY-99X" not in kept, "the scope rule must still set aside a real stranger"
+
+
+def test_edging_of_an_excluded_part_is_still_excluded():
+    """The same code could band a part this product does not contain: metres measured only
+    on out-of-scope parts have no claim, and a line with no provenance at all has none."""
+    import config
+    import route_compiler as rc
+    pes = [{"part_number": "12399-77J", "extended_total_cost_gbp": 5.0},
+           _edging_pe(_edging_for=["99999-OTHER"])]
+    rc.set_aside_late_lines(pes, _scope_payload(), {})
+    assert config.FACED_BOARD_EDGING_CODE not in {p["part_number"] for p in pes}
+    pes2 = [{"part_number": "12399-77J", "extended_total_cost_gbp": 5.0},
+            _edging_pe(_edging_for=[])]
+    rc.set_aside_late_lines(pes2, _scope_payload(), {})
+    assert config.FACED_BOARD_EDGING_CODE not in {p["part_number"] for p in pes2}
+
+
+def test_mixed_provenance_is_kept_and_flagged_to_reduce():
+    import config
+    import route_compiler as rc
+    pes = [{"part_number": "12399-77J", "extended_total_cost_gbp": 5.0},
+           _edging_pe(_edging_for=["12399-77J", "99999-OTHER"])]
+    rc.set_aside_late_lines(pes, _scope_payload(), {})
+    line = next(p for p in pes
+                if p["part_number"] == config.FACED_BOARD_EDGING_CODE)
+    flags = " ".join(str(f) for f in line.get("review_flags") or [])
+    assert "EDGING METRES INCLUDE EXCLUDED PARTS" in flags
+
+
+def test_the_config_code_alone_exempts_nothing():
+    import config
+    import route_compiler as rc
+    assert not rc._is_generated_line(config.FACED_BOARD_EDGING_CODE, {})
+
+
+def test_the_minted_stub_carries_its_provenance():
+    """estimate_document's edging block stamps _edging_for with the parts whose banded
+    lengths created the line — the fact the scope rule validates."""
+    import inspect
+    import estimator as E
+    src = inspect.getsource(E.estimate_document)
+    assert '_stub["_edging_for"]' in src
+
+
+# ── D-516: the estimate-time carrier stamps the bore callouts too ─────────────────────────
+
+def test_the_estimate_time_carrier_stamps_the_bore_callouts():
+    """The 11:22 book proved the build-time stamp does not reliably reach the costed record:
+    banding survived only through the estimate-time carrier, and the bores — same text, no
+    carrier — arrived nowhere. One carrier, both statements."""
+    from edge_banding import stamp_banding_statements_from_pages
+    part = {"part_number": "12399-77J"}
+    summary = {"pages": [_detail_page(
+        "12399-77J", "EDGED ALL AROUND SECTION A-A 2 x 8 11 AND 2 x 6.5 10")]}
+    assert stamp_banding_statements_from_pages([part], summary) == 1
+    calls = part.get("stated_bore_callouts") or []
+    assert sum(c["count"] for c in calls) == 4, calls
+    assert part.get("banding_statements")
+
+
+def test_existing_callouts_are_not_overwritten_by_the_carrier():
+    from edge_banding import stamp_banding_statements_from_pages
+    part = {"part_number": "12399-77J",
+            "banding_statements": ["EDGED ALL AROUND"],
+            "stated_bore_callouts": [{"count": 2.0, "diameter_mm": 5.0, "depth_mm": 8.0}]}
+    summary = {"pages": [_detail_page("12399-77J", "EDGED ALL AROUND 2 x 8 11")]}
+    assert stamp_banding_statements_from_pages([part], summary) == 0
+    assert part["stated_bore_callouts"][0]["diameter_mm"] == 5.0
+
+
 # ── D-515: the acceptance checks catch missing work ──────────────────────────────────────
 
 def test_a_banded_part_with_known_metres_and_no_edging_line_is_a_violation():

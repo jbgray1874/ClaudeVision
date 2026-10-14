@@ -4031,6 +4031,31 @@ def set_aside_late_lines(part_estimates: List[Dict[str, Any]], payload: Any,
         if not pn or pn in known or _is_generated_line(pn, part):
             kept.append(part)
             continue
+        # THE EDGING MATERIAL LINE IS PRODUCT MATERIAL, KEPT BY ITS PROVENANCE (D-516).
+        # It is minted at estimate time from metres measured on named parts, so the graph
+        # never saw it — and on 12343-01J's 11:22 book this rule set it aside as "Not
+        # linked" and re-created the very under-charge it was built to fix. It is NOT a
+        # blanket exemption: the line must carry _edging_for (the parts whose banded
+        # lengths created it) and at least one of them must be IN the graph — edging
+        # minted off an excluded product's parts is still excluded, and a line with no
+        # provenance has no claim. The config code alone exempts nothing: the same code
+        # could band a part this product does not contain.
+        if part.get("_edging_line"):
+            _for = [clean_part_number(x) for x in (part.get("_edging_for") or [])]
+            _for = [x for x in _for if x]
+            _in = [x for x in _for if x in known]
+            if _in:
+                if len(_in) < len(_for):
+                    part.setdefault("review_flags", []).append(
+                        f"EDGING METRES INCLUDE EXCLUDED PARTS: this line's length was "
+                        f"measured on {', '.join(sorted(set(_for)))} and only "
+                        f"{', '.join(sorted(set(_in)))} are in the product's scope — "
+                        f"reduce the metres to the in-scope edges before quoting.")
+                kept.append(part)
+                continue
+            removed.append((part, ("edging_of_excluded_parts" if _for
+                                   else "not_linked_to_the_product"), ""))
+            continue
         cands = by_key.get(spelling_key(pn)) or set()
         if len(cands) == 1:
             twin = next(iter(cands))

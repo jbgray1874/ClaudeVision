@@ -1705,7 +1705,11 @@ def extract_stated_bore_callouts(text: str) -> List[Dict[str, float]]:
         if key in seen:
             continue
         seen.add(key)
-        out.append({"count": float(n), "diameter_mm": dia, "depth_mm": depth})
+        # basis says WHOSE numbers these are: the text layer's, with the Ø and depth glyphs
+        # already lost — a diameter here may be the drawing's Ø8.5 printed as 8. Evidence
+        # for comparison and questions, never a specification (D-516).
+        out.append({"count": float(n), "diameter_mm": dia, "depth_mm": depth,
+                    "basis": "text_layer_callout"})
     return out
 
 

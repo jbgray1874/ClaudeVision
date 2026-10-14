@@ -108,12 +108,75 @@ def main(path: str) -> None:
                     except (TypeError, ValueError):
                         qty = 1.0
                     edge_mm += float(v["mm"]) * qty
+            contributors = []
+            for p in plist:
+                try:
+                    if (banded_length_mm(p) or {}).get("mm"):
+                        contributors.append(str(p.get("part_number") or ""))
+                except Exception:                                    # noqa: BLE001
+                    continue
             if edge_mm > 0:
                 print(f"  edging line WOULD MINT: code="
                       f"{getattr(config, 'FACED_BOARD_EDGING_CODE', '?')} "
-                      f"at {edge_mm / 1000.0:.3f} m a unit")
+                      f"at {edge_mm / 1000.0:.3f} m a unit, for {contributors}")
             else:
                 print("  edging line: NO METRES — the line would not mint from this list")
+
+            # THE SCOPE FILTER, REPLAYED (D-516): the minted line against the record's own
+            # compiled graph — kept on its provenance; and the counter-proof, edging whose
+            # contributors the graph does not hold, still set aside.
+            if edge_mm > 0:
+                try:
+                    from wb_populate import canonical_route_payload
+                    import route_compiler as rc
+                    payload = canonical_route_payload(summary) or {}
+                    if payload.get("product_root"):
+                        _code = getattr(config, "FACED_BOARD_EDGING_CODE", "EDGE")
+                        pes = ([{"part_number": p.get("part_number")} for p in plist]
+                               + [{"part_number": _code, "_edging_line": True,
+                                   "_edging_for": list(contributors),
+                                   "quantity": edge_mm / 1000.0}])
+                        rc.set_aside_late_lines(pes, payload, {})
+                        kept = {x.get("part_number") for x in pes}
+                        print(f"  scope filter vs {payload.get('product_root')}: "
+                              f"edging line "
+                              f"{'KEPT' if _code in kept else 'SET ASIDE'}")
+                        pes2 = ([{"part_number": p.get("part_number")} for p in plist]
+                                + [{"part_number": _code, "_edging_line": True,
+                                    "_edging_for": ["NOT-IN-THIS-PRODUCT-1"],
+                                    "quantity": 1.0}])
+                        rc.set_aside_late_lines(pes2, payload, {})
+                        kept2 = {x.get("part_number") for x in pes2}
+                        print(f"  scope filter counter-proof (excluded contributor): "
+                              f"edging line "
+                              f"{'SET ASIDE' if _code not in kept2 else 'KEPT (WRONG)'}")
+                    else:
+                        print("  scope filter: record holds no canonical payload — skipped")
+                except Exception as exc:                             # noqa: BLE001
+                    print(f"  scope filter replay failed: {type(exc).__name__}: {exc}")
+
+            # THE STATED BORES AGAINST THE RECORDED INVENTORY, after the carrier.
+            for p in plist:
+                calls = [c for c in (p.get("stated_bore_callouts") or [])
+                         if isinstance(c, dict)]
+                if not calls:
+                    continue
+                stated = int(sum(float(c.get("count") or 0) for c in calls))
+                ngp = p.get("normalized_geometry") if isinstance(
+                    p.get("normalized_geometry"), dict) else {}
+                grp = p.get("geometry_rollup") if isinstance(
+                    p.get("geometry_rollup"), dict) else {}
+                recorded = max(int(ngp.get("estimated_hole_count") or 0),
+                               int(grp.get("estimated_hole_count") or 0),
+                               len(p.get("hole_sizes_mm") or []))
+                _ctxt = "; ".join(
+                    "{} x Ø{:g} ↧{:g}".format(int(c.get("count") or 0),
+                                              float(c.get("diameter_mm") or 0),
+                                              float(c.get("depth_mm") or 0))
+                    for c in calls)
+                print(f"  bores on {p.get('part_number')}: stated {stated} ({_ctxt}) "
+                      f"vs recorded {recorded} — "
+                      f"{'SHORTFALL SAID' if stated > recorded else 'covered'}")
         except Exception as exc:                                     # noqa: BLE001
             print(f"  edging line calc failed: {type(exc).__name__}: {exc}")
 
