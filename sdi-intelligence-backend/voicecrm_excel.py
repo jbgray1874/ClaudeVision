@@ -53,6 +53,43 @@ import httpx
 GRAPH = "https://graph.microsoft.com/v1.0"
 
 
+def accept_text_in_number_cells() -> None:
+    """Let openpyxl read a cell marked as a number that holds text, as that text.
+
+    Nick's tracker, 14 October 2026: the 07:50 review stopped with
+    "could not convert string to float: 'Completed'". The file had been
+    rewritten outside Excel with text in cells typed as numbers; Excel Online
+    refuses such a file (FileCorruptTryRepair) and openpyxl raised on the first
+    one - so the morning email, the briefing and the read-only copy all failed
+    together. The text is what the cell says, so it is read as text; nothing
+    that openpyxl already reads changes. Idempotent; a no-op if openpyxl's
+    internals move."""
+    try:
+        from openpyxl.worksheet import _reader
+        cast, to_date = _reader._cast_number, _reader.from_excel
+    except Exception:  # noqa: BLE001
+        return
+    if getattr(cast, "sdi_tolerant", False):
+        return
+
+    def _cast_number(value):
+        try:
+            return cast(value)
+        except ValueError:
+            return value
+
+    def from_excel(value, *args, **kwargs):
+        # A text value in a date-formatted number cell stays text.
+        return value if isinstance(value, str) else to_date(value, *args, **kwargs)
+
+    _cast_number.sdi_tolerant = True
+    _reader._cast_number = _cast_number
+    _reader.from_excel = from_excel
+
+
+accept_text_in_number_cells()
+
+
 def _opt(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
