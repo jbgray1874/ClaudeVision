@@ -2340,6 +2340,22 @@ MATERIAL_DENSITY_KG_PER_M3 = {
     "UHMW": 940,
 }
 
+# ── WEIGHING ONLY, NEVER PRICING (D-513) ────────────────────────────────────────────────
+# A faced board is deliberately ABSENT from MATERIAL_DENSITY_KG_PER_M3: a density there
+# routes a part to mass-based costing, and a board is bought by the sheet, not by the kilo
+# (test_estimating_rules holds that precondition). But the WEIGHT CHECK also read that table,
+# so a 12343-01J shelf with a stated 5,573 g and a costed 1198 x 398 x 18 blank could not be
+# weighed against it — on the one record whose gauge the engine itself had proposed. These
+# figures exist so the check can run; nothing prices from them. Chipboard core per
+# BS EN 312 P2 (~650-720 kg/m3); melamine facing adds nothing a density can see.
+BOARD_WEIGHT_DENSITY_KG_PER_M3 = {
+    "MFC": 720,
+    "CHIPBOARD": 680,
+    "MELAMINE FACED CHIPBOARD": 720,
+    "MELAMINE": 720,
+    "MFMDF": 750,
+}
+
 MATERIAL_PRICE_GBP_PER_KG = {
     "MILD STEEL": 0.80,      # SDI rate £800/tonne inc. market movement buffer
     "MILD_STEEL": 0.80,

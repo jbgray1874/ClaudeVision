@@ -981,6 +981,28 @@ def _apply_post_build_fixes(parts: List[Dict[str, Any]], summary: Dict[str, Any]
         )
         combined_upper = combined_text.upper()
 
+        # THE SHEET'S OWN BANDING STATEMENT RIDES THE RECORD (D-513). 12343-01J's drawing
+        # says "EDGED ALL AROUND" and "2S/SL"; the finish box kept "EDGED" alone and the note
+        # snippets keep only deburr/weld/tap words, so the statement never reached a field the
+        # edging reader consults — the labour was flagged a CEILING and no edging material
+        # line was built, on a part whose drawing had answered the question. Harvested from
+        # the part's own DETAIL pages only (a note stays on the sheet it is written on; an
+        # assembly sheet's note names a member this pass cannot resolve), with the pack-wide
+        # specification legend stripped first.
+        if not part.get("banding_statements"):
+            try:
+                from edge_banding import harvest_banding_statements as _harvest_banding
+                _bs_text = " ".join(
+                    page_lookup[pn]["text"] for pn in page_nums
+                    if pn in page_lookup
+                    and str(page_lookup[pn].get("role") or "") == "detail")
+                _stmts = _harvest_banding(_strip_specification_legend(_bs_text)) \
+                    if _bs_text else []
+                if _stmts:
+                    part["banding_statements"] = _stmts
+            except Exception:                                        # noqa: BLE001
+                pass
+
         # Linear stock (tube / RHS / SHS / box section): capture the cutting-list
         # profile + cut length from the page text so the estimator's section path
         # fires even when the BOM line is the title-block name (e.g. the 3886-01

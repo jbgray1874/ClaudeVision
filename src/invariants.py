@@ -3327,6 +3327,23 @@ def check_a_stated_finish_is_costed(summary: Any) -> List[Dict[str, Any]]:
         # Spray row on the part.
         if (_ff(text) - {"bare"}) & _ch:
             continue
+        # A FINISH THAT STATES THE EDGING THE ROUTE CHARGES IS NOT UNKNOWN VOCABULARY
+        # (D-513). 12343-01J's finish box reads "EDGED" — the work its Edge Banding row
+        # already prices — and this check called it "a finish this engine has no vocabulary
+        # for", telling an estimator to consider pricing charged work a second time. Only a
+        # finish made WHOLLY of banding words is excused, and only where the part's route
+        # actually bands it; "EDGED & POWDER COATED" still has its powder judged above, and
+        # EDGED on a part nobody bands still fires.
+        try:
+            from edge_banding import finish_states_banding as _fsb
+            if _fsb(text):
+                _band_ops = {str(o).strip().lower() for f in (
+                    "operations", "textual_operations", "inferred_operations")
+                    for o in (part.get(f) or []) if isinstance(o, str)}
+                if "edge_banding" in _band_ops or _statement_covered(_pn, {"edge_banding"}):
+                    continue
+        except Exception:                                            # noqa: BLE001
+            pass
         unrecognised.append({"part_number": part.get("part_number"), "finish": text[:80]})
     if not uncosted and not unrecognised and not unstated:
         return []
