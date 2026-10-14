@@ -1186,6 +1186,24 @@ def assembly_scoped_qty(group: Dict[str, Any]) -> int:
         return 1
 
 
+def _bom_row_quantity(pe: Dict[str, Any]):
+    """The quantity a BOM row writes to its cell: a count floors, a continuous unit keeps
+    its fraction (D-520).
+
+    Module-level and pure for the same reason routed_operations_without_cost is: the floor
+    lived inline, the estimator's D-518 repair could not reach it, and the one test that
+    would have caught it had nothing to call. A record that declares a continuous unit of
+    measure (config.CONTINUOUS_UNITS_OF_MEASURE) — or is the minted edging line — writes
+    its own positive value; everything else stays the integer count it always was.
+    """
+    _uom = str(pe.get("unit_of_measure") or "").strip().lower()
+    if _uom in getattr(config, "CONTINUOUS_UNITS_OF_MEASURE", ()) or pe.get("_edging_line"):
+        _f = _safe(pe.get("quantity"))
+        if _f is not None and float(_f) > 0:
+            return float(_f)
+    return int(_safe(pe.get("quantity"), 1) or 1)
+
+
 def routed_operations_without_cost(pe: Dict[str, Any], costs: Any = None,
                                    extra_ops: Any = None) -> List[str]:
     """Fabrication operations on a part's ROUTE that the estimator put no cost against.
@@ -6148,7 +6166,13 @@ def populate_workbook(summary: Dict[str, Any], job_folder_name: str) -> Optional
                   f"quoting.", flags)
         # price: bought-in unit_cost_gbp, or tube's unit_material_cost_gbp (catalogue £/EA),
         # or — for BI-/fuller-costed items — derive unit from extended_total_cost_gbp / qty
-        qty = int(_safe(pe.get("quantity"), 1))
+        # THE CELL KEEPS THE FRACTION THE RECORD KEEPS (D-520). D-518 stopped the
+        # estimator flooring a metre line's quantity, and the 12:57 book still printed
+        # Estimate!K13 = 3 against a provenance of 3.192: this writer floored it again on
+        # the way to the sheet. A second writer of the same fact gets the same gate —
+        # config.CONTINUOUS_UNITS_OF_MEASURE — not a second opinion. (The powder branch
+        # below already writes fractional kilos to this very cell.)
+        qty = _bom_row_quantity(pe)
         # ── "Not priced" is a DECISION, not a missing value ──────────────────────────
         # The chain below is built to KEEP LOOKING until it finds a number: four candidate
         # fields, then a division as a last resort. That is right for a part whose price is

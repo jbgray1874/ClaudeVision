@@ -9700,8 +9700,7 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
     # 3.192 m; 0.5 m would have become 1). A record that declares a continuous unit of
     # measure keeps its own positive value, to the gram and the millimetre.
     _uom = str(part.get("unit_of_measure") or "").strip().lower()
-    if _uom in {"m", "lm", "m2", "m²", "sqm", "kg", "g", "l", "litre", "litres"} \
-            or part.get("_edging_line"):
+    if _uom in config.CONTINUOUS_UNITS_OF_MEASURE or part.get("_edging_line"):
         _frac = _safe_float(part.get("quantity"))
         if _frac is not None and _frac > 0:
             return _frac
