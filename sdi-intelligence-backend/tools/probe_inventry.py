@@ -127,9 +127,13 @@ def main():
         return
 
     ident = before["ID"]
-    # An explicit time, through the same conversion the live sync uses, so the
-    # read-back below proves the timezone handling as well as the write.
-    sent_at = datetime.datetime.now(datetime.timezone.utc)
+    # An explicit time through the same conversion the live sync uses - and
+    # deliberately NOT now. If InVentry ignores ActionDateTime and stamps its
+    # own clock, a sent "now" matches anyway and proves nothing: the first
+    # version of this check did exactly that, and reported success off
+    # InVentry's own timestamp (whole seconds sent, milliseconds recorded).
+    # Ten minutes back separates "used our time" from "used its own".
+    sent_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=10)
     sent = api.format_datetime(sent_at)
     if args.sign_in:
         client.sign_in(ident, when=sent_at)
@@ -158,22 +162,30 @@ def main():
         print("  * Accepted and discarded - no LastEventLocation came back. Sign-ins work;")
         print("    automatic sign-out must stay off, as we cannot recognise our own writes.")
 
-    # Did InVentry record the time we sent? An hour out means the timezone is
-    # wrong for this site - every live sign-in would be recorded an hour off.
+    # What did InVentry do with the time we sent? Three distinguishable cases.
     recorded = str(after["LastActivityDate"])[:19]
+    now = api.format_datetime(datetime.datetime.now(datetime.timezone.utc))
     try:
-        drift = (datetime.datetime.fromisoformat(recorded)
-                 - datetime.datetime.fromisoformat(sent)).total_seconds()
+        as_dt = datetime.datetime.fromisoformat
+        from_sent = (as_dt(recorded) - as_dt(sent)).total_seconds()
+        from_now = (as_dt(recorded) - as_dt(now)).total_seconds()
     except ValueError:
-        drift = None
-    if drift is None:
+        from_sent = from_now = None
+    if from_sent is None:
         print(f"  * Could not compare times (recorded {recorded!r}).")
-    elif abs(drift) <= 120:
-        print(f"  * Time recorded as sent ({recorded}). Timezone handling is right.")
-    else:
+    elif abs(from_sent) <= 120:
+        print(f"  * InVentry recorded the time we sent ({recorded}): ActionDateTime is "
+              f"honoured and the timezone is right.")
+    elif abs(from_now) <= 120:
+        print(f"  * InVentry IGNORED the time we sent ({sent}) and stamped its own clock "
+              f"({recorded}). Harmless for the fire roll, but sign-ins will show when the "
+              f"sync ran, not when the person clocked in.")
+    elif abs(abs(from_sent) - 3600) <= 120:
         print(f"  * TIME MISMATCH: sent {sent}, InVentry recorded {recorded} - out by "
-              f"{drift / 3600:+.1f} h. Live sign-ins would be recorded wrongly. Try "
-              f"INVENTRY_TIME_MODE={'utc' if cfg.INVENTRY_TIME_MODE == 'local' else 'local'}.")
+              f"{from_sent / 3600:+.1f} h. Try INVENTRY_TIME_MODE="
+              f"{'utc' if cfg.INVENTRY_TIME_MODE == 'local' else 'local'}.")
+    else:
+        print(f"  * Unexplained time: sent {sent}, now {now}, InVentry recorded {recorded}.")
 
     for w in client.warnings:
         print(f"\nwarning: {w}")
