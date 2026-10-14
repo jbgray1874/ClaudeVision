@@ -486,6 +486,39 @@ PACKING_METHOD = {
     },
 }
 
+# ── THE BOX CALCULATOR (D-521) ──────────────────────────────────────────────────────────
+# James's AI BOX CALCULATOR sheet (chatgptdropoff/AICalculator, 14 Oct 2026): a plain
+# corrugated carton priced from the box's outside dimensions — six panels in three pairs,
+# each cut oversize, grid-nested onto the stock sheet, plus a running cost over the three
+# dimensions and the set-up spread over the order. These are the sheet's own figures,
+# attributed and dated; the engine CORRECTS the sheet's one fault — its total sums two of
+# the three panel pairs (K10 = SUM(K7:K8)), so its worked example reads £1.82 where the
+# complete box is £2.82. The sheet cost is a PRICE and can go stale like any held figure:
+# every line priced from this method is flagged indicative with this source named, and the
+# proven ladder (SDI Live, history, the counted shipment) still runs where the method
+# declines. Validated against the Harley's order extract (BOX TEST SHEET) by
+# tools/check_box_calculator.py.
+BOX_COSTING = {
+    "enabled": True,
+    "stated_by": "James Gray (SDI), AI BOX CALCULATOR.xlsx",
+    "stated_on": "14 Oct 2026",
+    "stock_board": "BC 150KT",
+    # The sheet's own headers: Sheet Length 2300, Sheet Width 3200 ("2300x3200").
+    "sheet_length_mm": 2300.0,
+    "sheet_width_mm": 3200.0,
+    "sheet_cost_gbp": 8.0,
+    "setup_cost_gbp": 55.0,
+    "running_rate_gbp_per_mm": 0.00035,     # x (L + B + H) per box
+    "panel_oversize_mm": 20.0,              # each finished dimension + 20
+    "nest_gap_mm": 10.0,                    # 10 each side -> +20 in the nest divisor
+    "sheet_edge_trim_mm": 5.0,              # taken off the sheet width only, as the sheet does
+    "scrap_fraction": 0.5,                  # 50% on the sheet cost per part
+    # Which box styles the plain six-panel model prices. 0201 is a regular slotted carton;
+    # everything else on the Harley's extract (0409 folders, 0300 base-and-lid, sleeves,
+    # caps, pads, fittings, scored boards) is more than six panels and declines by name.
+    "styles_priced": ("0201",),
+}
+
 # ONE WORKBOOK, OR ONE PER QUANTITY.
 #
 #   "Let's look at collapsing all the s/sheets into one when we have multiple unit
@@ -618,6 +651,13 @@ ESTIMATOR_STATED_PRICES: dict = {}
 #   EDGE23X1ABS  the SPEC is below; drawn-edge metreage is measured, the BANDED metreage
 #                is the estimator's judgement (only visible edges band); the RATE is
 #                asked of SDI Live / the Ostermann catalogue, else explicitly unpriced.
+# A LINE BOUGHT IN A CONTINUOUS UNIT KEEPS ITS FRACTION, EVERYWHERE (D-518/D-520). The
+# estimator's quantity sanitiser guards counts against parser noise, and the workbook
+# writer floors on its own account — both read this one vocabulary, so 3.192 m of edging
+# is 3.192 on the record AND in the cell. A unit absent here is a discrete count.
+CONTINUOUS_UNITS_OF_MEASURE = frozenset(
+    {"m", "lm", "m2", "m²", "sqm", "kg", "g", "l", "litre", "litres"})
+
 FACED_BOARD_EDGING_CODE = "EDGE23X1ABS"
 FACED_BOARD_EDGING_SPEC = {
     "code": "EDGE23X1ABS",

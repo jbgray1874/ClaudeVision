@@ -100,6 +100,10 @@ _PURCHASE_SEARCH_MATERIAL_ADJECTIVES = (
     "STEEL", "MILD", "STAINLESS", "ALUMINIUM", "ALUMINUM", "PLASTIC", "ACRYLIC", "TIMBER",
     "METAL", "NYLON", "BRASS", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "MDF", "PLY",
     "PLYWOOD", "PVC", "POLYCARBONATE", "PERSPEX", "RUBBER",
+    # The board families say what a thing is made of — or matched to ("to match Egger
+    # W1001 ST9 laminate") — never what it is. The edging line's longest word was
+    # LAMINATE, and LAMINATE led the search (D-520).
+    "LAMINATE", "LAMINATES", "LAMINATED", "MFC", "CHIPBOARD", "MELAMINE",
 )
 
 # Category words that name a STOCK FORM — a material bought by the sheet, board or length —
@@ -1455,6 +1459,21 @@ class PricingService:
             _is_purchase = bool(self._is_bought_in_heuristic(part))
         material_hint = str(part.get("normalized_material") or "").strip()
         desc = str(part.get("description") or "").strip()
+        # A PRICE WITH NO STATED BASIS CANNOT PRICE A LINE BOUGHT BY THE METRE (D-520).
+        # This table holds one figure per row and no unit column, so what the figure is
+        # PER — an each, a roll, a sheet, a metre — is unknowable from the row. On a
+        # counted purchase that ambiguity is survivable (a castor is an each); on a line
+        # whose quantity is metres or kilograms it is the whole price: the 12:45 book put
+        # £18 — a sheet figure — against each of 3.192 m of edging, £56.16 on a £5.00
+        # board. Refusing the rung is not refusing the obligation to estimate: the line
+        # falls to the sources that state their basis (SDI Live, stated_prices, the
+        # roll-goods arithmetic where a roll length is held, the researched rung whose
+        # contract demands a unit basis) or reaches the sheet explicitly unpriced and
+        # named for the estimator.
+        if _is_purchase and (part.get("_edging_line") or (
+                str(part.get("unit_of_measure") or "").strip().lower()
+                in getattr(config, "CONTINUOUS_UNITS_OF_MEASURE", ()))):
+            return None
         if _is_purchase:
             # THE WORDS THAT NAME THE THING, NOT THE STUFF IT IS MADE OF. Asked by every word,
             # "PLASTIC END CAP" found PLASTIC SHEET and "STEEL BACKED MAGNET" found MILD STEEL

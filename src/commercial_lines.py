@@ -496,6 +496,68 @@ def _method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "working": _working}
 
 
+def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The order's cartons priced by the box calculator, or why not (D-521).
+
+    The second stated method: config.BOX_COSTING holds James's AI BOX CALCULATOR sheet —
+    three panel pairs on the stock board, nested, scrapped, plus running and set-up — and
+    box_costing.price_box runs it. GATED ON A KNOWABLE ENVELOPE: the method prices ONE box
+    around the unit, so it applies only where the unit's outside size is the measured fact
+    of a single counted part (a shelf, a panel, a board). A unit of several parts packs by
+    a packer's decision, not a formula, and declines by name; the proven ladder (SDI Live,
+    history, the counted shipment) prices it as before.
+    """
+    _c = getattr(config, "BOX_COSTING", {}) or {}
+    if not _c.get("enabled"):
+        return None
+    _counted = [p for p in (order.get("counted_parts") or []) if isinstance(p, dict)]
+    if not _counted:
+        return {"not_applicable": "no part was measured, so the unit has no envelope "
+                                  "to size a box around"}
+    if len(_counted) != 1 or _num(_counted[0].get("per_assembly")) not in (None, 1):
+        return {"not_applicable": (f"the unit is {len(_counted)} measured part(s)"
+                                   + ("" if len(_counted) != 1 else " x"
+                                      f"{_counted[0].get('per_assembly')}")
+                                   + " — how several pieces share a box is the packer's "
+                                     "decision, not a formula's")}
+    _structural_left_out = [p for p in (order.get("left_out_parts") or [])
+                            if isinstance(p, dict)
+                            and not p.get("is_assembly") and not p.get("bought_in")]
+    if _structural_left_out:
+        return {"not_applicable": (f"{_structural_left_out[0].get('part_number')} was left "
+                                   f"out of the count — an unmeasured structural part "
+                                   f"leaves the unit's envelope unproven")}
+    _p = _counted[0]
+    L, B = _num(_p.get("length_mm")), _num(_p.get("width_mm"))
+    H = _num(_p.get("thickness_mm"))
+    if not (L and B and H):
+        return {"not_applicable": f"{_p.get('part_number')} has no complete L x W x T"}
+    try:
+        import box_costing
+    except Exception:                                                # noqa: BLE001
+        return None
+    qty = max(1, int(_num(order.get("order_quantity")) or 1))
+    _r = box_costing.price_box(L, B, H, qty)
+    if not _r.get("priced"):
+        return {"not_applicable": str(_r.get("reason") or "the calculator declined")}
+    # The same arithmetic at every break: only the set-up share moves with quantity, and
+    # the break table divides real order costs, so each column carries its own share.
+    _at: Dict[int, float] = {}
+    for _q in sorted(set([1, qty]) | set(_BREAKS_DEFAULT)):
+        _rq = box_costing.price_box(L, B, H, _q)
+        if _rq.get("priced"):
+            _at[_q] = _rq["order_gbp"]
+    return {"order_gbp": _r["order_gbp"], "order_gbp_at_breaks": _at,
+            "source_class": "box_calculator",
+            "source_name": "box_calculator_config_rates",
+            "applied": True, "affects_total": True,
+            "reproducible": True, "indicative": True,
+            "method_source": f"{_c.get('stated_by')}, {_c.get('stated_on')}",
+            "working": (f"one {_r.get('stock_board')} carton per unit, "
+                        f"£{_r['unit_gbp']:.4f} each x {qty} = £{_r['order_gbp']:,.2f} "
+                        f"the order. {_r.get('basis')}")}
+
+
 def _held_rate(key: str) -> Optional[float]:
     """A figure the business has entered, which beats any lookup. One config line closes
     either of these for good, on every job, exactly as the finish rates do."""
@@ -908,6 +970,22 @@ def _line(code: str, order: Dict[str, Any], description: str,
         # so the fix is one catalogue row rather than a diagnosis.
         _method_gap = " " + str(_method.get("note") or "")
         _method = None
+    # THE BOX CALCULATOR (D-521): the second stated method, tried where Howard's declined.
+    # His bag-and-box is stated for small acrylic display goods; a plain carton sized from
+    # the unit's own measured envelope covers the jobs his gate refuses — the 12343-01J
+    # shelf's £4.25 packaging is an AI market order share, while the stated three-pair
+    # arithmetic prices its actual box. Where neither method fits, the proven ladder below
+    # (SDI Live, history, the counted shipment) runs exactly as before.
+    _box = None
+    if code == "PACKAGING" and _held is None and not _method:
+        _box = _box_method_price(order)
+        if _box and _box.get("not_applicable"):
+            out["box_method_status"] = f"declined — {_box['not_applicable']}"
+            _method_gap += (" The box calculator was not applied: "
+                            + str(_box["not_applicable"]) + ".")
+            _box = None
+        elif _box:
+            out["box_method_status"] = "priced by the box calculator"
     if _held is not None:
         # A HOUSE HOLD, NOT A CONFIRMED CATALOGUE PRICE. The figure is reproducible (same every
         # run, so it does not trip price_not_reproducible) but it is an INDICATIVE hold an
@@ -929,6 +1007,17 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["method_source"] = _method.get("method_source")
         if _method.get("inferred_step_note"):
             out["inferred_step"] = True
+    elif _box:
+        # THE BOX CALCULATOR, SIZED FROM THE UNIT'S OWN ENVELOPE (D-521). Counts and
+        # arithmetic are the estimators' stated sheet, in config with its source named;
+        # the whole working — panels, nests, scrap, running, set-up — is on the line, so
+        # confirming it is reading. Indicative: the sheet cost is a held figure.
+        _order_gbp = _box["order_gbp"]
+        _src = {k: _box[k] for k in ("source_class", "source_name", "reproducible",
+                                     "indicative", "applied", "affects_total")}
+        out["order_gbp_at_breaks"] = _box.get("order_gbp_at_breaks") or {}
+        out["packing_working"] = _box.get("working") or ""
+        out["method_source"] = _box.get("method_source")
     elif (_ch := _choose_commercial_basis(code, order)) is not None:
         # THE BEST-SUPPORTED BASIS, CHOSEN AND SAID (D-453). The business's own rate on the
         # counted shipment first; then SDI history where it is comparable (same customer AND

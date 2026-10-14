@@ -603,6 +603,120 @@ def test_a_laminate_catalogue_row_reads_as_stock():
     assert not _names_stock_form("EDGE TAPE / EDGING")
 
 
+# ── D-520: the four points of the 14 Oct review ───────────────────────────────────────────
+
+def test_the_shelf_keeps_its_board_charge_beside_the_edging_line():
+    """P1: the 12:45/12:57 books' Other Sheet Material block is EMPTY — material £74.41 is
+    edging £56.16 + packaging/delivery £18.25, no board. The block router excludes any
+    record whose canonical_kind is 'assembly' ('material belongs to leaf children'), so the
+    assembly flip did not only add Packing Joinery, it removed the £5.00 board. The graph's
+    leaf ruling must reach the costed record, with the blank the board row needs intact."""
+    import estimator as E
+    import costed_facts as cf
+    from route_compiler import apply_canonical_evidence_to_parts
+    shelf = {"part_number": "12399-77J", "description": "KD V2 SHELF", "quantity": 1,
+             "normalized_material": "MFC", "normalized_thickness_mm": 18.0,
+             "blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+             "dxf_measured_outline": True, "dxf_augmented": True,
+             "flat_pattern_detected": True,
+             "textual_operations": ["cnc_routing", "edge_banding"],
+             "banding_statements": ["EDGED ALL AROUND"],
+             "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+                                     "estimated_cut_length_mm": 3192.0,
+                                     "geometry_source": "dxf_flat_pattern"},
+             "pages": [1], "page_roles": ["detail"]}
+    parts = [shelf]
+    summary = {"declared_product": "12399-77J", "drawing_number": "12399-77J",
+               "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {},
+               "pages": []}
+    E.estimate_document(parts, summary=summary)
+    assert any(p.get("_edging_line") for p in parts), "the edging line must mint"
+    apply_canonical_evidence_to_parts(parts, summary=summary)
+    assert shelf.get("canonical_kind") == "leaf", shelf.get("canonical_kind")
+    assert not shelf.get("is_sub_assembly")
+    _bd = cf.blank_dimensions(shelf)
+    assert _bd.get("length_mm") and _bd.get("width_mm"), \
+        "the board row costs from the blank — it must survive the round trip"
+
+
+def test_the_workbook_cell_keeps_the_metres_the_record_keeps():
+    """P2: the 12:57 book shows 3.192 in provenance and Estimate!K13 holds 3 — the writer
+    floored the quantity again on the way to the cell, independently of D-518."""
+    from wb_populate import _bom_row_quantity
+    assert _bom_row_quantity({"quantity": 3.192, "_edging_line": True}) == 3.192
+    assert _bom_row_quantity({"quantity": 3.192, "unit_of_measure": "m"}) == 3.192
+    assert _bom_row_quantity({"quantity": 0.5, "unit_of_measure": "kg"}) == 0.5
+    assert _bom_row_quantity({"quantity": 3.7}) == 3, "a count still floors"
+    assert _bom_row_quantity({"quantity": None}) == 1
+
+
+def test_a_metre_line_is_never_priced_from_a_row_with_no_stated_unit():
+    """P3: the supplier-catalogue table has no unit column, so what its figure is PER is
+    unknowable from the row — survivable on an each, the whole price on a metre line
+    (£18, a sheet figure, against each of 3.192 m). A continuous-unit purchase refuses
+    the rung outright and falls to the sources that state their basis."""
+    from pricing_service import PricingService
+    svc = object.__new__(PricingService)
+    calls = []
+    svc._fetch_one_with_retry = lambda sql, params: calls.append(params) or (
+        "http://example", "LAMINATE SHEETS", 18.0, 1)
+    metre_line = {"part_number": "EDGE23X1ABS", "quantity": 3.192,
+                  "unit_of_measure": "m", "_edging_line": True,
+                  "page_roles": ["bought_in"], "is_bought_in": True,
+                  "description": "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate"}
+    assert svc._get_supplier_catalog(metre_line) is None
+    assert not calls, "refused before any row could answer, not after the wrong one did"
+
+
+def test_a_counted_purchase_still_refuses_every_stock_row():
+    """P3's other half: on an each-count purchase the rung still runs, and a laminate or
+    sheet row is refused however the search found it — the search keeps looking and, with
+    only stock rows answering, returns nothing rather than the wrong thing."""
+    from pricing_service import PricingService
+    svc = object.__new__(PricingService)
+    svc._fetch_one_with_retry = lambda sql, params: (
+        "http://example", "LAMINATE SHEETS", 18.0, 1)
+    castor = {"part_number": "BI-CASTOR", "quantity": 4,
+              "page_roles": ["bought_in"], "is_bought_in": True,
+              "description": "CASTOR 50MM SWIVEL to suit laminate trolley"}
+    assert svc._get_supplier_catalog(castor) is None
+
+
+def test_the_board_families_never_lead_a_purchase_search():
+    """P3: LAMINATE led the 12:45 search — a word that says what a thing is matched to,
+    never what it is. The board families join the material adjectives."""
+    from pricing_service import (_PURCHASE_SEARCH_MATERIAL_ADJECTIVES, _article_words)
+    _adj = set(_PURCHASE_SEARCH_MATERIAL_ADJECTIVES)
+    assert {"LAMINATE", "MFC", "CHIPBOARD", "MELAMINE"} <= _adj
+    _searches = _article_words(
+        "23 x 1 mm ABS edging to match Egger W1001 ST9 laminate") - _adj
+    assert "LAMINATE" not in _searches and "EDGING" in _searches
+
+
+def test_an_all_bought_genuine_assembly_is_still_an_assembly():
+    """P4: 'only a made child makes an assembly' must not widen — a GA whose every child
+    is purchased is still an assembly, because the hardware-carrier ruling demands the
+    parent's OWN fabrication evidence and a GA has none. The kit is packed as before."""
+    from route_compiler import compile_route_without_pricing
+    ga = {"part_number": "12399-90-GA", "description": "DISPLAY KIT ASSEMBLY",
+          "quantity": 1, "pages": [1], "page_roles": ["assembly"]}
+    castor = {"part_number": "BI-CASTOR", "description": "CASTOR 50MM", "quantity": 4,
+              "bom_parent": "12399-90-GA", "page_roles": ["bought_in"],
+              "is_bought_in": True, "pages": []}
+    shutter = {"part_number": "BI-SHUTTER", "description": "ROLLER SHUTTER", "quantity": 1,
+               "bom_parent": "12399-90-GA", "page_roles": ["bought_in"],
+               "is_bought_in": True, "pages": []}
+    summary = {"declared_product": "12399-90-GA",
+               "manufacturing_writeup": {"parts": [ga, castor, shutter]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    tops = [t for t in nodes if t.get("part_number") == "12399-90-GA"]
+    assert tops and all(t.get("kind") == "assembly" for t in tops), tops
+
+
 # ── D-518: a line bought by the metre keeps its fraction ─────────────────────────────────
 
 def test_a_metre_quantity_is_not_floored_to_a_count():

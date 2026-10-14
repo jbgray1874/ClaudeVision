@@ -101,20 +101,36 @@ def test_the_breaks_carry_the_step_not_a_slope(monkeypatch):
     assert _price_at(rec, 250) == round(at[250] / 250, 5)
 
 
-def test_one_missing_consumable_keeps_the_honest_zero_and_names_itself(monkeypatch):
+def test_one_missing_consumable_never_reaches_the_sheet_half_priced(monkeypatch):
+    """A half-priced method is confidently short. Howard's figure must not reach the
+    sheet with the box rate missing — the line prices by ANOTHER whole method (the box
+    calculator, D-521) or not at all, and either way Howard's missing rate is named."""
     monkeypatch.setattr(CL, "_consumable_price", _prices({"PACK56": 0.06}))  # no BOX481
     line = CL.packaging_line(_parts(), 50)
-    assert line.get("order_gbp") is None, "a half-priced method is confidently short"
-    assert line["estimator_input_required"] is True
-    assert "BOX481" in line["note"], "the fix is one catalogue row, not a diagnosis"
+    assert "BOX481" in str(line.get("method_status") or ""), \
+        "the fix is one catalogue row, not a diagnosis"
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator", line["price_source"]
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(_parts(), 50)
+    assert bare.get("order_gbp") is None, "with no whole method, the honest zero stands"
+    assert bare["estimator_input_required"] is True
+    assert "BOX481" in bare["note"]
 
 
 def test_an_order_beyond_the_stated_steps_is_not_priced_by_extrapolation(monkeypatch):
+    """Beyond Howard's last stated step his method invents nothing. The box calculator
+    may still price the carton — its arithmetic is sized, not stepped — but never by
+    stretching HIS steps, and with it off the order is honestly unpriced."""
     monkeypatch.setattr(CL, "_consumable_price",
                         _prices({"PACK56": 0.06, "BOX481": 1.89}))
     line = CL.packaging_line(_parts(), 2000)
-    assert line.get("order_gbp") is None
-    assert "beyond the last stated point" in line["note"]
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator", line["price_source"]
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(_parts(), 2000)
+    assert bare.get("order_gbp") is None
+    assert "beyond the last stated point" in bare["note"]
 
 
 def test_an_estimators_house_rate_still_beats_the_method(monkeypatch):
@@ -241,19 +257,31 @@ def _large_acrylic_parts():
 
 
 def test_a_steel_job_does_not_inherit_howards_bags(monkeypatch):
+    """Howard's bags decline the steel job BY NAME. The line may still price — the box
+    calculator sizes a carton from the panel's own envelope (D-521), which is a different
+    stated method, not his bags — and with that off too, the honest zero names him."""
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_steel_parts(), 50)
-    assert line.get("order_gbp") is None
-    assert "MILD STEEL" in line["note"] and "not applied" in line["note"]
+    assert "MILD STEEL" in str(line.get("method_status") or "")
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator", line["price_source"]
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(_steel_parts(), 50)
+    assert bare.get("order_gbp") is None
+    assert "MILD STEEL" in bare["note"] and "not applied" in bare["note"]
 
 
 def test_a_joinery_job_does_not_inherit_them_either(monkeypatch):
     import stated_prices
     monkeypatch.setattr(stated_prices, "system_price", lambda c, d=None: _udef(c))
     line = CL.packaging_line(_joinery_parts(), 50)
-    assert line.get("order_gbp") is None
-    assert "not applied" in line["note"]
+    if line.get("order_gbp") is not None:
+        assert line["price_source"]["source_class"] == "box_calculator", line["price_source"]
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", False)
+    bare = CL.packaging_line(_joinery_parts(), 50)
+    assert bare.get("order_gbp") is None
+    assert "not applied" in bare["note"]
 
 
 def test_a_large_display_fails_the_declared_small_goods_ceiling(monkeypatch):
