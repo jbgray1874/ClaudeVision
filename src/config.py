@@ -793,6 +793,19 @@ CONCEPT_CONSUMABLE_ALLOWANCE = {
 # them), and words that say a piece needs none. Vocabulary, not logic.
 CONCEPT_FIXING_WORDS = ["fixing", "fixings", "fastener", "fasteners", "screw", "screws",
                         "bolt", "bolts", "rivet", "rivets", "nut", "nuts", "washer"]
+# BOUGHT HARDWARE IS FIXED TOO (D-532). 0356453's hanging rail welded every made piece, so the
+# per-piece count found nothing to fix — and its four bolted castors and its ID plate went on
+# with no fixings at all. A bought item whose words name hardware that is screwed or bolted on
+# takes this many fixings each (the same reference fixing, priced down the ordinary chain). An
+# ASSUMPTION TO CONFIRM, named on the line with every item it counted; vocabulary, not logic.
+CONCEPT_FASTENED_BOUGHT_ITEMS = (
+    (("castor", "castors", "caster", "casters", "wheel", "wheels"), 4),
+    (("id plate", "name plate", "nameplate", "badge", "label plate"), 2),
+    (("handle", "handles"), 2),
+    (("hinge", "hinges"), 4),
+    (("lock", "latch", "catch"), 2),
+    (("foot", "feet", "leveller", "levellers", "leveler", "glide", "glides"), 1),
+)
 CONCEPT_FIXING_FREE_WORDS = ["hook", "hooked", "hooks", "hang", "hangs", "hung", "hanging",
                              "clip", "clips", "clip-in", "clip-on", "slot-in", "push-fit",
                              "snap", "magnet", "magnetic", "tool-free"]

@@ -5899,6 +5899,19 @@ def compile_job_route(
         return not _pw_ruled_out("powder_coating",
                                  weldment_finish_for_gate(_rec, _pn, graph))
 
+    def _pw_bought(_pn: str) -> bool:
+        _rec = (graph["records"].get(_pn)
+                or _record_by_squashed_key(graph["records"], _pn) or {})
+        if not _rec:
+            return False
+        if _rec.get("is_bought_in") or str(_rec.get("concept_kind") or "") == "bought_in":
+            return True
+        try:
+            from bought_in_policy import is_bought_in as _bi
+            return bool(_bi(dict(_rec)))
+        except Exception:                                            # noqa: BLE001
+            return False
+
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
@@ -5910,9 +5923,13 @@ def compile_job_route(
             # words corroborate it; complete coverage cannot stand it down. A scope
             # label without welding evidence is a title-block statement, not a stage.
             continue
+        # BOUGHT HARDWARE ARRIVES FINISHED (D-532): a castor or an ID plate fitted after the
+        # coat is not a member "carrying no coat of its own" — 0356453's four castors and its
+        # plate turned a fully coated frame into a coating-scope question for a person.
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,
-                                                        graph["parents"])}
+                                                        graph["parents"])
+                      and not _pw_bought(pn)}
         _coated_desc = {pn for pn in _leaf_desc
                         if pn in _pw_required and _pw_member_carries_coat(pn)}
         if _leaf_desc and _coated_desc == _leaf_desc:
@@ -6039,6 +6056,16 @@ def compile_job_route(
                 "TUBE", "CHS", "RHS", "SHS", "BOX SECTION",
             ))
         )
+        # EVERY SECTION IS CUT ONCE (D-532). A flat bar, angle, channel, round bar or oval
+        # with no flat pattern of its own is a stock length the saw cuts — the estimator's
+        # section path already strips the laser and charges the saw for exactly these, so a
+        # laser word left standing here put 0356453's 50 x 10 flat-bar feet on a Tube row
+        # AND a Saw row. A section that carries a DXF flat is profiled and left alone.
+        _flat = bool(raw_part.get("dxf_augmented") or raw_part.get("flat_pattern_detected")
+                     or str(raw_part.get("geometry_source") or "") == "dxf_flat_pattern")
+        if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
+                and not _flat:
+            is_tube = True
         if (
             is_tube
             and template.scope == "part"
@@ -6051,7 +6078,10 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason="section stock is cut by the tube process, not sheet profiling",
+                reason=("section stock is cut by the tube process, not sheet profiling"
+                        if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
+                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
+                        f"profiled from sheet"),
                 route_id=template.route_id,
             ))
 

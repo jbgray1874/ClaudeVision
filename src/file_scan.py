@@ -5109,7 +5109,8 @@ def _finalize_scan_summary(
             # into a confirmations file and nobody can match to a job by eye.
             _job_name = (Path(job_folder).name if job_folder else "") or (
                 Path(_pack[0]).stem if _pack else "CONCEPT")
-            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)
+            _sighted = concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read,
+                                                          brief=_brief or "")
             _unit_ops = concept_scan.unit_operations(_answer)
             # ── THE ANSWERS FILE, APPLIED TO THE PARTS IT WAS WRITTEN ABOUT ──────────
             #
