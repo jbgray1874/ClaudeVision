@@ -4585,6 +4585,72 @@ def _is_descendant(identity: str, ancestor: str, parents: Mapping[str, Set[str]]
     return identity != ancestor and ancestor in _ancestor_distances(identity, parents)
 
 
+# Words a materials-list line shares with any part, so they never decide which part it names.
+_CALLOUT_NOISE = {"MM", "MILD", "STEEL", "THE", "TO", "OF", "AND", "WITH", "OTHER", "SIDE",
+                  "WELDED", "WELD", "THICK", "BAR", "ON", "IN", "AT", "FOR"}
+
+
+def _callout_words(num: str, route: Mapping[str, Any], llm_extract: Mapping[str, Any]) -> str:
+    """The words the sheet prints against list item `num`: the extract's own line for it,
+    and the route's quoted evidence (D-533)."""
+    bits: List[str] = []
+    for pool in ("bom", "parts"):
+        for e in (llm_extract.get(pool) or []):
+            if not isinstance(e, Mapping):
+                continue
+            if any(str(e.get(k) or "").strip() == num for k in (
+                    "item_number", "item", "item_no", "callout", "find_number", "part_number")):
+                bits.extend(str(e.get(k) or "") for k in (
+                    "description", "name", "part_name", "material", "notes"))
+    for k in ("evidence", "drawing_note", "quote", "notes", "description"):
+        v = str(route.get(k) or "").strip()
+        if v and not any(v.upper() in b.upper() for b in bits):
+            bits.append(v)
+    return " ".join(b for b in bits if b).strip()
+
+
+def _resolve_callout(num: str, route: Mapping[str, Any], llm_extract: Mapping[str, Any],
+                     raw: Mapping[str, Mapping[str, Any]]) -> str:
+    """The one part whose own words share most with list item `num`'s line, or "" (D-533).
+
+    Two shared significant words at least, and strictly more than any other part — a line
+    that names nothing in this job, or names two parts equally, resolves to nothing."""
+    def _toks(text: str) -> Set[str]:
+        return {w for w in re.findall(r"[A-Z]{2,}", str(text or "").upper())
+                if w not in _CALLOUT_NOISE}
+    line = _toks(_callout_words(num, route, llm_extract))
+    if not line:
+        return ""
+    scored: List[Tuple[int, str]] = []
+    for pn, rec in (raw or {}).items():
+        if not isinstance(rec, Mapping):
+            continue
+        own = " ".join([str(rec.get("description") or ""), str(rec.get("concept_seen") or "")]
+                       + [str(m) for m in (rec.get("materials") or []) if m])
+        scored.append((len(line & _toks(own)), str(pn)))
+    scored.sort(reverse=True)
+    if not scored or scored[0][0] < 2 or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return ""
+    return scored[0][1]
+
+
+def _welded_host(pn: str, graph: Mapping[str, Any], raw: Mapping[str, Mapping[str, Any]]) -> str:
+    """The nearest assembly above `pn` whose own record carries a weld — the joint the member's
+    stated weld already is (D-533) — or ""."""
+    if not pn:
+        return ""
+    dist = _ancestor_distances(pn, graph.get("parents") or {})
+    for anc, _d in sorted(dist.items(), key=lambda kv: kv[1]):
+        if anc == pn:
+            continue
+        rec = raw.get(anc) or {}
+        ops = [str(o).lower() for o in (list(rec.get("inferred_operations") or [])
+                                        + list(rec.get("textual_operations") or []))]
+        if any(o in ("welding", "spot_welding") for o in ops):
+            return str(anc)
+    return ""
+
+
 _PRESSED_FASTENER_DEFAULT_WORDS = (
     "SELF-CLINCH", "SELF CLINCH", "CLINCH NUT", "PEM STUD", "PEM NUT", "PRESS-IN", "PRESS IN",
     "NUTSERT", "RIVNUT", "RIV NUT", "RIVET NUT", "BLIND NUT",
@@ -5028,6 +5094,51 @@ def compile_job_route(
             issues.append({"code": "route_participant_outside_the_product",
                            "operation": operation, "identities": _dropped,
                            "kept": list(participants)})
+        # A CALLOUT NUMBER IS NOT A PART (D-533). 0356455's materials list reads "6. 2MM
+        # U-CHANNEL BAR CONNECTOR OTHER SIDE WELDED TO UPRIGHT"; the extract keyed that weld to
+        # part "6" — the list's item number — and the sheet charged a Weld (CO2) row on a part
+        # that does not exist, beside the unit's own weld. A bare list number no part record
+        # carries is a reference to a line, never a participant.
+        # AND THE WORK IT STATES IS KEPT: the number is resolved to the part its list line
+        # names (U-CHANNEL BAR CONNECTOR -> the connector), and where that part is welded into
+        # an assembly whose own weld counts its joints, the stated weld is that weld — charged
+        # once, there, with the reason on the member. Only a line that names no part is left
+        # uncharged, and it is asked, not lost.
+        _callouts = [item for item in participants
+                     if re.fullmatch(r"\d{1,3}", str(item)) and not raw.get(item)]
+        if _callouts:
+            participants = [item for item in participants if item not in _callouts]
+            for _num in _callouts:
+                _hit = _resolve_callout(_num, route, llm_extract, raw)
+                _host = _welded_host(_hit, graph, raw) if (_hit and operation == "welding") else ""
+                if _hit and _host:
+                    _ev = stable_id("decision", {"route": "callout", "operation": operation,
+                                                 "scope": "part", "target_id": _hit})
+                    add_claim(_ev, make_claim(
+                        operation, NOT_APPLICABLE, "llm_full_extract",
+                        subject_id=_hit, target_id=_hit, scope="part", participants=[_hit],
+                        sequence=number(route.get("sequence")),
+                        reason=(f"the sheet's item {_num} states this {operation} "
+                                f"('{_callout_words(_num, route, llm_extract)[:70]}'); {_hit} is "
+                                f"welded into {_host}, whose own weld counts its joints — charged "
+                                f"once there, not again on this line"),
+                        route_id=str(route.get("route_id") or "")))
+                    issues.append({"code": "route_callout_resolved", "operation": operation,
+                                   "callout": _num, "part_number": _hit, "charged_on": _host,
+                                   "detail": (f"item {_num}'s {operation} is {_hit}'s joint, "
+                                              f"charged once on {_host}")})
+                elif _hit:
+                    participants.append(_hit)
+                    issues.append({"code": "route_callout_resolved", "operation": operation,
+                                   "callout": _num, "part_number": _hit, "charged_on": _hit,
+                                   "detail": f"item {_num}'s {operation} is charged on {_hit}"})
+                else:
+                    issues.append({"code": "route_participant_is_a_callout_number",
+                                   "operation": operation, "identities": [_num],
+                                   "kept": list(participants),
+                                   "detail": (f"{operation} was keyed to {_num} — a materials-list "
+                                              f"item number that names no part in this job; not "
+                                              f"charged until it is assigned to one")})
         if not operation or not participants:
             continue
         stated_scope = str(route.get("scope") or "").strip().lower()
@@ -5899,6 +6010,19 @@ def compile_job_route(
         return not _pw_ruled_out("powder_coating",
                                  weldment_finish_for_gate(_rec, _pn, graph))
 
+    def _pw_bought(_pn: str) -> bool:
+        _rec = (graph["records"].get(_pn)
+                or _record_by_squashed_key(graph["records"], _pn) or {})
+        if not _rec:
+            return False
+        if _rec.get("is_bought_in") or str(_rec.get("concept_kind") or "") == "bought_in":
+            return True
+        try:
+            from bought_in_policy import is_bought_in as _bi
+            return bool(_bi(dict(_rec)))
+        except Exception:                                            # noqa: BLE001
+            return False
+
     for event_id, event_claims in list(claims_by_event.items()):
         _d = arbitrate_event(event_id, event_claims)
         if not (_d.operation == "powder_coating" and _d.status == REQUIRED
@@ -5910,9 +6034,13 @@ def compile_job_route(
             # words corroborate it; complete coverage cannot stand it down. A scope
             # label without welding evidence is a title-block statement, not a stage.
             continue
+        # BOUGHT HARDWARE ARRIVES FINISHED (D-532): a castor or an ID plate fitted after the
+        # coat is not a member "carrying no coat of its own" — 0356453's four castors and its
+        # plate turned a fully coated frame into a coating-scope question for a person.
         _leaf_desc = {pn for pn, k in kinds.items()
                       if k == "leaf" and _is_descendant(pn, _d.target_id,
-                                                        graph["parents"])}
+                                                        graph["parents"])
+                      and not _pw_bought(pn)}
         _coated_desc = {pn for pn in _leaf_desc
                         if pn in _pw_required and _pw_member_carries_coat(pn)}
         if _leaf_desc and _coated_desc == _leaf_desc:
@@ -6039,6 +6167,16 @@ def compile_job_route(
                 "TUBE", "CHS", "RHS", "SHS", "BOX SECTION",
             ))
         )
+        # EVERY SECTION IS CUT ONCE (D-532). A flat bar, angle, channel, round bar or oval
+        # with no flat pattern of its own is a stock length the saw cuts — the estimator's
+        # section path already strips the laser and charges the saw for exactly these, so a
+        # laser word left standing here put 0356453's 50 x 10 flat-bar feet on a Tube row
+        # AND a Saw row. A section that carries a DXF flat is profiled and left alone.
+        _flat = bool(raw_part.get("dxf_augmented") or raw_part.get("flat_pattern_detected")
+                     or str(raw_part.get("geometry_source") or "") == "dxf_flat_pattern")
+        if not is_tube and profile in {"FLAT", "ROUND", "ANGLE", "CHANNEL", "OVAL"} \
+                and not _flat:
+            is_tube = True
         if (
             is_tube
             and template.scope == "part"
@@ -6051,7 +6189,10 @@ def compile_job_route(
                 scope="part",
                 participants=[template.target_id],
                 sequence=template.sequence,
-                reason="section stock is cut by the tube process, not sheet profiling",
+                reason=("section stock is cut by the tube process, not sheet profiling"
+                        if profile in {"CHS", "RHS", "SHS", "TUBE", ""} else
+                        f"{'an' if profile[:1] in 'AEIOU' else 'a'} {profile.lower()} section is cut from a stock length, not "
+                        f"profiled from sheet"),
                 route_id=template.route_id,
             ))
 

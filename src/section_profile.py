@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
-__all__ = ["detect_section_stock", "section_kg_per_m"]
+__all__ = ["detect_section_stock", "section_kg_per_m", "section_outer_perimeter_mm"]
 
 # The hollow-section keywords PATH 1 needs. Config (SECTION_HOLLOW_KEYWORDS) since this list
 # also decides which parts-list rows are a frame's cut list; this is the default.
@@ -155,6 +155,36 @@ def detect_section_stock(text: str) -> Optional[Dict[str, Any]]:
                 }
 
     return None
+
+
+def section_outer_perimeter_mm(a: Any, b: Any = None, profile_form: Any = "") -> Optional[float]:
+    """The outer perimeter of a section, mm — what powder lands on per mm of length.
+
+        round / CHS / ROUND   pi x D
+        OVAL                  Ramanujan's ellipse on the semi-axes
+        everything else       2 x (a + b) — a closed box, and also an open angle or channel
+                              (both faces of both legs) or a flat bar (b is its thickness)
+
+    One formula for every reader that coats a section (D-532): the workbook's section area
+    and the costing's own coated area for a section part or a welded unit's members."""
+    try:
+        a_f = float(a)
+    except (TypeError, ValueError):
+        return None
+    try:
+        b_f = float(b) if b not in (None, "") else a_f
+    except (TypeError, ValueError):
+        b_f = a_f
+    if a_f <= 0:
+        return None
+    b_f = b_f if b_f > 0 else a_f
+    form = str(profile_form or "").strip().upper()
+    if form in ("CHS", "ROUND", "TUBE_ROUND"):
+        return _PI * a_f
+    if form == "OVAL":
+        ha, hb = a_f / 2.0, b_f / 2.0
+        return _PI * (3 * (ha + hb) - ((3 * ha + hb) * (ha + 3 * hb)) ** 0.5)
+    return 2.0 * (a_f + b_f)
 
 
 def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",

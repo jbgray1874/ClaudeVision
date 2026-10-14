@@ -360,7 +360,7 @@ def test_the_scan_reads_a_design_intent_sheet_as_a_sheet():
     src = (ROOT / "src" / "file_scan.py").read_text(encoding="utf-8")
     assert "_sheet_read = bool(_design_intent_pages)" in src
     assert "concept_scan.read_sheet_concept(\n                    _pack, refresh=_fresh, brief=_brief," in src
-    assert "concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read)" in src
+    assert "concept_scan.parts_from_concept(_answer, _job_name, sheet=_sheet_read," in src
     assert "concept_scan.raise_sheet_questions(" in src
 
 

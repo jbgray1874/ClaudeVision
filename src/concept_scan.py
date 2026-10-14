@@ -553,6 +553,97 @@ def find_brief(folders: List[Any]) -> tuple:
     return "", ""
 
 
+# ── AN ACCEPTED CONSTRUCTION (D-534) ─────────────────────────────────────────────────────
+#
+# "The next step is to verify the member schedule against the PDF, then replay that accepted
+#  construction through pricing — not repeatedly ask Grok for another fresh design." — the
+#  reviewer, on 0356455's first book: wire hooks read as whole bars, a phantom pair of 1723 mm
+#  tubes, the flat-bar cross-members missing. The answers file corrects a size, a count or a
+#  material on a line the read made; it cannot add the line the read missed, remove one it
+#  invented, or change what a line is cut from. A construction a person has checked against the
+#  drawing is a better read than the model's: in the read's own shape, so every rule downstream
+#  prices it exactly as it would have priced the model's answer, and the model is not asked.
+CONSTRUCTION_SUFFIX = "_construction.json"
+CONSTRUCTION_FILENAME = "construction.json"
+# A construction says what is MADE and BOUGHT, never what it costs: a money figure in it would
+# reach the sheet wearing the drawing's authority (the answers file's rule, estimator_confirmed).
+_CONSTRUCTION_MONEY_KEYS = ("price", "cost", "rate", "gbp", "£")
+_CONSTRUCTION_KEYS = ("product", "unit_operations", "parts", "not_visible", "sheet_facts")
+
+
+def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], List[str]]:
+    """(answer, problems) from one construction file — the answer None when it is refused.
+
+    Refused, by name: no parts; a line with no name, no kind or no positive quantity; any money
+    key anywhere; and a file nobody has accepted ("accepted_by" empty, or still a DRAFT)."""
+    problems: List[str] = []
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as exc:                                         # noqa: BLE001
+        return None, [f"could not be read ({type(exc).__name__}: {exc})"]
+    if not isinstance(data, dict) or not isinstance(data.get("parts"), list) or not data["parts"]:
+        return None, ["it has no parts list"]
+
+    def _money(obj: Any, where: str) -> List[str]:
+        found: List[str] = []
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                if any(m in str(k).lower() for m in _CONSTRUCTION_MONEY_KEYS):
+                    found.append(f"{where}{k}")
+                found.extend(_money(v, f"{where}{k}."))
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                found.extend(_money(v, f"{where}{i}."))
+        return found
+    _m = _money(data, "")
+    if _m:
+        problems.append(f"it carries money ({', '.join(_m[:4])}) — a construction states what is "
+                        f"made and bought, never a price; enter prices on the sheet")
+    who = str(data.get("accepted_by") or "").strip()
+    if not who or who.upper().startswith("DRAFT"):
+        problems.append("nobody has accepted it — set \"accepted_by\" to the person who checked "
+                        "it against the drawing")
+    for i, p in enumerate(data["parts"], start=1):
+        if not isinstance(p, dict):
+            problems.append(f"line {i} is not a part")
+            continue
+        if not str(p.get("name") or "").strip() or not str(p.get("kind") or "").strip():
+            problems.append(f"line {i} has no name or no kind")
+        if not _num(p.get("quantity")) > 0:
+            problems.append(f"line {i} ({p.get('name')}) has no positive quantity")
+    if problems:
+        return None, problems
+    answer = {k: data[k] for k in _CONSTRUCTION_KEYS if k in data}
+    answer["accepted_construction"] = {
+        "file": str(path), "accepted_by": who,
+        "accepted_on": str(data.get("accepted_on") or ""),
+        "basis": str(data.get("basis") or ""),
+        "excluded": [str(x) for x in (data.get("excluded") or [])]}
+    return answer, []
+
+
+def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
+        Optional[Dict[str, Any]], str, List[str]]:
+    """(answer, file, problems) from the first construction file in the run's folders.
+
+    "<job>_construction.json", then "<folder>_construction.json", then "construction.json".
+    A file that is found and refused returns (None, file, problems) — said, never ignored."""
+    seen = set()
+    for folder in folders:
+        if not folder or str(folder) in seen:
+            continue
+        seen.add(str(folder))
+        p = Path(str(folder))
+        names = ([f"{job}{CONSTRUCTION_SUFFIX}"] if job else []) + [
+            f"{p.name}{CONSTRUCTION_SUFFIX}", CONSTRUCTION_FILENAME]
+        for name in names:
+            f = p / name
+            if f.is_file():
+                ans, problems = load_accepted_construction(f)
+                return ans, str(f), problems
+    return None, "", []
+
+
 def missing_brief_flag(client_document: bool = False) -> str:
     """The book's own statement that NO enquiry brief reached this read (D-473).
 
@@ -1286,7 +1377,7 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
         pn = str(p.get("part_number") or "")
         if p.get("welded_to_hosts"):
             excluded[pn] = "welded to its host"
-        elif "welding" in _ops_of(p):
+        elif "welding" in _ops_of(p) or p.get("weld_charged_on"):
             excluded[pn] = "welded — its joint is the weld"
         elif _says(p, bonded):
             # BONDED IS NOT SCREWED (D-500): its adhesive is a different consumable, said.
@@ -1297,7 +1388,34 @@ def mechanically_fitted(parts: List[Any]) -> Dict[str, Any]:
             excluded[pn] = f"hangs on {hung_by[pn]} welded to it"
         else:
             counted[pn] = _qty_of(p)
-    return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded}
+    try:
+        per_made = float((_vocab("CONCEPT_CONSUMABLE_ALLOWANCE", {}) or {})
+                         .get("per_piece_fitted") or 0)
+    except (TypeError, ValueError):
+        per_made = 0.0
+    fixings = per_made * sum(counted.values())
+    # BOUGHT HARDWARE SCREWED OR BOLTED ON (D-532): castors, plates, handles — counted by
+    # config CONCEPT_FASTENED_BOUGHT_ITEMS, each at its own fixings per item. A bought line
+    # its own words say is welded, bonded or clipped is fitted without them.
+    bought: Dict[str, Dict[str, Any]] = {}
+    for p in parts or []:
+        if not (isinstance(p, dict) and p.get("concept_kind") == "bought_in"):
+            continue
+        if p.get("concept_not_visible") or p.get("fixings_allowance") is not None:
+            continue
+        low = f" {p.get('description') or ''} {p.get('concept_seen') or ''} ".lower()
+        if _says(p, ["weld", "welded"] + bonded) or _says_free(p):
+            continue
+        per = next((n for words, n in (_vocab("CONCEPT_FASTENED_BOUGHT_ITEMS", ()) or ())
+                    if any(re.search(rf"(?<![a-z]){re.escape(w)}(?![a-z])", low)
+                           for w in words)), 0)
+        if per:
+            pn = str(p.get("part_number") or "")
+            bought[pn] = {"quantity": _qty_of(p), "fixings_each": per}
+            counted[pn] = _qty_of(p)
+            fixings += per * _qty_of(p)
+    return {"pieces": sum(counted.values()), "counted": counted, "excluded": excluded,
+            "bought": bought, "fixings": int(round(fixings))}
 
 
 def adhesive_allowance_lines(parts: List[Any], stem: str, n: int) -> List[Dict[str, Any]]:
@@ -1446,9 +1564,15 @@ def fixings_allowance_line(parts: List[Any], stem: str, n: int) -> Optional[Dict
     mech = mechanically_fitted(parts)
     if per <= 0 or not ref or mech["pieces"] <= 0:
         return None
-    count = int(round(per * mech["pieces"]))
-    basis = (f"{per:g} per mechanically fitted piece × {mech['pieces']} piece(s) "
-             f"({_rule.get('basis') or 'config'})")
+    _bought = mech.get("bought") or {}
+    _made = mech["pieces"] - sum(int(b["quantity"]) for b in _bought.values())
+    count = int(mech.get("fixings") or round(per * mech["pieces"]))
+    basis = "; ".join(
+        ([f"{per:g} per mechanically fitted made piece × {_made} "
+          f"({_rule.get('basis') or 'config'})"] if _made > 0 else [])
+        + [f"{b['fixings_each']:g} per {k} × {b['quantity']} (bought hardware fixed on, "
+           f"config CONCEPT_FASTENED_BOUGHT_ITEMS — an assumption to confirm)"
+           for k, b in _bought.items()])
     record = _empty_part_record(f"{_slug(stem, 'CONCEPT')}-NV{n:02d}", item_number=None,
                                 description=f"Fixings allowance — {ref}", quantity=None)
     record["concept"] = True
@@ -2119,6 +2243,50 @@ def _stock_form_in_words(text: Any) -> str:
     return ""
 
 
+def _names_form(text: Any, form: str) -> bool:
+    """Do these words name this one stock form (config.CONCEPT_STOCK_FORM_WORDS)?"""
+    said = " " + re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()) + " "
+    words = dict(_vocab("CONCEPT_STOCK_FORM_WORDS", ()) or ()).get(form) or ()
+    return any(f" {w} " in said for w in words)
+
+
+_ITEM_STOP_WORDS = {"THE", "AND", "FOR", "WITH", "ONE", "OFF", "MM", "BOUGHT", "IN", "OF"}
+
+
+def stated_item_size(name: Any, text: Any) -> Optional[List[float]]:
+    """The size a brief line states for this named item, or None (D-532).
+
+    A line counts when every significant word of the item's name is on it and the line
+    carries an "A x B" size: "7. one UPC ID plate (20 x 10 mm), bought in" for "UPC ID
+    PLATE". A name of one significant word is too loose to match by — it returns None."""
+    sig = [w for w in re.findall(r"[A-Z0-9]+", str(name or "").upper())
+           if len(w) >= 2 and w not in _ITEM_STOP_WORDS and not w.isdigit()]
+    if len(sig) < 2:
+        return None
+    for line in re.split(r"[\n;]+", str(text or "")):
+        up = " " + re.sub(r"[^A-Z0-9]+", " ", line.upper()) + " "
+        if not all(f" {w} " in up for w in sig):
+            continue
+        m = _STOCK_SIZE_RE.search(line)
+        if m:
+            return [float(g) for g in m.groups() if g]
+    return None
+
+
+def stated_section_forms(text: Any) -> Dict[Tuple[float, float], set]:
+    """The section forms a brief's or sheet's materials lines name, by size (D-532):
+    "1. 40 × 20 oval tube frame" gives {(20, 40): {"oval_tube"}}. One line, one size."""
+    out: Dict[Tuple[float, float], set] = {}
+    for line in re.split(r"[\n;]+", str(text or "")):
+        m = _STOCK_SIZE_RE.search(line)
+        form = _stock_form_in_words(line)
+        if not m or form not in STOCK_SECTION_FORMS:
+            continue
+        key = tuple(sorted((float(m.group(1)), float(m.group(2)))))
+        out.setdefault(key, set()).add(form)
+    return out
+
+
 def _sizes(value: Any) -> List[float]:
     vals = value if isinstance(value, (list, tuple)) else [value]
     return [v for v in (_num(x) for x in vals) if v > 0]
@@ -2150,8 +2318,13 @@ def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
     if said_form in STOCK_SECTION_FORMS + ("mesh", "wire"):
         form = said_form
         # THE WORDS NAME AN OVAL THE SCHEMA HAS NO WORD FOR (D-531): a read that called
-        # "40 X 20 OVAL" a tube is right that it is hollow and wrong about its shape.
-        if word_form == "oval_tube" and said_form in ("tube", "box_section"):
+        # "40 X 20 OVAL" a tube is right that it is hollow and wrong about its shape. The read's
+        # own size note counts as its words (D-532): 0356453's 20:20 read wrote "40x20 oval
+        # stated in materials list" in why_size and "tube" in the stock field.
+        if said_form in ("tube", "box_section") and (
+                word_form == "oval_tube"
+                or (metal and _names_form(" ".join(str(p.get(k) or "") for k in (
+                    "why_size", "seen")), "oval_tube"))):
             form = "oval_tube"
     elif said_form in ("sheet", "board", "plate"):
         # The read says sheet; only a plate too thick to be one AND words naming a section
@@ -2188,6 +2361,11 @@ def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
                     "notes": [f"named as {form.replace('_', ' ')} with no section size"]}
         if len(sec) == 1:
             sec = [sec[0], sec[0]]
+        # A ROUND TUBE HAS ONE DIAMETER (D-532): a "tube" read with two different sides is a
+        # rectangular tube — weighed as round it took the larger side as its diameter.
+        if form == "tube" and abs(sec[0] - sec[1]) > 1e-6:
+            form = "box_section"
+            notes.append(f"{sec[0]:g} x {sec[1]:g} has two sides — a rectangular tube, not round")
         assumed = False
         if form == "flat_bar":
             wall = sec[1]
@@ -2237,12 +2415,28 @@ def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
             "notes": notes}
 
 
-def resolve_stocks(parts: List[Any]) -> List[Dict[str, Any]]:
+def resolve_stocks(parts: List[Any], brief: str = "") -> List[Dict[str, Any]]:
     """resolve_stock for every line of one read, index for index — and a held line whose
     width and thickness are the section another line of the same read is cut from is that
     section (D-528): FRAME HORIZONTALS at 415 x 25 x 25 beside FRAME VERTICALS of 25 x 25 box
-    section is 415 mm of the same box section, not a 25 mm plate."""
+    section is 415 mm of the same box section, not a 25 mm plate.
+
+    THE BRIEF'S MATERIALS LINE NAMES THE SHAPE (D-532): a line the read called a hollow tube
+    whose section is the size a brief line gives as oval ("1. 40 × 20 oval tube frame") is that
+    oval — where the brief names no other form at that size."""
     out = [resolve_stock(p) if isinstance(p, Mapping) else {} for p in parts or []]
+    _stated = stated_section_forms(brief)
+    for s in out:
+        if s.get("form") not in ("tube", "box_section") or not s.get("section_mm"):
+            continue
+        if _stated.get(tuple(sorted(s["section_mm"][:2]))) == {"oval_tube"}:
+            a, b = s["section_mm"][:2]
+            s.update(form="oval_tube", profile_form=_PROFILE_FORM["oval_tube"])
+            if s.get("wall_assumed"):
+                s["wall_mm"] = float((_vocab("CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {})
+                                     .get("oval_tube", s.get("wall_mm") or 1.5))
+            s.setdefault("notes", []).append(
+                f"oval: the brief's materials list gives {a:g} x {b:g} as oval tube")
     known: Dict[Tuple[float, float], Tuple[Dict[str, Any], str]] = {}
     for p, s in zip(parts or [], out):
         if s.get("form") in STOCK_SECTION_FORMS:
@@ -3486,7 +3680,7 @@ def cutout_geometry(sighted: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def parts_from_concept(answer: Dict[str, Any], stem: str, *,
-                       sheet: bool = False) -> List[Dict[str, Any]]:
+                       sheet: bool = False, brief: str = "") -> List[Dict[str, Any]]:
     """The sighted parts as engine part records, every field attributed at concept rank.
 
     Written through apply_field so the stamps are the arbitration machinery's own, not a
@@ -3508,7 +3702,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         _implied = [p for p in (_netted.get("parts") or [])[_before:] if isinstance(p, dict)]
     else:
         answer = _with_implied_fittings(answer)
-    _stocks = resolve_stocks(list(answer.get("parts") or []))
+    _stocks = resolve_stocks(list(answer.get("parts") or []), brief=brief)
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -3650,7 +3844,23 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             # plated bracket — which is a briefable item, as long as every word of it says
             # it was SIGHTED and approximate. The description on the sheet stays what it
             # was; this is a second field, read only by the rung that goes looking.
+            # A SIZE THE BRIEF STATES FOR THIS ITEM RIDES ITS LINE (D-532). 0356453's read
+            # named "UPC ID PLATE" and dropped the "20 X 10MM" the sheet and the brief both
+            # print, so the plate was researched with no size at all. Stated, not sighted:
+            # the description says it and the research asks for that size.
+            _stated_sz = (None if record.get("concept_sighted_size_mm")
+                          else stated_item_size(name, brief))
+            if _stated_sz:
+                record["concept_stated_size_mm"] = _stated_sz
+                _sz = " x ".join(f"{v:g}" for v in _stated_sz)
+                if not re.search(r"\d", name):
+                    record["description"] = f"{name} {_sz} MM"
+                record["review_flags"].append(
+                    f"CONCEPT: {_sz} mm is the size the brief states for this item — carried "
+                    f"on its line and into the price research, never nested")
             _spec = [name]
+            if _stated_sz:
+                _spec.append(f"{' x '.join(f'{v:g}' for v in _stated_sz)} mm (stated)")
             if sighted_mat:
                 _spec.append(str(sighted_mat))
             _dims = [f"{k} ~{blank_given}mm" for k, blank_given in
@@ -4241,7 +4451,11 @@ _COUNT_STOP = {"is", "are", "and", "or", "with", "to", "of", "for", "at", "in", 
                "each", "all", "its", "their", "any", "also"}
 _COUNT_UNITS = {"mm", "cm", "m", "kg", "g", "off", "pcs", "pc", "x", "year", "years", "hour",
                 "hours", "min", "mins", "page", "pages", "units", "unit", "day", "days", "week",
-                "weeks", "percent"}
+                "weeks", "percent",
+                # A NUMBER BEFORE A DIMENSION WORD IS A SIZE (D-532): "frame 700 wide, uprights
+                # 1625 tall", "top rail (660 long)" were read as 700 frames and 660 rails.
+                "wide", "long", "tall", "high", "deep", "thick", "dia", "diameter", "across",
+                "overall", "wall", "radius", "rad", "deg", "degree", "degrees", "gauge", "swg"}
 _HAND_WORDS = {"left", "right", "lh", "rh", "mirrored", "handed", "hand"}
 
 
@@ -4256,7 +4470,11 @@ def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
     posts", "five front shelves". A count in a sentence that says each / per (other than per
     unit) is a count per something else, not a part's count, and is skipped."""
     out: List[Dict[str, Any]] = []
-    flat = " ".join(str(brief or "").split())
+    # A LIST LINE ENDS WHERE THE NEXT ONE STARTS (D-533). Flattened, "- four wire hooks, one on
+    # each end of each bar" ran into "- four U-channel bar connectors" as one clause, and the
+    # first line's "each" cancelled the second line's count.
+    _lines = re.sub(r"\n\s*(?=(?:[-•*•]|\d{1,2}[.)])\s)", ".\n", str(brief or ""))
+    flat = " ".join(_lines.split())
     _per = r"\beach\b|\bevery\b|\bper (?!unit\b|product\b|fixture\b)"
     for sentence in re.split(r"(?<=[.;:])\s+", flat):
         low = sentence.lower()
@@ -5104,6 +5322,9 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
         if p.get("weld_stated_by_brief") or not (set(ops) & set(_WELD_WORDS)):
             continue
         p["inferred_operations"] = [o for o in ops if o not in _WELD_WORDS]
+        # The joint is still a weld — only where it is charged moved (D-534): nothing may
+        # read this member as fitted by fasteners.
+        p["weld_charged_on"] = str(unit.get("part_number") or "")
         p.setdefault("review_flags", []).append(
             f"CONCEPT: welded into the unit — the joint is charged once, on "
             f"{unit.get('part_number')}'s Weld and Dress rows, not again on this line")

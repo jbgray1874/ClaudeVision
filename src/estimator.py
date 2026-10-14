@@ -9026,9 +9026,15 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         setup_pm = float(pc_rule.get("setup_min_per_part", pc_rule.get("min_per_part", 0.75)))
         throughput = float(pc_rule.get("throughput_m2_per_hour", 15.0))
         _reliable_m2 = part.get("_powder_reliable_coated_m2")
+        _sec_m2 = _section_outer_area_m2(part)
         if _reliable_m2 is not None and float(_reliable_m2) > 0:
             coated_m2 = float(_reliable_m2)
             coated_detail = {"coated_area_source": "powder_consumable_reliable_blank"}
+        elif _sec_m2:
+            # A SECTION'S COAT IS ITS OUTER SURFACE (D-532): perimeter x cut length — the
+            # sheet's own section area, from the same formula, so the two never disagree.
+            coated_m2 = _sec_m2
+            coated_detail = {"coated_area_source": "section_outer_surface"}
         else:
             # No reliable blank => powder material was suppressed. Do NOT invent an
             # inflated area from drawing-extent dims; floor to nominal handling + flag.
@@ -12774,11 +12780,16 @@ def stamp_members_coated_area(parts: Any) -> int:
                 continue
             # THROUGH THE SHARED RESOLVER. The measured members of that case hold their flat
             # under normalized_geometry.bounding_box_flat_mm; reading two spellings found none.
+            # A SECTION MEMBER IS COATED ON ITS OUTER SURFACE, NOT AS A FLAT (D-532): 0356453's
+            # oval uprights, round rails and flat-bar feet summed as length x width x 2 faces
+            # came to 0.327 m2 where their outer surfaces are about 0.43 m2.
+            _sec_m2 = _section_outer_area_m2(_m)
             _L, _W = _flat_blank_mm(_m)
-            if not _L or not _W:
+            if not _sec_m2 and (not _L or not _W):
                 continue
             _per = max(1.0, (_safe_float(_m.get("quantity")) or 1.0) / _asm_qty)
-            _m_area = (_L / 1000.0) * (_W / 1000.0) * _faces * _per
+            _m_area = (_sec_m2 * _per if _sec_m2
+                       else (_L / 1000.0) * (_W / 1000.0) * _faces * _per)
             _area += _m_area
             _counted.append(f"{_m.get('part_number')} x{_per:g}")
             _by_member[str(_m.get("part_number") or "").strip().upper()] = round(_m_area, 6)
@@ -12791,12 +12802,30 @@ def stamp_members_coated_area(parts: Any) -> int:
             _asm["_powder_members_left_out"] = _left_out
         _asm.setdefault("review_flags", []).append(
             f"powder on this assembly is charged over the sum of its members' blanks, "
-            f"{_area:.3f} m2 both faces ({', '.join(_counted)}) — their sheets carry no coat "
+            f"{_area:.3f} m2 (sections on their outer surface, sheet on both faces) "
+            f"({', '.join(_counted)}) — their sheets carry no coat "
             f"of their own, so they are coated as the assembly; override the area on the "
             f"sheet if the shop coats them before assembly"
             + (f"; not counted, not metal: {', '.join(_left_out)}" if _left_out else ""))
         stamped += 1
     return stamped
+
+
+def _section_outer_area_m2(part: Dict[str, Any]) -> float:
+    """One piece of a section part's coated surface, m2 — outer perimeter x cut length
+    (section_profile's perimeter), or 0.0 when it is not a section or is unmeasured."""
+    _ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
+    if not _ss:
+        return 0.0
+    try:
+        from section_profile import section_outer_perimeter_mm
+    except Exception:                                                # noqa: BLE001
+        return 0.0
+    _perim = section_outer_perimeter_mm(_ss.get("a"), _ss.get("b"), _ss.get("profile_form"))
+    _len = _safe_float(_ss.get("length_mm")) or _safe_float(part.get("blank_length_mm"))
+    if not _perim or not _len or _len <= 0:
+        return 0.0
+    return round((_perim / 1000.0) * (_len / 1000.0), 6)
 
 
 def _powder_consumable_from_area(part: Dict[str, Any], area_m2: float,
