@@ -563,12 +563,12 @@ def find_brief(folders: List[Any]) -> tuple:
 #  invented, or change what a line is cut from. A construction a person has checked against the
 #  drawing is a better read than the model's: in the read's own shape, so every rule downstream
 #  prices it exactly as it would have priced the model's answer, and the model is not asked.
-CONSTRUCTION_SUFFIX = "_construction.json"
-CONSTRUCTION_FILENAME = "construction.json"
-# A construction says what is MADE and BOUGHT, never what it costs: a money figure in it would
-# reach the sheet wearing the drawing's authority (the answers file's rule, estimator_confirmed).
-_CONSTRUCTION_MONEY_KEYS = ("price", "cost", "rate", "gbp", "£")
-_CONSTRUCTION_KEYS = ("product", "unit_operations", "parts", "not_visible", "sheet_facts")
+# The file, its checks and its table live in accepted_construction (D-535): pure python, so the
+# portal refuses a schedule before staging by exactly the rules the run will apply.
+import accepted_construction as _accepted                          # noqa: E402
+
+CONSTRUCTION_SUFFIX = _accepted.SUFFIX
+CONSTRUCTION_FILENAME = _accepted.FILENAME
 
 
 def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -576,52 +576,7 @@ def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], Lis
 
     Refused, by name: no parts; a line with no name, no kind or no positive quantity; any money
     key anywhere; and a file nobody has accepted ("accepted_by" empty, or still a DRAFT)."""
-    problems: List[str] = []
-    try:
-        # utf-8-sig: Windows Notepad and PowerShell 5's Set-Content write a byte-order mark,
-        # and a schedule refused for an invisible character is a wasted run.
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
-    except Exception as exc:                                         # noqa: BLE001
-        return None, [f"could not be read ({type(exc).__name__}: {exc})"]
-    if not isinstance(data, dict) or not isinstance(data.get("parts"), list) or not data["parts"]:
-        return None, ["it has no parts list"]
-
-    def _money(obj: Any, where: str) -> List[str]:
-        found: List[str] = []
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if any(m in str(k).lower() for m in _CONSTRUCTION_MONEY_KEYS):
-                    found.append(f"{where}{k}")
-                found.extend(_money(v, f"{where}{k}."))
-        elif isinstance(obj, list):
-            for i, v in enumerate(obj):
-                found.extend(_money(v, f"{where}{i}."))
-        return found
-    _m = _money(data, "")
-    if _m:
-        problems.append(f"it carries money ({', '.join(_m[:4])}) — a construction states what is "
-                        f"made and bought, never a price; enter prices on the sheet")
-    who = str(data.get("accepted_by") or "").strip()
-    if not who or who.upper().startswith("DRAFT"):
-        problems.append("nobody has accepted it — set \"accepted_by\" to the person who checked "
-                        "it against the drawing")
-    for i, p in enumerate(data["parts"], start=1):
-        if not isinstance(p, dict):
-            problems.append(f"line {i} is not a part")
-            continue
-        if not str(p.get("name") or "").strip() or not str(p.get("kind") or "").strip():
-            problems.append(f"line {i} has no name or no kind")
-        if not _num(p.get("quantity")) > 0:
-            problems.append(f"line {i} ({p.get('name')}) has no positive quantity")
-    if problems:
-        return None, problems
-    answer = {k: data[k] for k in _CONSTRUCTION_KEYS if k in data}
-    answer["accepted_construction"] = {
-        "file": str(path), "accepted_by": who,
-        "accepted_on": str(data.get("accepted_on") or ""),
-        "basis": str(data.get("basis") or ""),
-        "excluded": [str(x) for x in (data.get("excluded") or [])]}
-    return answer, []
+    return _accepted.load(path)
 
 
 def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
@@ -630,20 +585,7 @@ def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
 
     "<job>_construction.json", then "<folder>_construction.json", then "construction.json".
     A file that is found and refused returns (None, file, problems) — said, never ignored."""
-    seen = set()
-    for folder in folders:
-        if not folder or str(folder) in seen:
-            continue
-        seen.add(str(folder))
-        p = Path(str(folder))
-        names = ([f"{job}{CONSTRUCTION_SUFFIX}"] if job else []) + [
-            f"{p.name}{CONSTRUCTION_SUFFIX}", CONSTRUCTION_FILENAME]
-        for name in names:
-            f = p / name
-            if f.is_file():
-                ans, problems = load_accepted_construction(f)
-                return ans, str(f), problems
-    return None, "", []
+    return _accepted.find(folders, job=job)
 
 
 def missing_brief_flag(client_document: bool = False) -> str:
@@ -3442,9 +3384,19 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
                 and _key(r.get("name")) not in {_key(h.get("name")) for h in history}):
             history.append(dict(r, dropped_by_read=str(r.get("dropped_by_read") or read_key
                                                        or "a later read")))
+    # THE READ ITSELF, IN ITS OWN SHAPE (D-535): the portal's Member schedule panel starts the
+    # estimator's table from it — stock form, section, wall, holes and work included, which the
+    # summary rows above do not carry. Which read it was is said: the model's, or a schedule
+    # a person accepted (whose re-save is the schedule as priced).
+    _src = "accepted_construction" if isinstance(answer.get("accepted_construction"),
+                                                 Mapping) else "model"
+    read = {"source": _src,
+            **{k: answer[k] for k in ("product", "unit_operations", "not_visible")
+               if k in answer},
+            "parts": [dict(p) for p in (answer.get("parts") or []) if isinstance(p, Mapping)]}
     payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
                           "base_key": base_key, "read_key": read_key, "parts": rows,
-                          "history": history[:40]}, indent=1)
+                          "history": history[:40], "read": read}, indent=1, default=str)
     written = None
     for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
         if path is None:

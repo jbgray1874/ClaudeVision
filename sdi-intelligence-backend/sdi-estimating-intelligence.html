@@ -691,6 +691,80 @@
         <div id="refDocsList" style="margin-top:4px"></div>
       </div>
 
+      <!-- THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535). "Verify the member schedule
+           against the PDF, then replay that accepted construction through pricing — not
+           repeatedly ask Grok for another fresh design." The last read (or the schedule on
+           file) loads into a table; the estimator corrects it against the drawing — adds the
+           line the read missed, removes the one it invented, says what each line is cut from —
+           ticks and names it, and the LLM read files it beside the pack and prices it instead
+           of asking the model. It stays with the job until it is set aside. Never a price. -->
+      <details id="kPanel" style="margin:0 0 10px">
+        <summary style="cursor:pointer;font-weight:600">Member schedule — checked against the
+          drawing <span class="sub" style="font-weight:400">(optional, LLM read only — price a
+          construction you have checked instead of asking the model again)</span></summary>
+        <div style="margin-top:8px">
+          <div id="kOnFile" class="sub" aria-live="polite"></div>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <button type="button" id="kLoad" class="btn-measure">Load this job's schedule or last read</button>
+            <button type="button" id="kOpen" class="btn-measure">Open a schedule file…</button>
+            <input type="file" id="kFile" accept=".json,application/json" hidden>
+            <button type="button" id="kAdd" class="btn-measure">Add a line</button>
+            <span id="kStatus" class="sub" aria-live="polite"></span>
+          </div>
+          <label class="note" id="kSetAsideRow" style="display:none;margin-top:6px">
+            <input type="checkbox" id="kSetAside"> <b>Set the schedule on file aside</b> — the
+            model reads the drawing on this run. The schedule is kept beside the pack to load
+            again.</label>
+          <div id="kBody" style="display:none;margin-top:10px">
+            <p class="hint" style="margin:0 0 6px">One line per thing that is cut or bought, with
+              how many per unit. A section (tube, oval, angle, channel, flat or round bar) needs
+              its section — "40 x 20", "19", "50 x 50 x 5" — and its cut length; a wire its
+              diameter and developed length; a sheet or board part its blank length, width and
+              thickness. Work comes from the list the engine prices.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <label class="sub" style="flex:2;min-width:180px">Product<br>
+                <input id="kProdName" type="text" autocomplete="off" style="width:100%"></label>
+              <label class="sub">Height mm<br><input id="kProdH" type="text" inputmode="decimal" style="width:70px"></label>
+              <label class="sub">Width mm<br><input id="kProdW" type="text" inputmode="decimal" style="width:70px"></label>
+              <label class="sub">Depth mm<br><input id="kProdD" type="text" inputmode="decimal" style="width:70px"></label>
+              <label class="sub">Weight kg<br><input id="kProdKg" type="text" inputmode="decimal" style="width:60px"></label>
+              <label class="sub" style="flex:2;min-width:200px">Work on the whole unit<br>
+                <input id="kUnitOps" type="text" autocomplete="off" list="kOpsList" style="width:100%"
+                       placeholder="welding, assembly, powder_coating"></label>
+            </div>
+            <div style="overflow-x:auto;margin-top:8px">
+              <table id="kTable" style="width:100%;border-collapse:collapse;font-size:12.5px"></table>
+            </div>
+            <datalist id="kOpsList"></datalist>
+            <div class="row2" style="margin-top:8px">
+              <div class="field">
+                <label for="kExcluded" class="sub">Drawn but not part of the product (one per line)</label>
+                <textarea id="kExcluded" rows="2" style="width:100%"
+                          placeholder="e.g. the tote crate drawn on the base"></textarea>
+              </div>
+              <div class="field">
+                <label for="kNotVisible" class="sub">Needed but not drawn — for the estimator, not costed (one per line)</label>
+                <textarea id="kNotVisible" rows="2" style="width:100%"></textarea>
+              </div>
+            </div>
+            <div class="row2" style="margin-top:8px">
+              <div class="field">
+                <label for="kWho">Checked against the drawing by</label>
+                <input id="kWho" type="text" autocomplete="off" placeholder="your name">
+                <label style="font-weight:400;display:block;margin-top:6px">
+                  <input id="kChecked" type="checkbox"> I checked every line against the drawing</label>
+              </div>
+              <div class="field">
+                <label style="font-weight:400;display:block;margin-top:22px">
+                  <input id="kUse" type="checkbox"> <b>File this schedule and price it</b> on the
+                  LLM read — the model is not asked</label>
+              </div>
+            </div>
+            <div id="kCheck" class="sub" style="margin-top:6px" aria-live="polite"></div>
+          </div>
+        </div>
+      </details>
+
       <!-- A RUN YOU CANNOT STOP IS A DESKTOP YOU HAVE LOST FOR FIFTEEN MINUTES.
            Stopping was possible only by provoking a 409 from a SECOND run and taking the
            release offered in the refusal, or by POSTing by hand. So an accidental double
@@ -1619,6 +1693,195 @@ document.getElementById("chgRead").addEventListener("click", readChanges);
 document.getElementById("chgAdd").addEventListener("click", addChange);
 document.getElementById("chgWho").addEventListener("input", checkChanges);
 
+/* ── THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535) ─────────────────────────
+   The schedule on file, or the last read, loads from the staged job folder into a table; a
+   schedule file can be opened from disk instead (read in this browser and shown by the
+   service, never filed until Run). The estimator corrects every line against the drawing,
+   ticks and names it, and the LLM read files it beside the pack and prices it instead of
+   asking the model. The service checks it all again at Run. Said here so the page never
+   promises otherwise:
+     - nothing is filed without a tick and a name;
+     - every line must be priceable — a section its section and cut length, a wire its
+       diameter and length, a sheet part its blank — and work comes from the engine's list;
+     - no price is ever accepted. */
+let kRows = [], kVocab = null, kJob = "", _kSeq = 0;
+const _K_KINDS = {fabricated: "made", bought_in: "bought in", graphic: "graphic"};
+const _K_SECTIONS = ["box_section","tube","oval_tube","angle","channel","flat_bar","round_bar"];
+const _K_FORMS = ["sheet","board"].concat(_K_SECTIONS, ["wire","mesh"]);
+const _kJobKey = () => safe(client.value) + "|" + safe(drawing.value);
+const _kLines = id => ($(id).value || "").split(/\n+/).map(s => s.trim()).filter(Boolean);
+function _kSel(k, i, opts, sel, labels){
+  return `<select data-k="${k}" data-i="${i}">` + opts.map(v => `<option value="${_matEsc(v)}"`
+    + `${String(v) === String(sel) ? " selected" : ""}>${_matEsc((labels || {})[v]
+    || String(v).replace(/_/g, " "))}</option>`).join("") + `</select>`;
+}
+function _kIn(k, i, v, w, ph){
+  return `<input data-k="${k}" data-i="${i}" type="text" value="${_matEsc(v)}" `
+    + `style="width:${w + 12}px;padding:4px 6px;font-size:12.5px"`
+    + `${ph ? ` placeholder="${_matEsc(ph)}"` : ""}>`;
+}
+function renderSchedule(){
+  $("kBody").style.display = kRows.length ? "" : "none";
+  $("kOpsList").innerHTML = ((kVocab || {}).operations || [])
+    .map(o => `<option value="${_matEsc(o)}">`).join("");
+  const head = `<tr><th></th><th style="text-align:left">Line</th><th>Kind</th><th>Qty</th>
+    <th style="text-align:left">Material</th><th>Stock</th><th>Section</th><th>Wall</th>
+    <th>Length</th><th>Width</th><th>Thk</th><th>Holes</th><th>Hole Ø</th><th>Folds</th>
+    <th style="text-align:left">Work</th><th style="text-align:left">Note</th></tr>`;
+  $("kTable").innerHTML = head + kRows.map((r, i) => {
+    const made = r.kind === "fabricated", form = made ? (r.form || "sheet") : "";
+    const sec = _K_SECTIONS.includes(form), wire = form === "wire", mesh = form === "mesh";
+    const sheet = form === "sheet" || form === "board";
+    return `<tr style="border-top:1px solid var(--line)">
+      <td><button type="button" data-kdel="${i}" title="Remove this line">✕</button></td>
+      <td>${_kIn("name", i, r.name, 170)}</td>
+      <td>${_kSel("kind", i, Object.keys(_K_KINDS), r.kind || "fabricated", _K_KINDS)}</td>
+      <td>${_kIn("quantity", i, r.quantity, 36)}</td>
+      <td>${_kIn("material", i, r.material, 110)}</td>
+      <td>${made ? _kSel("form", i, (kVocab || {}).forms || _K_FORMS, form) : ""}</td>
+      <td>${sec || wire || mesh ? _kIn("section", i, r.section, 70,
+            sec ? "40 x 20" : (wire ? "Ø mm" : "grid")) : ""}</td>
+      <td>${sec || mesh ? _kIn("wall", i, r.wall, 36, mesh ? "wire" : "") : ""}</td>
+      <td>${_kIn("length", i, r.length, 52)}</td>
+      <td>${sheet || mesh || !made ? _kIn("width", i, r.width, 52) : ""}</td>
+      <td>${sheet || !made ? _kIn("thickness", i, r.thickness, 36) : ""}</td>
+      <td>${made ? _kIn("holes", i, r.holes, 32) : ""}</td>
+      <td>${made ? _kIn("hole_mm", i, r.hole_mm, 36) : ""}</td>
+      <td>${made ? _kIn("folds", i, r.folds, 32) : ""}</td>
+      <td>${_kIn("operations", i, (r.operations || []).join(", "), 190, "saw, welding")}</td>
+      <td>${_kIn("note", i, r.note, 240)}</td></tr>`;
+  }).join("");
+  $("kTable").querySelectorAll("[data-k]").forEach(el => el.addEventListener("change", _kEdit));
+  $("kTable").querySelectorAll("[data-kdel]").forEach(el => el.addEventListener("click", e => {
+    kRows.splice(+e.target.dataset.kdel, 1); renderSchedule(); checkSchedule(); }));
+}
+function _kEdit(e){
+  const el = e.target, r = kRows[+el.dataset.i], k = el.dataset.k;
+  r[k] = k === "operations"
+    ? el.value.split(/[,;]+/).map(s => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_")).filter(Boolean)
+    : el.value;
+  if(k === "form" || k === "kind") renderSchedule();
+  checkSchedule();
+}
+function _kFill(view, said){
+  const p = view.product || {}, ov = p.assumed_overall_mm || {};
+  $("kProdName").value = p.name || "";
+  $("kProdH").value = ov.height || ""; $("kProdW").value = ov.width || "";
+  $("kProdD").value = ov.depth || ""; $("kProdKg").value = p.stated_weight_kg || "";
+  $("kUnitOps").value = (view.unit_operations || []).join(", ");
+  $("kExcluded").value = (view.excluded || []).join("\n");
+  $("kNotVisible").value = (view.not_visible || []).join("\n");
+  kRows = (view.rows || []).map(r => Object.assign({}, r));
+  /* A NAME AND A TICK ARE THIS PERSON'S, EVERY TIME — never carried from a file. */
+  $("kWho").value = ""; $("kChecked").checked = false; $("kUse").checked = false;
+  kJob = _kJobKey();
+  $("kStatus").textContent = said;
+  renderSchedule(); checkSchedule();
+}
+function _kShowOnFile(j){
+  const k = j.on_file, box = $("kOnFile");
+  $("kSetAsideRow").style.display = k ? "" : "none";
+  if(!k){ $("kSetAside").checked = false; }
+  box.style.color = k && (k.problems || []).length ? "var(--bad)" : "";
+  box.textContent = k
+    ? ((k.problems || []).length
+       ? "A schedule is on file but would be refused (" + k.problems.join("; ") + ") — the "
+         + "model reads the drawing until it is corrected and filed again."
+       : `On file: ${(k.rows || []).length} line(s), accepted by ${k.accepted_by}`
+         + (k.accepted_on ? ` on ${k.accepted_on}` : "") + ". The next LLM read prices this "
+         + "schedule and does not ask the model — Fresh read does not change that.")
+    : (j.status === "ok" || j.status === "no_job"
+       ? "No schedule on file — the next LLM read asks the model to read the drawing." : "");
+}
+async function loadSchedule(){
+  const st = $("kStatus"), seq = ++_kSeq;
+  st.textContent = "Reading this job's folder…";
+  try{
+    const r = await api("/api/estimate/construction/read", {method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({client: safe(client.value), drawing_number: safe(drawing.value)})});
+    const j = r.ok ? await r.json() : {status:"unavailable", message:(await r.text()).slice(0,200)};
+    if(seq !== _kSeq) return;
+    kVocab = j.vocabulary || kVocab;
+    _kShowOnFile(j);
+    if(j.status !== "ok"){ st.textContent = j.message || j.status; return; }
+    const lr = j.last_read;
+    if(j.on_file) _kFill(j.on_file, "Loaded the schedule on file. To change it, edit, tick, "
+                                  + "name and file it again.");
+    else if(lr && lr.complete) _kFill(lr, (lr.source === "accepted_construction"
+        ? "Loaded the schedule the last run priced." : "Loaded the model's last read.")
+        + " Check every line against the drawing: add what it missed, remove what it "
+        + "invented, and say what each line is cut from.");
+    else if(lr) _kFill(lr, "The last read was saved before this panel existed — names, counts "
+        + "and sizes only. Set each line's stock, section and work against the drawing.");
+    else if(j.set_aside) _kFill(j.set_aside, "Loaded the schedule that was set aside.");
+    else { kJob = _kJobKey(); st.textContent = "Nothing read for this job yet — run the LLM "
+        + "read once, open a schedule file, or add the lines by hand."; }
+  }catch(e){ if(seq === _kSeq) st.textContent = "Could not read this job's folder: " + e.message; }
+}
+function openScheduleFile(e){
+  const f = e.target.files && e.target.files[0];
+  if(!f) return;
+  const fr = new FileReader();
+  fr.onload = async () => {
+    const st = $("kStatus");
+    try{
+      const data = JSON.parse(String(fr.result || "").replace(/^﻿/, ""));
+      const r = await api("/api/estimate/construction/read", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({schedule: data})});
+      const j = await r.json();
+      kVocab = j.vocabulary || kVocab;
+      if(!j.opened || !(j.opened.rows || []).length){ st.textContent = f.name + " has no lines."; return; }
+      _kFill(j.opened, `Opened ${f.name} — check every line against the drawing; it is filed `
+        + "only when you tick, name it and run.");
+    }catch(err){ st.textContent = "Could not open " + f.name + ": " + err.message; }
+    e.target.value = "";
+  };
+  fr.readAsText(f);
+}
+function scheduleSubmitted(){
+  const n = id => ($(id).value || "").trim();
+  return {accepted_by: n("kWho"), checked: $("kChecked").checked,
+          product: {name: n("kProdName"), stated_weight_kg: n("kProdKg"),
+                    assumed_overall_mm: {height: n("kProdH"), width: n("kProdW"), depth: n("kProdD")}},
+          unit_operations: n("kUnitOps"), parts: kRows,
+          excluded: _kLines("kExcluded"), not_visible: _kLines("kNotVisible")};
+}
+let _kChkTimer = null;
+function checkSchedule(){
+  clearTimeout(_kChkTimer);
+  _kChkTimer = setTimeout(async () => {
+    const box = $("kCheck");
+    if(!kRows.length){ box.textContent = ""; return; }
+    try{
+      const r = await api("/api/estimate/construction/check", {method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({drawing_number: safe(drawing.value), construction: scheduleSubmitted()})});
+      const j = await r.json();
+      box.style.color = j.ok ? "var(--ok)" : "var(--bad)";
+      box.textContent = j.ok
+        ? `${j.lines} line(s) — tick "File this schedule" and the LLM read prices it.`
+        : j.errors.join(" · ");
+    }catch(err){ box.textContent = ""; }
+  }, 300);
+}
+/* WHAT THE LLM READ SENDS: a schedule to file, a set-aside, or nothing (what is on file stands). */
+function constructionForRun(){
+  if($("kUse").checked) return scheduleSubmitted();
+  if($("kSetAside").checked) return {set_aside: true};
+  return null;
+}
+$("kLoad").addEventListener("click", loadSchedule);
+$("kOpen").addEventListener("click", () => $("kFile").click());
+$("kFile").addEventListener("change", openScheduleFile);
+$("kAdd").addEventListener("click", () => {
+  if(!kJob) kJob = _kJobKey();
+  kRows.push({name: "", kind: "fabricated", quantity: 1, form: "sheet", operations: [], _orig: {}});
+  renderSchedule(); checkSchedule(); });
+["kWho","kChecked","kProdName","kProdH","kProdW","kProdD","kProdKg","kUnitOps","kExcluded","kNotVisible"]
+  .forEach(id => $(id).addEventListener("change", checkSchedule));
+
 function destination(){
   const c = safe(client.value), d = safe(drawing.value);
   return (c && d) ? `${OUTPUT_ROOT}\\${c}\\${d}` : "";
@@ -2464,6 +2727,18 @@ $("bRunLLM").onclick = async () => {
     line(_b ? "Enquiry brief: " + _b.replace(/\s+/g, " ").slice(0, 200)
                + (_b.length > 200 ? "…" : "")
             : "No enquiry brief — the model reads the pack alone."); }
+  /* WHICH CONSTRUCTION THIS RUN PRICES (D-535). A schedule loaded for one job must never be
+     filed against another: the table belongs to the client and drawing it was loaded for. */
+  const _k = constructionForRun();
+  if(_k && !_k.set_aside && kJob && kJob !== _kJobKey()){
+    line("Not started — the member schedule was loaded for " + kJob.replace("|", " / ")
+       + ", not this job. Load it again for this job, or untick 'File this schedule'.", "e");
+    setStatus("err", "Not started"); running = false; refresh();
+    return; }
+  if(_k && !_k.set_aside)
+    line(`Member schedule: ${kRows.length} line(s), checked by ${_k.accepted_by || "—"} — `
+       + "filed with the pack and priced; the model is not asked to read the drawing.");
+  else if(_k) line("Member schedule set aside — the model reads the drawing.");
   line("Output → "+destination());
   const folder = drawings.find(d => d.is_dir);
   try{
@@ -2484,11 +2759,21 @@ $("bRunLLM").onclick = async () => {
                             concept_document: !!$("conceptDocument").checked,
                             enquiry_brief: ($("enquiryBrief").value || "").trim() || null,
                             reference_documents: refDocs.size ? [...refDocs] : null,
+                            construction: _k,
                             delivery: {requested: $("delivRequired").checked,
                                        postcode: ($("delivPostcode").value || "").trim() || null}})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;
+    /* A SCHEDULE THE SERVICE DID NOT FILE IS A RUN PRICING SOMETHING ELSE — the model's read.
+       A service older than this page ignores the field, so the run is stopped, not left to
+       finish looking like the checked construction. */
+    if(_k && !_k.set_aside && started.construction !== "filed"){
+      await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
+      throw new Error("The service did not file the member schedule (it answered '"
+        + (started.construction === undefined ? "nothing — it is running older code than this page"
+           : started.construction) + "'). Update and restart the service before running.");
+    }
     if($("conceptDocument").checked && started.concept_document !== true){
       await api("/api/estimate/"+encodeURIComponent(runId)+"/abandon", {method:"POST"});
       throw new Error("The service did not acknowledge client-document mode. Update the service before running this brief.");

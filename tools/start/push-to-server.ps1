@@ -74,6 +74,7 @@ param(
         "src/product_identity.py",
         "src/material_confirmation.py",
         "src/customer_changes.py",
+        "src/accepted_construction.py",
         "src/estimator_confirmed.py",
         "src/json_normaliser.py",
         "src/extractor_patterns.py",
