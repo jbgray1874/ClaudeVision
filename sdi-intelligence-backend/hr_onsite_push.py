@@ -332,6 +332,16 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
 
     by_person_id, by_email, by_name = _index_personnel(people)
     duplicates, conflicts = _shared_identifiers(by_person_id, by_email)
+
+    # People whose BrightHR query failed this run. Their presence is unknown,
+    # not absent, so their InVentry records are left exactly as they are.
+    unknown_idents = set()
+    for e in (payload.get("query_failed") or []):
+        unknown = {"brighthr_id": e.get("id") or "", "first_name": e.get("first_name", ""),
+                   "surname": e.get("surname", ""), "email": e.get("email", "")}
+        record, _ = _match(unknown, by_person_id, by_email, by_name)
+        if record is not None:
+            unknown_idents.add(api.inventry_id(record))
     if duplicates:
         names = sorted({_display(g[0]) for _, g in duplicates})
         summary["warnings"].append(
@@ -390,17 +400,36 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         for ident, record in inventry_on_site.items():
             if ident in should_be_on_site:
                 continue
-            if not api.person_key(record):
-                # Not a person we manage: a visitor, contractor or someone
-                # InVentry knows and we do not. Never ours to sign out.
+            if ident in unknown_idents:
+                # Their BrightHR lookup failed this run. Not knowing is not the
+                # same as clocked out; the next run will know.
+                summary["skipped_unknown"] = summary.get("skipped_unknown", 0) + 1
                 continue
-            if only_our_own and not api.signed_in_by_us(record):
-                # Their last event came from reception, the Anywhere app or a
-                # rule - a human decision, or InVentry's own. Not ours to undo.
-                summary["skipped_not_ours"] = summary.get("skipped_not_ours", 0) + 1
+            if only_our_own:
+                if not api.signed_in_by_us(record):
+                    # Their last event came from reception, the Anywhere app or
+                    # a rule - a human decision, or InVentry's own. Not ours.
+                    summary["skipped_not_ours"] = summary.get("skipped_not_ours", 0) + 1
+                    continue
+                # The marker alone settles it: only this sync writes it, so the
+                # record is on site because we put it there. PersonID is NOT
+                # required - it was once meant to hold our BrightHR id, but on
+                # the live site it is Active Directory's, and 104 of 255 records
+                # have none. Requiring it left those people signed in for ever.
+            elif not api.person_key(record):
+                # Marker check off: a PersonID is the only remaining sign that
+                # the record is someone managed rather than a stray. Weak, which
+                # is why the marker check is the default.
                 continue
             label = f"{api._field(record,'FirstName')} {api._field(record,'Surname')}".strip()
             to_sign_out.append((ident, label))
+
+        if summary.get("skipped_unknown"):
+            summary["warnings"].append(
+                f"{summary['skipped_unknown']} person(s) left as they are: their BrightHR "
+                f"lookup failed this run, and an unknown is not a clock-out."
+            )
+            _log(f"  left as is (BrightHR lookup failed): {summary['skipped_unknown']}")
 
         if summary.get("skipped_not_ours"):
             summary["warnings"].append(

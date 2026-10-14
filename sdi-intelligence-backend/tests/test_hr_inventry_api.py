@@ -289,12 +289,14 @@ def snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BLIP_MAX_STALE_MINUTES", 15)
     monkeypatch.setattr(cfg, "INVENTRY_MAX_SIGN_OUTS_PER_RUN", 25)
 
-    def write(on_site, status="ok", age_minutes=1, query_failures=0):
+    def write(on_site, status="ok", age_minutes=1, query_failures=0, query_failed=None):
         (snapshots / "blip_latest.json").write_text(json.dumps({
             "summary": {"timestamp": _iso(age_minutes), "employees_checked": 192,
-                        "on_site": len(on_site), "query_failures": query_failures,
+                        "on_site": len(on_site),
+                        "query_failures": query_failures or len(query_failed or []),
                         "status": status},
             "on_site": on_site,
+            "query_failed": query_failed or [],
         }), encoding="utf-8")
 
     return write
@@ -382,17 +384,23 @@ def test_sign_out_is_disabled_by_default(snapshot):
 
 
 def test_sign_out_when_enabled_only_touches_people_we_manage(snapshot):
+    """Changed 14 Oct. INV-3 used to be treated as an untouchable "visitor"
+    because it had no PersonID. But it carries our marker, which only this sync
+    writes - so it is on site because we put it there. On the live site
+    PersonID is Active Directory's field and 104 of 255 records lack one;
+    the old rule left every one of those signed in for ever."""
     ours = cfg.INVENTRY_ACTION_LOCATION
     snapshot([clocked_in()])
     fake = FakeAPI([
         person(person_id="BH-1", activity="IN", location=ours),                    # still here
         person(inventry_id="INV-2", person_id="BH-2", activity="IN", location=ours),  # left
-        person(inventry_id="INV-3", person_id="", activity="IN", location=ours),   # visitor
+        person(inventry_id="INV-3", person_id="", activity="IN", location=ours),   # left, no PersonID
+        person(inventry_id="INV-4", person_id="", activity="IN", location="CONSOLE"),  # reception
     ])
 
     push.run_push(apply=True, client=fake, enable_sign_out=True)
 
-    assert fake.signed_out == ["INV-2"]
+    assert sorted(fake.signed_out) == ["INV-2", "INV-3"]
 
 
 def test_a_reception_sign_in_is_never_undone(snapshot):
@@ -876,3 +884,44 @@ def test_a_time_with_no_offset_is_trusted_as_given(monkeypatch):
     monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "local")
     monkeypatch.setattr(api, "_to_local", lambda v: v.astimezone(BST))
     assert api.format_datetime("2026-10-14T05:54:06") == "2026-10-14T05:54:06"
+
+
+
+# ── a failed BrightHR lookup is unknown, not absent ──────────────────────
+# Live, 14 Oct: "36 on site of 190 (1 query failure(s))". Within tolerance, so
+# the run proceeds - but the failed person used to be indistinguishable from
+# someone who had clocked out, and with sign-out live that takes a person who
+# is in the building off the fire roll until the next cycle.
+
+def test_a_failed_lookup_is_not_taken_as_a_clock_out(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()], query_failed=[{"id": "BH-7", "first_name": "Pat",
+                                             "surname": "Example", "email": "pat@wearesdi.com"}])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location=ours),   # genuinely here
+                    person(inventry_id="INV-7", first="Pat", surname="Example",
+                           email="pat@wearesdi.com", person_id="AD-7",
+                           activity="IN", location=ours)])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == []
+    assert result["skipped_unknown"] == 1
+    assert any("lookup failed" in w for w in result["warnings"])
+
+
+def test_someone_else_failing_does_not_shield_a_real_clock_out(snapshot):
+    """Only the person whose lookup failed is left alone."""
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()], query_failed=[{"id": "BH-7", "first_name": "Pat",
+                                             "surname": "Example", "email": "pat@wearesdi.com"}])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="IN", location=ours),                # genuinely here
+        person(inventry_id="INV-7", first="Pat", surname="Example",
+               email="pat@wearesdi.com", person_id="AD-7", activity="IN", location=ours),
+        person(inventry_id="INV-8", first="Sam", surname="Gone",
+               email="sam@wearesdi.com", person_id="AD-8", activity="IN", location=ours),
+    ])
+
+    push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == ["INV-8"]
