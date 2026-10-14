@@ -9693,6 +9693,18 @@ def _sanitise_part_quantity(part: Dict[str, Any]) -> int:
       2. If quantity > MAX_PART_QTY_PER_UNIT (default 50) -> reset to 1.
       Both cases add a review_flag warning to the part.
     """
+    # A LINE BOUGHT BY THE METRE KEEPS ITS FRACTION (D-518). This sanitiser guards against
+    # parser noise in COUNTS — a drawing number read as a quantity. 3.192 m of edging is
+    # not a count, and flooring it under-bought every fractional continuous quantity on
+    # the bill (the replay showed EDGE23X1ABS x3.0 where the drawing's perimeter is
+    # 3.192 m; 0.5 m would have become 1). A record that declares a continuous unit of
+    # measure keeps its own positive value, to the gram and the millimetre.
+    _uom = str(part.get("unit_of_measure") or "").strip().lower()
+    if _uom in {"m", "lm", "m2", "m²", "sqm", "kg", "g", "l", "litre", "litres"} \
+            or part.get("_edging_line"):
+        _frac = _safe_float(part.get("quantity"))
+        if _frac is not None and _frac > 0:
+            return _frac
     raw_qty = _safe_int(part.get("quantity")) or 1
     if raw_qty <= 1:
         return 1

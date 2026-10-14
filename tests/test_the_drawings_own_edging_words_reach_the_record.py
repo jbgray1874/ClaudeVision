@@ -525,6 +525,56 @@ def test_existing_callouts_are_not_overwritten_by_the_carrier():
     assert part["stated_bore_callouts"][0]["diameter_mm"] == 5.0
 
 
+# ── D-518: a line bought by the metre keeps its fraction ─────────────────────────────────
+
+def test_a_metre_quantity_is_not_floored_to_a_count():
+    """The replay showed EDGE23X1ABS x3.0 where the drawing's perimeter is 3.192 m:
+    estimate_part's quantity sanitiser — a guard against parser noise in COUNTS — floored
+    every continuous quantity on the bill (0.5 m would have become 1)."""
+    import estimator as E
+    line = {"part_number": "EDGE23X1ABS", "quantity": 3.192, "unit_of_measure": "m"}
+    assert E._sanitise_part_quantity(line) == 3.192
+    half = {"part_number": "EDGE23X1ABS", "quantity": 0.5, "_edging_line": True}
+    assert E._sanitise_part_quantity(half) == 0.5
+    count = {"part_number": "12399-77J", "quantity": 3.7}
+    assert E._sanitise_part_quantity(count) == 3, "a discrete count still sanitises"
+    noise = {"part_number": "8172-01_WELDMENT", "quantity": 8172}
+    assert E._sanitise_part_quantity(noise) == 1, "parser noise is still caught"
+
+
+def test_the_metres_survive_the_whole_estimate_and_compile():
+    """End to end, offline: estimate_document mints the line at 3.192 m, estimate_part
+    does not floor it, and the compiled graph's edge carries 3.192 — the replay's x3.0,
+    closed."""
+    import estimator as E
+    from route_compiler import compile_route_without_pricing
+    shelf = {"part_number": "12399-77J", "description": "KD V2 SHELF", "quantity": 1,
+             "normalized_material": "MFC", "normalized_thickness_mm": 18.0,
+             "blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+             "textual_operations": ["cnc_routing", "edge_banding"],
+             "banding_statements": ["EDGED ALL AROUND"],
+             "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0,
+                                     "estimated_cut_length_mm": 3192.0},
+             "pages": [1], "page_roles": ["detail"]}
+    parts = [shelf]
+    summary = {"declared_product": "12399-77J", "drawing_number": "12399-77J",
+               "manufacturing_writeup": {"parts": parts},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {},
+               "pages": []}
+    E.estimate_document(parts, summary=summary)
+    stub = next((p for p in parts if p.get("_edging_line")), None)
+    assert stub is not None, "the edging line must mint"
+    assert abs(float(stub["quantity"]) - 3.192) < 1e-9, stub["quantity"]
+    assert stub.get("bom_parent") == "12399-77J"
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    edge_nodes = [t for t in nodes if "EDGE" in str(t.get("part_number") or "")]
+    assert edge_nodes, [t.get("part_number") for t in nodes]
+    _q = edge_nodes[0].get("qty_per_unit") or edge_nodes[0].get("qty_effective")
+    assert _q is not None and abs(float(_q) - 3.192) < 1e-9, edge_nodes[0]
+
+
 # ── D-515: the acceptance checks catch missing work ──────────────────────────────────────
 
 def test_a_banded_part_with_known_metres_and_no_edging_line_is_a_violation():
