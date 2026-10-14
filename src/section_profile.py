@@ -184,6 +184,8 @@ def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",
         area_mm2 = a_f * b_f
     elif form == "ROUND":
         area_mm2 = _PI / 4.0 * (a_f ** 2)
+    elif form == "OVAL":
+        area_mm2 = max(0.0, _PI / 4.0 * ((a_f * b_f) - (inner_a * inner_b)))
     elif form == "CHS":
         area_mm2 = max(0.0, _PI / 4.0 * ((a_f ** 2) - (inner_a ** 2)))
     else:

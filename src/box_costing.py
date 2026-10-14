@@ -120,9 +120,10 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
                   f"{c['sheet_width_mm']:g} at £{sheet_gbp:g} a sheet, {scrap:.0%} scrap; "
                   f"running (L+B+H) x £{c['running_rate_gbp_per_mm']:g}/mm = "
                   f"£{running:.3f}; set-up £{c['setup_cost_gbp']:g} / {qty} = "
-                  f"£{setup_share:.3f}. This is the three-pair sum; the source sheet's "
-                  f"own total (SUM(K7:K8), two pairs) is £{sheet_total:.2f} — which "
-                  f"formula fits is judged against the Harley's history, not assumed. "
+                  f"£{setup_share:.3f}. The three-pair sum is £{unit:.2f}; the source "
+                  f"sheet's own total (SUM(K7:K8), two pairs) is £{sheet_total:.2f} — "
+                  f"config BOX_COSTING['formula'] picks which is charged, judged against "
+                  f"the Harley's history. "
                   f"Assumes one unit per carton, 0201 style, +{ov:g} mm the only "
                   f"clearance, no protection or orientation modelled — "
                   f"estimator to confirm"),

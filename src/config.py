@@ -2296,17 +2296,21 @@ CONCEPT_SHEET_ENVELOPE_TOLERANCE_MM = 5.0
 # "WIRE MESH" is mesh before it is wire and "BOX SECTION" is a box before it is a tube.
 CONCEPT_STOCK_FORM_WORDS = (
     ("mesh", ("WELDED MESH", "WELDMESH", "WELD MESH", "WIRE MESH", "MESH")),
+    # Oval before any tube word: "40 X 20 OVAL" is neither a box nor a round (D-531).
+    ("oval_tube", ("OVAL TUBE", "OVALTUBE", "OVAL")),
     ("box_section", ("BOX SECTION", "SQUARE TUBE", "RECTANGULAR TUBE", "BOX TUBE", "SHS", "RHS")),
     ("angle", ("ANGLE IRON", "ANGLE")),
     ("channel", ("CHANNEL",)),
-    ("flat_bar", ("FLAT BAR",)),
-    ("round_bar", ("ROUND BAR", "ROD")),
-    ("tube", ("ROUND TUBE", "CHS", "TUBE", "PIPE")),
+    # Sheets print these run together ("50MM FLATBAR 10MM THICK", "19MM ROUNDTUBE").
+    ("flat_bar", ("FLAT BAR", "FLATBAR")),
+    ("round_bar", ("ROUND BAR", "ROUNDBAR", "ROD")),
+    ("tube", ("ROUND TUBE", "ROUNDTUBE", "CHS", "TUBE", "PIPE")),
     ("wire", ("WIRE",)),
 )
 # A section's wall where the pack states none: a working figure, costed and SAID on the line as
 # assumed, never presented as read. Light-gauge display stock.
-CONCEPT_SECTION_DEFAULT_WALL_MM = {"box_section": 1.5, "tube": 1.5, "angle": 3.0, "channel": 3.0}
+CONCEPT_SECTION_DEFAULT_WALL_MM = {"box_section": 1.5, "tube": 1.5, "oval_tube": 1.5,
+                                   "angle": 3.0, "channel": 3.0}
 # A mesh's wire where the pack states none, and its grid where neither the read nor the words
 # give one — light welded mesh, costed as assumed.
 CONCEPT_MESH_DEFAULT_WIRE_MM = 3.0

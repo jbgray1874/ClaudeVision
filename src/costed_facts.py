@@ -2189,6 +2189,14 @@ def _price_origin(part: Mapping[str, Any], kind: str, block: Optional[str],
     # system's, and the same run reproduces the same figure. INDICATIVE_HOUSE, for the
     # same reason as the plater freight and the roll: a real figure to verify or accept,
     # never one to "replace with a quote".
+    # THE BOX CALCULATOR IS ITS OWN BASIS (D-531): the estimators' stated carton sheet at
+    # held config rates — reproducible, provisional, and never a market figure to replace.
+    if "box_calculator" in tokens:
+        return {"class": "box_calculator", "firmness": INDICATIVE_HOUSE,
+                "owner": "estimator",
+                "label": ("priced by the box calculator — the estimators' stated carton "
+                          "arithmetic at held sheet rates, a provisional allowance; verify "
+                          "the carton size and count, not the arithmetic")}
     if "stated_method_system_priced" in tokens or "packing_method" in tokens:
         return {"class": "stated_method", "firmness": INDICATIVE_HOUSE,
                 "owner": "estimator",

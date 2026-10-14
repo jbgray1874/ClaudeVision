@@ -1282,10 +1282,15 @@ def _line(code: str, order: Dict[str, Any], description: str,
         "unit_gbp": round(_order_gbp / qty, 2),
         "price_source": _src, "estimator_input_required": False,
         "note": (f"{code.title()} for the whole order of {qty}, divided per unit. "
-                 + (f"Packed by the stated method ({out.get('method_source')}): "
-                    f"{out.get('packing_working')} = £{_order_gbp:,.2f} the order — counts "
-                    f"stated, prices live from the system this run; confirm the method "
-                    f"fits this job. " if out.get('packing_working') else "")
+                 # ONE BASIS, SAID ONCE (D-531): the box calculator's sheet rates are held in
+                 # config, not priced live — the note names which stated method it was.
+                 + ((f"Priced by the box calculator: {out.get('packing_working')} — held "
+                     f"sheet rates, not a quotation; confirm the carton size and count. ")
+                    if out.get('packing_working') and _src.get("source_class") == "box_calculator"
+                    else (f"Packed by the stated method ({out.get('method_source')}): "
+                          f"{out.get('packing_working')} = £{_order_gbp:,.2f} the order — counts "
+                          f"stated, prices live from the system this run; confirm the method "
+                          f"fits this job. ") if out.get('packing_working') else "")
                  + f"Described as: {description}."
                  + (f" SDI Live: {out['sdi_live_status']}." if out.get("sdi_live_status") else "")),
     })

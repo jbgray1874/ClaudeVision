@@ -2095,11 +2095,12 @@ def _num(value: Any) -> float:
 
 
 # ── STOCK THAT IS NOT SHEET (D-528) ───────────────────────────────────────────────────────
-STOCK_SECTION_FORMS = ("box_section", "tube", "angle", "channel", "flat_bar", "round_bar")
+STOCK_SECTION_FORMS = ("box_section", "tube", "oval_tube", "angle", "channel", "flat_bar",
+                       "round_bar")
 STOCK_FORMS = STOCK_SECTION_FORMS + ("mesh", "wire", "sheet", "board")
 # section_profile.section_kg_per_m's names for each form ("" is a closed rectangle).
-_PROFILE_FORM = {"box_section": "", "tube": "CHS", "angle": "ANGLE", "channel": "CHANNEL",
-                 "flat_bar": "FLAT", "round_bar": "ROUND"}
+_PROFILE_FORM = {"box_section": "", "tube": "CHS", "oval_tube": "OVAL", "angle": "ANGLE",
+                 "channel": "CHANNEL", "flat_bar": "FLAT", "round_bar": "ROUND"}
 _STOCK_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?)"
                             r"(?:\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?))?", re.IGNORECASE)
 # The largest cross-section or grid a size in a part's words can be: above it, "A x B" is the
@@ -2148,6 +2149,10 @@ def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
     word_form = _stock_form_in_words(words) if metal else ""
     if said_form in STOCK_SECTION_FORMS + ("mesh", "wire"):
         form = said_form
+        # THE WORDS NAME AN OVAL THE SCHEMA HAS NO WORD FOR (D-531): a read that called
+        # "40 X 20 OVAL" a tube is right that it is hollow and wrong about its shape.
+        if word_form == "oval_tube" and said_form in ("tube", "box_section"):
+            form = "oval_tube"
     elif said_form in ("sheet", "board", "plate"):
         # The read says sheet; only a plate too thick to be one AND words naming a section
         # outrank it — the corruption this exists for wrote "sheet" beside "25 x 25 mesh".
@@ -5069,7 +5074,49 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
            + ", ".join(f"{p.get('part_number')} ×{_qty(p)}" for p in joined) if joined else ""))
     record["assembly_fitted_items"] = [str(p.get("part_number")) for p in fitted
                                        if p.get("concept_kind") != "fabricated"]
+    joints_once_on_the_unit(record, made)
     return record
+
+
+_WELD_WORDS = ("welding", "spot_welding")
+
+
+def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) -> List[str]:
+    """A WELDED UNIT OWNS ITS JOINTS (D-531). The read marks the unit welded and every member
+    welded too, and both were charged: the tote trolley and the hanging rail each paid Weld and
+    Dress on the unit AND on every member — the same connections, by two timers. A concept
+    member has no sub-weld of its own to show; its weld is the joint that puts it into this
+    unit (D-387: a member's welded finish is the assembly's joint). So the unit carries the
+    welding once, its joints counted from the welded PIECES — a weldment of N pieces has at
+    least N-1 joints, at the shop's per-joint rate — and a member's inferred weld comes off,
+    said on the member. A weld the brief states for a member is that member's and stays."""
+    if not isinstance(unit, dict) or not (set(unit.get("inferred_operations") or [])
+                                          & set(_WELD_WORDS)):
+        return []
+    moved: List[str] = []
+    pieces = 0
+    for p in made or []:
+        ops = list(p.get("inferred_operations") or [])
+        welded = bool(set(ops) & set(_WELD_WORDS)) or bool(p.get("welded_to_hosts"))
+        if not welded:
+            continue
+        pieces += _qty_of(p)
+        if p.get("weld_stated_by_brief") or not (set(ops) & set(_WELD_WORDS)):
+            continue
+        p["inferred_operations"] = [o for o in ops if o not in _WELD_WORDS]
+        p.setdefault("review_flags", []).append(
+            f"CONCEPT: welded into the unit — the joint is charged once, on "
+            f"{unit.get('part_number')}'s Weld and Dress rows, not again on this line")
+        moved.append(str(p.get("part_number")))
+    if pieces >= 2:
+        unit["weld_joint_count"] = max(int(_num(unit.get("weld_joint_count"))), pieces - 1)
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: the unit's welding is charged once, here — {pieces} welded piece(s), so "
+            f"at least {pieces - 1} joint(s) at the shop's per-joint rate"
+            + (f"; the members' own weld rows are not charged ({', '.join(moved)})"
+               if moved else "")
+            + ". Confirm the joint count")
+    return moved
 
 
 def concept_note(answer: Dict[str, Any]) -> Dict[str, Any]:

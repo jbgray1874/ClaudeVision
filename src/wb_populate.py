@@ -1143,8 +1143,13 @@ def section_coated_area_m2(part: Dict[str, Any]) -> float:
     _len = _safe((_me.get("stock_estimate") or {}).get("section_length_mm")) or _safe(_ss.get("length_mm"))
     if not _len or _len <= 0:
         return 0.0
-    if str(_ss.get("profile_form") or "").strip().upper() in ("CHS", "ROUND", "TUBE_ROUND"):
+    _pf = str(_ss.get("profile_form") or "").strip().upper()
+    if _pf in ("CHS", "ROUND", "TUBE_ROUND"):
         _perim_mm = 3.14159265 * _a
+    elif _pf == "OVAL" and _b:
+        # Ramanujan's ellipse perimeter on the semi-axes (D-531).
+        _ha, _hb = _a / 2.0, _b / 2.0
+        _perim_mm = 3.14159265 * (3 * (_ha + _hb) - ((3 * _ha + _hb) * (_ha + 3 * _hb)) ** 0.5)
     else:
         _perim_mm = 2.0 * (_a + (_b or _a))
     _q = _safe(_p.get("quantity"), 1) or 1
