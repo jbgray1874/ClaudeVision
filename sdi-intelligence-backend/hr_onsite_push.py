@@ -264,6 +264,15 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
          f"{len(inventry_on_site)}, sign in {len(to_sign_in)}, sign out "
          f"{len(to_sign_out)}, already on site {summary['already_on_site']}, "
          f"unmatched {len(summary['unmatched'])}")
+    # How people matched is the single most informative number on a first run:
+    # it says whether matching is exact (PersonID), good (email) or fragile
+    # (name). And the unmatched are the people a fire roll would miss, so they
+    # are named here rather than left in a status file nobody opens.
+    mb = summary["matched_by"]
+    _log(f"  matched by PersonID {mb.get('PersonID', 0)}, email {mb.get('email', 0)}, "
+         f"name {mb.get('name', 0)}")
+    for u in summary["unmatched"]:
+        _log(f"  UNMATCHED {u['name']}: {u['reason']}")
 
     # ── apply ──
     for ident, label, when in to_sign_in:

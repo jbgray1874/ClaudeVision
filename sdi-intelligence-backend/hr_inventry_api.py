@@ -450,7 +450,10 @@ class InVentryAPI:
             "personnel": len(people),
             "on_site": len(on_site),
             "on_site_signed_in_by_us": len(ours),
-            "with_our_person_id": len([p for p in people if _field(p, "PersonID")]),
+            # ANY PersonID, not ours - we have written none. On a directory-
+            # synced site InVentry fills this from Active Directory, so a high
+            # count here usually means AD identifiers, not BrightHR ones.
+            "with_person_id": len([p for p in people if _field(p, "PersonID")]),
             "warnings": list(self.warnings),
         }
 
