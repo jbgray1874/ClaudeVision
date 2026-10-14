@@ -2532,6 +2532,11 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
         # ── MASS ─────────────────────────────────────────────────────────────────
         if nat.mass_kg and nat.mass_kg > 0 and not _num(part.get("stated_weight_g")):
             part["stated_weight_g"] = round(float(nat.mass_kg) * 1000.0, 2)
+            # WHOSE FIGURE THIS IS (D-514). The weight check called this "the sheet's
+            # stated weight": on 12343-01J it compared the blank to the MODEL's 5.496 kg
+            # and the book presented that as drawing corroboration while the drawing
+            # prints 5.573 kg. The figure is kept; its origin travels with it.
+            part["stated_weight_source"] = "solidworks_model_mass"
             flags.append(f"mass {nat.mass_kg:.4f}kg from the SolidWorks model")
             out["mass"] += 1
 

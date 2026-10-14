@@ -175,6 +175,133 @@ def test_a_provisional_gauge_the_weight_refutes_still_raises_the_check():
     assert note and note.startswith("WEIGHT CHECK:"), note
 
 
+# ── the estimate-time carrier: the pages stamp the parts where the money is (D-514) ──────
+
+def _detail_page(code, text):
+    return {"page_number": 1, "page_role": {"primary_role": "detail"},
+            "text_preview": text, "region_text": {"notes": text},
+            "page_analysis": {"title_block": {"drawing_numbers": [code]}}}
+
+
+def test_the_estimate_time_stamp_reads_the_saved_pages():
+    """The 09:36 record held the statement in its own page text and the costed part still
+    arrived without it. The estimate-time pass reads the pages AS SAVED, so a replay of
+    the record stamps the same statement the document build should have."""
+    from edge_banding import stamp_banding_statements_from_pages, banded_length_mm
+    part = {"part_number": "12399-77J", "blank_length_mm": 1198.0, "blank_width_mm": 398.0}
+    summary = {"pages": [_detail_page(
+        "12399-77J", "EDGED ALL AROUND EDGING ORDER: 2S/SL C B SECTION A-A 10")]}
+    assert stamp_banding_statements_from_pages([part], summary) == 1
+    out = banded_length_mm(part)
+    assert out["basis"] == "note_all_round" and abs(out["mm"] - 3192.0) < 0.5
+
+
+def test_the_stamp_fills_only_a_gap_and_only_the_named_part():
+    from edge_banding import stamp_banding_statements_from_pages
+    held = {"part_number": "12399-77J", "banding_statements": ["EDGED TWO LONG EDGES"]}
+    other = {"part_number": "12399-78M"}
+    summary = {"pages": [_detail_page("12399-77J", "EDGED ALL AROUND")]}
+    assert stamp_banding_statements_from_pages([held, other], summary) == 0
+    assert held["banding_statements"] == ["EDGED TWO LONG EDGES"]
+    assert "banding_statements" not in other
+
+
+def test_an_assembly_page_stamps_nothing_at_estimate_time():
+    from edge_banding import stamp_banding_statements_from_pages
+    part = {"part_number": "12399-77J"}
+    page = _detail_page("12399-77J", "EDGED ALL AROUND")
+    page["page_role"] = {"primary_role": "assembly"}
+    assert stamp_banding_statements_from_pages([part], {"pages": [page]}) == 0
+
+
+# ── the reference is named: a model's mass is not "the sheet's stated" (D-514) ───────────
+
+def test_the_weight_note_names_the_models_mass_and_the_sheets_own_figure():
+    """The 09:36 book said "against the stated 5.496 kg" — the MODEL's mass, presented as
+    drawing corroboration while the sheet prints 5.573 kg. The reference keeps its name and
+    the sheet's differing figure rides beside it."""
+    import estimator as E
+    from source_precedence import apply_field
+    part = {"part_number": "12399-77J", "description": "KD V2 SHELF",
+            "normalized_material": "MFC",
+            "stated_weight_g": 5496.0, "stated_weight_source": "solidworks_model_mass",
+            "weights": ["5573g"],
+            "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0}}
+    apply_field(part, "normalized_thickness_mm", 18.0, "model_extents_board_gauge")
+    note = E._blank_weight_check(part)
+    assert note and "the model's 5.496 kg" in note, note
+    assert "the sheet itself prints 5.573 kg" in note, note
+    assert "the sheet's stated 5.496" not in note
+
+
+def test_a_sheets_own_weight_keeps_its_plain_name():
+    import estimator as E
+    from source_precedence import apply_field
+    part = {"part_number": "12399-77J", "description": "KD V2 SHELF",
+            "normalized_material": "MFC", "stated_weight_g": 5573.0,
+            "normalized_geometry": {"blank_length_mm": 1198.0, "blank_width_mm": 398.0}}
+    apply_field(part, "normalized_thickness_mm", 18.0, "model_extents_board_gauge")
+    note = E._blank_weight_check(part)
+    assert note and "the sheet's stated 5.573 kg" in note, note
+    assert "the sheet itself prints" not in note
+
+
+def test_the_sw_extract_stamps_whose_mass_it_wrote():
+    from source_connectors import solidworks as sw
+    part = _board_part()
+    sw.apply_native_to_pre_estimate(
+        [part], _native_job_mass(mass_kg=5.496))
+    assert float(part.get("stated_weight_g") or 0) == 5496.0
+    assert part.get("stated_weight_source") == "solidworks_model_mass"
+
+
+def _native_job_mass(**kw):
+    from source_connectors import solidworks as sw
+    nat = sw.NativePart(part_number="12399-77J", **kw)
+    return sw.NativeJob(part_signals={"12399-77J": nat}, found=True,
+                        meta={"extract_path": "test"})
+
+
+def _board_part(**over):
+    part = {"part_number": "12399-77J", "description": "KD V2 SHELF",
+            "normalized_material": "MFC", "quantity": 1}
+    part.update(over)
+    return part
+
+
+# ── the routing's claim matches its evidence (D-514) ─────────────────────────────────────
+
+def test_a_second_view_inventory_is_not_called_a_program():
+    import estimator as E
+    part = _board_part(normalized_thickness_mm=18.0,
+                       blank_length_mm=1198.0, blank_width_mm=398.0,
+                       hole_sizes_mm=[6.5],
+                       secondary_view_hole_inventory={
+                           "files": ["12399-77J_REAR.DXF"], "hole_count": 2,
+                           "hole_diameters_mm": [6.5]},
+                       textual_operations=["cnc_routing"],
+                       normalized_geometry={"estimated_hole_count": 2,
+                                            "estimated_cut_length_mm": 3192.0})
+    E.estimate_process_times(part, quantity=1)
+    flags = " ".join(str(f) for f in part.get("review_flags") or [])
+    assert "measured on a second view" in flags and "12399-77J_REAR.DXF" in flags
+    assert "not a demonstrated program" in flags
+    assert "are in the program" not in flags
+
+
+def test_the_costed_flats_own_holes_still_read_as_the_program():
+    import estimator as E
+    part = _board_part(normalized_thickness_mm=18.0,
+                       blank_length_mm=1198.0, blank_width_mm=398.0,
+                       hole_sizes_mm=[8.5, 6.5],
+                       textual_operations=["cnc_routing"],
+                       normalized_geometry={"estimated_hole_count": 4,
+                                            "estimated_cut_length_mm": 3192.0})
+    E.estimate_process_times(part, quantity=1)
+    flags = " ".join(str(f) for f in part.get("review_flags") or [])
+    assert "are in the program" in flags
+
+
 # ── the second view: its measured circles are the hole inventory ─────────────────────────
 
 def _write_dxf(path, length, width, circles=()):

@@ -326,6 +326,77 @@ def harvest_banding_statements(text: Any, *, window: int = 40, cap: int = 8) -> 
     return out
 
 
+def stamp_banding_statements_from_pages(parts: Any, summary: Any) -> int:
+    """THE ESTIMATE-TIME CARRIER (D-514): banding statements read off the summary's own
+    pages, onto the parts the pages name — where the money is computed, not only where the
+    document was built.
+
+    D-513 stamped these during the document build, and on the 09:36 12343-01J run the
+    costed record still arrived without them while the page's own notes region holds
+    "EDGED ALL AROUND EDGING ORDER: 2S/SL" verbatim — the statement existed on the summary
+    and died somewhere between the build and the costing. This pass closes that class of
+    loss: it runs at the head of estimate_document, reads the pages as saved (so a REPLAY
+    of a saved record proves it), fills only a gap, and keys each page to the part whose
+    number its own title block states — a note stays on the sheet it is written on.
+    Detail pages only. Returns how many parts were stamped."""
+    try:
+        from extractor_patterns import strip_specification_legend as _strip_legend
+    except Exception:                                                # noqa: BLE001
+        def _strip_legend(t: Any) -> str:                            # type: ignore[misc]
+            return str(t or "")
+
+    def _norm_code(v: Any) -> str:
+        return "".join(ch for ch in str(v or "").upper() if ch.isalnum())
+
+    page_texts: List[Tuple[set, str]] = []
+    for pg in ((summary or {}).get("pages") or []):
+        if not isinstance(pg, dict):
+            continue
+        role = pg.get("page_role")
+        role = role.get("primary_role") if isinstance(role, dict) else role
+        if str(role or "") != "detail":
+            continue
+        pa = pg.get("page_analysis") or {}
+        tb = (pa.get("title_block") or {}) if isinstance(pa, dict) else {}
+        codes = {_norm_code(v) for v in (tb.get("drawing_numbers") or [])}
+        for k in ("current_number", "primary_drawing_number"):
+            codes.add(_norm_code(tb.get(k)))
+            if isinstance(pa, dict):
+                codes.add(_norm_code(pa.get(k)))
+        codes.discard("")
+        if not codes:
+            continue
+        bits: List[Any] = [pg.get("text_preview"), pg.get("pdfplumber_text"),
+                           pg.get("normalized_text"), pg.get("pypdf_text")]
+        rt = pg.get("region_text")
+        if isinstance(rt, dict):
+            bits.extend(rt.values())
+        text = " ".join(str(b) for b in bits if b)
+        if text.strip():
+            page_texts.append((codes, text))
+    if not page_texts:
+        return 0
+
+    stamped = 0
+    for p in (parts or []):
+        if not isinstance(p, dict) or p.get("banding_statements"):
+            continue
+        pn = _norm_code(p.get("part_number"))
+        if not pn:
+            continue
+        stmts: List[str] = []
+        for codes, text in page_texts:
+            if pn not in codes:
+                continue
+            for s in harvest_banding_statements(_strip_legend(text)):
+                if s not in stmts:
+                    stmts.append(s)
+        if stmts:
+            p["banding_statements"] = stmts[:8]
+            stamped += 1
+    return stamped
+
+
 # The words an extent statement is allowed to add around the banding nouns — "ALL", "AROUND",
 # "TWO LONG EDGES" — plus the fillers a finish box writes. A finish made only of these and the
 # banding vocabulary states the edging the route charges; it is not an unknown process.
