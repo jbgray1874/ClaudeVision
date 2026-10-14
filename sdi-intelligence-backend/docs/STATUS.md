@@ -91,6 +91,15 @@ Proven on the live system before going live, each with one record:
 First `--apply`: **16 sign-ins, 0 sign-outs, 0 failures.** Then the scheduled
 task was registered with `-Apply`: every 5 minutes, as SYSTEM, sign-out on.
 
+**Scheduled runs failed for the first 50 minutes** - the runner resolved its
+folder to `C:\` under Task Scheduler (fixed in `6dfe4c1`, task re-registered).
+Since 20:45 the runs are clean, every 5 minutes, about 3.5 minutes each
+(BrightHR rate-limits the per-employee queries): 21 genuinely on site, all 16
+matchable people already signed in, 5 unmatched, 0 failures. **Automatic
+sign-out has not fired yet** - nobody the sync signed in had clocked out by
+21:00. First real test is the evening shift ending; check the pipeline log for
+`signed out` lines the next morning.
+
 **It is running on DESKTOP-GFAAP80**, not SDI-APP01. If that PC sleeps or is
 shut down the sync stops, and anyone it signed in stays signed in until it
 resumes. A fire roll cannot depend on a desktop - moving to SDI-APP01 is the
