@@ -1676,6 +1676,39 @@ def classify_dimensions(text: str) -> Dict[str, Any]:
     }
 
 
+# A STATED BORE CALLOUT: "2 x Ø8.5 ↧11" as the drawing writes it — and as the text layer
+# keeps it, which on 12343-01J is "2 x 8 11" and "2 x 6.5 10": the Ø and depth glyphs are
+# CAD symbols and do not survive extraction, so a Ø-anchored hole reader sees nothing while
+# the drawing states four bores. The count-x-diameter-depth SHAPE survives, and it is read
+# conservatively: a small count, a plausible drill diameter, a depth in proportion to it.
+# EVIDENCE ONLY — a callout read this way raises flags and questions and never charges time,
+# because "2 x 8 11" is a strong shape for a bore and not a proof of one (D-515).
+_STATED_BORE_RE = re.compile(
+    r"(?<![\dA-Z.,/:])([1-9]\d?)\s*[xX]\s*(?:Ø|⌀|O/|DIA\.?\s*)?"
+    r"(\d{1,2}(?:\.\d)?)\s+(\d{1,2}(?:\.\d)?)(?![\d.])")
+
+
+def extract_stated_bore_callouts(text: str) -> List[Dict[str, float]]:
+    """The bore callouts a sheet's text states, as evidence: [{count, diameter_mm,
+    depth_mm}], deduplicated (a drawing's text layers repeat the same callout). Bounds keep
+    sizes and member counts out: count 2-24, diameter 2-30 mm, depth 0.3-6x the diameter."""
+    out: List[Dict[str, float]] = []
+    seen = set()
+    for m in _STATED_BORE_RE.finditer(normalize_text(text)):
+        try:
+            n, dia, depth = int(m.group(1)), float(m.group(2)), float(m.group(3))
+        except (TypeError, ValueError):
+            continue
+        if not (2 <= n <= 24 and 2.0 <= dia <= 30.0 and 0.3 * dia <= depth <= 6.0 * dia):
+            continue
+        key = (n, round(dia, 2), round(depth, 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"count": float(n), "diameter_mm": dia, "depth_mm": depth})
+    return out
+
+
 def extract_feature_cues(text: str) -> Dict[str, Any]:
     text = normalize_text(text)
     dimensions = classify_dimensions(text)

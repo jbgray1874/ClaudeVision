@@ -4621,7 +4621,112 @@ def check_two_roots_do_not_price_the_same_members(summary: Any) -> List[Dict[str
         pairs=hits)]
 
 
+def check_a_banded_board_buys_its_edging(summary: Any) -> List[Dict[str, Any]]:
+    """A part whose banded metres are KNOWN must not pass without edging material (D-515).
+
+    Three 12343-01J books charged £22.77 of edge-banding labour and bought no ABS. The first
+    two could not know the metres (the statement never resolved); the moment it resolves,
+    "labour without material" is a checkable contradiction — the same shape as D-509's
+    labour-without-steel. Fires only where a part's own banding evidence resolves an extent
+    (never on the perimeter fallback) and the bill carries no edging line, so a job with no
+    banding, or banding whose extent is still a question, is untouched."""
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    except AttributeError:
+        return []
+    parts = [p for p in parts if isinstance(p, dict)]
+    if not parts:
+        return []
+    try:
+        import config as _cfg
+        _code = str(getattr(_cfg, "FACED_BOARD_EDGING_CODE", "") or "").strip().upper()
+    except Exception:                                                # noqa: BLE001
+        _code = ""
+    if any(p.get("_edging_line")
+           or (_code and str(p.get("part_number") or "").strip().upper() == _code)
+           for p in parts):
+        return []
+    try:
+        from edge_banding import banded_length_mm as _banded
+    except Exception:                                                # noqa: BLE001
+        return []
+    offenders: List[Dict[str, Any]] = []
+    for p in parts:
+        _ops = {str(o).strip().lower() for f in (
+            "operations", "textual_operations", "inferred_operations")
+            for o in (p.get(f) or []) if isinstance(o, str)}
+        if "edge_banding" not in _ops:
+            continue
+        try:
+            v = _banded(p) or {}
+        except Exception:                                            # noqa: BLE001
+            continue
+        if (v.get("mm") or 0) > 0:
+            offenders.append({"part_number": p.get("part_number"),
+                              "banded_mm": v.get("mm"), "basis": v.get("basis")})
+    if not offenders:
+        return []
+    listed = "; ".join(f"{o['part_number']} ({o['banded_mm']:g} mm, {o['basis']})"
+                       for o in offenders[:4])
+    return [_violation(
+        "edging_material_missing", WARNING,
+        f"{len(offenders)} banded part(s) resolve a stated banded length and the bill "
+        f"carries no edging material line: {listed}. The banding labour may be timed, but "
+        f"nobody has bought the edging — the metres are known, so the line should exist, "
+        f"priced or visibly unpriced. ESTIMATOR TO ADD OR CONFIRM THE EDGING MATERIAL.",
+        count=len(offenders), parts=offenders[:20])]
+
+
+def check_stated_bores_reach_the_inventory(summary: Any) -> List[Dict[str, Any]]:
+    """Four stated bores must not pass with two recorded (D-515).
+
+    The drawing's own callouts (stated_bore_callouts — count x diameter x depth, read from
+    the sheet's text) against the hole inventory the record actually holds. A shortfall is
+    work the drawing states and nothing demonstrates: said as a WARNING, no time added."""
+    try:
+        parts = (summary.get("manufacturing_writeup") or {}).get("parts") or []
+    except AttributeError:
+        return []
+    offenders: List[Dict[str, Any]] = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        calls = [c for c in (p.get("stated_bore_callouts") or []) if isinstance(c, dict)]
+        if not calls:
+            continue
+        try:
+            stated = int(sum(float(c.get("count") or 0) for c in calls))
+        except (TypeError, ValueError):
+            continue
+        ng = p.get("normalized_geometry") if isinstance(p.get("normalized_geometry"),
+                                                        dict) else {}
+        gr = p.get("geometry_rollup") if isinstance(p.get("geometry_rollup"), dict) else {}
+        try:
+            recorded = max(int(ng.get("estimated_hole_count") or 0),
+                           int(gr.get("estimated_hole_count") or 0),
+                           len(p.get("hole_sizes_mm") or []))
+        except (TypeError, ValueError):
+            recorded = len(p.get("hole_sizes_mm") or [])
+        if stated > recorded:
+            offenders.append({"part_number": p.get("part_number"),
+                              "stated": stated, "recorded": recorded,
+                              "callouts": calls[:6]})
+    if not offenders:
+        return []
+    listed = "; ".join(f"{o['part_number']} (states {o['stated']}, holds {o['recorded']})"
+                       for o in offenders[:4])
+    return [_violation(
+        "stated_bores_not_in_inventory", WARNING,
+        f"{len(offenders)} part(s) state more bores on the drawing than the record holds: "
+        f"{listed}. The missing bores sit on faces no measured view shows. Nothing is "
+        f"charged for them beyond the routing's allowance — confirm they are in the CNC "
+        f"program, or add the machining once. ESTIMATOR TO CONFIRM THE BORING.",
+        count=len(offenders), parts=offenders[:20])]
+
+
 CHECKS = (
+    check_a_banded_board_buys_its_edging,
+    check_stated_bores_reach_the_inventory,
     check_the_identity_gate_actually_ran,
     check_the_sheet_carries_only_the_graphs_identities,
     check_every_reached_bom_item_is_accounted_for,

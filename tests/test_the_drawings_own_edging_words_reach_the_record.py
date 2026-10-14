@@ -302,6 +302,143 @@ def test_the_costed_flats_own_holes_still_read_as_the_program():
     assert "are in the program" in flags
 
 
+# ── D-515: the saved record itself, replayed ─────────────────────────────────────────────
+#
+# The probe on the live 12343-01J record showed the D-513 stamp HAD fired and survived —
+# and banded_length_mm still returned extent-unknown: _interpret_part rebuilds
+# normalized_geometry with the blank under bounding_box_flat_mm, blank_length_mm is gone,
+# and the ALL AROUND branch cannot state a perimeter it cannot see. These fixtures are the
+# saved record's own shapes, verbatim from the probe output.
+
+_SAVED_STATEMENTS = [
+    '1198 A A 893 493 1194 2 EDGED ALL AROUND EDGING ORDER: 2S/SL 163 B C',
+    'N: MATERIAL: MFC REVISION TABLE FINISH: EDGED REV DRG NO DESCRIPTION DATE BY COLOUR:',
+    '3G SPECIFICATION: MATERIAL: MFC FINISH: EDGED COLOUR: EGGER: W980 ST7   PLATINUM WHIT',
+    'ED UPC 0324926 18/03/2026 GS GARETH 1/1 EDGED ALL AROUND EDGING ORDER: 2S/SL C B SECT',
+]
+
+def _saved_record_part(**over):
+    part = {"part_number": "12399-77J", "description": "KD V2 SHELF", "quantity": 1,
+            "normalized_material": "MFC",
+            "textual_operations": ["cnc_routing", "edge_banding"],
+            "banding_statements": list(_SAVED_STATEMENTS),
+            "normalized_geometry": {
+                "stock_form": "sheet", "profile_type": "flat",
+                "bounding_box_flat_mm": {"length": 1198.0, "width": 398.0, "height": 18.0},
+                "bounding_box_formed_mm": {"length": 1198.0, "width": 398.0, "height": None},
+                "developed_length_mm": 1198.0, "developed_width_mm": 398.0}}
+    part.update(over)
+    return part
+
+
+def test_the_saved_records_own_shape_resolves_the_all_round_statement():
+    from edge_banding import banded_length_mm
+    out = banded_length_mm(_saved_record_part())
+    assert out["basis"] == "note_all_round", out
+    assert abs(out["mm"] - 3192.0) < 0.5
+
+
+def test_a_record_with_no_blank_in_any_spelling_still_refuses_an_extent():
+    from edge_banding import banded_length_mm
+    part = _saved_record_part(normalized_geometry={})
+    out = banded_length_mm(part)
+    assert out["mm"] is None and out["basis"] == "banding_stated_extent_unknown"
+
+
+# ── D-515: the drawing's bore callouts survive as evidence ───────────────────────────────
+
+def test_the_callouts_the_text_layer_keeps_are_read():
+    """The Ø and depth glyphs are CAD symbols and die in extraction — 12343-01J's text says
+    "2 x 8 11" and "2 x 6.5 10". The shape is read; sizes and sheet dims are not."""
+    from extractor_patterns import extract_stated_bore_callouts
+    text = ("SECTION A-A 2 x 8 11 296.5 5 5 296.5 299 600 - CENTRES 299 "
+            "2 x 6.5 10 81 DETAIL B SCALE 1 : 1 KD V2 SHELF 1198 X 400 SHEET 2800 x 2070")
+    calls = extract_stated_bore_callouts(text)
+    assert {(c["count"], c["diameter_mm"], c["depth_mm"]) for c in calls} == \
+        {(2.0, 8.0, 11.0), (2.0, 6.5, 10.0)}, calls
+
+
+def test_a_repeated_callout_is_one_statement():
+    from extractor_patterns import extract_stated_bore_callouts
+    assert len(extract_stated_bore_callouts("2 x 6.5 10 ... 2 x 6.5 10")) == 1
+
+
+def test_the_detail_page_stamps_the_callouts_on_the_part():
+    import document_builder as db
+    part = db._empty_part_record("12399-77J")
+    part["pages"] = [1]
+    summary = {"pages": [_page(1, "SECTION A-A 2 x 8 11 AND 2 x 6.5 10")]}
+    out = db._apply_post_build_fixes([part], summary)
+    calls = out[0].get("stated_bore_callouts") or []
+    assert sum(c["count"] for c in calls) == 4, calls
+
+
+def test_stated_bores_beyond_the_inventory_are_said_on_the_routing():
+    import estimator as E
+    part = _saved_record_part(
+        hole_sizes_mm=[6.5],
+        stated_bore_callouts=[{"count": 2.0, "diameter_mm": 8.0, "depth_mm": 11.0},
+                              {"count": 2.0, "diameter_mm": 6.5, "depth_mm": 10.0}],
+        normalized_geometry={"estimated_hole_count": 2,
+                             "estimated_cut_length_mm": 3192.0,
+                             "bounding_box_flat_mm": {"length": 1198.0, "width": 398.0}})
+    E.estimate_process_times(part, quantity=1)
+    flags = " ".join(str(f) for f in part.get("review_flags") or [])
+    assert "STATED BORES EXCEED THE RECORDED INVENTORY" in flags
+    assert "state 4 bore(s)" in flags and "the record holds 2" in flags
+
+
+# ── D-515: the acceptance checks catch missing work ──────────────────────────────────────
+
+def test_a_banded_part_with_known_metres_and_no_edging_line_is_a_violation():
+    import invariants as inv
+    job = {"manufacturing_writeup": {"parts": [_saved_record_part()]}}
+    codes = [v.get("code") or v.get("name") for v in
+             inv.check_a_banded_board_buys_its_edging(job)]
+    assert "edging_material_missing" in codes, codes
+
+
+def test_the_edging_line_on_the_bill_satisfies_the_check():
+    import invariants as inv
+    import config
+    job = {"manufacturing_writeup": {"parts": [
+        _saved_record_part(),
+        {"part_number": config.FACED_BOARD_EDGING_CODE, "_edging_line": True,
+         "description": "ABS edging — 3.192 m a unit", "quantity": 3.192}]}}
+    assert inv.check_a_banded_board_buys_its_edging(job) == []
+
+
+def test_an_unresolved_extent_is_a_question_not_this_violation():
+    """The CEILING question owns the unresolved case; this check fires only on KNOWN metres."""
+    import invariants as inv
+    part = _saved_record_part(banding_statements=["EDGED"], normalized_geometry={})
+    job = {"manufacturing_writeup": {"parts": [part]}}
+    assert inv.check_a_banded_board_buys_its_edging(job) == []
+
+
+def test_four_stated_bores_with_two_recorded_is_a_violation():
+    import invariants as inv
+    part = _saved_record_part(
+        hole_sizes_mm=[6.5],
+        stated_bore_callouts=[{"count": 2.0, "diameter_mm": 8.0, "depth_mm": 11.0},
+                              {"count": 2.0, "diameter_mm": 6.5, "depth_mm": 10.0}],
+        normalized_geometry={"estimated_hole_count": 2})
+    job = {"manufacturing_writeup": {"parts": [part]}}
+    found = inv.check_stated_bores_reach_the_inventory(job)
+    assert [v.get("code") or v.get("name") for v in found] == ["stated_bores_not_in_inventory"]
+
+
+def test_a_full_inventory_satisfies_the_boring_check():
+    import invariants as inv
+    part = _saved_record_part(
+        hole_sizes_mm=[8.0, 6.5],
+        stated_bore_callouts=[{"count": 2.0, "diameter_mm": 8.0, "depth_mm": 11.0},
+                              {"count": 2.0, "diameter_mm": 6.5, "depth_mm": 10.0}],
+        normalized_geometry={"estimated_hole_count": 4})
+    job = {"manufacturing_writeup": {"parts": [part]}}
+    assert inv.check_stated_bores_reach_the_inventory(job) == []
+
+
 # ── the second view: its measured circles are the hole inventory ─────────────────────────
 
 def _write_dxf(path, length, width, circles=()):

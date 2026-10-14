@@ -9124,6 +9124,26 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 "CNC ROUTING: the record holds NO hole inventory — if the drawing calls up "
                 "bores, nothing here demonstrates they reached the program; check the hole "
                 "callouts against the DXF views.")
+        # THE DRAWING'S CALLOUTS AGAINST THE RECORD'S INVENTORY (D-515). 12343-01J states
+        # four bores (2 x Ø8.5 ↧11, 2 x Ø6.5 ↧10) and the measured views yielded two: the
+        # other pair sits on faces no export shows, and three books passed with half the
+        # boring. Where the sheet's own callouts state more than the record holds, the
+        # shortfall is said — no time is added; the coverage is the estimator's to confirm.
+        _calls = [c for c in (part.get("stated_bore_callouts") or [])
+                  if isinstance(c, dict)]
+        if _calls:
+            _stated_n = int(sum(_safe_float(c.get("count")) or 0 for c in _calls))
+            _stated_txt = ", ".join(
+                f"{int(_safe_float(c.get('count')) or 0)} x "
+                f"Ø{_safe_float(c.get('diameter_mm')) or 0:g} "
+                f"↧{_safe_float(c.get('depth_mm')) or 0:g} mm" for c in _calls)
+            if _stated_n > (_hole_n or 0):
+                part.setdefault("review_flags", []).append(
+                    f"STATED BORES EXCEED THE RECORDED INVENTORY: the drawing's callouts "
+                    f"state {_stated_n} bore(s) ({_stated_txt}); the record holds "
+                    f"{_hole_n or 0}. The missing bores sit on faces no measured view "
+                    f"shows — confirm the full set, their faces and depths are covered by "
+                    f"the CNC program, or add the machining once.")
 
     if "edge_banding" in ops:
         eb_rule = LABOUR_RULES.get("edge_banding") or {}

@@ -83,6 +83,11 @@ _ESTIMATOR = {
     # A coat or a weld charged on an assembly and again on a part it contains: before AND
     # after assembly, or one item twice. Asked under Decisions required; only a person rules.
     "operation_charged_on_a_parent_and_its_child",
+    # The drawing's bore callouts state more holes than any measured view shows (D-515,
+    # 12343-01J: 2 x Ø8.5 ↧11 on faces neither export carries). No engine can measure a
+    # face nobody drew; whether the CNC program covers them is confirmed with the drawing
+    # open, or the drawing office exports the face.
+    "stated_bores_not_in_inventory",
 }
 
 # The union, so any caller still asking only "is this the engine's fault" gets the answer it
@@ -97,6 +102,10 @@ _OURS = {
     # material basis and the sheet's charge. One of them is our wrong blank, gauge, weight or
     # stock form; never the drawing office's and never the estimator's to settle by hand.
     "sheet_charge_disagrees_with_engine_material_basis",
+    # A banded part whose metres RESOLVED and no edging line on the bill (D-515): the engine
+    # mints that line itself from the same metres, so this firing means our own hand-off
+    # dropped it — exactly the loss 12343-01J lived through three books running.
+    "edging_material_missing",
     "canonical_route_bom_node_disconnected",
     "bom_node_disconnected",
     "datum_written_without_source",
