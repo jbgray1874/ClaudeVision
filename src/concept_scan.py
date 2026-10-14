@@ -62,7 +62,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 #   c4  print is always its own graphic line, never folded into a board's material (D-365)
 #   c5  a folded part's folds, flange depth and blank basis (finished or flat), its internal
 #       cut-outs, and one line per size for a part that follows parts of different sizes (D-490)
-CONCEPT_PROMPT_VERSION = "c5"
+#   c6  a part's stock form, with a section's size and wall, a mesh's grid and wire, and a wire's
+#       diameter in fields of their own — never in the blank's thickness (D-528)
+CONCEPT_PROMPT_VERSION = "c6"
 
 SOURCE = "vision_concept"
 
@@ -655,6 +657,16 @@ Rules:
 - A PART THAT RUNS ALONG OTHER PARTS (an edge strip, a trim, a lip) takes its length from the
   part it runs along: where those parts differ in size, list one line per size, each with its
   own count — never one count at a single length.
+- STOCK THAT IS NOT SHEET KEEPS ITS OWN SIZES. Give every made part "stock.form": sheet,
+  board, box_section, tube, angle, channel, flat_bar, round_bar, wire or mesh.
+  A SECTION (box_section, tube, angle, channel, flat_bar, round_bar): "section_mm" is its
+  outside size ("25 x 25 box section" is [25, 25], "60 x 40 angle" is [60, 40], a round is
+  [diameter]), "wall_mm" its wall or gauge (0 if not shown), "length_mm" its cut length; its
+  assumed_blank_mm thickness is 0. A MESH: "aperture_mm" is its grid ("25 x 25 mesh" is
+  [25, 25]), "wire_mm" its wire diameter (0 if not shown), and assumed_blank_mm the panel's
+  length and width with thickness 0. A WIRE: "wire_mm" and "length_mm".
+  A size "A x B" written before a section or mesh word is its section or grid: NEVER a count,
+  NEVER a thickness.
 
 Return ONLY valid JSON, no markdown, exactly this shape:
 {{
@@ -665,6 +677,8 @@ Return ONLY valid JSON, no markdown, exactly this shape:
       "sighted_material": "<what it looks like, verbatim impression>",
       "material_guess": "<closest stock material, e.g. MFMDF, MDF, ACRYLIC, MILD STEEL, PRINTED_PAPER>",
       "assumed_blank_mm": {{"length": 0, "width": 0, "thickness": 0}},
+      "stock": {{"form": "sheet", "section_mm": [], "wall_mm": 0, "length_mm": 0,
+                "aperture_mm": [], "wire_mm": 0}},
       "quantity": 1, "quantity_basis": "<seen / implied by symmetry / per print set>",
       "operations": ["saw", "cnc_routing"],
       "folds": 0, "flange_mm": 0, "blank_basis": "finished|developed",
@@ -679,7 +693,7 @@ Return ONLY valid JSON, no markdown, exactly this shape:
 
 # The prompt's own hash, so a change without a version bump cannot pass silently. If a test
 # tells you this is wrong: bump CONCEPT_PROMPT_VERSION above, then put the new hash here.
-_PROMPT_FINGERPRINT = "f8289cfa0392"
+_PROMPT_FINGERPRINT = "0ec971544c51"
 
 
 class ConceptUnavailable(RuntimeError):
@@ -2070,6 +2084,242 @@ def _num(value: Any) -> float:
     return f if f > 0 else 0.0
 
 
+# ── STOCK THAT IS NOT SHEET (D-528) ───────────────────────────────────────────────────────
+STOCK_SECTION_FORMS = ("box_section", "tube", "angle", "channel", "flat_bar", "round_bar")
+STOCK_FORMS = STOCK_SECTION_FORMS + ("mesh", "wire", "sheet", "board")
+# section_profile.section_kg_per_m's names for each form ("" is a closed rectangle).
+_PROFILE_FORM = {"box_section": "", "tube": "CHS", "angle": "ANGLE", "channel": "CHANNEL",
+                 "flat_bar": "FLAT", "round_bar": "ROUND"}
+_STOCK_SIZE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?)"
+                            r"(?:\s*(?:mm)?\s*[x×]\s*(\d+(?:\.\d+)?))?", re.IGNORECASE)
+# The largest cross-section or grid a size in a part's words can be: above it, "A x B" is the
+# part's length and width, not its section.
+_STOCK_SECTION_MAX_MM = 200.0
+_METAL_WORDS = ("STEEL", "ALUMIN", "ZINTEC", "STAINLESS", "GALV", "IRON", "METAL", "BRASS",
+                "COPPER", "WIRE", "MESH")
+
+
+def _stock_form_in_words(text: Any) -> str:
+    """The stock form a part's own words name (config.CONCEPT_STOCK_FORM_WORDS), or ""."""
+    said = " " + re.sub(r"[^A-Z0-9]+", " ", str(text or "").upper()) + " "
+    for form, words in _vocab("CONCEPT_STOCK_FORM_WORDS", ()) or ():
+        if any(f" {w} " in said for w in words):
+            return str(form)
+    return ""
+
+
+def _sizes(value: Any) -> List[float]:
+    vals = value if isinstance(value, (list, tuple)) else [value]
+    return [v for v in (_num(x) for x in vals) if v > 0]
+
+
+def resolve_stock(p: Mapping[str, Any]) -> Dict[str, Any]:
+    """What a made line is cut from, every size in its own field (D-528).
+
+    {} for a sheet or board part (and anything not made). Otherwise {"form", "notes", ...}:
+    a section carries section_mm [a, b], wall_mm, length_mm, profile_form; a mesh carries
+    aperture_mm [a, b], wire_mm, panel_mm [L, W] and the wire_length_mm it is woven from; a
+    wire carries wire_mm and length_mm; "held" is a made metal line sighted as a plate thicker
+    than config.CONCEPT_PLATE_THICKNESS_LIMIT_MM that nothing says is a section — costed as
+    read and asked. Each size comes from the read's own stock fields, then the part's own words
+    ("25 x 25 box section"), then — said on the line — the old reading that wrote a section's
+    size into the blank's width and thickness. A wall or wire nobody states is the config
+    figure, marked assumed."""
+    if not isinstance(p, Mapping) or _concept_kind(p.get("kind")) != "fabricated":
+        return {}
+    st = p.get("stock") if isinstance(p.get("stock"), Mapping) else {}
+    words = " ".join(str(p.get(k) or "") for k in ("name", "sighted_material", "material_guess"))
+    blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+    L, W, T = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
+    limit = float(_vocab("CONCEPT_PLATE_THICKNESS_LIMIT_MM", 12.0) or 12.0)
+    metal = any(w in words.upper() for w in _METAL_WORDS) or not str(
+        p.get("material_guess") or "").strip()
+    said_form = str(st.get("form") or "").strip().lower().replace(" ", "_").replace("-", "_")
+    word_form = _stock_form_in_words(words) if metal else ""
+    if said_form in STOCK_SECTION_FORMS + ("mesh", "wire"):
+        form = said_form
+    elif said_form in ("sheet", "board", "plate"):
+        # The read says sheet; only a plate too thick to be one AND words naming a section
+        # outrank it — the corruption this exists for wrote "sheet" beside "25 x 25 mesh".
+        form = word_form if (word_form and T > limit) else ""
+    else:
+        form = word_form
+    notes: List[str] = []
+    m = next((x for x in _STOCK_SIZE_RE.finditer(words)
+              if float(x.group(1)) <= _STOCK_SECTION_MAX_MM
+              and float(x.group(2)) <= _STOCK_SECTION_MAX_MM), None)
+    if not form:
+        if metal and T > limit:
+            return {"form": "held", "thickness_mm": T,
+                    "notes": [f"sighted as {T:g} mm plate — thicker than the "
+                              f"{limit:g} mm a concept read is trusted to call plate, and nothing "
+                              f"says what section or mesh it is"]}
+        return {}
+    if form in STOCK_SECTION_FORMS:
+        sec, wall = _sizes(st.get("section_mm"))[:2], _num(st.get("wall_mm"))
+        if sec:
+            notes.append(f"section {' x '.join(f'{v:g}' for v in sec)} read as the stock's size")
+        elif m:
+            sec = [float(m.group(1)), float(m.group(2))]
+            wall = wall or (_num(m.group(3)) if m.group(3) else 0.0)
+            notes.append(f"section {m.group(0).strip()} taken from the part's own words")
+        elif 0 < W <= _STOCK_SECTION_MAX_MM and 0 < T <= _STOCK_SECTION_MAX_MM:
+            sec = [W, T]
+            notes.append(f"the read wrote the section's size into the blank's width and "
+                         f"thickness ({W:g} x {T:g}); taken as the section, not a "
+                         f"{T:g} mm plate")
+        if not sec:
+            return {"form": "held", "thickness_mm": T,
+                    "notes": [f"named as {form.replace('_', ' ')} with no section size"]}
+        if len(sec) == 1:
+            sec = [sec[0], sec[0]]
+        assumed = False
+        if form == "flat_bar":
+            wall = sec[1]
+        elif form == "round_bar":
+            wall = sec[0]
+        elif not wall:
+            wall = float((_vocab("CONCEPT_SECTION_DEFAULT_WALL_MM", {}) or {}).get(form, 1.5))
+            assumed = True
+            notes.append(f"wall {wall:g} mm ASSUMED — the pack states none")
+        length = _num(st.get("length_mm")) or L
+        return {"form": form, "section_mm": sec, "wall_mm": wall, "wall_assumed": assumed,
+                "length_mm": length, "profile_form": _PROFILE_FORM.get(form, ""),
+                "notes": notes}
+    if form == "mesh":
+        ap = _sizes(st.get("aperture_mm"))[:2]
+        wire = _num(st.get("wire_mm"))
+        if ap:
+            notes.append(f"grid {' x '.join(f'{v:g}' for v in ap)} read as the mesh's aperture")
+        elif m:
+            ap = [float(m.group(1)), float(m.group(2))]
+            wire = wire or (_num(m.group(3)) if m.group(3) else 0.0)
+            notes.append(f"grid {m.group(0).strip()} taken from the part's own words")
+        elif limit < T <= _STOCK_SECTION_MAX_MM:
+            ap = [T, T]
+            notes.append(f"the read wrote the mesh's grid into the blank's thickness ({T:g}); "
+                         f"taken as a {T:g} x {T:g} aperture, not a {T:g} mm plate")
+        if not ap:
+            _d = float(_vocab("CONCEPT_MESH_DEFAULT_APERTURE_MM", 25.0) or 25.0)
+            ap = [_d, _d]
+            notes.append(f"grid {_d:g} x {_d:g} ASSUMED — the pack states none")
+        if len(ap) == 1:
+            ap = [ap[0], ap[0]]
+        assumed = False
+        if not wire or wire > limit:
+            wire = float(_vocab("CONCEPT_MESH_DEFAULT_WIRE_MM", 3.0) or 3.0)
+            assumed = True
+            notes.append(f"wire Ø{wire:g} mm ASSUMED — the pack states none")
+        out = {"form": "mesh", "aperture_mm": ap, "wire_mm": wire, "wire_assumed": assumed,
+               "panel_mm": [L, W], "notes": notes}
+        if L and W:
+            import math                                               # noqa: WPS433
+            out["wire_length_mm"] = round((math.floor(W / ap[0]) + 1) * L
+                                          + (math.floor(L / ap[1]) + 1) * W, 1)
+        return out
+    wire = _num(st.get("wire_mm")) or (T if 0 < T <= limit else 0.0)
+    return {"form": "wire", "wire_mm": wire, "length_mm": _num(st.get("length_mm")) or L,
+            "notes": notes}
+
+
+def resolve_stocks(parts: List[Any]) -> List[Dict[str, Any]]:
+    """resolve_stock for every line of one read, index for index — and a held line whose
+    width and thickness are the section another line of the same read is cut from is that
+    section (D-528): FRAME HORIZONTALS at 415 x 25 x 25 beside FRAME VERTICALS of 25 x 25 box
+    section is 415 mm of the same box section, not a 25 mm plate."""
+    out = [resolve_stock(p) if isinstance(p, Mapping) else {} for p in parts or []]
+    known: Dict[Tuple[float, float], Tuple[Dict[str, Any], str]] = {}
+    for p, s in zip(parts or [], out):
+        if s.get("form") in STOCK_SECTION_FORMS:
+            known.setdefault(tuple(sorted(s["section_mm"][:2])), (s, str(p.get("name") or "")))
+    for i, (p, s) in enumerate(zip(parts or [], out)):
+        if s.get("form") != "held":
+            continue
+        blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
+        L, W, T = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
+        hit = known.get(tuple(sorted((W, T))))
+        if hit:
+            twin, of = hit
+            out[i] = dict(twin, length_mm=L, notes=[
+                f"the same {twin['section_mm'][0]:g} x {twin['section_mm'][1]:g} "
+                f"{twin['form'].replace('_', ' ')} as {of} — the read wrote it as a {T:g} mm "
+                f"plate"] + [n for n in twin.get("notes") or [] if "ASSUMED" in n])
+    return out
+
+
+def _stock_said(s: Mapping[str, Any]) -> str:
+    """A stock in the words an estimator confirms: '25 x 25 x 1.5 box section, 880 mm long'."""
+    form = str(s.get("form") or "").replace("_", " ")
+    if s.get("form") in STOCK_SECTION_FORMS:
+        a, b = s["section_mm"][:2]
+        size = (f"Ø{a:g}" if s.get("form") == "round_bar" else
+                f"{a:g} x {b:g}" if s.get("form") == "flat_bar" else
+                f"{a:g} x {b:g} x {s['wall_mm']:g}")
+        return f"{size} {form}" + (f", {s['length_mm']:g} mm long" if s.get("length_mm") else "")
+    if s.get("form") == "mesh":
+        ap = s.get("aperture_mm") or []
+        pan = [v for v in (s.get("panel_mm") or []) if v]
+        return (f"{ap[0]:g} x {ap[1]:g} mesh of Ø{s['wire_mm']:g} wire"
+                + (f", panel {pan[0]:g} x {pan[1]:g}" if len(pan) == 2 else ""))
+    return f"Ø{_num(s.get('wire_mm')):g} wire, {_num(s.get('length_mm')):g} mm"
+
+
+def _apply_stock(record: Dict[str, Any], s: Mapping[str, Any],
+                 blank: Mapping[str, Any]) -> Dict[str, Any]:
+    """The record a section, mesh or wire line becomes (D-528), in the fields the costing
+    already reads: section_stock {a, b, t, length_mm, profile_form} for the by-the-metre path,
+    wire_gauge_mm / wire_length_mm on wire stock for a mesh or wire. Returns the blank the rest
+    of the mapper writes: the cut length, the section's outside size and its wall — never a
+    section's size as a plate thickness."""
+    record["concept_stock"] = {k: v for k, v in s.items() if k != "notes"}
+    said = _stock_said(s)
+    if s.get("form") in STOCK_SECTION_FORMS:
+        a, b = s["section_mm"][:2]
+        record["section_stock"] = {
+            "a": a, "b": b, "t": s["wall_mm"], "length_mm": s.get("length_mm") or 0,
+            "profile_form": s.get("profile_form") or "", "form": s["form"],
+            "wall_assumed": bool(s.get("wall_assumed")), "source": SOURCE}
+        record["stock_form"] = "tube"
+        record["review_flags"].append(
+            f"CONCEPT STOCK: {said} — costed by the metre, not nested as plate"
+            + (f" ({'; '.join(s['notes'])})" if s.get("notes") else ""))
+        return {"length": s.get("length_mm") or _num(blank.get("length")), "width": a,
+                "thickness": s["wall_mm"]}
+    wire_len = s.get("wire_length_mm") if s.get("form") == "mesh" else s.get("length_mm")
+    record["stock_form"] = "wire"
+    record.setdefault("manufacturing_interpretation", {})["stock_form"] = "wire"
+    if s.get("wire_mm"):
+        record["wire_gauge_mm"] = s["wire_mm"]
+    if wire_len:
+        record["wire_length_mm"] = wire_len
+    record["review_flags"].append(
+        f"CONCEPT STOCK: {said} — costed as "
+        + (f"{wire_len:,.0f} mm of wire" if wire_len else "wire") + ", not as a plate"
+        + (f" ({'; '.join(s['notes'])})" if s.get("notes") else ""))
+    if s.get("form") == "mesh":
+        pan = s.get("panel_mm") or [0, 0]
+        return {"length": pan[0], "width": pan[1], "thickness": s.get("wire_mm") or 0}
+    return {"length": s.get("length_mm") or 0, "width": 0, "thickness": s.get("wire_mm") or 0}
+
+
+def stock_mass_kg(p: Mapping[str, Any], density: float = 7850.0,
+                  stock: Optional[Mapping[str, Any]] = None) -> Optional[float]:
+    """One piece's mass by its stock (D-528) — a section by the metre, a mesh or wire by its
+    wire — or None where it is sheet, held, or cannot be weighed."""
+    s = dict(stock) if stock is not None else resolve_stock(p)
+    rho = density or 7850.0
+    if s.get("form") in STOCK_SECTION_FORMS and s.get("length_mm"):
+        from section_profile import section_kg_per_m                 # noqa: WPS433
+        a, b = s["section_mm"][:2]
+        kg_m = section_kg_per_m(a, b, s["wall_mm"], s.get("profile_form"), rho)
+        return kg_m * s["length_mm"] / 1000.0 if kg_m else None
+    if s.get("form") == "mesh" and s.get("wire_length_mm"):
+        return s["wire_length_mm"] / 1000.0 * 3.14159265 / 4.0 * (s["wire_mm"] ** 2) * rho / 1e6
+    if s.get("form") == "wire" and s.get("wire_mm") and s.get("length_mm"):
+        return s["length_mm"] / 1000.0 * 3.14159265 / 4.0 * (s["wire_mm"] ** 2) * rho / 1e6
+    return None
+
+
 def _density(material: Any) -> float:
     """kg/m³ for a sighted material from config's density table, or 0 where it names none."""
     try:
@@ -2188,6 +2438,12 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
                     m2 = re.match(r"^(\d+(?:\.\d+)?)\s*KG$", lines[j], re.IGNORECASE)
                     if m2:
                         weights.append(float(m2.group(1)))
+    if not weights:
+        # A TITLE BLOCK THAT PRINTS ONLY THE FIGURE (D-528): 0356456 prints "49KG" on a line of
+        # its own under the title, with no WEIGHT label — the only weight on the sheet. A lone
+        # "<n> KG" line counts where it is the one such figure the sheet prints.
+        weights = [float(m.group(1)) for m in
+                   (re.match(r"^(\d+(?:\.\d+)?)\s*KGS?$", l, re.IGNORECASE) for l in lines) if m]
     if _one(weights):
         out["stated_weight_kg"] = _one(weights)
 
@@ -2214,6 +2470,13 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
         for word in sorted(materials, key=len, reverse=True):
             m = re.search(rf"\b(\d+(?:\.\d+)?)\s*MM\s+{re.escape(word)}\b", l, re.IGNORECASE)
             if m:
+                # A GAUGE THAT NAMES ITS PART IS THAT PART'S (D-528): "1.5MM STEEL SHEET SIDES"
+                # on a materials list is the sides' gauge, not the product's — "2mm STEEL
+                # CONSTRUCTION" is the product's. A tail naming anything but the stock is a part.
+                _tail = [w for w in re.findall(r"[A-Za-z]+", l[m.end():].upper())
+                         if w not in _GAUGE_NOTE_QUALIFIERS]
+                if _tail:
+                    break
                 gauges.append(float(m.group(1)))
                 mats.append(str(materials[word]))
                 break
@@ -2229,6 +2492,12 @@ def sheet_stated_facts(words: str) -> Dict[str, Any]:
     if len(set(finishes)) == 1:
         out["finish"] = finishes[0]
     return out
+
+
+_GAUGE_NOTE_QUALIFIERS = {"SHEET", "SHEETS", "PLATE", "CONSTRUCTION", "THROUGHOUT", "ALL",
+                          "GAUGE", "THICK", "THK", "MATERIAL", "MILD", "STEEL", "CR", "CRCA",
+                          "HR", "ZINTEC", "GALV", "GALVANISED", "GALVANIZED", "PRE", "ONLY",
+                          "UNLESS", "OTHERWISE", "STATED", "MM"}
 
 
 def _uncovered_faces(dims: List[float], made: List[Mapping[str, Any]], tol: float) -> List[str]:
@@ -2256,8 +2525,24 @@ def _uncovered_faces(dims: List[float], made: List[Mapping[str, Any]], tol: floa
     return out
 
 
+def brief_stated_weight(brief: str) -> float:
+    """The product's weight an enquiry brief states (D-528) — "49 kg stated on the drawing",
+    "weighs about 12kg" — or 0. Read only from a sentence that says it is a weight, never one
+    about a load, a capacity or each of something; two different figures state nothing."""
+    vals = set()
+    for sentence in re.split(r"(?<=[.;])\s+|\n", str(brief or "")):
+        if not re.search(r"weigh|weight|stated|overall|total", sentence, re.IGNORECASE):
+            continue
+        if re.search(r"\b(?:each|per|load|loads|capacity|max|maximum|swl|rated|holds?)\b",
+                     sentence, re.IGNORECASE):
+            continue
+        for m in re.finditer(r"(\d+(?:\.\d+)?)\s*kgs?\b", sentence, re.IGNORECASE):
+            vals.add(float(m.group(1)))
+    return vals.pop() if len(vals) == 1 else 0.0
+
+
 def sheet_check(answer: Mapping[str, Any], words: str = "",
-                envelope: Any = None) -> Dict[str, Any]:
+                envelope: Any = None, brief: str = "") -> Dict[str, Any]:
     """The sighted bill against the sheet's stated body, goods and weight.
 
     Returns {'checked', 'agrees', 'failures', 'body_mm', 'body_used_mm', 'body_source',
@@ -2392,6 +2677,12 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     # too light under both, or too heavy under both, fails; fitting only one is UNVERIFIED —
     # the case a single reading let pass as "agrees".
     stated = _stated("stated weight", facts.get("stated_weight_kg"))
+    # THE BRIEF'S WEIGHT WHERE THE SHEET GIVES NONE (D-528): an enquiry brief is a stated fact
+    # (enquiry_brief rank), so it needs no printed figure to stand on.
+    _weight_from = "sheet" if stated else ""
+    if not stated:
+        stated = brief_stated_weight(brief)
+        _weight_from = "enquiry brief" if stated else ""
     unit_w = _stated("goods unit weight", facts.get("goods_unit_weight_kg"))
     goods = (goods_count * unit_w if (goods_count and unit_w)
              else _stated("goods weight", facts.get("goods_weight_kg")))
@@ -2409,10 +2700,16 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     light_testable = bool(readings) and (_no or bool(_less_goods))
 
     sighted, unweighed = 0.0, []
-    for p in made:
+    # BY ITS STOCK (D-528): a section by the metre, a mesh by its wire — a 25 x 25 mesh weighed
+    # as a 25 mm plate is fifty times its weight, and the check then blames the wrong line.
+    for p, stock in zip(made, resolve_stocks(made)):
         blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
         l, w, t = (_num(blank.get(k)) for k in ("length", "width", "thickness"))
         rho = _density(p.get("material_guess")) or _density(facts.get("material"))
+        _by_stock = stock_mass_kg(p, rho or 7850.0, stock) if stock else None
+        if _by_stock:
+            sighted += _by_stock * (_num(p.get("quantity")) or 1.0)
+            continue
         if not (l and w and t and rho):
             unweighed.append(str(p.get("name") or "a part").strip())
             continue
@@ -2486,7 +2783,11 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
     _family = _density(_mat) if _mat_printed else 0.0
     gauge_checked = bool(gauge and _family and made)
     if gauge_checked:
-        for p in made:
+        # A SHEET GAUGE IS NOT A SECTION'S SIZE (D-528): a box section, angle, mesh or wire line
+        # has its own sizes, and holding them to "1.5MM STEEL" fails the line for being a section.
+        for p, _stk in zip(made, resolve_stocks(made)):
+            if _stk.get("form") in STOCK_SECTION_FORMS + ("mesh", "wire"):
+                continue
             blank = p.get("assumed_blank_mm") if isinstance(p.get("assumed_blank_mm"), Mapping) else {}
             t = _num(blank.get("thickness"))
             if t and _density(p.get("material_guess") or _mat) == _family and abs(t - gauge) > 0.05:
@@ -2574,6 +2875,7 @@ def sheet_check(answer: Mapping[str, Any], words: str = "",
             "labels_missing": [lab["label"] for lab in labels_missing],
             "gauge_checked": gauge_checked, "finish_checked": finish_checked,
             "stated_weight_kg": stated or None,
+            "stated_weight_from": _weight_from or None,
             "goods_weight_kg": goods or None, "net_weight_kg": net or None,
             "weight_readings_kg": [round(r, 2) for r in readings],
             "sighted_weight_kg": round(sighted, 2) if sighted else None,
@@ -2687,7 +2989,7 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
     first_base_key = str(read.get("base_key") or "")
     answer = read.get("parsed") or {}
     words = str(read.get("sheet_text") or "")
-    check = sheet_check(answer, words, envelope=envelope)
+    check = sheet_check(answer, words, envelope=envelope, brief=brief)
     # A REPLAYED BILL WAS ALREADY THE BETTER OF TWO: the run that produced it took the re-ask.
     if check.get("failures") and read.get("baseline") != "unchanged read reused":
         first = list(check["failures"])
@@ -2696,7 +2998,7 @@ def read_sheet_concept(pdf_paths: List[str], *, refresh: bool = False,
         answer2 = again.get("parsed") or {}
         taken = False
         if answer2.get("parts"):
-            check2 = sheet_check(answer2, words, envelope=envelope)
+            check2 = sheet_check(answer2, words, envelope=envelope, brief=brief)
             if _check_rank(check2) < _check_rank(check):
                 read, answer, check, taken = again, answer2, check2, True
         check["rechecked"] = True
@@ -3180,6 +3482,7 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         _implied = [p for p in (_netted.get("parts") or [])[_before:] if isinstance(p, dict)]
     else:
         answer = _with_implied_fittings(answer)
+    _stocks = resolve_stocks(list(answer.get("parts") or []))
     for n, sighted in enumerate(answer.get("parts") or [], start=1):
         if not isinstance(sighted, dict):
             continue
@@ -3340,7 +3643,26 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
         # ── FOLDS, FLANGES AND CUT-OUTS (D-490) ─────────────────────────────────────
         # The flat blank, the fold count and the internal cutting, each with its working.
         _cuts: Dict[str, Any] = {}
-        if kind == "fabricated" and not unclassified:
+        _stock = _stocks[n - 1] if n - 1 < len(_stocks) else {}
+        if kind == "fabricated" and not unclassified and _stock.get("form") in (
+                STOCK_SECTION_FORMS + ("mesh", "wire")):
+            # STOCK THAT IS NOT SHEET (D-528): costed as what it is cut from — a section by the
+            # metre, a mesh or wire by its wire — never nested as a plate at a section's size.
+            blank = _apply_stock(record, _stock, blank)
+            if _stock.get("notes"):
+                why = f"{why}; {'; '.join(_stock['notes'])}"
+            _assume("", _stock_said(_stock), "; ".join(_stock.get("notes") or [])
+                    or "the stock the read names", field="stock")
+        elif kind == "fabricated" and not unclassified:
+            if _stock.get("form") == "held":
+                from source_precedence import raise_manufacturing_question  # noqa: WPS433
+                raise_manufacturing_question(
+                    record,
+                    f"{name}: {'; '.join(_stock.get('notes') or [])}",
+                    f"costed as read — {_stock.get('thickness_mm', 0):g} mm plate",
+                    "state the stock in the brief or the answers file: the plate's gauge, or the "
+                    "section, mesh or wire it is cut from",
+                    "concept_stock_check")
             _dev = developed_blank(blank, sighted,
                                    envelope=(answer.get("product") or {}).get("assumed_overall_mm"))
             record["concept_blank_basis"] = _dev["basis"]
@@ -3446,6 +3768,19 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
                     seen_ops.append(name)
             elif name:
                 unknown.append(str(raw))
+        # A SECTION IS SAWN AND A MESH IS NOT LASERED (D-528): the read's flat-sheet cut on a
+        # line it was told is section or mesh stock is the cut that stock takes.
+        if record.get("concept_stock") and "laser_cutting" in seen_ops:
+            seen_ops.remove("laser_cutting")
+            if record.get("section_stock"):
+                if "saw" not in seen_ops:
+                    seen_ops.insert(0, "saw")
+                record["review_flags"].append(
+                    "CONCEPT STOCK: the read's laser cut is the section's saw cut to length")
+            else:
+                record["review_flags"].append(
+                    "CONCEPT STOCK: laser cutting dropped — mesh and wire are not cut on the "
+                    "flat-bed laser")
         if _edges and "edge_banding" in seen_ops:
             record["concept_banded_edges"] = _edges
             _assume("", f"edge_banding: {_edges}", "the edges visible on the render",
@@ -3496,14 +3831,18 @@ def parts_from_concept(answer: Dict[str, Any], stem: str, *,
             record["review_flags"].append(
                 f"CONCEPT: size from the enquiry brief ({why}) — the model worked this part "
                 f"out from the brief's stated dimensions; confirm "
-                f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
-                f"{blank.get('thickness', '?')}mm before release")
+                + (_stock_said(_stock) if record.get("concept_stock") else
+                   f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
+                   f"{blank.get('thickness', '?')}mm")
+                + " before release")
         elif wrote_size or thickness > 0:
             record["review_flags"].append(
                 f"CONCEPT: size {'read off the design-intent sheet by the vision model' if sheet else 'assumed from the render'} "
                 f"({why}) — confirm "
-                f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
-                f"{blank.get('thickness', '?')}mm before release")
+                + (_stock_said(_stock) if record.get("concept_stock") else
+                   f"{blank.get('length', '?')} x {blank.get('width', '?')} x "
+                   f"{blank.get('thickness', '?')}mm")
+                + " before release")
         elif not unclassified and kind == "fabricated":
             # An unclassified line already carries its one action; "enter the dimensions"
             # on top of it asks for a size before anybody has said what the thing is. Only a
@@ -3910,6 +4249,11 @@ def brief_stated_counts(brief: str) -> List[Dict[str, Any]]:
             num = "|".join(list(_COUNT_WORDS) + [r"\d+"])
             for m in re.finditer(rf"(?<![\d.\-])\b({num})\b(?![\d.%\-])\s+"
                                  rf"([a-z][a-z\-]*(?:\s+[a-z][a-z\-]*){{0,3}})", clause):
+                # THE LAST TERM OF A SIZE IS NOT A COUNT (D-528). "60 x 40 angle runners" and
+                # "25 x 25 mesh base" were costed as 40 runners and 25 meshes over the read's 8
+                # and 1: the number after "<n> x" is a section, aperture or panel dimension.
+                if re.search(r"\d\s*(?:mm)?\s*[x×]\s*$", clause[:m.start(1)]):
+                    continue
                 n = int(m.group(1)) if m.group(1).isdigit() else _COUNT_WORDS[m.group(1)]
                 words = []
                 for w in m.group(2).split():

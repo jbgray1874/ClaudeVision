@@ -173,7 +173,18 @@ def section_kg_per_m(a: Any, b: Any, t: Any, profile_form: Any = "",
         return None
     inner_a = max(0.0, a_f - 2.0 * t_f)
     inner_b = max(0.0, b_f - 2.0 * t_f)
-    if str(profile_form or "").upper() == "CHS":
+    form = str(profile_form or "").upper()
+    # AN OPEN SECTION IS NOT A BOX (D-528): an angle is two legs, a channel a web and two
+    # flanges, a flat or round bar solid. Weighed as a hollow box an angle comes out near double.
+    if form == "ANGLE":
+        area_mm2 = t_f * (a_f + b_f - t_f)
+    elif form == "CHANNEL":
+        area_mm2 = t_f * (a_f + 2.0 * b_f - 2.0 * t_f)
+    elif form == "FLAT":
+        area_mm2 = a_f * b_f
+    elif form == "ROUND":
+        area_mm2 = _PI / 4.0 * (a_f ** 2)
+    elif form == "CHS":
         area_mm2 = max(0.0, _PI / 4.0 * ((a_f ** 2) - (inner_a ** 2)))
     else:
         area_mm2 = max(0.0, (a_f * b_f) - (inner_a * inner_b))

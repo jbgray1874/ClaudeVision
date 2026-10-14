@@ -6772,9 +6772,14 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # catalogue row, use that real per-piece price + supplier instead of a mass*£/kg
             # estimate. Falls through to the mass estimate (flagged) if no catalogue match.
             _refused: List[Dict[str, Any]] = []
-            _cat = _lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm,
-                                                own_part_number=part.get("part_number"),
-                                                refused=_refused)
+            # THE CATALOGUE'S SECTION ROWS ARE HOLLOW (D-528): a 60 x 40 x 3 angle is not the
+            # 60 x 40 x 3 RHS that shares its numbers, so an open or solid form never takes one.
+            _hollow = str(_ss.get("profile_form") or "").upper() not in (
+                "ANGLE", "CHANNEL", "FLAT", "ROUND")
+            _cat = (_lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm,
+                                                 own_part_number=part.get("part_number"),
+                                                 refused=_refused)
+                    if _hollow else None)
             # A CATALOGUE ROW TURNED AWAY IS SAID, NOT DROPPED (D-383). Each refused row of
             # this profile is named on the part with its reason, so an estimator can see why
             # the catalogue was not used and confirm a stock row that was refused wrongly.
@@ -6840,9 +6845,9 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # length. That is the item these pieces are cut from, and its £/m is a real rate
             # for every length cut from it. Every row read is named on the record.
             _stock_refused: List[Dict[str, Any]] = []
-            _stock = _lookup_catalogue_section_stock_rate(
+            _stock = (_lookup_catalogue_section_stock_rate(
                 side_a_mm, side_b_mm, wall_t_mm, own_part_number=part.get("part_number"),
-                refused=_stock_refused)
+                refused=_stock_refused) if _hollow else None)
             for _rf in _stock_refused:
                 _msg = (f"catalogue row {_rf['code']} '{_rf['description']}' was not used to "
                         f"price this section: {_rf['why']} — another drawing's made part "
