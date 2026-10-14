@@ -27,12 +27,16 @@ def test_the_sheets_own_example_reproduces_to_the_penny():
     assert abs(r["setup_share_gbp"] - 0.4583) < 1e-3
 
 
-def test_the_total_carries_all_three_pairs_and_says_so():
-    """The sheet's K10 sums two pairs; a box has six panels. The correction is declared
-    in the basis so a checker comparing against the sheet sees why the figures differ."""
+def test_both_totals_are_returned_and_neither_is_declared_correct():
+    """The sheet's K10 sums two pairs (£1.82 on its worked example); all three sum to
+    £2.82. Which fits is judged against the Harley's history (the two-pair total reads
+    median +0.4% there, the three-pair −22%), so price_box returns BOTH and the basis
+    names them as an allowance, not a proven box price."""
     r = box_costing.price_box(88, 38, 1955, 120)
     assert abs(r["unit_gbp"] - 2.822) < 2e-3, r["unit_gbp"]
-    assert "SUM(K7:K8)" in r["basis"]
+    assert abs(r["sheet_total_gbp"] - 1.822) < 2e-3, r["sheet_total_gbp"]
+    assert "SUM(K7:K8)" in r["basis"] and "PROVISIONAL" in r["basis"]
+    assert "one unit per carton" in r["basis"], "the assumptions are stated on the line"
 
 
 def test_an_oversize_panel_declines_by_name_never_a_silent_zero():
@@ -52,7 +56,23 @@ def test_the_harleys_descriptions_parse_including_the_run_together_style():
     assert p["dims_mm"] == [610.0, 430.0, 1830.0] and p["style"] is None
 
 
-def test_the_packaging_rung_prices_a_one_part_unit_from_its_envelope():
+def test_the_method_is_opt_in_and_silent_while_held_out():
+    """The 14 Oct review: 'keep D-521 explicitly opt-in as a provisional panel-based
+    allowance'. Disabled (the shipped default), the rung returns None and the proven
+    ladder prices the line exactly as before — the shelf repairs stay isolated."""
+    import config
+    assert config.BOX_COSTING.get("enabled") is False
+    order = {"order_quantity": 20,
+             "counted_parts": [{"part_number": "12399-77J", "length_mm": 1198.0,
+                                "width_mm": 398.0, "thickness_mm": 18.0,
+                                "material": "MFC", "per_assembly": 1}],
+             "left_out_parts": []}
+    assert _box_method_price(order) is None
+
+
+def test_the_packaging_rung_prices_a_one_part_unit_from_its_envelope(monkeypatch):
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
     order = {"order_quantity": 20,
              "counted_parts": [{"part_number": "12399-77J", "length_mm": 1198.0,
                                 "width_mm": 398.0, "thickness_mm": 18.0,
@@ -62,13 +82,32 @@ def test_the_packaging_rung_prices_a_one_part_unit_from_its_envelope():
     assert r and not r.get("not_applicable"), r
     assert r["order_gbp"] > 0
     assert r["source_class"] == "box_calculator"
-    assert "panel pairs" in r["working"]
+    assert "PROVISIONAL" in r["working"] and "panel pairs" in r["working"]
+    assert "two-pair" in r["working"], "the configured formula is named on the line"
     # only the set-up share moves with quantity, so the per-unit falls as the order grows
     at = r["order_gbp_at_breaks"]
     assert at[100] / 100 < at[1] / 1
 
 
-def test_a_many_part_unit_is_the_packers_decision_not_a_formulas():
+def test_the_configured_formula_decides_the_figure(monkeypatch):
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+    order = {"order_quantity": 120,
+             "counted_parts": [{"part_number": "X", "length_mm": 88, "width_mm": 38,
+                                "thickness_mm": 1955, "per_assembly": 1}],
+             "left_out_parts": []}
+    monkeypatch.setitem(config.BOX_COSTING, "formula", "sheet")
+    two = _box_method_price(order)
+    monkeypatch.setitem(config.BOX_COSTING, "formula", "three_pair")
+    three = _box_method_price(order)
+    assert abs(two["order_gbp"] / 120 - 1.822) < 2e-3
+    assert abs(three["order_gbp"] / 120 - 2.822) < 2e-3
+    assert "three-pair" in three["working"]
+
+
+def test_a_many_part_unit_is_the_packers_decision_not_a_formulas(monkeypatch):
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
     order = {"order_quantity": 10,
              "counted_parts": [
                  {"part_number": "A", "length_mm": 500, "width_mm": 300,
@@ -81,7 +120,9 @@ def test_a_many_part_unit_is_the_packers_decision_not_a_formulas():
     assert "packer" in r["not_applicable"]
 
 
-def test_an_unmeasured_structural_part_leaves_the_envelope_unproven():
+def test_an_unmeasured_structural_part_leaves_the_envelope_unproven(monkeypatch):
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
     order = {"order_quantity": 10,
              "counted_parts": [{"part_number": "A", "length_mm": 500, "width_mm": 300,
                                 "thickness_mm": 18, "per_assembly": 1}],

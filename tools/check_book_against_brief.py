@@ -45,6 +45,12 @@ Keys understood (all optional; the replay keys behave as they do there):
   operation_times                {code: {op: {min_run_min, min_setup_min}}} — the op's charged
                                  time reaches the stated floor (proves the work, not only the
                                  word; the workbook row itself is verified only on the book)
+  book_rows                      {words: spec} pins on the EXPORTED Estimate sheet's own rows
+                                 (needs --xlsx). A row matches when one cell carries all the
+                                 words. spec: {"qty": 3.192} a cell on the row holds exactly
+                                 this number; {"row_without": ["catalog url"]} no cell on the
+                                 row carries these words; {"absent": true} NO row matches;
+                                 {} presence alone.
 
 Exit status 0 when every pin holds, 1 otherwise.
 """
@@ -126,6 +132,15 @@ def _unit_mass(pe: Optional[Dict[str, Any]]) -> Optional[float]:
         return None
     me = pe.get("material_estimate") or {}
     return _num(me.get("unit_material_mass_kg"))
+
+
+def _estimate_rows(xlsx: Path) -> List[List[Any]]:
+    """Every row of the book's Estimate sheet (or its first sheet), as plain values."""
+    import openpyxl
+    wb = openpyxl.load_workbook(str(xlsx), data_only=True, read_only=True)
+    name = next((n for n in wb.sheetnames if n.strip().lower() == "estimate"),
+                wb.sheetnames[0])
+    return [list(r) for r in wb[name].iter_rows(values_only=True)]
 
 
 def _breaks_in_book(xlsx: Path) -> Tuple[List[int], Dict[int, float]]:
@@ -419,6 +434,43 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
             res.add("quantity_breaks", str(want), sorted(got) == sorted(int(q) for q in want),
                     f"book columns {got}; unit £ " + ", ".join(
                         f"{q}: {unit[q]:.2f}" for q in got if q in unit))
+
+    # ── rows of the exported Estimate sheet itself (D-522) ──────────────────────
+    # The engine-level tests prove the record and the graph; the reviewer's acceptance
+    # is the BOOK — "show the board charge, fractional quantity and correctly
+    # unit-priced edging in the exported sheet". These pins read the sheet's own cells.
+    want_rows = facts.get("book_rows") or {}
+    if want_rows:
+        if xlsx is None:
+            res.add("book_rows", ", ".join(want_rows), False, "pass --xlsx <book> to check")
+        else:
+            _rows = _estimate_rows(xlsx)
+            for words, spec in want_rows.items():
+                spec = spec or {}
+                toks = [t for t in str(words).upper().split() if t]
+                hits = [r for r in _rows if any(
+                    isinstance(c, str) and all(t in c.upper() for t in toks) for c in r)]
+                if spec.get("absent"):
+                    res.add("book_rows", f"{words} ABSENT", not hits,
+                            f"{len(hits)} row(s) carry it" if hits else "no row carries it")
+                    continue
+                if not hits:
+                    res.add("book_rows", words, False, "no Estimate row carries these words")
+                    continue
+                ok, bits = True, [f"{len(hits)} row(s)"]
+                q = _num(spec.get("qty"))
+                if q is not None:
+                    _nums = [float(c) for r in hits for c in r if _num(c) is not None]
+                    _hit = any(abs(v - q) < 1e-6 for v in _nums)
+                    ok = ok and _hit
+                    bits.append(f"qty {q:g} " + ("on the row" if _hit else
+                                                 f"NOT on the row (cells: {_nums[:8]})"))
+                for bad in (spec.get("row_without") or []):
+                    _carried = any(str(bad).upper() in str(c).upper()
+                                   for r in hits for c in r if isinstance(c, str))
+                    ok = ok and not _carried
+                    bits.append(f"{bad!r} " + ("CARRIED" if _carried else "not carried"))
+                res.add("book_rows", words, ok, "; ".join(bits))
     return res
 
 

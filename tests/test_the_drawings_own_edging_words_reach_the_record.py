@@ -694,6 +694,34 @@ def test_the_board_families_never_lead_a_purchase_search():
     assert "LAMINATE" not in _searches and "EDGING" in _searches
 
 
+def test_a_ga_with_borrowed_geometry_is_still_an_assembly():
+    """D-522, the reviewer's correction: 'a GA never has fabrication evidence' was too
+    absolute — a DXF matched to an assembly drawing, or geometry inherited onto it, puts
+    measured fields on a record that is not a part we cut. The evidence must belong to
+    the parent's OWN fabricated part: a record whose drawing's role is an assembly (its
+    pages say so, or its code convention does) never becomes a leaf through the
+    hardware-carrier gate, whatever geometry got attached."""
+    from route_compiler import compile_route_without_pricing
+    ga = {"part_number": "12399-91-GA", "description": "STAND ASSEMBLY", "quantity": 1,
+          # spurious fabrication evidence a merge could attach to the GA's record
+          "dxf_measured_outline": True, "dxf_augmented": True,
+          "flat_pattern_detected": True,
+          "normalized_geometry": {"blank_length_mm": 900.0, "blank_width_mm": 600.0,
+                                  "geometry_source": "dxf_flat_pattern"},
+          "pages": [1], "page_roles": ["assembly"]}
+    bolt = {"part_number": "BI-BOLT", "description": "M8 BOLT", "quantity": 8,
+            "bom_parent": "12399-91-GA", "page_roles": ["bought_in"],
+            "is_bought_in": True, "pages": []}
+    summary = {"declared_product": "12399-91-GA",
+               "manufacturing_writeup": {"parts": [ga, bolt]},
+               "document_analysis": {"bom_rows": []}, "llm_full_extract": {}}
+    compiled = compile_route_without_pricing(summary)
+    nodes = [(n if isinstance(n, dict) else n.__dict__)
+             for n in (compiled.get("nodes") or [])]
+    tops = [t for t in nodes if t.get("part_number") == "12399-91-GA"]
+    assert tops and all(t.get("kind") == "assembly" for t in tops), tops
+
+
 def test_an_all_bought_genuine_assembly_is_still_an_assembly():
     """P4: 'only a made child makes an assembly' must not widen — a GA whose every child
     is purchased is still an assembly, because the hardware-carrier ruling demands the
