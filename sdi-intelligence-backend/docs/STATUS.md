@@ -77,10 +77,28 @@ Findings:
 * **8 people clocked in have no matching InVentry record at all** - missing
   from a fire roll until fixed in InVentry. Named in the dry-run output.
 
-**Before `--apply`:** sign-out. With it off, everyone signed in stays on site
-after they leave, unless an InVentry system rule signs them out. Prove the
-marker round-trips with `probe_inventry.py --sign-in` on one record, then
-enable `INVENTRY_ENABLE_SIGN_OUT`.
+## 1b. LIVE since 14 Oct 2026, 19:52 — on a desktop
+
+Proven on the live system before going live, each with one record:
+
+* the `BRIGHTHR SYNC` marker round-trips as `LastEventLocation`, so automatic
+  sign-out only ever touches the sync's own records;
+* sign-out works and keeps the marker;
+* InVentry **ignores `ActionDateTime`** and stamps its own clock (sent a time
+  ten minutes back; it recorded now). Sign-ins show when the sync ran, not the
+  clock-in time. Harmless for the fire roll.
+
+First `--apply`: **16 sign-ins, 0 sign-outs, 0 failures.** Then the scheduled
+task was registered with `-Apply`: every 5 minutes, as SYSTEM, sign-out on.
+
+**It is running on DESKTOP-GFAAP80**, not SDI-APP01. If that PC sleeps or is
+shut down the sync stops, and anyone it signed in stays signed in until it
+resumes. A fire roll cannot depend on a desktop - moving to SDI-APP01 is the
+first production task (section 3).
+
+To stop it: `Disable-ScheduledTask -TaskName 'BrightHR-InVentry Presence Sync'`
+(elevated). To undo its sign-ins: `python tools\revert_sync.py --confirm`,
+after disabling the task.
 
 ## 2. The moment the secret lands
 
