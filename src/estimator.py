@@ -6775,7 +6775,7 @@ def estimate_material(part: Dict[str, Any]) -> Dict[str, Any]:
             # THE CATALOGUE'S SECTION ROWS ARE HOLLOW (D-528): a 60 x 40 x 3 angle is not the
             # 60 x 40 x 3 RHS that shares its numbers, so an open or solid form never takes one.
             _hollow = str(_ss.get("profile_form") or "").upper() not in (
-                "ANGLE", "CHANNEL", "FLAT", "ROUND")
+                "ANGLE", "CHANNEL", "FLAT", "ROUND", "OVAL")
             _cat = (_lookup_catalogue_tube_price(side_a_mm, side_b_mm, wall_t_mm, length_mm,
                                                  own_part_number=part.get("part_number"),
                                                  refused=_refused)
@@ -8059,6 +8059,10 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
     # laser profile nor saw. But SDI DOES bend the tube, so the bend op is RETAINED.
     # Material = bought-in length; cost = material + bend + finish + handling.
     if _section_no_dxf:
+        # Whether the part's own evidence named a saw, taken before the strip below (D-531).
+        _saw_named = any("saw" in (lst or []) for lst in (
+            ops, part.get("inferred_operations"), part.get("textual_operations"))
+            if isinstance(lst, list))
         ops = [o for o in ops if o not in ("laser_cutting", "saw")]
         if isinstance(part.get("inferred_operations"), list):
             part["inferred_operations"] = [
@@ -8079,6 +8083,19 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
         _cl_pieces = [v for v in (_safe_float(x) for x in (
             (part.get("section_stock") or {}).get("cut_lengths_mm") or [])
             if not isinstance(x, (dict, list))) if v and v > 0]
+        # A STOCK LENGTH IS CUT TO SIZE HERE (D-531). "Bought as a length" is true of a
+        # catalogue piece priced at its own length (catalogue_section_price) and of nothing
+        # else: a section priced per metre from a stock bar, or by weight, is a bar the shop
+        # saws. 0356453's uprights and rails — the read said saw — reached the sheet with no
+        # cutting row at all. One cut per piece, at the configured saw time — where the
+        # part's own evidence names the saw; with no cut list and no saw named, none is
+        # invented (D-455).
+        _cut_here = str(part.get("_material_cost_method") or "") != "catalogue_section_price"
+        if not _cl_pieces and _cut_here and _saw_named:
+            _len_cut = _safe_float((part.get("section_stock") or {}).get("length_mm")) \
+                or _safe_float(part.get("blank_length_mm"))
+            if _len_cut and _len_cut > 0:
+                _cl_pieces = [_len_cut]
         if _cl_pieces:
             part["_saw_cut_list_pieces"] = list(_cl_pieces)
             # A TIME COUNTED FROM THE PART'S OWN RECORD IS NOT A DERIVATION TO BE FLOORED
@@ -8091,21 +8108,29 @@ def estimate_process_times(part: Dict[str, Any], quantity: int = 1) -> Dict[str,
                 f"{float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut "
                 f"(config SAW_SECONDS_PER_CUT)")
             ops = list(ops) + ["saw"]
-            record_operation(part, "saw", str(
-                (part.get("section_stock") or {}).get("cut_lengths_mm_source")
-                or (part.get("section_stock") or {}).get("source")
-                or "drawing_deterministic"), inferred=False)
+            _from_list = bool((part.get("section_stock") or {}).get("cut_lengths_mm"))
+            if _from_list:
+                record_operation(part, "saw", str(
+                    (part.get("section_stock") or {}).get("cut_lengths_mm_source")
+                    or (part.get("section_stock") or {}).get("source")
+                    or "drawing_deterministic"), inferred=False)
+            else:
+                record_operation(part, "saw", "inference")
             part.setdefault("review_flags", []).append(
-                f"sawn to its own cut list ({len(_cl_pieces)} piece(s): "
-                f"{' + '.join(f'{v:g}' for v in _cl_pieces)} mm) at "
-                f"{float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut — config "
-                f"SAW_SECONDS_PER_CUT, an allowance; confirm with the saw")
+                (f"sawn to its own cut list ({len(_cl_pieces)} piece(s): "
+                 f"{' + '.join(f'{v:g}' for v in _cl_pieces)} mm)" if _from_list else
+                 f"cut to length from stock ({_cl_pieces[0]:g} mm) — priced from a stock "
+                 f"length or by weight, so the shop saws it")
+                + f" at {float(getattr(config, 'SAW_SECONDS_PER_CUT', 90.0)):g} s a cut — "
+                  f"config SAW_SECONDS_PER_CUT, an allowance; confirm with the saw")
         part["section_costing_adjustment"] = {
             "rule": "section_bought_as_length_bent_inhouse",
             "basis": "bought_in_length_plus_bend_finish_handling",
             "note": ("RHS/tube bought as a length (not made in-house) -- not profile-cut. "
-                     + (f"Sawn to its cut list ({len(_cl_pieces)} pieces). "
-                        if _cl_pieces else "No cut list stated, so no saw charged. ")
+                     + (f"Sawn to size ({len(_cl_pieces)} piece(s)). "
+                        if _cl_pieces else
+                        ("Bought cut to its own length, so no saw charged. " if not _cut_here
+                         else "No cut list and no saw named, so no saw charged. "))
                      + "SDI bends the tube, so the bend op is retained; the bend COUNT may "
                        "be under-read from the drawing -- verify bend count/time with the "
                        "tube-bend operator. Coated in-house (SDI sprays everything)."),
@@ -9881,7 +9906,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         part["material_estimate"] = {
             "unit_material_cost_gbp": _cp, "cost_per_part_gbp": _cp,
             "extended_material_cost_gbp": round(_cp * max(1, int(quantity or 1)), 2),
-            "cost_method": ("commercial_line_market_indication" if _cp
+            "cost_method": (("commercial_line_box_calculator"
+                             if str(part.get("cost_source") or "") == "box_calculator_allowance"
+                             else "commercial_line_market_indication") if _cp
                             else "commercial_placeholder_unpriced")}
         part["labour_estimate"] = {"unit_labour_cost_gbp": 0.0, "extended_labour_cost_gbp": 0.0}
         part["unit_cost_gbp"] = _cp
@@ -10096,6 +10123,9 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
     except Exception:                                                # noqa: BLE001
         pass
     material = estimate_material(part)
+    # HOW THE MATERIAL WAS BOUGHT, for the process pass (D-531): a section bought as a piece at
+    # its own length is not cut here; one priced from a stock length or by weight is.
+    part["_material_cost_method"] = str((material or {}).get("cost_method") or "")
     # THE BLANK THE MATERIAL WAS COSTED ON, for every later check on this part (D-450).
     try:
         _mbl, _mbw = _safe_float(material.get("blank_length_mm")), _safe_float(material.get("blank_width_mm"))
@@ -13274,11 +13304,18 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
             # SDI LIVE'S OWN FIGURE IS NAMED AS SDI LIVE'S (D-451): a CommercialRate x the
             # counted shipment, or past quotes' lines, is not an "AI market figure".
             _from_live = str(_cl_src.get("source_class") or "") in ("sdi_commercial_rate", "sdi_history")
+            # THE BOX CALCULATOR IS NAMED AS ITSELF (D-531). 0356453's £59.73 read "Box
+            # calculator config rates" in the supplier cell and "AI market figure" on the row,
+            # the flag and the report — one figure, two bases. It is the estimators' stated
+            # carton arithmetic at held sheet rates: reproducible, provisional, not a lookup.
+            _from_box = str(_cl_src.get("source_class") or "") == "box_calculator"
             _stub["cost_source"] = ("config_commercial_indicative" if _from_hold
                                     else ("stated_method_system_priced" if _from_method
                                           else ("sdi_live_commercial" if _from_live and _unit
-                                                else ("market_indication" if _unit
-                                                      else "estimator_to_price"))))
+                                                else ("box_calculator_allowance"
+                                                      if _from_box and _unit
+                                                      else ("market_indication" if _unit
+                                                            else "estimator_to_price")))))
             if _from_method:
                 # "when we explain the packaging and delivery on s/sheet we need to try to
                 # provide as much clarity as possible on the number" — James, 15 Sep. The
@@ -13307,6 +13344,10 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                 if _from_live and _unit:
                     _stub["description"] = _stub["description"].replace(
                         "AI market figure — estimator to confirm", "SDI Live figure — confirm")
+                elif _from_box and _unit:
+                    _stub["description"] = _stub["description"].replace(
+                        "AI market figure — estimator to confirm",
+                        "box calculator — provisional allowance, confirm")
             if _cline:
                 _stub["commercial_line"] = _cline
                 _announce_packing_status(_cline)
@@ -13332,6 +13373,11 @@ def estimate_document(parts: List[Dict[str, Any]], summary: Optional[Dict[str, A
                  + (f". Basis: {(_cline or {}).get('basis_chosen')}"
                     if (_cline or {}).get("basis_chosen") else "") + ".")
                 if _from_live and _unit else
+                (f"BOX CALCULATOR £{float(_unit):.2f}/unit — "
+                 f"{(_cline or {}).get('packing_working') or 'working not recorded'}"
+                 f" — held sheet rates, not a quotation; confirm the carton size and count "
+                 f"before quoting.")
+                if _from_box and _unit else
                 (f"AI MARKET FIGURE £{float(_unit):.2f}/unit — an indication from the market "
                  f"lookup, not a quotation; confirm or replace it before quoting"
                  + (f". Basis: {(_cline or {}).get('basis_chosen')}"
