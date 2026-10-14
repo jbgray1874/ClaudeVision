@@ -511,6 +511,34 @@
             Save as the default list</button>
         </div>
       </div>
+      <!-- THE DELIVERY DECLARATION (D-524). Tim, 14 Oct, on 12665-01-GA: "There is £125
+           delivery when there is no delivery requested." Whether an order is delivered,
+           and where to, is the enquiry's fact — no drawing can say it — so it is asked
+           here, filed with the pack as DELIVERY_DECLARED.json, and the DELIVERY line
+           follows it: unticked is a deliberate £0 on the sheet (a declaration, not a
+           missing price); ticked keeps today's pricing and carries the postcode, which is
+           what the per-mile delivery calculator (cost per mile, by the number and size of
+           boxes) will price from when it lands. -->
+      <div class="row2">
+        <div class="field" style="flex:1">
+          <label>Delivery</label>
+          <label style="font-weight:400;display:block;margin-top:6px">
+            <input id="delivRequired" type="checkbox" checked> We are delivering this order
+          </label>
+          <p class="hint" style="margin:4px 0 0">Untick for collection — the DELIVERY line
+             goes on the sheet at a deliberate £0 saying so, instead of a market figure
+             nobody asked for.</p>
+        </div>
+        <div class="field" style="flex:1">
+          <label for="delivPostcode">Delivery postcode
+            <span class="sub" style="font-weight:400">— where the order goes</span></label>
+          <input id="delivPostcode" type="text" autocomplete="off" maxlength="10"
+                 placeholder="e.g. LE19 1WZ">
+          <p class="hint" style="margin:4px 0 0">Carried on the delivery line and the saved
+             record. When the per-mile calculator lands, the cost is computed from this
+             postcode and the counted boxes; until then the line keeps its stated basis.</p>
+        </div>
+      </div>
       <div class="field">
         <label for="client">Client</label>
         <input id="client" type="text" autocomplete="off">
@@ -2455,7 +2483,9 @@ $("bRunLLM").onclick = async () => {
                             method: "llm", fresh_read: !!freshRead.checked,
                             concept_document: !!$("conceptDocument").checked,
                             enquiry_brief: ($("enquiryBrief").value || "").trim() || null,
-                            reference_documents: refDocs.size ? [...refDocs] : null})});
+                            reference_documents: refDocs.size ? [...refDocs] : null,
+                            delivery: {requested: $("delivRequired").checked,
+                                       postcode: ($("delivPostcode").value || "").trim() || null}})});
     if(!r.ok) throw new Error((await r.text()).slice(0,300));
     const started = await r.json();
     runId = started.run_id;
@@ -2844,7 +2874,12 @@ runBtn.onclick = async () => {
     material_answers: (document.getElementById("matUse") || {}).checked ? materialAnswers() : null,
     // Only when the estimator ticked "Use these changes". Checked again by the service before
     // anything is staged; costed by the engine in place of what the drawings state.
-    customer_changes: (document.getElementById("chgUse") || {}).checked ? changesSubmitted() : null
+    customer_changes: (document.getElementById("chgUse") || {}).checked ? changesSubmitted() : null,
+    // THE DELIVERY DECLARATION (D-524): the checkbox and postcode above. Always sent — the
+    // ticked default keeps today's pricing; unticked is the deliberate £0; the postcode is
+    // the future per-mile calculator's destination.
+    delivery: {requested: document.getElementById("delivRequired").checked,
+               postcode: (document.getElementById("delivPostcode").value || "").trim() || null}
   };
   try{
     const r = await api("/api/estimate",{method:"POST",

@@ -35,6 +35,48 @@ import config
 
 SCHEMA = "commercial_lines.v1"
 
+# THE RUN FORM'S DELIVERY DECLARATION (D-524). Whether an order is delivered, and where to,
+# is the enquiry's fact — the drawings can never say it. The portal writes this file beside
+# the staged drawings (the CONCEPT_DOCUMENT.json pattern: written after staging, removed
+# when a run carries none, a hand-written file left alone), file_scan reads it onto
+# summary["delivery_declared"], and the estimator's DELIVERY line honours it: declared not
+# required -> a deliberate £0 naming the declaration; declared with a postcode -> the
+# postcode rides the line so the per-mile calculator (cost per mile by the number and size
+# of boxes — to come) has its destination the day it lands.
+DELIVERY_DECLARED_FILENAME = "DELIVERY_DECLARED.json"
+
+
+def find_delivery_declaration(folders: Any) -> Optional[Dict[str, Any]]:
+    """The run's delivery declaration, read off the staged job folder, or None.
+
+    Returns {"requested": bool | None, "postcode": str, "file": str}. A malformed file is
+    reported as None with a print rather than an exception — a bad declaration must not
+    stop a costing run, and the line then behaves exactly as an undeclared one."""
+    import json as _json
+    from pathlib import Path as _Path
+    seen = set()
+    for f in (folders if isinstance(folders, (list, tuple, set)) else [folders]):
+        if not f:
+            continue
+        p = _Path(str(f)) / DELIVERY_DECLARED_FILENAME
+        if str(p) in seen or not p.is_file():
+            seen.add(str(p))
+            continue
+        try:
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"   [delivery] {p.name} could not be read ({exc}) — the run is costed "
+                  f"as undeclared", flush=True)
+            return None
+        req = data.get("requested") if isinstance(data, dict) else None
+        if not isinstance(req, bool):
+            req = None
+        return {"requested": req,
+                "postcode": str((data.get("postcode") if isinstance(data, dict) else "")
+                                or "").strip().upper()[:16],
+                "file": str(p)}
+    return None
+
 # Rough kg per cubic metre, by material family, for turning blanks into a shipping weight.
 # Deliberately coarse: a haulage bracket does not turn on the third significant figure, and a
 # weight good to twenty per cent picks the right band every time.

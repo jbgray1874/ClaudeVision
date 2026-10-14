@@ -561,6 +561,13 @@ class EstimateRequest(BaseModel):
     # was not used. Checked before staging and written into the staged folder as
     # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
     customer_changes: Optional[Dict[str, Any]] = None
+    # THE DELIVERY DECLARATION (D-524): {"requested": bool, "postcode": "LE19 ..."} from the
+    # Run form's checkbox and postcode box. None means the form predates the field or the
+    # caller never heard of it — the run costs exactly as before. Written into the staged
+    # folder as DELIVERY_DECLARED.json (the concept-marker pattern: reset every run); the
+    # engine's DELIVERY line honours it, and the postcode is what the per-mile delivery
+    # calculator will price from when it lands.
+    delivery: Optional[Dict[str, Any]] = None
 
 
 class RecipientsRequest(BaseModel):
@@ -1690,6 +1697,23 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             _reference_marker.unlink()
     except OSError as exc:
         raise HTTPException(502, f"Could not file the reference-document declaration: {exc}. "
+                                 f"Nothing queued.")
+    # The delivery declaration (D-524), under the same reset-every-run rule: the checkbox
+    # and postcode from the Run form, written beside the drawings for the engine's DELIVERY
+    # line and, when it lands, the per-mile delivery calculator.
+    _delivery_marker = Path(folder) / "DELIVERY_DECLARED.json"
+    try:
+        if req.delivery and isinstance(req.delivery, dict) and \
+                isinstance(req.delivery.get("requested"), bool):
+            _delivery_marker.write_text(json.dumps({
+                "requested": bool(req.delivery.get("requested")),
+                "postcode": str(req.delivery.get("postcode") or "").strip().upper()[:16],
+                "declared_on": "run_form",
+            }) + "\n", encoding="utf-8")
+        elif _delivery_marker.exists():
+            _delivery_marker.unlink()
+    except OSError as exc:
+        raise HTTPException(502, f"Could not file the delivery declaration: {exc}. "
                                  f"Nothing queued.")
     # Written AFTER staging, because staging clears the folder. With no confirmation this run,
     # a file the portal wrote on an earlier run is removed, so an old answer cannot govern

@@ -48,9 +48,15 @@ Keys understood (all optional; the replay keys behave as they do there):
   book_rows                      {words: spec} pins on the EXPORTED Estimate sheet's own rows
                                  (needs --xlsx). A row matches when one cell carries all the
                                  words. spec: {"qty": 3.192} a cell on the row holds exactly
-                                 this number; {"row_without": ["catalog url"]} no cell on the
-                                 row carries these words; {"absent": true} NO row matches;
-                                 {} presence alone.
+                                 this number; {"charge": true, "qty": 3.192} the qty is in the
+                                 BOM block's OWN quantity column and the money reconciles to
+                                 qty x rate x (1 + disclosed scrap) — a blank price passes as
+                                 explicitly unpriced; {"row_without": ["catalog url"]} no cell
+                                 on the row carries these words; {"absent": true} NO row
+                                 matches; {} presence alone.
+  unit_priced_in                 {code: "m"} — where the record carries money for the code,
+                                 its price structures must state what the figure is PER (the
+                                 unit, or a roll conversion); explicitly unpriced passes.
 
 Exit status 0 when every pin holds, 1 otherwise.
 """
@@ -324,6 +330,40 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
                    ("measured blank" if _measured else
                     "no provisional record and no measured blank — "
                     + str(_wpart.get('geometry_source') or 'no geometry source'))))
+    # ── a priced line states the unit its rate is per (D-523) ───────────────────
+    # "A verified £/m basis, including any roll conversion — not merely absence of
+    # 'catalog url'." Where the record carries money for the code, its own price
+    # structures must say what the figure is PER (the line's unit, or a roll conversion
+    # arithmetic); an explicitly unpriced line passes with its state named, because the
+    # honest zero is policy and a figure with no stated basis is the defect.
+    for code, uom in (facts.get("unit_priced_in") or {}).items():
+        pe = pes.get(_sq(code)) or {}
+        me = pe.get("material_estimate") or {}
+        money = next((v for v in (_num(pe.get("unit_cost_gbp")),
+                                  _num(me.get("unit_material_cost_gbp")),
+                                  _num(me.get("cost_per_part_gbp")),
+                                  _num(pe.get("extended_total_cost_gbp")))
+                      if v is not None and v > 0), None)
+        if money is None:
+            res.add("unit_priced_in", code, True,
+                    "explicitly unpriced — nothing charged, so no basis to verify; "
+                    "estimator to price")
+            continue
+        _u = str(uom).strip().lower()
+        _markers = [f"per {_u}", f"/{_u}", f"per_{_u}", f"_per_{_u}",
+                    "per metre", "a metre", "roll"] if _u in {"m", "lm"} else \
+                   [f"per {_u}", f"/{_u}", f"per_{_u}", f"_per_{_u}"]
+        _blob = json.dumps({k: pe.get(k) for k in
+                            ("price_source", "material_estimate", "stock_estimate",
+                             "price_research", "review_flags", "unit_of_measure",
+                             "supplier", "commercial_line")},
+                           default=str).lower()
+        _hit = next((m for m in _markers if m in _blob), None)
+        res.add("unit_priced_in", code, _hit is not None,
+                f"£{money:g} charged; " + (f"basis states {_hit!r}" if _hit else
+                f"NO stated per-{_u} basis anywhere on the line's price record — "
+                f"the figure cannot be verified as a per-{_u} rate"))
+
     if facts.get("commercial_basis"):
         cls = {str(c.get("code") or "").upper(): c for c in (summary.get("commercial_lines") or [])
                if isinstance(c, dict)}
@@ -459,12 +499,53 @@ def check(summary: Dict[str, Any], facts: Dict[str, Any],
                     continue
                 ok, bits = True, [f"{len(hits)} row(s)"]
                 q = _num(spec.get("qty"))
-                if q is not None:
+                if q is not None and not spec.get("charge"):
                     _nums = [float(c) for r in hits for c in r if _num(c) is not None]
                     _hit = any(abs(v - q) < 1e-6 for v in _nums)
                     ok = ok and _hit
                     bits.append(f"qty {q:g} " + ("on the row" if _hit else
                                                  f"NOT on the row (cells: {_nums[:8]})"))
+                if spec.get("charge"):
+                    # THE CELL THE CHARGE USES, NOT A NUMBER SOMEWHERE ON THE SHEET
+                    # (D-523, the reviewer's third qualification). The BOM block's own
+                    # columns (wb_populate CELL_MAP: J price, K qty, L scrap; M is the
+                    # template's extended formula) are read on the matched row, the
+                    # quantity is checked IN ITS COLUMN, and the money reconciles to
+                    # qty x rate x (1 + disclosed scrap). An explicitly unpriced row
+                    # (blank price) passes with its state named — the honest zero is
+                    # policy, a wrong-basis figure is not.
+                    try:
+                        from wb_populate import CELL_MAP as _CM
+                        _b = _CM["bom"]
+                        _ip, _iq, _is = (_b["col_price"] - 1, _b["col_qty"] - 1,
+                                         _b["col_scrap"] - 1)
+                    except Exception:                                # noqa: BLE001
+                        _ip, _iq, _is = 9, 10, 11
+                    r0 = hits[0]
+                    _price = _num(r0[_ip]) if len(r0) > _ip else None
+                    _qty = _num(r0[_iq]) if len(r0) > _iq else None
+                    _scrap = (_num(r0[_is]) if len(r0) > _is else None) or 0.0
+                    _ext = _num(r0[_is + 1]) if len(r0) > _is + 1 else None
+                    if q is not None:
+                        _qok = _qty is not None and abs(_qty - q) < 1e-6
+                        ok = ok and _qok
+                        bits.append(f"qty cell {_qty!r} vs {q:g} "
+                                    + ("OK" if _qok else "WRONG"))
+                    if _price is None:
+                        bits.append("price cell blank — explicitly unpriced, "
+                                    "estimator to price; nothing to reconcile")
+                    else:
+                        _want = _price * (_qty or 0) * (1.0 + _scrap)
+                        if _ext is None:
+                            bits.append(f"£{_price:g} x {_qty:g} x (1+{_scrap:g}) = "
+                                        f"£{_want:.2f}; extended cell holds no cached "
+                                        f"value (book not recalculated) — inputs verified")
+                        else:
+                            _rok = abs(_ext - _want) <= 0.02
+                            ok = ok and _rok
+                            bits.append(f"£{_price:g} x {_qty:g} x (1+{_scrap:g}) = "
+                                        f"£{_want:.2f} vs extended £{_ext:.2f} "
+                                        + ("RECONCILES" if _rok else "DOES NOT RECONCILE"))
                 for bad in (spec.get("row_without") or []):
                     _carried = any(str(bad).upper() in str(c).upper()
                                    for r in hits for c in r if isinstance(c, str))

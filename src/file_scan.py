@@ -4588,6 +4588,27 @@ def _finalize_scan_summary(
               flush=True)
 
     try:
+        # THE RUN'S DELIVERY DECLARATION (D-524), beside the customer changes and under the
+        # same one-file-per-run rule: whether this order is delivered, and the postcode it
+        # goes to, declared on the portal's Run form. The estimator's DELIVERY line reads
+        # summary["delivery_declared"]; no file is the usual case and costs as before.
+        import commercial_lines as _dl
+        _dd = _dl.find_delivery_declaration(
+            [job_folder, summary.get("job_folder")]
+            + ([Path(str(pdf_path)).parent] if pdf_path is not None else []))
+        if _dd:
+            summary["delivery_declared"] = _dd
+            _dd_say = ("no delivery — collection" if _dd.get("requested") is False
+                       else ("delivery to " + _dd["postcode"] if _dd.get("postcode")
+                             else "delivery required, postcode not given"))
+            summary.setdefault("review_flags", []).append(
+                f"DELIVERY DECLARED on the Run: {_dd_say} — the DELIVERY line follows it")
+            print(f"   [delivery] declared on the Run: {_dd_say}", flush=True)
+    except Exception as _dd_err:                                       # noqa: BLE001
+        print(f"   [delivery] declaration not read: {type(_dd_err).__name__}: {_dd_err}",
+              flush=True)
+
+    try:
         from route_compiler import apply_canonical_evidence_to_parts, job_drawing_numbers
         # THE BOM'S OWN PARENT EDGES, at the point the classification still changes the
         # answer. This runs before costing, so a part the BOM parents is an assembly's child

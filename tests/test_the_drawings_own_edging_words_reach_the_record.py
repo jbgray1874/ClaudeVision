@@ -720,6 +720,12 @@ def test_a_ga_with_borrowed_geometry_is_still_an_assembly():
              for n in (compiled.get("nodes") or [])]
     tops = [t for t in nodes if t.get("part_number") == "12399-91-GA"]
     assert tops and all(t.get("kind") == "assembly" for t in tops), tops
+    # AND THE CONFLICT IS SURFACED, NOT SILENTLY SETTLED (the reviewer's proviso): the
+    # role beside measured fabrication fields is two claims about one record, so the
+    # kept role is a decision a person can see and overturn.
+    conflicts = [i for i in (compiled.get("issues") or []) if isinstance(i, dict)
+                 and i.get("code") == "assembly_role_carries_fabrication_evidence"]
+    assert conflicts and "12399-91-GA" in str(conflicts[0]), compiled.get("issues")
 
 
 def test_an_all_bought_genuine_assembly_is_still_an_assembly():
