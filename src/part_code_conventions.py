@@ -184,9 +184,21 @@ def looks_like_a_drawing_number(text: str) -> bool:
     """True when a token has the shape of an SDI or customer drawing number.
 
     Shape only. It says a token COULD name a drawing, never that this drawing exists —
-    the direction of safety this module keeps everywhere else.
+    the direction of safety this module keeps everywhere else. A tail that is a finish,
+    colour or spacing word is prose, not a drawing (D-512): "600-CENTRES" fits the shape
+    and is a hole-spacing note, and its missing-drawing question was unanswerable.
     """
-    return bool(_DRAWING_NUMBER_SHAPE.match(str(text or "").strip()))
+    token = str(text or "").strip()
+    if not _DRAWING_NUMBER_SHAPE.match(token):
+        return False
+    try:
+        from config import CODE_TAIL_NOISE_WORDS as _tail_noise
+        _tail = token.rsplit("-", 1)[-1].upper()
+        if _tail.isalpha() and _tail in _tail_noise:
+            return False
+    except Exception:                                                # noqa: BLE001
+        pass
+    return True
 
 
 def bare_code(identity: str) -> str:

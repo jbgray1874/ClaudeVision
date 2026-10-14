@@ -84,9 +84,13 @@ EDGE_LAYER_WORDS = (
 )
 
 # Words that name the WHOLE perimeter. A drawing that says this has made a decision, and
-# taking it at its word is not the same as assuming it in silence.
-_ALL_ROUND = ("ALL ROUND", "ALL EDGES", "ALL FOUR EDGES", "ALL SIDES", "ALLROUND",
-              "EDGED ALL ROUND", "BANDED ALL ROUND")
+# taking it at its word is not the same as assuming it in silence. Both spellings of
+# "ROUND"/"AROUND" (D-512): 12343-01J states "EDGED ALL AROUND" and the vocabulary knew only
+# "ALL ROUND", so a stated whole-perimeter instruction was read as extent-unknown and the
+# book called its own perimeter a CEILING while the drawing had answered the question.
+_ALL_ROUND = ("ALL ROUND", "ALL AROUND", "ALL EDGES", "ALL FOUR EDGES", "ALL SIDES",
+              "ALLROUND", "ALLAROUND", "EDGED ALL ROUND", "EDGED ALL AROUND",
+              "BANDED ALL ROUND", "BANDED ALL AROUND")
 
 # Words that name SOME edges. Each maps to how many of the blank's four sides it describes,
 # and which dimension those sides run along.
@@ -346,7 +350,11 @@ def banded_length_mm(part: Any) -> Dict[str, Any]:
         return out
 
     text = _text_of(part)
-    says_banding = any(w in text for w in _BANDING_WORDS)
+    # An EDGING ORDER code is a banding statement (D-512): "2S/SL" on 12343-01J names the
+    # sequence the bander runs (two short, then the long sides) — a drawing that writes one
+    # has decided the part is banded, whatever other words it used.
+    says_banding = (any(w in text for w in _BANDING_WORDS)
+                    or bool(re.search(r"\b\d{1,2}\s*[SL]\s*/\s*\d{0,2}\s*[SL]\b", text)))
 
     # 2 ── A NOTE THAT NAMES THE EDGES. "All round" is a statement, not a default.
     if says_banding and any(w in text for w in _ALL_ROUND):

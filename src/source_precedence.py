@@ -297,6 +297,10 @@ SOURCE_RANK: Dict[str, int] = {
     # (which knows nothing about this part) and below the printed overall (which names the
     # overall). A provisional blank, labelled as one wherever it is shown.
     "printed_extents_provisional": 30,
+    # A FLAT BOARD'S GAUGE FROM ITS MODEL'S SMALLEST EXTENT (D-512): a labelled fallback
+    # for a verified flat, constant-thickness board whose model carries no cut list — below
+    # every stated gauge (drawing callout, DXF filename, cut list), above a bare inference.
+    "model_extents_board_gauge": 30,
     # SIGHTED FROM A RENDER, NOT READ FROM A DRAWING. The concept read (concept_scan.py)
     # looks at a customer's visual — a photoreal render with no dimensions, no title block,
     # no BOM — and names what it can SEE: a carcass, a header, castors, a printed panel, a
@@ -530,6 +534,7 @@ SOURCE_DISPLAY_NAME: Dict[str, str] = {
     "inference":              "engine inference",
     "geometry_inference":     "engine inference from geometry",
     "printed_extents_provisional": "the largest dimensions printed on its own sheet (provisional)",
+    "model_extents_board_gauge": "the model's smallest extent — a flat board's gauge (provisional)",
     "assembly_envelope_allowance": "the outline of the assembly it sits in (provisional — the part read larger)",
     "mirror_of_provisional":  "its other hand's provisional reading",
     "compiler_default":       "an engine default",

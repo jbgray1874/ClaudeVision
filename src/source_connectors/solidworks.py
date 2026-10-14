@@ -2460,6 +2460,57 @@ def apply_native_to_pre_estimate(parts: List[Dict[str, Any]], job: NativeJob,
                     flags.append(f"thickness {cur_thk:g}mm -> {thk:g}mm from the SolidWorks "
                                  f"cut list (modelled sheet gauge)")
                     out["thickness"] += 1
+        elif (not _plausible_thk(nat.thickness_mm)
+              and not _num(part.get("normalized_thickness_mm"))):
+            # A FLAT BOARD'S GAUGE IS ITS MODEL'S SMALLEST EXTENT — AS A LABELLED FALLBACK
+            # (D-512). 12343-01J, an 18 mm MFC shelf: the model carried the box
+            # 1198 x 18 x 398, but a board has no sheet-metal cut list and the analyser's
+            # gauge window (a sheet-METAL window) ends at 12 mm, so thickness_mm came
+            # through None — and with no gauge the shelf had no kg, no sheet price, no
+            # weight check, and was charged machining and edging on a board nobody bought.
+            #
+            # Deliberately NARROW, per the review that demanded it: only a part whose
+            # material the Other Sheet block prices (board/plastic, never metal), that is a
+            # LEAF (no assembly flags), whose box is plate-shaped (the smallest extent is a
+            # board gauge, 3-60 mm, and at most a quarter of the next dimension — a shaped
+            # component or a block fails this), and that still has no recorded gauge. The
+            # value enters at its own provisional rank, below every stated gauge, with a
+            # flag and a question — a drawing callout read later still displaces it.
+            _dims = sorted(v for v in (_num(x) for x in (nat.bbox_mm or [])) if v)
+            _board_mat = False
+            try:
+                from costed_facts import is_other_sheet_material as _other_sheet2
+                _own = [str(m.get("raw") if isinstance(m, dict) else m)
+                        for m in (part.get("materials") or [])]
+                _board_mat = (any(_other_sheet2(m) for m in _own)
+                              or _other_sheet2(part.get("normalized_material") or "")
+                              or _other_sheet2(_norm_sw_material(nat.material or "")))
+            except Exception:                                        # noqa: BLE001
+                _board_mat = False
+            _leaf = not (part.get("is_assembly_parent") or part.get("is_sub_assembly")
+                         or part.get("assembly_children"))
+            if (_board_mat and _leaf and len(_dims) == 3
+                    and 3.0 <= _dims[0] <= 60.0 and _dims[0] * 4 <= _dims[1]):
+                thk = float(_dims[0])
+                if _apply_field(part, "normalized_thickness_mm", thk,
+                                "model_extents_board_gauge"):
+                    _why = (f"BOARD GAUGE {thk:g} mm FROM THE MODEL'S SMALLEST EXTENT — a "
+                            f"labelled fallback, not a cut list: the solid measures "
+                            f"{_bbox_text(nat)} and its material is priced as board, so the "
+                            f"thin way through it is read as the gauge. A stated gauge (a "
+                            f"drawing callout, a DXF filename) replaces it.")
+                    flags.append(_why)
+                    part.setdefault("review_flags", []).append(_why)
+                    try:
+                        from source_precedence import raise_manufacturing_question as _ask_g
+                        _ask_g(part, f"Gauge of {part.get('part_number')}: {thk:g} mm from "
+                                     f"the model's smallest extent (provisional)",
+                               _why, "confirm the board gauge; the sheet price, weight and "
+                                     "nest follow it",
+                               "solidworks.board_gauge_from_model_extents")
+                    except Exception:                                # noqa: BLE001
+                        pass
+                    out["thickness"] += 1
 
         # ── SURFACE TREATMENT ────────────────────────────────────────────────────
         # The cut list publishes the finish the designer specified. This is the datum the
