@@ -36,7 +36,12 @@ app = FastAPI(title="SDI Intelligence — Backend", version="0.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=config.ALLOWED_ORIGINS,
-    allow_methods=["GET"],
+    # POST is needed for the HR endpoints (/api/hr/pull, /load, /sync, /blip,
+    # /blip/load). This only matters when the portal is served from a DIFFERENT
+    # origin to this service - e.g. the Azure Static Web App in
+    # SDI_ALLOWED_ORIGINS. Served from here (API_BASE="") the calls are
+    # same-origin and never reach CORS at all, which is why GET-only worked.
+    allow_methods=["GET", "POST"],
     allow_headers=["X-SDI-Key", "Content-Type"],
 )
 
