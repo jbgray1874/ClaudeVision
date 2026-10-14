@@ -21,8 +21,12 @@ Two things to show your users honestly, every time:
 
 | Where | Base URL |
 |---|---|
-| Today (James's laptop, same network) | `http://<laptop-ip>:8072` |
+| Today (James's laptop, same network) | `http://<laptop-ip>:<port>` — James sends you the exact address |
 | Later (SDI-APP01) | `http://10.0.0.5:8071` |
+
+Keep the base URL as one setting in your code (it is `$BASE` / `base` below). Check it
+answers before anything else: `GET {base}/api/health` with the key header returns the
+service's status and the code version it is running.
 
 Every request needs the header `X-SDI-Key: <key James gives you>`.
 If your portal calls from **browser JavaScript**, the page's origin must be added to the
@@ -46,7 +50,7 @@ curl -H "X-SDI-Key: $KEY" \
   -F 'prompt=M&S tote trolley, mild steel 25x25 box frame ~1035x830x880, 16mm melamine top, 4x 100mm braked castors, 49 kg stated' \
   -F 'image=@trolley.png' -F 'client=M&S' -F 'reference=0356456' \
   -F 'quantities=1, 25, 50, 100' \
-  http://<laptop-ip>:8072/api/estimate/llm
+  "$BASE/api/estimate/llm"
 ```
 
 ```js
