@@ -134,18 +134,67 @@ foreach ($candidate in @(8071, 8072, 8073)) {
     $listening = @(Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)
     if ($listening.Count -gt 0) { $serving += $candidate }
 }
-if ($serving.Count -gt 0 -and ($serving -notcontains $Port)) {
+
+# THE PORT THE SCHEDULED TASK ITSELF STARTS ON. What is listening and what the task will
+# bring back are different facts, and the restart in step 3 obeys the second. The laptop's
+# task was installed for 8072 while a stray window held 8071, so "-Port 8071" -- the remedy
+# the refusal below offered -- ended the window, started the task on 8072, and reported
+# 8071 as down. 0 when there is no task (the server's NSSM service) or it names no port.
+$taskPort = 0
+$taskHere = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($taskHere) {
+    foreach ($action in @($taskHere.Actions)) {
+        if ("$($action.Arguments)" -match '-Port\s+(\d+)') { $taskPort = [int]$Matches[1] }
+    }
+}
+$whatIsOn = 'Get-NetTCPConnection -LocalPort {0} -State Listen | ForEach-Object {{ Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" }} | Select-Object ProcessId, CreationDate, CommandLine'
+
+if ($serving.Count -gt 0 -and ($serving -notcontains $Port) -and ($taskPort -ne $Port)) {
     $me = [System.Net.Dns]::GetHostName()
     Write-Host ""
     Write-Host ("  STOP. {0} is not serving {1} - nothing is listening on it here." -f $me, $Port) -ForegroundColor Red
     Write-Host ("  This machine is listening on {0}." -f ($serving -join ", ")) -ForegroundColor Red
+    if ($taskPort -gt 0) {
+        Write-Host ("  Its scheduled task starts the service on {0}." -f $taskPort) -ForegroundColor Red
+    }
     Write-Host "  The estimating laptop serves 8072; SDI-APP01 serves 8071. Both have a" -ForegroundColor Red
     Write-Host "  C:\ClaudeVision, so the prompt looks the same on either." -ForegroundColor Red
     Write-Host ""
-    Write-Host ("  Either re-run here with -Port {0}, or run this ON the other machine." -f $serving[0]) -ForegroundColor Yellow
+    $offer = $serving[0]
+    if ($taskPort -gt 0) { $offer = $taskPort }
+    Write-Host ("  Either re-run here with -Port {0}, or run this ON the other machine." -f $offer) -ForegroundColor Yellow
     Write-Host "  Nothing has been stopped." -ForegroundColor Green
     Write-Host ""
     exit 2
+}
+
+# LISTENING ON THE PORT ASKED FOR, BUT NOT BY THE TASK. Restarting would end that listener
+# and bring the task back on its own port, then report this one as down -- a success read
+# as a failure, which is the fault this whole step exists to prevent.
+if ($taskPort -gt 0 -and $taskPort -ne $Port -and ($serving -contains $Port)) {
+    $me = [System.Net.Dns]::GetHostName()
+    Write-Host ""
+    Write-Host ("  STOP. Something on {0} is listening on {1}, but this machine's scheduled" -f $me, $Port) -ForegroundColor Red
+    Write-Host ("  task starts the service on {0}. Restarting would end the {1} listener, bring" -f $taskPort, $Port) -ForegroundColor Red
+    Write-Host ("  the service back on {0}, and then report {1} as down." -f $taskPort, $Port) -ForegroundColor Red
+    Write-Host ""
+    Write-Host ("  Restart the task's own service:      -Port {0}" -f $taskPort) -ForegroundColor Yellow
+    Write-Host ("  Or make {0} this machine's port:   .\tools\start\install-service-task.ps1 -Port {0}" -f $Port) -ForegroundColor Yellow
+    Write-Host ("  What is on {0}:" -f $Port) -ForegroundColor Yellow
+    Write-Host ("    " + ($whatIsOn -f $Port)) -ForegroundColor Yellow
+    Write-Host "  Nothing has been stopped." -ForegroundColor Green
+    Write-Host ""
+    exit 2
+}
+
+# ASKED FOR THE TASK'S PORT WHILE SOMETHING ELSE HOLDS ANOTHER. The restart goes ahead --
+# the task is what serves this port -- but the other listener is not this task, is left
+# alone, and is very likely still serving old code.
+if ($taskPort -eq $Port -and $serving.Count -gt 0 -and ($serving -notcontains $Port)) {
+    foreach ($other in $serving) {
+        Write-Host ("  note: {0} is also listening here and is not the scheduled task; it is left alone." -f $other) -ForegroundColor Yellow
+        Write-Host ("    find it:  " + ($whatIsOn -f $other)) -ForegroundColor Yellow
+    }
 }
 
 # -- 1. STOP WHATEVER SUPERVISES IT HERE ----------------------------------------------
