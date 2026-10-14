@@ -8,11 +8,13 @@ the sheet rate with a 50% scrap allowance, plus a running cost of (L + B + H) x 
 set-up spread over the order quantity. Every figure lives in config.BOX_COSTING, attributed
 and dated; nothing is typed here.
 
-THE SHEET'S OWN TOTAL IS WRONG AND THIS MODULE SAYS SO RATHER THAN COPYING IT. K10 sums
-K7:K8 — two of the three pairs — so the sheet's worked example (88 x 38 x 1955 at 120 off)
-reads £1.82 where the complete box is £2.82. A faithful copy of a fault is still a fault;
-the correction is declared in the basis sentence so a checker comparing against the sheet
-sees why the figures differ.
+TWO TOTALS EXIST AND BOTH ARE RETURNED. The sheet's own total sums K7:K8 — two of the
+three panel pairs — so its worked example (88 x 38 x 1955 at 120 off) reads £1.82 where
+the three-pair sum is £2.82. Whether the third pair belongs in the allowance is NOT
+settled by this module: a real 0201 carton is one folded blank, not six separate panels,
+so neither figure is a proven box price. price_box returns the three-pair figure as
+unit_gbp and the sheet-faithful two-pair figure as sheet_total_gbp, and the validation
+tool compares BOTH against the Harley's order history so the choice is made on evidence.
 
 WHAT IT REFUSES. A panel that does not fit the sheet in the sheet's own orientation (the
 calculator does not rotate panels, so neither does this), a non-positive dimension, and any
@@ -98,9 +100,12 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     running = (L + B + H) * float(c["running_rate_gbp_per_mm"])
     setup_share = float(c["setup_cost_gbp"]) / qty
     unit = running + setup_share + material
+    # The sheet's own total: running + set-up + the FIRST TWO pairs (K10 = SUM(K7:K8)).
+    sheet_total = running + setup_share + sum(p["pair_cost_gbp"] for p in panels[:2])
     return {
         "priced": True,
         "unit_gbp": round(unit, 4),
+        "sheet_total_gbp": round(sheet_total, 4),
         "order_gbp": round(unit * qty, 2),
         "material_gbp": round(material, 4),
         "running_gbp": round(running, 4),
@@ -108,15 +113,19 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
         "order_qty": qty,
         "panels": panels,
         "stock_board": c.get("stock_board"),
-        "basis": (f"box calculator ({c.get('stated_by')}, {c.get('stated_on')}): "
+        "basis": (f"box calculator ({c.get('stated_by')}, {c.get('stated_on')}): a "
+                  f"PROVISIONAL panel-based allowance, not a quoted box price. "
                   f"{L:g} x {B:g} x {H:g} mm as 3 panel pairs +{ov:g} mm on "
                   f"{c.get('stock_board')} {c['sheet_length_mm']:g} x "
                   f"{c['sheet_width_mm']:g} at £{sheet_gbp:g} a sheet, {scrap:.0%} scrap; "
                   f"running (L+B+H) x £{c['running_rate_gbp_per_mm']:g}/mm = "
                   f"£{running:.3f}; set-up £{c['setup_cost_gbp']:g} / {qty} = "
-                  f"£{setup_share:.3f}. ALL THREE pairs are summed — the source sheet's "
-                  f"own total drops the Height/Length pair (K10 = SUM(K7:K8)), corrected "
-                  f"here"),
+                  f"£{setup_share:.3f}. This is the three-pair sum; the source sheet's "
+                  f"own total (SUM(K7:K8), two pairs) is £{sheet_total:.2f} — which "
+                  f"formula fits is judged against the Harley's history, not assumed. "
+                  f"Assumes one unit per carton, 0201 style, +{ov:g} mm the only "
+                  f"clearance, no protection or orientation modelled — "
+                  f"estimator to confirm"),
     }
 
 

@@ -3279,6 +3279,23 @@ def build_part_graph(
         kids = children.get(identity) or {}
         if not kids:
             return False
+        # THE EVIDENCE MUST BELONG TO THE PARENT'S OWN FABRICATED PART (D-522, the
+        # reviewer's correction of D-520's wording). "A GA never has fabrication
+        # evidence" was too absolute: a DXF matched to an assembly drawing, or geometry
+        # inherited onto it, would put measured fields on a record that is not a part we
+        # cut. A record whose drawing's ROLE is an assembly — its pages say so, or its
+        # code convention does — is an assembly whatever geometry got attached to it;
+        # the stamps (is_sub_assembly et al.) are deliberately NOT consulted here, since
+        # overriding a BOM edge's stamp on a measured PART is this gate's whole point
+        # (D-264's END CAP).
+        if any(str(r).lower() == "assembly" for r in (record.get("page_roles") or [])):
+            return False
+        try:
+            from part_code_conventions import carries_assembly_role as _is_ga_code
+            if _is_ga_code(identity):
+                return False
+        except Exception:                                            # noqa: BLE001
+            pass
         try:
             from bought_in_policy import has_fabrication_evidence, is_bought_in
         except Exception:                                            # noqa: BLE001

@@ -486,20 +486,28 @@ PACKING_METHOD = {
     },
 }
 
-# ── THE BOX CALCULATOR (D-521) ──────────────────────────────────────────────────────────
+# ── THE BOX CALCULATOR (D-521; OPT-IN per the 14 Oct review, D-522) ─────────────────────
 # James's AI BOX CALCULATOR sheet (chatgptdropoff/AICalculator, 14 Oct 2026): a plain
-# corrugated carton priced from the box's outside dimensions — six panels in three pairs,
-# each cut oversize, grid-nested onto the stock sheet, plus a running cost over the three
-# dimensions and the set-up spread over the order. These are the sheet's own figures,
-# attributed and dated; the engine CORRECTS the sheet's one fault — its total sums two of
-# the three panel pairs (K10 = SUM(K7:K8)), so its worked example reads £1.82 where the
-# complete box is £2.82. The sheet cost is a PRICE and can go stale like any held figure:
-# every line priced from this method is flagged indicative with this source named, and the
-# proven ladder (SDI Live, history, the counted shipment) still runs where the method
-# declines. Validated against the Harley's order extract (BOX TEST SHEET) by
-# tools/check_box_calculator.py.
+# corrugated carton allowance from the box's outside dimensions — six panels in three
+# pairs, each cut oversize, grid-nested onto the stock sheet, plus a running cost over
+# the three dimensions and the set-up spread over the order. These are the sheet's own
+# figures, attributed and dated. TWO TOTALS EXIST AND BOTH ARE REPORTED: the sheet's own
+# total sums two of the three panel pairs (K10 = SUM(K7:K8), £1.82 on its worked
+# example); summing all three gives £2.82. tools/check_box_calculator.py compared BOTH
+# against the 101 comparable 0201 orders in the Harley's extract (BOX TEST SHEET),
+# difference defined as (paid − calculator) / paid: the sheet's own two-pair total reads
+# median +0.4% (71% within ±25%; by quantity band −14.6% at 1-9 off, −1.8% at 10-49,
+# +8.0% at 50-199, −0.4% at 200+), the three-pair sum median −22% (45% within ±25%) —
+# the sheet's K7:K8 tracks what Harleys actually charged, plausibly because a real 0201
+# is one folded blank, not six separate panels, though WHY is not established. The
+# method stays DISABLED until James judges that comparison. Enabled, it prices the
+# PACKAGING line as a provisional panel-based allowance using the formula below, with
+# its assumptions stated on the line (one unit per carton, 0201 style, +20 mm the only
+# clearance, no protection or orientation modelled); disabled, the proven ladder
+# (SDI Live, history, the counted shipment) runs unchanged.
 BOX_COSTING = {
-    "enabled": True,
+    "enabled": False,        # OPT-IN: hold out until the two-formula comparison is judged
+    "formula": "sheet",      # "sheet" = the sheet's own K7:K8 total; "three_pair" = all six panels
     "stated_by": "James Gray (SDI), AI BOX CALCULATOR.xlsx",
     "stated_on": "14 Oct 2026",
     "stock_board": "BC 150KT",

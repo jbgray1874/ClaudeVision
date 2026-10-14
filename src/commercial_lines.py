@@ -540,22 +540,31 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     _r = box_costing.price_box(L, B, H, qty)
     if not _r.get("priced"):
         return {"not_applicable": str(_r.get("reason") or "the calculator declined")}
+    # WHICH FORMULA IS A CONFIG DECISION WITH THE EVIDENCE BESIDE IT (D-522). The sheet's
+    # own two-pair total tracked the Harley's history at median +0.4%; the three-pair sum
+    # ran 22% high. Neither is declared "correct" here — config.BOX_COSTING["formula"]
+    # picks, the comparison lives in the config comment, and the line says which was used.
+    _use_sheet = str(_c.get("formula") or "sheet").lower() != "three_pair"
+    _fkey = "sheet_total_gbp" if _use_sheet else "unit_gbp"
+    _fname = ("the sheet's own two-pair total (K7:K8)" if _use_sheet
+              else "the three-pair sum (all six panels)")
+    _unit = float(_r[_fkey])
     # The same arithmetic at every break: only the set-up share moves with quantity, and
     # the break table divides real order costs, so each column carries its own share.
     _at: Dict[int, float] = {}
     for _q in sorted(set([1, qty]) | set(_BREAKS_DEFAULT)):
         _rq = box_costing.price_box(L, B, H, _q)
         if _rq.get("priced"):
-            _at[_q] = _rq["order_gbp"]
-    return {"order_gbp": _r["order_gbp"], "order_gbp_at_breaks": _at,
+            _at[_q] = round(float(_rq[_fkey]) * _q, 2)
+    return {"order_gbp": round(_unit * qty, 2), "order_gbp_at_breaks": _at,
             "source_class": "box_calculator",
             "source_name": "box_calculator_config_rates",
             "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": f"{_c.get('stated_by')}, {_c.get('stated_on')}",
-            "working": (f"one {_r.get('stock_board')} carton per unit, "
-                        f"£{_r['unit_gbp']:.4f} each x {qty} = £{_r['order_gbp']:,.2f} "
-                        f"the order. {_r.get('basis')}")}
+            "working": (f"a PROVISIONAL allowance: one {_r.get('stock_board')} carton "
+                        f"per unit at {_fname}, £{_unit:.4f} each x {qty} = "
+                        f"£{_unit * qty:,.2f} the order. {_r.get('basis')}")}
 
 
 def _held_rate(key: str) -> Optional[float]:
