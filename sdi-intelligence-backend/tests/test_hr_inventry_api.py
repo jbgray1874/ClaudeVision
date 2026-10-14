@@ -464,7 +464,12 @@ def test_inventry_read_failure_aborts_without_writing(snapshot):
 def test_individual_failure_is_partial_not_fatal(snapshot):
     snapshot([clocked_in(), clocked_in(bh_id="BH-2", first="Aisha", surname="Khan",
                                        email="aisha@wearesdi.com")])
-    fake = FakeAPI([person(person_id="BH-1"), person(inventry_id="INV-2", person_id="BH-2")],
+    # INV-2 is Aisha's record. It used to carry the default name John Smith and
+    # match Aisha by ID alone - the very wrong-person match the name check now
+    # refuses. This test is about failure handling, so the record is hers.
+    fake = FakeAPI([person(person_id="BH-1"),
+                    person(inventry_id="INV-2", first="Aisha", surname="Khan",
+                           email="aisha@wearesdi.com", person_id="BH-2")],
                    fail_on={"INV-2"})
 
     result = push.run_push(apply=True, client=fake)
@@ -766,3 +771,76 @@ def test_duplicate_records_are_reported_for_cleanup(snapshot):
     ])
     result = push.run_push(apply=False, client=client)
     assert any("more than one InVentry record" in w for w in result["warnings"])
+
+
+# ── different people sharing an identifier ───────────────────────────────
+# Real dry run, 14 Oct: the record chosen for one BrightHR person was one of
+# two InVentry records filed under a different person's name. A shared email or
+# PersonID does NOT always mean one person. Signing in the wrong one puts the
+# wrong name on a fire roll and leaves the right one off.
+
+def test_shared_email_between_two_people_is_settled_by_name(snapshot):
+    snapshot([clocked_in(bh_id="BH-9", first="Sam", surname="Holt",
+                         email="shared@wearesdi.com")])
+    alex = person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+                  email="shared@wearesdi.com", person_id="AD-1")
+    sam = person(inventry_id="INV-SAM", first="Sam", surname="Holt",
+                   email="shared@wearesdi.com", person_id="AD-2")
+    alex["LastActivityDate"] = "2026-10-13T08:00:00.000"    # Alex used it more recently
+    sam["LastActivityDate"] = "0001-01-01T00:00:00"
+    client = FakeAPI([alex, sam])
+    push.run_push(apply=True, client=client)
+    assert client.signed_in == ["INV-SAM"]
+
+
+def test_an_email_held_by_a_differently_named_record_is_refused(snapshot):
+    """Sam's address on Alex's record is a data error. Guessing either way is
+    worse than reporting it."""
+    snapshot([clocked_in(bh_id="BH-9", first="Sam", surname="Holt",
+                         email="sam.holt@wearesdi.com")])
+    client = FakeAPI([person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+                             email="sam.holt@wearesdi.com", person_id="AD-1")])
+    result = push.run_push(apply=True, client=client)
+    assert client.signed_in == []
+    assert "different person" in result["unmatched"][0]["reason"]
+    assert "Alex Fenn" in result["unmatched"][0]["reason"]
+
+
+def test_a_nickname_still_matches_on_email(snapshot):
+    """Surname agrees, so Rob is Robert - refusing this would drop a real
+    person off the roll."""
+    snapshot([clocked_in(bh_id="BH-9", first="Robert", surname="Lane",
+                         email="robert.lane@wearesdi.com")])
+    client = FakeAPI([person(inventry_id="INV-ROB", first="Rob", surname="Lane",
+                             email="robert.lane@wearesdi.com", person_id="AD-1")])
+    push.run_push(apply=True, client=client)
+    assert client.signed_in == ["INV-ROB"]
+
+
+def test_same_name_duplicates_linked_by_an_identifier_are_one_person(snapshot):
+    """Two "Kit Marlow" records sharing an email are one person on two
+    records, not two namesakes - so a name match can safely use one of them
+    rather than leaving him off the roll as "ambiguous"."""
+    snapshot([clocked_in(bh_id="BH-9", first="Kit", surname="Marlow",
+                         email="kit@personal.example")])
+    a = person(inventry_id="INV-N1", first="Kit", surname="Marlow",
+               email="k.marlow@wearesdi.com", person_id="AD-1")
+    b = person(inventry_id="INV-N2", first="Kit", surname="Marlow",
+               email="k.marlow@wearesdi.com", person_id="AD-2")
+    client = FakeAPI([a, b])
+    result = push.run_push(apply=True, client=client)
+    assert len(client.signed_in) == 1
+    assert result["matched_by"]["name"] == 1
+
+
+def test_different_people_sharing_an_identifier_are_reported_as_a_conflict(snapshot):
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+               email="shared@wearesdi.com", person_id="AD-1"),
+        person(inventry_id="INV-SAM", first="Sam", surname="Holt",
+               email="shared@wearesdi.com", person_id="AD-2"),
+    ])
+    result = push.run_push(apply=False, client=client)
+    conflict = [w for w in result["warnings"] if "different people" in w]
+    assert conflict and "Alex Fenn" in conflict[0] and "Sam Holt" in conflict[0]
