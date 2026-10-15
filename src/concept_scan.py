@@ -5194,7 +5194,7 @@ def unit_assembly_part(parts: List[Dict[str, Any]], answer: Dict[str, Any],
     # THE PRODUCT'S OWN SIZE, FOR PACKING IT AS ITSELF (D-530): the drawn body where the sheet
     # gives one, else the read's overall size. Footprint longest first, then height.
     _facts = answer.get("sheet_facts") if isinstance(answer.get("sheet_facts"), Mapping) else {}
-    for _src, _box in (("the sheet's body dimensions", _facts.get("body_mm")),
+    for _src, _box in (("the drawing's body dimensions", _facts.get("body_mm")),
                        ("the read's overall size",
                         (answer.get("product") or {}).get("assumed_overall_mm"))):
         if isinstance(_box, Mapping):

@@ -84,7 +84,7 @@ def test_anyone_can_follow_it_step_by_step(monkeypatch):
     r = _box_method_price(_order())
     t = _text(ee.calculator_inputs_html(
         [{"code": "PACKAGING", "calculator_inputs": [r["calculator_inputs"]]}]))
-    heads = ["What it is.", "What was boxed on this job.", "The figures it uses."]
+    heads = ["What it is.", "How the sheet is applied to this drawing.", "The figures it uses."]
     heads += [f"Step {n} —" for n in range(1, 7)]
     heads += ["Why the ends are left out.", "Step 7 —", "At other quantities.",
               "What it assumes.", "How to check or change it."]
@@ -105,3 +105,47 @@ def test_the_covering_email_places_it_before_the_footer():
     src = (ROOT / "src" / "estimate_explained.py").read_text(encoding="utf-8")
     body = src[src.index("def covering_email("):]
     assert body.index("calculator_inputs_html(_commercial)") < body.index("Produced by SDI")
+
+
+def test_it_says_how_the_sheet_is_applied_to_the_drawing(monkeypatch):
+    """D-540: the sheet needs a box size and a box count; the drawing gives neither directly.
+    The e-mail says what was packed and why, which of the drawing's dimensions became the
+    box's L, B and H, and how the cartons were counted — and says where the sheet's own
+    figures are held (src/config.py, BOX_COSTING)."""
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+    monkeypatch.setitem(config.BOX_COSTING, "formula", "sheet")
+    r = _box_method_price(_order())
+    ap = r["calculator_inputs"]["applied"]
+    assert ap["route"] == "one_part"
+    assert [d["box"] for d in ap["dims"]] == ["Length (L)", "Breadth (B)", "Height (H)"]
+    assert [d["mm"] for d in ap["dims"]] == [88, 38, 1955]
+    t = _text(ee.calculator_inputs_html(
+        [{"code": "PACKAGING", "calculator_inputs": [r["calculator_inputs"]]}]))
+    assert t.index("How the sheet is applied to this drawing.") < t.index("The figures it uses.")
+    for want in ("The part X1", "Height (H) 1955 the part's thickness (its gauge)",
+                 "one carton per unit ordered: 120 units = 120 cartons",
+                 "src/config.py", "BOX_COSTING"):
+        assert want in t, want
+
+
+def test_an_assembled_product_is_boxed_by_its_drawn_body(monkeypatch):
+    import config
+    import box_costing
+    from commercial_lines import _box_cartons_from_shipment
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+    order = {"order_quantity": 1,
+             "assembled_unit": {"part_number": "U1", "envelope_mm": [700, 475, 1723],
+                                "envelope_source": "the drawing's body dimensions",
+                                "basis": "a welded unit, which cannot be flat-packed"},
+             "shipment": {"carton_count": 1, "carton_internal_mm": [700, 475, 1723],
+                          "ships_assembled": True, "packing_factor": 0.8}}
+    r = _box_cartons_from_shipment(order, 1, box_costing, config.BOX_COSTING)
+    t = _text(ee.calculator_inputs_html(
+        [{"code": "PACKAGING", "calculator_inputs": [r["calculator_inputs"]]}]))
+    for want in ("The assembled product U1", "a welded unit, which cannot be flat-packed, so it "
+                 "ships assembled",
+                 "Length (L) 700 the longer side of the product's footprint",
+                 "Height (H) 1723 the product's overall height — the drawing's body dimensions",
+                 "1 unit = 1 carton"):
+        assert want in t, want

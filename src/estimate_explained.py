@@ -2677,12 +2677,35 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
             "sides, two ends &mdash; cut from large sheets of board. It works out how many of "
             "each panel fit on one sheet, shares the sheet&rsquo;s price between them, adds a "
             "scrap allowance, then adds a running cost for making the box and a share of the "
-            "set-up cost for the order.</p>")
-        out.append(_P + f"<b>What was boxed on this job.</b> {_e(c.get('sized_as'))}. Order "
-                   f"quantity {qty}; {cartons} carton{'s' if cartons != 1 else ''} in all.</p>")
+            "set-up cost for the order. The sheet&rsquo;s figures are copied into the "
+            "engine&rsquo;s configuration (<code>src/config.py</code>, <code>BOX_COSTING</code>) "
+            "and its sum is rebuilt in the engine, so the engine and the sheet give the same "
+            "answer for the same box.</p>")
+        # ── the sheet applied to this drawing (D-540) ─────────────────────────────────
+        ap = c.get("applied") if isinstance(c.get("applied"), dict) else {}
+        if ap:
+            out.append(_P + "<b>How the sheet is applied to this drawing.</b> The sheet needs "
+                       "two things: the box&rsquo;s outside size and how many boxes. The "
+                       "drawing gives neither directly, so this is how they were taken from "
+                       "it:</p>")
+            out.append(_P + f"<b>What is packed.</b> {_e(ap.get('packed'))} &mdash; "
+                       f"{_e(ap.get('why'))}.</p>")
+            out.append(_table(["Box size", "mm", "Taken from"], [
+                [_e(d.get("box")), g(d.get("mm")), _e(d.get("from"))]
+                for d in (ap.get("dims") or []) if isinstance(d, dict)]))
+            out.append(_P + f"<b>The fit.</b> {_e(ap.get('fit'))} (+{g(ov)} mm on each "
+                       "panel, step 1) &mdash; no foam, corners or other protection is "
+                       "added.</p>")
+            out.append(_P + f"<b>How many cartons.</b> {_e(ap.get('count'))}. Order quantity "
+                       f"{qty}.</p>")
+        else:
+            out.append(_P + f"<b>What was boxed on this job.</b> {_e(c.get('sized_as'))}. "
+                       f"Order quantity {qty}; {cartons} carton{'s' if cartons != 1 else ''} "
+                       "in all.</p>")
         # ── the inputs ────────────────────────────────────────────────────────────────
-        out.append(_P + "<b>The figures it uses.</b> All are the estimators&rsquo; own, held in "
-                   "the engine&rsquo;s configuration with their source; change one there and "
+        out.append(_P + "<b>The figures it uses.</b> The box size is this job&rsquo;s (above); "
+                   "the rest are the sheet&rsquo;s own, held in <code>src/config.py</code> "
+                   "under <code>BOX_COSTING</code> with their source. Change one there and "
                    "every later estimate follows it.</p>")
         out.append(_table(["Figure", "Value", "What it is for"], [
             ["Box outside size L x B x H", f"{g(L)} x {g(B)} x {g(H)} mm",
