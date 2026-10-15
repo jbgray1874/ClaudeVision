@@ -3483,8 +3483,19 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
     # it weighed, the density it used, what it came to, and whether that made it a parcel or
     # a pallet. A description that says "about 49 kg" for a 2.3 kg tray then names the part
     # carrying the other 46 kg, instead of hiding it in a total.
-    _commercial = [c for c in (g["scan_doc"] or {}).get("commercial_lines", [])
-                   if isinstance(c, dict)] if isinstance(g["scan_doc"], dict) else []
+    # FROM THE PART RECORDS, NOT ONLY THE STORED LIST (D-543). summary["commercial_lines"] is
+    # filled by the quantity sweep, after the run JSON this note reads was written — so the
+    # key was empty on every saved job, and with it this section and the calculator working
+    # below. The lines live on their part stubs in that JSON; collect_lines is the one
+    # harvester the workbook and the sweep already use.
+    _commercial: List[Dict[str, Any]] = []
+    if isinstance(g["scan_doc"], dict):
+        try:
+            from commercial_lines import collect_lines as _collect_lines
+            _commercial = [c for c in _collect_lines(g["scan_doc"]) if isinstance(c, dict)]
+        except Exception:                                            # noqa: BLE001
+            _commercial = [c for c in (g["scan_doc"].get("commercial_lines") or [])
+                           if isinstance(c, dict)]
     if _commercial:
         add("<h4>How packaging and delivery were worked out</h4>")
         _basis = next((c.get("basis") for c in _commercial
