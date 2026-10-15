@@ -511,6 +511,12 @@ PACKING_METHOD = {
 BOX_COSTING = {
     "enabled": True,
     "formula": "sheet",      # "sheet" = the sheet's own K7:K8 total; "three_pair" = all six panels
+    # WHY THAT FORMULA, in words an estimator reads on the e-mail (D-538). Change it with the
+    # formula — it is quoted as the reason for the choice.
+    "formula_evidence": ("checked against 101 comparable 0201 cartons bought from Harley's: "
+                         "the sheet's own two-pair total came out a median 0.4% from what "
+                         "Harley's charged (71% of orders within 25%); adding the third pair "
+                         "came out a median 22% above it (45% within 25%)"),
     "stated_by": "James Gray (SDI), AI BOX CALCULATOR.xlsx",
     "stated_on": "14 Oct 2026",
     "stock_board": "BC 150KT",
