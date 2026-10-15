@@ -2593,6 +2593,121 @@ def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = N
             f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
+def calculator_inputs_html(commercial_lines: Any) -> str:
+    """THE 'AI ESTIMATOR CALCULATOR INPUTS' SECTION (James Gray, 15 Oct 2026).
+
+    "A new section at the bottom called AI Estimator Calculator Inputs. This will be a new
+    series of improvements. The first is the boxing work we did — show the full details of
+    the calculation for the job so estimating can check it."
+
+    Each calculator the engine ran on the estimators' own figures (config, named and dated)
+    shows every input and every step, in the order the source sheet works it, so a person
+    can re-do it by hand. Nothing is priced here: every number is the calculator's own result
+    carried on the commercial line (calculator_inputs). No calculator ran, no section."""
+    calcs: List[Dict[str, Any]] = []
+    for line in commercial_lines or []:
+        if not isinstance(line, dict):
+            continue
+        for c in line.get("calculator_inputs") or []:
+            if isinstance(c, dict) and c.get("calculator"):
+                calcs.append(dict(c, _line=str(line.get("code") or "")))
+    if not calcs:
+        return ""
+
+    def g(v: Any, unit: str = "") -> str:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return "—"
+        return f"{f:.6f}".rstrip("0").rstrip(".") + unit
+
+    def money(v: Any, dp: int = 2) -> str:
+        try:
+            return f"£{float(v):,.{dp}f}"
+        except (TypeError, ValueError):
+            return "—"
+    out: List[str] = ["<h3>AI Estimator Calculator Inputs</h3>",
+                      "<p>The calculators the engine ran on this job using the estimators&rsquo; "
+                      "own figures, with every input and every step, in the order the source "
+                      "sheet works them, so each can be checked by hand. Change an input in "
+                      "config and the next run follows it.</p>"]
+    for c in calcs:
+        if c.get("calculator") != "box":
+            continue
+        i = c.get("inputs") or {}
+        box = c.get("box_mm") or []
+        dims = " x ".join(g(v) for v in box) + " mm" if len(box) == 3 else "—"
+        out.append(f"<h4>{_e(c.get('title') or 'Box calculator')} &middot; the "
+                   f"{_e(c.get('_line') or 'PACKAGING')} line</h4>")
+        out.append(f"<p>Source: {_e(c.get('source'))}. Priced as {_e(c.get('sized_as'))}. "
+                   f"Order quantity {int(c.get('order_qty') or 1)}; cartons "
+                   f"{int(c.get('cartons') or 1)}.</p>")
+        out.append(_table(["Input", "Value", "Used for"], [
+            ["Box outside size (L x B x H)", dims, "every panel's cut size"],
+            ["Stock board", str(i.get("stock_board") or "—"), "the sheet the panels nest on"],
+            ["Sheet size", f"{g(i.get('sheet_length_mm'))} x {g(i.get('sheet_width_mm'))} mm",
+             "the nest"],
+            ["Sheet price", money(i.get("sheet_cost_gbp")), "each panel's share of a sheet"],
+            ["Scrap allowance", f"{float(i.get('scrap_fraction') or 0):.0%}",
+             "added to each panel's sheet share"],
+            ["Panel oversize", g(i.get("panel_oversize_mm"), " mm"),
+             "added to each finished dimension"],
+            ["Nest gap", g(i.get("nest_gap_mm"), " mm each side"), "between panels on the sheet"],
+            ["Sheet edge trim", g(i.get("sheet_edge_trim_mm"), " mm"),
+             "taken off the sheet width"],
+            ["Running rate", f"£{g(i.get('running_rate_gbp_per_mm'))}/mm", "x (L + B + H)"],
+            ["Set-up", money(i.get("setup_cost_gbp")), "spread over the cartons"],
+        ]))
+        try:
+            sw, sl = float(i.get("sheet_width_mm")), float(i.get("sheet_length_mm"))
+            trim, gap2 = float(i.get("sheet_edge_trim_mm")), 2.0 * float(i.get("nest_gap_mm"))
+            sheet, scrap = float(i.get("sheet_cost_gbp")), float(i.get("scrap_fraction"))
+        except (TypeError, ValueError):
+            sw = sl = trim = gap2 = sheet = scrap = 0.0
+        n_charged = int(c.get("pairs_charged") or 3)
+        rows = []
+        for k, p in enumerate(c.get("panels") or []):
+            pl, pb = p.get("cut_length_mm"), p.get("cut_breadth_mm")
+            nest = (f"across INT(({g(sw)} - {g(trim)}) / ({g(pb)} + {g(gap2)})) = "
+                    f"{p.get('across', '—')}; along INT({g(sl)} / ({g(pl)} + {g(gap2)})) = "
+                    f"{p.get('along', '—')}; {p.get('per_sheet')} a sheet")
+            cost = (f"{money(sheet)} / {p.get('per_sheet')} x {1 + scrap:g} x 2 = "
+                    f"{money(p.get('pair_cost_gbp'), 4)}")
+            rows.append([p.get("pair"), f"{g(pl)} x {g(pb)}", nest, cost,
+                         "yes" if k < n_charged else "no — not in the sheet's total"])
+        out.append(_table(["Panel pair (2 each)", "Cut size mm", "Nest on the sheet",
+                           "Pair cost", "In the charge"], rows))
+        try:
+            run_txt = (f"({' + '.join(g(v) for v in box)}) x £{g(i.get('running_rate_gbp_per_mm'))}"
+                       f" = {money(c.get('running_gbp'), 4)}")
+        except Exception:                                            # noqa: BLE001
+            run_txt = money(c.get("running_gbp"), 4)
+        steps = [
+            ["Running", run_txt],
+            ["Set-up share", f"{money(i.get('setup_cost_gbp'))} / {int(c.get('cartons') or 1)} "
+                             f"carton(s) = {money(c.get('setup_share_gbp'), 4)}"],
+            ["Sheet's own total (running + set-up + first two pairs)",
+             money(c.get("sheet_total_gbp"), 4)],
+            ["Three-pair sum (running + set-up + all six panels)",
+             money(c.get("three_pair_gbp"), 4)],
+            ["Charged a carton", f"{money(c.get('per_carton_gbp'), 4)} — {c.get('formula_name')} "
+                                 f"(config BOX_COSTING['formula'] = '{c.get('formula')}')"],
+            ["The order", f"{money(c.get('per_carton_gbp'), 4)} x {int(c.get('cartons') or 1)} = "
+                          f"{money(c.get('order_gbp'))}"],
+        ]
+        out.append(_table(["Step", "Working"], steps))
+        _at = c.get("order_gbp_at_breaks") or {}
+        if _at:
+            _brk = sorted((int(q), float(v)) for q, v in _at.items())
+            out.append(_table(["Order quantity", "Packaging for the order", "Per unit"],
+                              [[q, money(v), money(v / q, 4)] for q, v in _brk], numeric={0, 1, 2}))
+        out.append("<p style=\"color:#5b6b7d;font-size:12px\">A provisional allowance at held "
+                   "sheet rates, not a quoted box price: one unit per carton, 0201 style, the "
+                   "oversize the only clearance, no protection or orientation modelled. Check the "
+                   "carton size and count against the job before quoting.</p>")
+    return "\n".join(out)
+
+
 def _setup_and_run(labour_rows: List[Dict[str, Any]], order_qty: Any = 1) -> Dict[str, Any]:
     """How much of the labour is set-up, which is the whole of the quantity story.
 
@@ -3538,6 +3653,12 @@ def covering_email(workbook: Path, scan_json: Optional[Path] = None, *,
             "leaving the line blank. Each of these is a substitution we made, and ours to "
             "fix — nothing here needs anything from you:</p>")
         add("<ul>" + "".join(f"<li>{_e(o)}</li>" for o in _ours) + "</ul>")
+
+    # AI ESTIMATOR CALCULATOR INPUTS — at the bottom, the full working of each calculator the
+    # engine ran on the estimators' own figures (the box calculator first).
+    _calc_html = calculator_inputs_html(_commercial)
+    if _calc_html:
+        add(_calc_html)
 
     _scan_doc_rid = g.get("scan_doc") if isinstance(g.get("scan_doc"), dict) else {}
     _rid = str(_scan_doc_rid.get("run_id") or "")
