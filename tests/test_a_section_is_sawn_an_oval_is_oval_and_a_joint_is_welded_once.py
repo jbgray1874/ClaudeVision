@@ -111,8 +111,12 @@ def test_a_welded_unit_owns_the_joints_and_its_members_do_not_charge_them_again(
     assert unit["weld_joint_count"] == 4, "five welded pieces make at least four joints"
     for r in recs:
         assert not {"welding", "spot_welding"} & set(r["inferred_operations"]), r["part_number"]
-        assert "saw" in r["inferred_operations"] and "powder_coating" in r["inferred_operations"]
+        assert "saw" in r["inferred_operations"]
         assert any("charged once" in f for f in r["review_flags"])
+        # ...and coated with the unit after welding, not hung on its own (D-537)
+        assert "powder_coating" not in r["inferred_operations"]
+        assert r["coat_charged_on"] == unit["part_number"]
+    assert "powder_coating" in unit["inferred_operations"]
 
 
 def test_a_weld_the_brief_states_on_a_member_stays_on_it():
@@ -126,11 +130,16 @@ def test_a_weld_the_brief_states_on_a_member_stays_on_it():
 
 
 def test_an_unwelded_unit_leaves_its_members_alone():
+    # One welded member line welds to nothing else in the unit: the unit stays unwelded and the
+    # member keeps its own weld. (Two or more welded member lines are welded to one another,
+    # and make the unit welded — D-537, tests/test_a_welded_unit_is_welded_and_coated_once.)
     ans = _rail(unit_ops=("assembly",))
+    for p in ans["parts"][1:]:
+        p["operations"] = [o for o in p["operations"] if o != "welding"]
     recs = cs.parts_from_concept(ans, "J")
     unit = cs.unit_assembly_part(recs, ans, "J")
     assert "welding" not in (unit.get("inferred_operations") or [])
-    assert all("welding" in r["inferred_operations"] for r in recs)
+    assert "welding" in recs[0]["inferred_operations"]
 
 
 # ── a box-calculator figure is named as the box calculator, everywhere ───────────────────

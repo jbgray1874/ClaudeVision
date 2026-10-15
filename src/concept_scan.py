@@ -3444,12 +3444,52 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     moved. Matched by name, case and spacing ignored."""
     if not previous or not previous.get("parts"):
         return []
-    key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n).lower()).strip()
-    before = {key(r["name"]): r for r in previous.get("parts") or []}
-    after = {key(r["name"]): r for r in _bill_rows(answer or {})}
+    # "19MM" and "19 MM" are one spelling (D-537).
+    key = lambda n: re.sub(r"[^a-z0-9]+", " ", re.sub(  # noqa: E731
+        r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", str(n).lower())).strip()
+    def _keyed(rows: Any) -> Dict[str, Any]:
+        # Two lines of one name are two lines (D-537): the 21:37 read named a 732 mm and a
+        # 475 mm base angle alike, and keying by name alone kept only the second.
+        out_: Dict[str, Any] = {}
+        for r in rows or []:
+            k, n = key(r["name"]), 2
+            while k in out_:
+                k, n = f"{key(r['name'])} {n}", n + 1
+            out_[k] = r
+        return out_
+    before = _keyed(previous.get("parts"))
+    after = _keyed(_bill_rows(answer or {}))
+    # A LINE RENAMED IS NOT A LINE DROPPED (D-537). 0356455's 21:37 read called the uprights
+    # "MAIN VERTICAL OVAL UPRIGHT" where the last read said "MAIN VERTICAL UPRIGHT", and the
+    # book listed six lines as dropped — "its material and work are missing" — beside the same
+    # six lines added. A new name that holds every word of an old one (or the other way round),
+    # of the same kind, pairs with it when that pairing is the only one either name has.
+    _gone = [k for k in before if k not in after]
+    _new = [k for k in after if k not in before]
+    _words = lambda k: {w for w in k.split() if w not in ("mm", "x")}  # noqa: E731
+
+    def _pairs(a: str, b: str) -> bool:
+        wa, wb = _words(a), _words(b)
+        # One word ("Strip") is too loose to name a line by — the D-532 rule for item sizes.
+        return (min(len(wa), len(wb)) >= 2 and (wa <= wb or wb <= wa)
+                and before[a].get("kind") == after[b].get("kind"))
+    _dist = lambda a, b: len(_words(a) ^ _words(b))                   # noqa: E731
+    renamed: Dict[str, str] = {}
+    for a in _gone:
+        cands = sorted((b for b in _new if b not in renamed and _pairs(a, b)),
+                       key=lambda b: _dist(a, b))
+        if not cands or (len(cands) > 1 and _dist(a, cands[1]) == _dist(a, cands[0])):
+            continue
+        best = cands[0]
+        if any(x != a and _pairs(x, best) and _dist(x, best) <= _dist(a, best) for x in _gone):
+            continue
+        renamed[best] = a
     out: List[str] = []
     for k, r in after.items():
         p = before.get(k)
+        if p is None and k in renamed:
+            p = before[renamed[k]]
+            out.append(f"renamed: {p['name']} → {r['name']}")
         if p is None:
             out.append(f"added: {r['name']} x{r['quantity']:g}")
             continue
@@ -3464,8 +3504,9 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
                        f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm"
                        + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "size" in _ok else "")
                        + _why)
+    _renamed_from = set(renamed.values())
     for k, p in before.items():
-        if k not in after:
+        if k not in after and k not in _renamed_from:
             out.append(f"dropped: {p['name']} x{p.get('quantity') or 0:g}")
     return out
 
@@ -5261,11 +5302,34 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
     unit (D-387: a member's welded finish is the assembly's joint). So the unit carries the
     welding once, its joints counted from the welded PIECES — a weldment of N pieces has at
     least N-1 joints, at the shop's per-joint rate — and a member's inferred weld comes off,
-    said on the member. A weld the brief states for a member is that member's and stays."""
-    if not isinstance(unit, dict) or not (set(unit.get("inferred_operations") or [])
-                                          & set(_WELD_WORDS)):
+    said on the member. A weld the brief states for a member is that member's and stays.
+
+    MEMBERS WELDED TO EACH OTHER MAKE A WELDED UNIT (D-537). 0356455's 21:37 read marked six
+    member lines welded and the unit only assembled and coated, so each member group paid its
+    own Weld and Dress rows — three of each, thirty minutes' set-up apiece — for joints that
+    are the unit's. Two or more welded member lines are welded to one another, here: the unit
+    is welded, said on it, and the joints are charged once as above.
+
+    COATED AFTER WELDING, AS ONE PIECE (D-537). A welded unit goes through the booth as the
+    weldment, not as its members: the same book hung 21 member pieces on the line and costed
+    the powder over 0.05 m2 while the welded frame's surface is over a square metre. A welded
+    member's coat moves to the unit (the unit is coated over its members' surfaces); a member
+    that is not welded in — a bar hung on hooks — keeps its own coat and hangs on its own."""
+    if not isinstance(unit, dict):
         return []
+    if not (set(unit.get("inferred_operations") or []) & set(_WELD_WORDS)):
+        _welded_lines = [p for p in made or []
+                         if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
+        if len(_welded_lines) < 2:
+            return []
+        unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + ["welding"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: welded as a unit — the read marked {len(_welded_lines)} member lines "
+            f"welded ({', '.join(str(p.get('part_number')) for p in _welded_lines)}) and the "
+            f"unit itself not; members welded to one another are the unit's weldment, so its "
+            f"joints are charged here, once. Confirm the members are welded")
     moved: List[str] = []
+    coat_moved: List[str] = []
     pieces = 0
     for p in made or []:
         ops = list(p.get("inferred_operations") or [])
@@ -5273,6 +5337,15 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
         if not welded:
             continue
         pieces += _qty_of(p)
+        if "powder_coating" in ops:
+            ops = [o for o in ops if o != "powder_coating"]
+            p["inferred_operations"] = ops
+            p["coat_charged_on"] = str(unit.get("part_number") or "")
+            p.setdefault("review_flags", []).append(
+                f"CONCEPT: coated with the welded unit — it goes through the booth as part of "
+                f"{unit.get('part_number')}, whose coat covers its surface; it is not hung on "
+                f"its own")
+            coat_moved.append(str(p.get("part_number")))
         if p.get("weld_stated_by_brief") or not (set(ops) & set(_WELD_WORDS)):
             continue
         p["inferred_operations"] = [o for o in ops if o not in _WELD_WORDS]
@@ -5291,6 +5364,15 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
             + (f"; the members' own weld rows are not charged ({', '.join(moved)})"
                if moved else "")
             + ". Confirm the joint count")
+    if coat_moved:
+        if "powder_coating" not in (unit.get("inferred_operations") or []):
+            unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + [
+                "powder_coating"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: coated once, as the welded unit — {', '.join(coat_moved)} go through the "
+            f"booth welded into it, not as {len(coat_moved)} line(s) of loose pieces; the coat "
+            f"covers their surfaces. Override on the sheet if the shop coats them before "
+            f"welding")
     return moved
 
 
