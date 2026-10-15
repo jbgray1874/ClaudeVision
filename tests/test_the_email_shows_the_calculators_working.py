@@ -149,3 +149,30 @@ def test_an_assembled_product_is_boxed_by_its_drawn_body(monkeypatch):
                  "Height (H) 1723 the product's overall height — the drawing's body dimensions",
                  "1 unit = 1 carton"):
         assert want in t, want
+
+
+def test_the_calculator_reaches_the_real_email_from_the_part_record(monkeypatch, tmp_path):
+    """D-543: the 0356454 16:58 e-mail had no calculator section, nor 'How packaging and
+    delivery were worked out'. The note read summary['commercial_lines'], which the quantity
+    sweep fills after the run JSON is written — the key was empty on every saved job. The
+    line lives on its part stub in that JSON; the note now harvests it from there."""
+    import importlib
+    import json
+    import config
+    monkeypatch.setitem(config.BOX_COSTING, "enabled", True)
+    monkeypatch.setitem(config.BOX_COSTING, "formula", "sheet")
+    sys.path.insert(0, str(ROOT / "tests"))
+    sib = importlib.import_module("test_the_covering_note_says_what_the_estimate_costs")
+    scan = sib._scan(tmp_path / "j.json")
+    doc = json.loads(scan.read_text(encoding="utf-8"))
+    r = _box_method_price(_order())
+    line = {"code": "PACKAGING", "order_gbp": r["order_gbp"], "unit_gbp": r["order_gbp"] / 120,
+            "calculator_inputs": [r["calculator_inputs"]]}
+    doc.pop("commercial_lines", None)
+    doc.setdefault("estimate_summary", {}).setdefault("part_estimates", []).append(
+        {"part_number": "PACKAGING", "commercial_line": line})
+    scan.write_text(json.dumps(doc), encoding="utf-8")
+    note = ee.covering_email(sib._workbook(tmp_path / "j.xlsx"), scan, client="x")
+    t = _text(note["html"])
+    assert "AI Estimator Calculator Inputs" in t
+    assert "Box calculator — the PACKAGING line" in t
