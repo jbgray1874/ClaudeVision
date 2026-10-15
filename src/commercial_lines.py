@@ -651,7 +651,7 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             _at[_q] = round(float(_rq[_fkey]) * _q, 2)
     return {"order_gbp": round(_unit * qty, 2), "order_gbp_at_breaks": _at,
             "source_class": "box_calculator",
-            "source_name": "box_calculator_config_rates",
+            "source_name": _box_source_name(_r),
             "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": f"{_c.get('stated_by')}, {_c.get('stated_on')}",
@@ -664,6 +664,13 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "working": (f"a PROVISIONAL allowance: one {_r.get('stock_board')} carton "
                         f"per unit at {_fname}, £{_unit:.4f} each x {qty} = "
                         f"£{_unit * qty:,.2f} the order. {_r.get('basis')}")}
+
+
+def _box_source_name(r: Dict[str, Any]) -> str:
+    """The supplier column's name for the box price (D-542): the sheet when the sheet priced
+    it, the held config rates otherwise."""
+    kind = str((r.get("calculation_source") or {}).get("kind") or "")
+    return "box_calculator_sheet" if kind.startswith("sheet") else "box_calculator_config_rates"
 
 
 def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
@@ -681,6 +688,7 @@ def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
                   f"{(r.get('inputs') or {}).get('stated_on')}",
         "sized_as": sized_as,
         "applied": dict(applied or {}),
+        "calculation_source": dict(r.get("calculation_source") or {}),
         "box_mm": list(r.get("box_mm") or []),
         "cartons": int(cartons),
         "order_qty": int(order_qty),
@@ -855,7 +863,7 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
                    f"{r.get('basis')}")
         return {"order_gbp": order_gbp, "order_gbp_at_breaks": at,
                 "source_class": "box_calculator",
-                "source_name": "box_calculator_config_rates",
+                "source_name": _box_source_name(r),
                 "applied": True, "affects_total": True,
                 "reproducible": True, "indicative": True,
                 "method_source": f"{cfg.get('stated_by')}, {cfg.get('stated_on')}",
@@ -871,7 +879,7 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
                   f"lower bound — confirm with the packer." if _unm else ""))
     return {"order_gbp": order_gbp, "order_gbp_at_breaks": at,
             "source_class": "box_calculator",
-            "source_name": "box_calculator_config_rates",
+            "source_name": _box_source_name(r),
             "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": f"{cfg.get('stated_by')}, {cfg.get('stated_on')}",

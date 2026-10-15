@@ -90,6 +90,8 @@ _SOURCE_NAME_KEYS = ("source_name", "source", "source_type")
 # estimator calls the thing. Keyed on the SOURCE, never on a part or a job, so a connector
 # added next week is named by the same rule.
 _SOURCE_SYSTEM_NAMES = {
+    "box_calculator_sheet":        "AI BOX CALCULATOR sheet",
+    "box_calculator_config_rates": "Box calculator config rates",
     "udef_sqlserver":     "SDI Live UDEF",
     "sqlserver":          "SDI Live",
     "spreadsheet":        "Estimating spreadsheet",
