@@ -2593,6 +2593,48 @@ def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = N
             f"<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
 
 
+def _box_source_html(src: Dict[str, Any], _P: str, _e: Any) -> List[str]:
+    """'Where the calculation came from' for the box (D-542): the sheet calculating in Excel,
+    the engine's copy of its formulas on the sheet's figures, or the figures in config — the
+    file, when it was saved, its checksum, why not the sheet where it was not, and anything
+    on the sheet itself a reader should know."""
+    kind = str(src.get("kind") or "config")
+    where = ""
+    if src.get("file"):
+        where = (f"<b>{_e(src.get('file'))}</b>, saved {_e(src.get('modified'))}"
+                 + (f" (checksum {_e(src.get('sha256'))})" if src.get("sha256") else "")
+                 + f", at <code>{_e(src.get('path'))}</code> &mdash; the file named by "
+                   f"<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s "
+                   f"<code>.env</code>")
+    if kind == "sheet_excel":
+        body = (f"The sheet itself calculated this box. The engine copied {where}, entered "
+                "this job&rsquo;s box size and quantity into its Length, Breadth, Height and "
+                "Qty cells, let Excel calculate, and read back its TOTAL and each pair&rsquo;s "
+                "count and cost. The estimators&rsquo; own file is never written to. Whatever "
+                "estimating changes in that sheet is what the next run charges.")
+        if src.get("agrees") is False:
+            body += (" The engine&rsquo;s own copy of the sheet&rsquo;s formulas came to "
+                     f"&pound;{float(src.get('engine_copy_gbp') or 0):.4f} a carton, so the "
+                     "sheet holds a change the steps below do not show; the sheet&rsquo;s "
+                     "figure is the one charged.")
+    elif kind == "sheet_engine":
+        body = (f"The figures were read from {where}. {_e(src.get('reason'))}. The steps below "
+                "are that copy, so they are exactly what was charged.")
+    elif kind == "given":
+        body = _e(src.get("reason") or "")
+    else:
+        body = (_e(src.get("reason") or "the figures held in src/config.py (BOX_COSTING)")
+                + ". To have the sheet itself price every box, set "
+                  "<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s <code>.env</code> "
+                  "to the sheet&rsquo;s path.")
+    out = [_P + f"<b>Where the calculation comes from.</b> {body}</p>"]
+    notes = [n for n in (src.get("notes") or []) if n]
+    if notes:
+        out.append(_P + "<b>On the sheet itself.</b> " + "; ".join(_e(n) for n in notes)
+                   + ".</p>")
+    return out
+
+
 def calculator_inputs_html(commercial_lines: Any) -> str:
     """THE 'AI ESTIMATOR CALCULATOR INPUTS' SECTION (D-538, D-539).
 
@@ -2677,10 +2719,11 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
             "sides, two ends &mdash; cut from large sheets of board. It works out how many of "
             "each panel fit on one sheet, shares the sheet&rsquo;s price between them, adds a "
             "scrap allowance, then adds a running cost for making the box and a share of the "
-            "set-up cost for the order. The sheet&rsquo;s figures are copied into the "
-            "engine&rsquo;s configuration (<code>src/config.py</code>, <code>BOX_COSTING</code>) "
-            "and its sum is rebuilt in the engine, so the engine and the sheet give the same "
-            "answer for the same box.</p>")
+            "set-up cost for the order.</p>")
+        # ── where the calculation came from (D-542) ───────────────────────────────────
+        src = c.get("calculation_source") if isinstance(c.get("calculation_source"), dict) \
+            else {}
+        out.extend(_box_source_html(src, _P, _e))
         # ── the sheet applied to this drawing (D-540) ─────────────────────────────────
         ap = c.get("applied") if isinstance(c.get("applied"), dict) else {}
         if ap:
@@ -2703,10 +2746,14 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
                        f"Order quantity {qty}; {cartons} carton{'s' if cartons != 1 else ''} "
                        "in all.</p>")
         # ── the inputs ────────────────────────────────────────────────────────────────
+        _from_sheet = str(src.get("kind") or "").startswith("sheet")
         out.append(_P + "<b>The figures it uses.</b> The box size is this job&rsquo;s (above); "
-                   "the rest are the sheet&rsquo;s own, held in <code>src/config.py</code> "
-                   "under <code>BOX_COSTING</code> with their source. Change one there and "
-                   "every later estimate follows it.</p>")
+                   + ("the rest were read from the sheet named above, as it was saved. Change "
+                      "one in the sheet and the next run uses it."
+                      if _from_sheet else
+                      "the rest are held in <code>src/config.py</code> under "
+                      "<code>BOX_COSTING</code>, copied from the sheet with their source.")
+                   + "</p>")
         out.append(_table(["Figure", "Value", "What it is for"], [
             ["Box outside size L x B x H", f"{g(L)} x {g(B)} x {g(H)} mm",
              "length, breadth and height of the box this job needs"],
@@ -2801,6 +2848,19 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
             out.append(_table(["Units ordered", "Packaging for the order", "Per unit"],
                               [[q, money(v), money(v / q, 4)] for q, v in _brk],
                               numeric={0, 1, 2}))
+        # ── how the figure reaches the estimate workbook (D-542) ──────────────────────
+        _line = _e(c.get("_line") or "PACKAGING")
+        out.append(_P + f"<b>How it reaches the estimate workbook.</b> The order&rsquo;s "
+                   f"{money(c.get('order_gbp'))} is entered on the <b>{_line}</b> line of the "
+                   f"Estimate sheet&rsquo;s bill of materials as a price per unit &mdash; "
+                   f"{money(c.get('order_gbp'))} / {qty} unit{'s' if qty != 1 else ''} = "
+                   f"{money(num(c.get('order_gbp')) / max(qty, 1), 4)}, quantity per unit 1 "
+                   f"&mdash; with the supplier column reading <i>"
+                   + ("AI BOX CALCULATOR sheet" if _from_sheet else "Box calculator config rates")
+                   + "</i>. The Material Price Break tab carries the same line at each quantity "
+                   "(the order&rsquo;s packaging at that quantity divided by it), and the "
+                   "Quantity Breaks tab reads those back. Nothing on the workbook re-prices "
+                   "it: the figure is the calculator&rsquo;s, typed in.</p>")
         # ── what it assumes, and how to challenge it ──────────────────────────────────
         out.append(_P + "<b>What it assumes.</b> One unit per carton; a plain 0201 carton in "
                    f"{_e(board)}; the {g(ov)} mm oversize is the only room left inside &mdash; no "
@@ -2809,10 +2869,16 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
         out.append(_P + "<b>How to check or change it.</b> If the carton should be a different "
                    "size, a different board, hold more than one unit, or needs protection, say so "
                    "on the job and the line is re-priced. If a figure in the table above is out "
-                   "of date (sheet price, running rate, set-up), it is changed once in the "
-                   "engine&rsquo;s configuration and every estimate after follows it. To check "
-                   "the arithmetic, put the box size into the AI BOX CALCULATOR sheet: it gives "
-                   "the same panel counts and pair costs.</p>")
+                   "of date (sheet price, running rate, set-up), "
+                   + ("change it in the AI BOX CALCULATOR sheet named above and save it: the "
+                      "next run reads it. "
+                      if _from_sheet else
+                      "change it in the AI BOX CALCULATOR sheet and point "
+                      "<code>SDI_BOX_CALCULATOR_XLSX</code> in the engine&rsquo;s "
+                      "<code>.env</code> at that file, so the engine reads the sheet; until "
+                      "then it uses the copy in <code>src/config.py</code>. ")
+                   + "To check the arithmetic, put the box size and quantity into the sheet: "
+                   "it gives the same panel counts, pair costs and TOTAL.</p>")
     return "\n".join(out)
 
 

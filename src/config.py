@@ -536,6 +536,33 @@ BOX_COSTING = {
     "styles_priced": ("0201",),
 }
 
+# THE SHEET ITSELF, WHERE THE ESTIMATORS KEEP IT (D-542). James, 15 Oct 2026: "can we change it
+# ... so that it's reading from the s/sheet and using the s/sheet for the calculation in case
+# estimating tweak it ... we should make the file a .env variable". SDI_BOX_CALCULATOR_XLSX is
+# the path to AI BOX CALCULATOR.xlsx. Set, the engine reads the sheet's own figures and
+# formulas from it at run time and, on a machine with Excel, enters the box size and quantity
+# into a copy and lets Excel calculate the TOTAL — so a change estimating saves into the sheet
+# is the price on the next run. Without Excel it runs its copy of the sheet's formulas on the
+# figures read from the sheet. Unset, unreadable, or laid out differently from the cells below,
+# it prices from BOX_COSTING above and the e-mail says which source priced the box and why.
+# The cells are the sheet's own; a moved input is a change to make here, not a guess.
+BOX_CALCULATOR_SHEET = {
+    "path": os.getenv("SDI_BOX_CALCULATOR_XLSX", "").strip().strip('"') or None,
+    "use_excel": os.getenv("SDI_BOX_CALCULATOR_EXCEL", "1").strip().lower()
+                 not in ("0", "false", "no", "off"),
+    # Where the sheet takes its inputs and gives its answer, checked against its labels.
+    "inputs": {"length": "G2", "breadth": "G3", "height": "G4", "qty": "H2"},
+    "labels": {"F2": "Length", "F3": "Breadth", "F4": "Height", "H1": "Qty", "I1": "TOTAL",
+               "A2": "Stock board"},
+    "total": "I2",                 # the sheet's own TOTAL for one carton
+    "running": "E3", "setup_share": "H3",
+    "figures": {"stock_board": "A3", "sheet_cost_gbp": "C3", "setup_cost_gbp": "D3"},
+    # One row per panel pair: name A, panels B, cut length C, cut breadth D, sheet length F,
+    # sheet width G, qty per sheet H, scrap I, sheet cost J, pair cost K.
+    "pair_rows": (7, 8, 9),
+    "pairs_total": "K10",          # what the TOTAL adds of the pairs (SUM(K7:K8) today)
+}
+
 # ONE WORKBOOK, OR ONE PER QUANTITY.
 #
 #   "Let's look at collapsing all the s/sheets into one when we have multiple unit

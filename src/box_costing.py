@@ -48,6 +48,60 @@ def _num(value: Any) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
+def source_sentence(src: Dict[str, Any]) -> str:
+    """One sentence naming the calculation that priced the box (D-542)."""
+    src = src or {}
+    kind = src.get("kind")
+    where = (f"{src.get('file')}, saved {src.get('modified')}"
+             + (f", checksum {src.get('sha256')}" if src.get("sha256") else "")
+             + f" ({src.get('path')}, named by SDI_BOX_CALCULATOR_XLSX)")
+    if kind == "sheet_excel":
+        return (f"calculated by the AI BOX CALCULATOR sheet itself, in Excel — {where}"
+                + ("" if src.get("agrees", True) else
+                   f"; the engine's own copy of its formulas gives "
+                   f"£{float(src.get('engine_copy_gbp') or 0):.4f}, so the sheet holds a "
+                   f"change the copy does not — the sheet's figure is the one charged"))
+    if kind == "sheet_engine":
+        return f"the figures read from the AI BOX CALCULATOR sheet — {where}; {src.get('reason')}"
+    return str(src.get("reason") or "the figures held in src/config.py (BOX_COSTING)")
+
+
+def _calculation_source(sheet: Dict[str, Any], L: float, B: float, H: float,
+                        qty: int) -> Dict[str, Any]:
+    """Which calculation priced the box, in words for the e-mail (D-542): the sheet calculating
+    in Excel, the engine's copy of the sheet's formulas on the sheet's own figures, or the
+    figures held in config — with the file, its saved time and checksum, and why not the
+    sheet where it was not."""
+    if not sheet:
+        return {"kind": "config", "path": None, "env": "SDI_BOX_CALCULATOR_XLSX",
+                "reason": "SDI_BOX_CALCULATOR_XLSX is not set, so the figures held in "
+                          "src/config.py (BOX_COSTING) were used"}
+    base = {k: sheet.get(k) for k in ("path", "file", "modified", "sha256", "sheet_name",
+                                      "notes", "problems", "env")}
+    if not sheet.get("ok"):
+        return dict(base, kind="config",
+                    reason=f"the sheet could not be used — {sheet.get('reason')} — so the "
+                           f"figures held in src/config.py (BOX_COSTING) were used")
+    try:
+        import box_calculator_sheet as _bcs
+        _prime = set(getattr(config, "BOX_CALCULATOR_SHEET", {}).get("prime_quantities")
+                     or (1, 10, 20, 25, 50, 100, 200, 250, 500, 1000))
+        got, why = _bcs.calculate(sheet, L, B, H, _prime | {qty})
+    except Exception as exc:                                         # noqa: BLE001
+        got, why = {}, f"{type(exc).__name__}: {exc}"
+    if got.get(qty):
+        return dict(base, kind="sheet_excel", excel=got[qty])
+    if sheet.get("engine_copy_ok"):
+        return dict(base, kind="sheet_engine",
+                    reason=f"Excel did not calculate it ({why}), so the engine ran its copy "
+                           f"of the sheet's formulas on the figures read from the sheet")
+    return dict(base, kind="config",
+                reason=f"Excel did not calculate it ({why}) and the sheet's formulas have "
+                       f"changed in a way the engine's copy does not follow "
+                       f"({'; '.join(sheet.get('problems') or [])}) — so the figures held "
+                       f"in src/config.py (BOX_COSTING) were used")
+
+
 def panels_per_sheet(panel_length_mm: float, panel_breadth_mm: float,
                      cfg: Optional[Dict[str, Any]] = None) -> int:
     """The sheet's own grid nest: INT((sheet_width - trim) / (breadth + 2*gap)) x
@@ -68,6 +122,18 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     Returns {priced: bool, ...}. Priced: unit_gbp, order_gbp, material_gbp, running_gbp,
     setup_share_gbp, panels (each pair's size, nest and cost), basis. Refused: reason.
     """
+    # THE SHEET ITSELF WHEN IT IS NAMED (D-542). With no explicit cfg, a sheet named by
+    # SDI_BOX_CALCULATOR_XLSX supplies the figures, and on a machine with Excel the sheet
+    # does the sum. An explicit cfg (a test, the Harley's validation) prices exactly what it
+    # is given.
+    _sheet: Dict[str, Any] = {}
+    if cfg is None:
+        try:
+            import box_calculator_sheet as _bcs
+            if _bcs.configured_path():
+                _sheet = _bcs.read_sheet()
+        except Exception as exc:                                     # noqa: BLE001
+            _sheet = {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
     c = _cfg(cfg)
     L, B, H = _num(length_mm), _num(breadth_mm), _num(height_mm)
     qty = max(1, int(_num(order_qty) or 1))
@@ -75,6 +141,10 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
         return {"priced": False,
                 "reason": f"a box needs three positive outside dimensions; got "
                           f"{length_mm!r} x {breadth_mm!r} x {height_mm!r}"}
+    source = _calculation_source(_sheet, L, B, H, qty) if cfg is None else {
+        "kind": "given", "reason": "priced on the figures the caller supplied"}
+    if source.get("kind") in ("sheet_excel", "sheet_engine"):
+        c.update(_sheet.get("figures") or {})
     ov = float(c["panel_oversize_mm"])
     pairs = [("Length/Breadth", L + ov, B + ov),
              ("Height/Breadth", H + ov, B + ov),
@@ -105,9 +175,28 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     running = (L + B + H) * float(c["running_rate_gbp_per_mm"])
     setup_share = float(c["setup_cost_gbp"]) / qty
     unit = running + setup_share + material
-    # The sheet's own total: running + set-up + the FIRST TWO pairs (K10 = SUM(K7:K8)).
-    sheet_total = running + setup_share + sum(p["pair_cost_gbp"] for p in panels[:2])
+    # The sheet's own total: running + set-up + the pairs its K10 adds (SUM(K7:K8) — two).
+    _n_total = int((_sheet.get("pairs_in_total")
+                    if source.get("kind") in ("sheet_excel", "sheet_engine") else None) or 2)
+    sheet_total = running + setup_share + sum(p["pair_cost_gbp"] for p in panels[:_n_total])
+    if source.get("excel"):
+        # THE SHEET'S OWN ANSWER IS CHARGED. The engine's copy is kept beside it as a check.
+        _x = source.pop("excel")
+        source["engine_copy_gbp"] = round(sheet_total, 4)
+        for _p, _xp in zip(panels, _x.get("pairs") or []):
+            if _xp.get("per_sheet") is not None:
+                _p["per_sheet"] = int(_xp["per_sheet"])
+            if _xp.get("cost") is not None:
+                _p["pair_cost_gbp"] = round(float(_xp["cost"]), 4)
+        running = float(_x.get("running") if _x.get("running") is not None else running)
+        setup_share = float(_x.get("setup_share") if _x.get("setup_share") is not None
+                            else setup_share)
+        material = sum(p["pair_cost_gbp"] for p in panels)
+        unit = running + setup_share + material
+        sheet_total = float(_x["total"])
+        source["agrees"] = abs(source["engine_copy_gbp"] - sheet_total) < 0.005
     return {
+        "calculation_source": source,
         "priced": True,
         # EVERY FIGURE THE ARITHMETIC USED, so the estimator can check the box against the
         # sheet it came from (James, 15 Oct: "show the full details of the calculation for
@@ -140,7 +229,7 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
                   f"the Harley's history. "
                   f"Assumes one unit per carton, 0201 style, +{ov:g} mm the only "
                   f"clearance, no protection or orientation modelled — "
-                  f"estimator to confirm"),
+                  f"estimator to confirm. Source: {source_sentence(source)}"),
     }
 
 
