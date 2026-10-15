@@ -405,8 +405,8 @@
   </div>
 
   <h2 id="overrides">Telling the engine more than the drawings say</h2>
-  <p class="lead">Three optional inputs sit on the estimating page between the drawing list and
-  the run button. All three exist for the same reason: sometimes you know something the pack
+  <p class="lead">These optional inputs sit on the estimating page between the drawing list and
+  the run button. All of them exist for the same reason: sometimes you know something the pack
   does not say, and typing it here beats hand-editing the sheet afterwards — because what you
   type travels with the run, lands on the book with your name on it, and shows up in the
   provenance like any other piece of evidence. None of them is ever a price.</p>
@@ -446,6 +446,20 @@
       file is ticked reference is refused — there would be no product to cost.</td>
       <td>The pack includes a customer's standards manual or spec alongside the product
       drawings.</td></tr>
+    <tr><td class="k">Member schedule — checked against the drawing</td>
+      <td><b>LLM reads only.</b> Press <b>Load this job's schedule or last read</b> and the
+      model's last read of this job fills a table — one line per thing cut or bought, with its
+      count, stock (sheet, tube, oval, angle, channel, flat or round bar, wire, mesh), section,
+      cut length, holes, folds and work. Check every line against the drawing: add the line the
+      read missed, remove the one it invented, say what each is cut from. Tick <b>I checked
+      every line against the drawing</b>, put your name in, tick <b>File this schedule and price
+      it</b>, and press the LLM read. The schedule is filed beside the pack and priced by every
+      rule the model's read would be — <b>the model is not asked again</b>, and Fresh read does
+      not change that. It stays with the job (a re-run keeps it) until you tick <b>Set the
+      schedule on file aside</b>; the run's log says which construction it priced.</td>
+      <td>The model's read got the construction wrong — a missing member, an invented one, a
+      wire read as a bar — and you want the price of the construction you checked, not another
+      fresh guess.</td></tr>
   </table>
 
   <div class="panel">

@@ -563,12 +563,12 @@ def find_brief(folders: List[Any]) -> tuple:
 #  invented, or change what a line is cut from. A construction a person has checked against the
 #  drawing is a better read than the model's: in the read's own shape, so every rule downstream
 #  prices it exactly as it would have priced the model's answer, and the model is not asked.
-CONSTRUCTION_SUFFIX = "_construction.json"
-CONSTRUCTION_FILENAME = "construction.json"
-# A construction says what is MADE and BOUGHT, never what it costs: a money figure in it would
-# reach the sheet wearing the drawing's authority (the answers file's rule, estimator_confirmed).
-_CONSTRUCTION_MONEY_KEYS = ("price", "cost", "rate", "gbp", "£")
-_CONSTRUCTION_KEYS = ("product", "unit_operations", "parts", "not_visible", "sheet_facts")
+# The file, its checks and its table live in accepted_construction (D-535): pure python, so the
+# portal refuses a schedule before staging by exactly the rules the run will apply.
+import accepted_construction as _accepted                          # noqa: E402
+
+CONSTRUCTION_SUFFIX = _accepted.SUFFIX
+CONSTRUCTION_FILENAME = _accepted.FILENAME
 
 
 def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], List[str]]:
@@ -576,50 +576,7 @@ def load_accepted_construction(path: Any) -> Tuple[Optional[Dict[str, Any]], Lis
 
     Refused, by name: no parts; a line with no name, no kind or no positive quantity; any money
     key anywhere; and a file nobody has accepted ("accepted_by" empty, or still a DRAFT)."""
-    problems: List[str] = []
-    try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
-    except Exception as exc:                                         # noqa: BLE001
-        return None, [f"could not be read ({type(exc).__name__}: {exc})"]
-    if not isinstance(data, dict) or not isinstance(data.get("parts"), list) or not data["parts"]:
-        return None, ["it has no parts list"]
-
-    def _money(obj: Any, where: str) -> List[str]:
-        found: List[str] = []
-        if isinstance(obj, dict):
-            for k, v in obj.items():
-                if any(m in str(k).lower() for m in _CONSTRUCTION_MONEY_KEYS):
-                    found.append(f"{where}{k}")
-                found.extend(_money(v, f"{where}{k}."))
-        elif isinstance(obj, list):
-            for i, v in enumerate(obj):
-                found.extend(_money(v, f"{where}{i}."))
-        return found
-    _m = _money(data, "")
-    if _m:
-        problems.append(f"it carries money ({', '.join(_m[:4])}) — a construction states what is "
-                        f"made and bought, never a price; enter prices on the sheet")
-    who = str(data.get("accepted_by") or "").strip()
-    if not who or who.upper().startswith("DRAFT"):
-        problems.append("nobody has accepted it — set \"accepted_by\" to the person who checked "
-                        "it against the drawing")
-    for i, p in enumerate(data["parts"], start=1):
-        if not isinstance(p, dict):
-            problems.append(f"line {i} is not a part")
-            continue
-        if not str(p.get("name") or "").strip() or not str(p.get("kind") or "").strip():
-            problems.append(f"line {i} has no name or no kind")
-        if not _num(p.get("quantity")) > 0:
-            problems.append(f"line {i} ({p.get('name')}) has no positive quantity")
-    if problems:
-        return None, problems
-    answer = {k: data[k] for k in _CONSTRUCTION_KEYS if k in data}
-    answer["accepted_construction"] = {
-        "file": str(path), "accepted_by": who,
-        "accepted_on": str(data.get("accepted_on") or ""),
-        "basis": str(data.get("basis") or ""),
-        "excluded": [str(x) for x in (data.get("excluded") or [])]}
-    return answer, []
+    return _accepted.load(path)
 
 
 def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
@@ -628,20 +585,7 @@ def find_accepted_construction(folders: List[Any], job: str = "") -> Tuple[
 
     "<job>_construction.json", then "<folder>_construction.json", then "construction.json".
     A file that is found and refused returns (None, file, problems) — said, never ignored."""
-    seen = set()
-    for folder in folders:
-        if not folder or str(folder) in seen:
-            continue
-        seen.add(str(folder))
-        p = Path(str(folder))
-        names = ([f"{job}{CONSTRUCTION_SUFFIX}"] if job else []) + [
-            f"{p.name}{CONSTRUCTION_SUFFIX}", CONSTRUCTION_FILENAME]
-        for name in names:
-            f = p / name
-            if f.is_file():
-                ans, problems = load_accepted_construction(f)
-                return ans, str(f), problems
-    return None, "", []
+    return _accepted.find(folders, job=job)
 
 
 def missing_brief_flag(client_document: bool = False) -> str:
@@ -3440,9 +3384,19 @@ def save_bill(folder: Any, job: str, answer: Mapping[str, Any],
                 and _key(r.get("name")) not in {_key(h.get("name")) for h in history}):
             history.append(dict(r, dropped_by_read=str(r.get("dropped_by_read") or read_key
                                                        or "a later read")))
+    # THE READ ITSELF, IN ITS OWN SHAPE (D-535): the portal's Member schedule panel starts the
+    # estimator's table from it — stock form, section, wall, holes and work included, which the
+    # summary rows above do not carry. Which read it was is said: the model's, or a schedule
+    # a person accepted (whose re-save is the schedule as priced).
+    _src = "accepted_construction" if isinstance(answer.get("accepted_construction"),
+                                                 Mapping) else "model"
+    read = {"source": _src,
+            **{k: answer[k] for k in ("product", "unit_operations", "not_visible")
+               if k in answer},
+            "parts": [dict(p) for p in (answer.get("parts") or []) if isinstance(p, Mapping)]}
     payload = json.dumps({"job": job, "prompt_version": CONCEPT_PROMPT_VERSION,
                           "base_key": base_key, "read_key": read_key, "parts": rows,
-                          "history": history[:40]}, indent=1)
+                          "history": history[:40], "read": read}, indent=1, default=str)
     written = None
     for path in (_bill_path(folder, job), _runner_bill_path(folder, job)):
         if path is None:
@@ -3490,12 +3444,52 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
     moved. Matched by name, case and spacing ignored."""
     if not previous or not previous.get("parts"):
         return []
-    key = lambda n: re.sub(r"[^a-z0-9]+", " ", str(n).lower()).strip()
-    before = {key(r["name"]): r for r in previous.get("parts") or []}
-    after = {key(r["name"]): r for r in _bill_rows(answer or {})}
+    # "19MM" and "19 MM" are one spelling (D-537).
+    key = lambda n: re.sub(r"[^a-z0-9]+", " ", re.sub(  # noqa: E731
+        r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", str(n).lower())).strip()
+    def _keyed(rows: Any) -> Dict[str, Any]:
+        # Two lines of one name are two lines (D-537): the 21:37 read named a 732 mm and a
+        # 475 mm base angle alike, and keying by name alone kept only the second.
+        out_: Dict[str, Any] = {}
+        for r in rows or []:
+            k, n = key(r["name"]), 2
+            while k in out_:
+                k, n = f"{key(r['name'])} {n}", n + 1
+            out_[k] = r
+        return out_
+    before = _keyed(previous.get("parts"))
+    after = _keyed(_bill_rows(answer or {}))
+    # A LINE RENAMED IS NOT A LINE DROPPED (D-537). 0356455's 21:37 read called the uprights
+    # "MAIN VERTICAL OVAL UPRIGHT" where the last read said "MAIN VERTICAL UPRIGHT", and the
+    # book listed six lines as dropped — "its material and work are missing" — beside the same
+    # six lines added. A new name that holds every word of an old one (or the other way round),
+    # of the same kind, pairs with it when that pairing is the only one either name has.
+    _gone = [k for k in before if k not in after]
+    _new = [k for k in after if k not in before]
+    _words = lambda k: {w for w in k.split() if w not in ("mm", "x")}  # noqa: E731
+
+    def _pairs(a: str, b: str) -> bool:
+        wa, wb = _words(a), _words(b)
+        # One word ("Strip") is too loose to name a line by — the D-532 rule for item sizes.
+        return (min(len(wa), len(wb)) >= 2 and (wa <= wb or wb <= wa)
+                and before[a].get("kind") == after[b].get("kind"))
+    _dist = lambda a, b: len(_words(a) ^ _words(b))                   # noqa: E731
+    renamed: Dict[str, str] = {}
+    for a in _gone:
+        cands = sorted((b for b in _new if b not in renamed and _pairs(a, b)),
+                       key=lambda b: _dist(a, b))
+        if not cands or (len(cands) > 1 and _dist(a, cands[1]) == _dist(a, cands[0])):
+            continue
+        best = cands[0]
+        if any(x != a and _pairs(x, best) and _dist(x, best) <= _dist(a, best) for x in _gone):
+            continue
+        renamed[best] = a
     out: List[str] = []
     for k, r in after.items():
         p = before.get(k)
+        if p is None and k in renamed:
+            p = before[renamed[k]]
+            out.append(f"renamed: {p['name']} → {r['name']}")
         if p is None:
             out.append(f"added: {r['name']} x{r['quantity']:g}")
             continue
@@ -3510,8 +3504,9 @@ def bill_changes(previous: Mapping[str, Any], answer: Mapping[str, Any]) -> List
                        f"{r.get('length') or 0:g} × {r.get('width') or 0:g} mm"
                        + (" — AN APPROVED VALUE CHANGED; the estimator's stands" if "size" in _ok else "")
                        + _why)
+    _renamed_from = set(renamed.values())
     for k, p in before.items():
-        if k not in after:
+        if k not in after and k not in _renamed_from:
             out.append(f"dropped: {p['name']} x{p.get('quantity') or 0:g}")
     return out
 
@@ -5307,11 +5302,34 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
     unit (D-387: a member's welded finish is the assembly's joint). So the unit carries the
     welding once, its joints counted from the welded PIECES — a weldment of N pieces has at
     least N-1 joints, at the shop's per-joint rate — and a member's inferred weld comes off,
-    said on the member. A weld the brief states for a member is that member's and stays."""
-    if not isinstance(unit, dict) or not (set(unit.get("inferred_operations") or [])
-                                          & set(_WELD_WORDS)):
+    said on the member. A weld the brief states for a member is that member's and stays.
+
+    MEMBERS WELDED TO EACH OTHER MAKE A WELDED UNIT (D-537). 0356455's 21:37 read marked six
+    member lines welded and the unit only assembled and coated, so each member group paid its
+    own Weld and Dress rows — three of each, thirty minutes' set-up apiece — for joints that
+    are the unit's. Two or more welded member lines are welded to one another, here: the unit
+    is welded, said on it, and the joints are charged once as above.
+
+    COATED AFTER WELDING, AS ONE PIECE (D-537). A welded unit goes through the booth as the
+    weldment, not as its members: the same book hung 21 member pieces on the line and costed
+    the powder over 0.05 m2 while the welded frame's surface is over a square metre. A welded
+    member's coat moves to the unit (the unit is coated over its members' surfaces); a member
+    that is not welded in — a bar hung on hooks — keeps its own coat and hangs on its own."""
+    if not isinstance(unit, dict):
         return []
+    if not (set(unit.get("inferred_operations") or []) & set(_WELD_WORDS)):
+        _welded_lines = [p for p in made or []
+                         if set(p.get("inferred_operations") or []) & set(_WELD_WORDS)]
+        if len(_welded_lines) < 2:
+            return []
+        unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + ["welding"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: welded as a unit — the read marked {len(_welded_lines)} member lines "
+            f"welded ({', '.join(str(p.get('part_number')) for p in _welded_lines)}) and the "
+            f"unit itself not; members welded to one another are the unit's weldment, so its "
+            f"joints are charged here, once. Confirm the members are welded")
     moved: List[str] = []
+    coat_moved: List[str] = []
     pieces = 0
     for p in made or []:
         ops = list(p.get("inferred_operations") or [])
@@ -5319,6 +5337,15 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
         if not welded:
             continue
         pieces += _qty_of(p)
+        if "powder_coating" in ops:
+            ops = [o for o in ops if o != "powder_coating"]
+            p["inferred_operations"] = ops
+            p["coat_charged_on"] = str(unit.get("part_number") or "")
+            p.setdefault("review_flags", []).append(
+                f"CONCEPT: coated with the welded unit — it goes through the booth as part of "
+                f"{unit.get('part_number')}, whose coat covers its surface; it is not hung on "
+                f"its own")
+            coat_moved.append(str(p.get("part_number")))
         if p.get("weld_stated_by_brief") or not (set(ops) & set(_WELD_WORDS)):
             continue
         p["inferred_operations"] = [o for o in ops if o not in _WELD_WORDS]
@@ -5337,6 +5364,15 @@ def joints_once_on_the_unit(unit: Dict[str, Any], made: List[Dict[str, Any]]) ->
             + (f"; the members' own weld rows are not charged ({', '.join(moved)})"
                if moved else "")
             + ". Confirm the joint count")
+    if coat_moved:
+        if "powder_coating" not in (unit.get("inferred_operations") or []):
+            unit["inferred_operations"] = list(unit.get("inferred_operations") or []) + [
+                "powder_coating"]
+        unit.setdefault("review_flags", []).append(
+            f"CONCEPT: coated once, as the welded unit — {', '.join(coat_moved)} go through the "
+            f"booth welded into it, not as {len(coat_moved)} line(s) of loose pieces; the coat "
+            f"covers their surfaces. Override on the sheet if the shop coats them before "
+            f"welding")
     return moved
 
 

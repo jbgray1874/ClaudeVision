@@ -123,3 +123,10 @@ def test_a_member_whose_weld_the_unit_charges_takes_no_fixings(tmp_path):
                for r in recs if r.get("concept_kind") == "fabricated")
     mech = cs.mechanically_fitted(recs)
     assert mech["fixings"] == 4 * 4, "the castors only — the welded members are not screwed on"
+
+
+def test_a_schedule_saved_with_a_byte_order_mark_is_read(tmp_path):
+    (tmp_path / f"{JOB}_construction.json").write_bytes(
+        b"\xef\xbb\xbf" + json.dumps(_schedule()).encode("utf-8"))
+    ans, _f, problems = cs.find_accepted_construction([tmp_path], job=JOB)
+    assert ans and not problems

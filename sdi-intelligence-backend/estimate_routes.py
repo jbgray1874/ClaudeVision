@@ -561,6 +561,12 @@ class EstimateRequest(BaseModel):
     # was not used. Checked before staging and written into the staged folder as
     # `<drawing>_customer_changes.json` — src/customer_changes.build_changes_file, never a price.
     customer_changes: Optional[Dict[str, Any]] = None
+    # THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535). LLM read only. None: whatever is
+    # on file for the job stands (and the log says which). {"set_aside": true}: the schedule on
+    # file is renamed, so the model reads the drawing again. Otherwise the panel's table,
+    # checked before staging by src/accepted_construction.build_file and filed beside the pack
+    # as `<drawing>_construction.json` — priced in place of the model's read. Never a price.
+    construction: Optional[Dict[str, Any]] = None
     # THE DELIVERY DECLARATION (D-524): {"requested": bool, "postcode": "LE19 ..."} from the
     # Run form's checkbox and postcode box. None means the form predates the field or the
     # caller never heard of it — the run costs exactly as before. Written into the staged
@@ -1503,6 +1509,81 @@ def changes_check(req: ChangesCheckRequest, x_sdi_key: Optional[str] = Header(de
             "questions": len((data or {}).get("questions") or [])}
 
 
+# ── THE MEMBER SCHEDULE, CHECKED AGAINST THE DRAWING (D-535) ────────────────────────────
+#
+# "Verify the member schedule against the PDF, then replay that accepted construction through
+# pricing — not repeatedly ask Grok for another fresh design." The first way to file one was a
+# JSON file edited in Notepad and copied onto the share by hand, which a re-run's staging then
+# deleted. So it is made here, like the materials and the customer's changes: the last read
+# (or the schedule already on file) loads into a table, the estimator corrects it against the
+# drawing, ticks and names it, and the Run files it beside the pack. Never a price.
+
+def _construction_module():
+    """src/accepted_construction, loaded by path like the other steps — pure python, so this
+    service checks a schedule by the run's own rules without carrying the engine."""
+    import importlib.util
+    src = Path(__file__).resolve().parents[1] / "src"
+    spec = importlib.util.spec_from_file_location("sdi_accepted_construction",
+                                                  src / "accepted_construction.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)                                     # type: ignore[union-attr]
+    return mod
+
+
+class ConstructionReadRequest(BaseModel):
+    client: str = ""
+    drawing_number: str = ""
+    # A schedule file the estimator opened in the browser: shown as the table's rows and its
+    # refusals, never filed — only a Run files a schedule.
+    schedule: Optional[Dict[str, Any]] = None
+
+
+@router.post("/construction/read")
+def construction_read(req: ConstructionReadRequest,
+                      x_sdi_key: Optional[str] = Header(default=None)):
+    """For this client and job: the schedule the next LLM run would price, one set aside, and
+    the last read's lines to start from. Reads the staged job folder; writes nothing."""
+    _check_key(x_sdi_key)
+    mod = _construction_module()
+    if req.schedule is not None:
+        return {"status": "ok", "opened": mod.schedule_view(req.schedule or {}),
+                "vocabulary": mod.vocabulary()}
+    client, drawing = safe_segment(req.client), safe_segment(req.drawing_number)
+    if not client or not drawing:
+        return {"status": "empty", "message": "Enter the client and the drawing number first.",
+                "vocabulary": mod.vocabulary()}
+    try:
+        folder = staging.job_folder_for(client, drawing)
+    except staging.StagingError as exc:
+        return {"status": "unavailable", "message": str(exc), "vocabulary": mod.vocabulary()}
+    if _within_a_root(str(folder)) is None:
+        raise HTTPException(403, f"The staged job folder {folder} is outside the shares this "
+                                 f"service may read.")
+    if not Path(folder).is_dir():
+        return {"status": "no_job", "folder": str(folder), "vocabulary": mod.vocabulary(),
+                "message": "This job has not been run yet, so there is no read to start from — "
+                           "run the LLM read once, or build the schedule line by line."}
+    out = mod.on_file(folder, drawing)
+    out.update({"status": "ok", "vocabulary": mod.vocabulary()})
+    return out
+
+
+class ConstructionCheckRequest(BaseModel):
+    drawing_number: str = ""
+    construction: Dict[str, Any] = {}
+
+
+@router.post("/construction/check")
+def construction_check(req: ConstructionCheckRequest,
+                       x_sdi_key: Optional[str] = Header(default=None)):
+    """The schedule as the run would take it, or every reason it would be refused — so the
+    page shows a missing size or name before Run. The Run checks again."""
+    _check_key(x_sdi_key)
+    data, errors = _construction_module().build_file(req.construction or {},
+                                                     safe_segment(req.drawing_number))
+    return {"ok": not errors, "errors": errors, "lines": len((data or {}).get("parts") or [])}
+
+
 class BriefRequest(BaseModel):
     """A run queued from a typed brief with no drawings (D-401) — the shape another site
     posts. `reference` is the enquiry or drawing number the job is filed under."""
@@ -1569,6 +1650,8 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  if str(f or "").strip()]
     if _ref_docs and method != "llm":
         raise HTTPException(400, "Reference/standards documents ride on the LLM read method.")
+    if req.construction and method != "llm":
+        raise HTTPException(400, "A member schedule rides on the LLM read method only.")
     if _ref_docs and req.files:
         _file_names = {Path(str(f)).name for f in req.files if str(f or "").strip()}
         _unknown = sorted(set(_ref_docs) - _file_names)
@@ -1664,6 +1747,20 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(400, "Customer changes not accepted: " + "; ".join(_cerrs))
         _changes_file = _cfile or None
 
+    # THE MEMBER SCHEDULE (D-535), CHECKED BEFORE STAGING by the rules the run applies: a line
+    # with no section size or no name is refused while nothing has moved. LLM read only — a
+    # drawing pack's readers measure the parts themselves.
+    _construction_file: Optional[Dict[str, Any]] = None
+    _construction_set_aside = False
+    if req.construction:
+        if req.construction.get("set_aside"):
+            _construction_set_aside = True
+        else:
+            _kfile, _kerrs = _construction_module().build_file(req.construction, drawing)
+            if _kerrs:
+                raise HTTPException(400, "Member schedule not accepted: " + "; ".join(_kerrs))
+            _construction_file = _kfile
+
     try:
         if _brief_only:
             staged = staging.stage_brief_only(client=client, drawing=drawing,
@@ -1749,6 +1846,27 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             raise HTTPException(
                 502, f"The drawings were staged but the customer changes could not be "
                      f"written beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
+    # The member schedule, after staging (which keeps one already on file as the job's own
+    # data): filed, set aside, or — with neither asked — whatever is on file stands, and the
+    # run's log says which below.
+    _construction_status = "not_an_llm_read" if method != "llm" else "none"
+    _construction_on_file: Optional[Dict[str, Any]] = None
+    if method == "llm":
+        _kmod = _construction_module()
+        try:
+            if _construction_file:
+                _kmod.write(folder, drawing, _construction_file)
+                _construction_status = "filed"
+            elif _construction_set_aside:
+                _construction_status = ("set_aside" if _kmod.set_aside(folder, drawing)
+                                        else "none")
+            _construction_on_file = (_kmod.on_file(folder, drawing) or {}).get("on_file")
+            if _construction_on_file and _construction_status == "none":
+                _construction_status = "on_file"
+        except OSError as exc:
+            raise HTTPException(
+                502, f"The drawings were staged but the member schedule could not be filed "
+                     f"beside them ({type(exc).__name__}: {exc}). Nothing was queued.")
 
     job = _within_a_root(folder)
     if job is None:
@@ -1832,6 +1950,27 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
                  "quoted or compared with a normal run's.")
     _brief_status = (_file_enquiry_brief(run, job, req.enquiry_brief)
                      if run.llm_only else "not_an_llm_read")
+    # WHICH CONSTRUCTION THIS RUN PRICES, said where the estimator is looking (D-535): a
+    # schedule on file changes what the run is, and a run that silently priced last week's
+    # schedule — or silently asked the model again — is the failure this panel exists to end.
+    if _construction_status == "set_aside":
+        run.line("MEMBER SCHEDULE set aside — the model reads the drawing this run; the "
+                 "schedule is kept beside the pack to start from again.")
+    elif _construction_on_file and not _construction_on_file.get("problems"):
+        _k = _construction_on_file
+        run.line(f"MEMBER SCHEDULE {'filed' if _construction_status == 'filed' else 'on file'} "
+                 f"— {len(_k.get('rows') or [])} line(s) accepted by {_k.get('accepted_by')}"
+                 + (f" on {_k['accepted_on']}" if _k.get("accepted_on") else "")
+                 + ". This run prices the schedule; the model is NOT asked to read the pack "
+                   "(Fresh read does not change that). Set it aside in the Member schedule "
+                   "panel to have the model read the drawing.")
+        for _x in (_k.get("excluded") or [])[:4]:
+            run.line(f"  not part of the product: {_x}")
+    elif _construction_on_file:
+        run.line("WARNING — a member schedule is on file but would be refused: "
+                 + "; ".join(_construction_on_file.get("problems") or [])
+                 + ". The model reads the drawing instead. Correct it in the Member "
+                   "schedule panel.")
     if req.concept_document:
         run.line("CLIENT DOCUMENT: read extracted PDF text, all page images and the enquiry "
                  "brief together; infer a provisional BOM and route for ordinary costing.")
@@ -1901,6 +2040,7 @@ def start(req: EstimateRequest, x_sdi_key: Optional[str] = Header(default=None))
             "drawing_folder": str(drawing_folder),
             "waiting_behind": busy.run_id if busy is not None else None,
             "enquiry_brief": _brief_status,
+            "construction": _construction_status,
             "reference_documents": list(_ref_docs),
             "concept_document": bool(req.concept_document)}
 

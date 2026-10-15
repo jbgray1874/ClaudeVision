@@ -10995,6 +10995,12 @@ def estimate_part(part: Dict[str, Any], job_quantity: Optional[int] = None) -> D
         "material_priced_as": (dict(part["material_priced_as"])
                                if isinstance(part.get("material_priced_as"), dict) else None),
         "drawn_thickness_mm": part.get("drawn_thickness_mm"),
+        # THE SECTION'S OWN SIZE CROSSES THE BOUNDARY (D-537). wb_populate's coated-area sum
+        # asks the costed record for section_stock — and it was never copied here, so every
+        # section the route coats on its own line added nothing: 0356455's 21:37 POWDER row
+        # held 0.0475 m2 (the wire alone) for a frame of tubes, angles and channels.
+        **({"section_stock": dict(part.get("section_stock"))}
+           if isinstance(part.get("section_stock"), dict) and part.get("section_stock") else {}),
         # A PIECE WELDED TO A COATED HOST IS COATED WITH IT (D-499): its area belongs in the
         # powder sum though it never hangs on the line as a piece of its own.
         **({"coated_with_host": list(part.get("coated_with_host"))}
@@ -12743,6 +12749,11 @@ def stamp_members_coated_area(parts: Any) -> int:
         _counted: List[str] = []
         _left_out: List[str] = []
         _by_member: Dict[str, float] = {}
+        # A WELDED UNIT THAT TOOK ITS MEMBERS' COAT (D-537, concept_scan.joints_once_on_the_unit)
+        # leaves a member still carrying powder_coating hung on its own line — 0356455's loose
+        # wire bars — so it is counted there, not on the unit too.
+        _took_coats = any(str(_m.get("coat_charged_on") or "").strip().upper() == _apn
+                          for _m in _members)
         try:
             from document_builder import flat_blank_mm as _flat_blank_mm
         except Exception:                                            # noqa: BLE001
@@ -12777,6 +12788,8 @@ def stamp_members_coated_area(parts: Any) -> int:
             # arriving by another road (D-286). Only a stated powder finish of its own, or the
             # op read from its own text with no finish inherited, is a coat on its own line.
             if _member_carries_its_own_coat(_m):
+                continue
+            if _took_coats and "powder_coating" in _part_ops(_m):
                 continue
             # THROUGH THE SHARED RESOLVER. The measured members of that case hold their flat
             # under normalized_geometry.bounding_box_flat_mm; reading two spellings found none.
@@ -12813,9 +12826,17 @@ def stamp_members_coated_area(parts: Any) -> int:
 
 def _section_outer_area_m2(part: Dict[str, Any]) -> float:
     """One piece of a section part's coated surface, m2 — outer perimeter x cut length
-    (section_profile's perimeter), or 0.0 when it is not a section or is unmeasured."""
+    (section_profile's perimeter), or 0.0 when it is not a section or is unmeasured.
+
+    WIRE IS COATED ON ITS SURFACE TOO (D-537): pi x d x length, the figure the workbook's own
+    wire sum uses. 0356455's 21:37 book booked P.Coat on four 6 mm wire bars and said "charged
+    with no coated area" — the costing had no wire term, the sheet had one."""
     _ss = part.get("section_stock") if isinstance(part.get("section_stock"), dict) else {}
     if not _ss:
+        _wd = _safe_float(part.get("wire_gauge_mm"))
+        _wl = _safe_float(part.get("wire_length_mm"))
+        if str(part.get("stock_form") or "").lower() == "wire" and _wd and _wl:
+            return round(3.14159265 * (_wd / 1000.0) * (_wl / 1000.0), 6)
         return 0.0
     try:
         from section_profile import section_outer_perimeter_mm

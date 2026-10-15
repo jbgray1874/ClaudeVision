@@ -180,8 +180,15 @@ def test_the_units_coat_is_its_members_outer_surfaces():
 
 
 def test_a_section_part_coats_its_outer_surface():
-    rail = next(r for r in _records() if r["description"] == "CROSS RAIL")
-    det = E.estimate_part(rail)["process_estimate"]["powder_coating_detail"]
+    parts = _records()
+    rail = next(r for r in parts if r["description"] == "CROSS RAIL")
+    # Welded into the unit, it is coated with it (D-537) — over its outer surface.
+    assert rail["coat_charged_on"] == parts[0]["part_number"]
+    assert E._section_outer_area_m2(rail) == pytest.approx(math.pi * 19 * 660 / 1e6, abs=1e-4)
+    # A section coated on its own line is coated on the same surface.
+    loose = dict(rail, inferred_operations=["saw", "powder_coating"])
+    loose.pop("coat_charged_on")
+    det = E.estimate_part(loose)["process_estimate"]["powder_coating_detail"]
     assert det["coated_area_source"] == "section_outer_surface"
     assert det["coated_m2"] == pytest.approx(math.pi * 19 * 660 / 1e6, abs=1e-4)
 
