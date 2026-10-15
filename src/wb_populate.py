@@ -1277,6 +1277,24 @@ def _group_material_family(candidate_ids, estimates, raw,
     return material, is_acrylic
 
 
+_CUT_REMAPPED_TO_TUBE = frozenset({"laser", "laser_cutting", "laser_metal", "guillotine"})
+
+
+def _sawn_to_length(pid: str, estimates: Dict[str, Any], raw: Dict[str, Any]) -> bool:
+    """The part is already cut to length on the saw (D-531): it carries the estimator's saw
+    pieces, or the saw among its own operations."""
+    for rec in (estimates.get(pid) or {}, raw.get(pid) or {}):
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("_saw_cut_list_pieces"):
+            return True
+        for field in ("inferred_operations", "textual_operations", "operations"):
+            if "saw" in {str(o).strip().lower() for o in (rec.get(field) or [])
+                         if isinstance(o, str)}:
+                return True
+    return False
+
+
 def _map_operation(op: str, is_acrylic: bool, stock_form: str = "",
                    material: Any = "") -> Optional[str]:
     """Map an engine operation name to the correct WB department name.
@@ -3425,6 +3443,19 @@ def canonical_labour_groups(
         # is CO2 on steel, and a bonded acrylic joint has no bead to dress.
         if is_acrylic and not _is_timber(material) and wb_op in ("Weld (CO2)", "Spotweld"):
             wb_op = "Glue"
+        # A SECTION IS CUT ONCE, ON THIS ROAD TOO (D-541). The remap above turns a laser or
+        # guillotine word on a tube into the Tube cut, which was right while nothing else cut
+        # it. Since D-531 the estimator charges the saw per piece on every section bought as a
+        # stock length, so 0356454's box-section uprights and lower frame reached the sheet
+        # on a Tube row AND a Saw row — one length cut twice. Where every part on the row is
+        # already sawn, the Tube row is the same cut and is not made.
+        if wb_op == "Tube" and operation in _CUT_REMAPPED_TO_TUBE:
+            _known = [p for p in candidate_ids if p in estimates or p in raw]
+            _sawn = [p for p in _known if _sawn_to_length(p, estimates, raw)]
+            if _sawn and len(_sawn) == len(_known):
+                print(f"   [route] {operation} NOT charged on {', '.join(_sawn)} — already "
+                      f"sawn to length; a section is cut once", flush=True)
+                continue
 
         scope = str(decision.get("scope") or "part").lower()
         sequence = _safe(decision.get("sequence"))
