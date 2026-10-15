@@ -94,8 +94,13 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
                                f"packer's to price")}
         pair_gbp = (sheet_gbp / n) * (1.0 + scrap) * 2.0
         material += pair_gbp
+        # The nest's two counts, so the working can be checked against the sheet's own cells.
+        _gap2 = 2.0 * float(c["nest_gap_mm"])
         panels.append({"pair": name, "count": 2, "cut_length_mm": round(pl, 1),
                        "cut_breadth_mm": round(pb, 1), "per_sheet": n,
+                       "across": int((float(c["sheet_width_mm"]) - float(c["sheet_edge_trim_mm"]))
+                                     // (pb + _gap2)),
+                       "along": int(float(c["sheet_length_mm"]) // (pl + _gap2)),
                        "pair_cost_gbp": round(pair_gbp, 4)})
     running = (L + B + H) * float(c["running_rate_gbp_per_mm"])
     setup_share = float(c["setup_cost_gbp"]) / qty
@@ -104,6 +109,14 @@ def price_box(length_mm: Any, breadth_mm: Any, height_mm: Any, order_qty: Any,
     sheet_total = running + setup_share + sum(p["pair_cost_gbp"] for p in panels[:2])
     return {
         "priced": True,
+        # EVERY FIGURE THE ARITHMETIC USED, so the estimator can check the box against the
+        # sheet it came from (James, 15 Oct: "show the full details of the calculation for
+        # the job so estimating can check it"). Read by estimate_explained.
+        "inputs": {k: c.get(k) for k in (
+            "stock_board", "sheet_length_mm", "sheet_width_mm", "sheet_cost_gbp",
+            "scrap_fraction", "panel_oversize_mm", "nest_gap_mm", "sheet_edge_trim_mm",
+            "running_rate_gbp_per_mm", "setup_cost_gbp", "stated_by", "stated_on")},
+        "box_mm": [L, B, H],
         "unit_gbp": round(unit, 4),
         "sheet_total_gbp": round(sheet_total, 4),
         "order_gbp": round(unit * qty, 2),

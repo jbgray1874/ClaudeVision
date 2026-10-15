@@ -651,9 +651,48 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": f"{_c.get('stated_by')}, {_c.get('stated_on')}",
+            "calculator_inputs": _box_calculator_inputs(
+                _r, cartons=qty, order_qty=qty, use_sheet=_use_sheet,
+                sized_as=(f"one carton per unit, sized around {_p.get('part_number')} "
+                          f"({L:g} x {B:g} x {H:g} mm, its measured size)"),
+                per_carton=_unit, order_gbp=_unit * qty, at_breaks=_at),
             "working": (f"a PROVISIONAL allowance: one {_r.get('stock_board')} carton "
                         f"per unit at {_fname}, £{_unit:.4f} each x {qty} = "
                         f"£{_unit * qty:,.2f} the order. {_r.get('basis')}")}
+
+
+def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
+                           use_sheet: bool, sized_as: str, per_carton: float,
+                           order_gbp: float, at_breaks: Dict[int, float]) -> Dict[str, Any]:
+    """THE BOX CALCULATOR'S INPUTS AND EVERY STEP, as one record for the covering e-mail's
+    'AI Estimator Calculator Inputs' section (James Gray, 15 Oct 2026: "show the full
+    details of the calculation for the job so estimating can check it"). Nothing here is
+    priced again — it is price_box's own result, the carton count and the formula used."""
+    return {
+        "calculator": "box",
+        "title": "Box calculator — packaging",
+        "source": f"{(r.get('inputs') or {}).get('stated_by')}, "
+                  f"{(r.get('inputs') or {}).get('stated_on')}",
+        "sized_as": sized_as,
+        "box_mm": list(r.get("box_mm") or []),
+        "cartons": int(cartons),
+        "order_qty": int(order_qty),
+        "formula": "sheet" if use_sheet else "three_pair",
+        "formula_name": ("the sheet's own total — running + set-up + the first two panel pairs "
+                         "(K10 = SUM(K7:K8))" if use_sheet
+                         else "the three-pair sum — running + set-up + all six panels"),
+        "pairs_charged": 2 if use_sheet else 3,
+        "inputs": dict(r.get("inputs") or {}),
+        "panels": [dict(p) for p in (r.get("panels") or [])],
+        "running_gbp": r.get("running_gbp"),
+        "setup_share_gbp": r.get("setup_share_gbp"),
+        "material_gbp": r.get("material_gbp"),
+        "three_pair_gbp": r.get("unit_gbp"),
+        "sheet_total_gbp": r.get("sheet_total_gbp"),
+        "per_carton_gbp": round(float(per_carton), 4),
+        "order_gbp": round(float(order_gbp), 2),
+        "order_gbp_at_breaks": {int(k): v for k, v in (at_breaks or {}).items()},
+    }
 
 
 def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any,
@@ -703,6 +742,17 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
             if rq.get("priced"):
                 at[q] = round(float(rq[_fkey]) * _nq, 2)
     _unm = _num(plan.get("parts_without_a_blank")) or 0
+    _inputs = _box_calculator_inputs(
+        r, cartons=n, order_qty=qty, use_sheet=_use_sheet,
+        sized_as=(f"{n} carton(s), one per unit, sized around the assembled product "
+                  f"({L:g} x {B:g} x {H:g} mm) — it ships assembled"
+                  if plan.get("ships_assembled") else
+                  f"{n} carton(s) of the configured standard size ({L:g} x {B:g} x {H:g} mm, "
+                  f"its internal size used as the cut size), counted from the measured "
+                  f"blanks' volume and weight at packing factor {plan.get('packing_factor')}"
+                  + (f"; {int(_unm)} part(s) had no blank, so the count is a lower bound"
+                     if _unm else "")),
+        per_carton=per, order_gbp=order_gbp, at_breaks=at)
     if plan.get("ships_assembled"):
         working = (f"a PROVISIONAL allowance: {n} x {cfg.get('stock_board')} carton(s), one "
                    f"per unit, each sized around the assembled product {L:g} x {B:g} x {H:g} mm "
@@ -715,6 +765,7 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
                 "applied": True, "affects_total": True,
                 "reproducible": True, "indicative": True,
                 "method_source": f"{cfg.get('stated_by')}, {cfg.get('stated_on')}",
+                "calculator_inputs": _inputs,
                 "working": working}
     working = (f"a PROVISIONAL allowance: {n} x {cfg.get('stock_board')} carton(s) "
                f"{L:g} x {B:g} x {H:g} mm — the configured standard carton, counted from "
@@ -730,6 +781,7 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
             "applied": True, "affects_total": True,
             "reproducible": True, "indicative": True,
             "method_source": f"{cfg.get('stated_by')}, {cfg.get('stated_on')}",
+            "calculator_inputs": _inputs,
             "working": working}
 
 
@@ -1193,6 +1245,8 @@ def _line(code: str, order: Dict[str, Any], description: str,
         out["order_gbp_at_breaks"] = _box.get("order_gbp_at_breaks") or {}
         out["packing_working"] = _box.get("working") or ""
         out["method_source"] = _box.get("method_source")
+        if isinstance(_box.get("calculator_inputs"), dict):
+            out["calculator_inputs"] = [dict(_box["calculator_inputs"])]
     elif (_ch := _choose_commercial_basis(code, order)) is not None:
         # THE BEST-SUPPORTED BASIS, CHOSEN AND SAID (D-453). The business's own rate on the
         # counted shipment first; then SDI history where it is comparable (same customer AND
