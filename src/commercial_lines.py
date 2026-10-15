@@ -177,7 +177,9 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
                 _unit = part
             continue
         L, W = _num(part.get("blank_length_mm")), _num(part.get("blank_width_mm"))
+        _blank_from = "the flat blank on the part's record"
         if not (L and W):
+            _blank_from = "the flat blank measured from the drawing's geometry"
             # THROUGH THE SHARED RESOLVER. A DXF-measured flat is held under the geometry
             # record, not at the top of the part; 12527-22's riser and rail were both
             # measured, and packing declined because "no part was measured".
@@ -190,6 +192,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
             # THE BLANK THE MATERIAL WAS COSTED ON (D-451): a costed record keeps it here.
             _me = part.get("material_estimate") if isinstance(part.get("material_estimate"), dict) else {}
             L, W = _num(_me.get("blank_length_mm")), _num(_me.get("blank_width_mm"))
+            _blank_from = "the blank its material was costed on"
         T = _num(part.get("normalized_thickness_mm"))
         if not (L and W and T):
             skipped += 1
@@ -235,6 +238,7 @@ def describe_order(parts: List[Dict[str, Any]], order_qty: Any) -> Dict[str, Any
         counted_parts.append({
             "part_number": part.get("part_number"), "length_mm": L, "width_mm": W,
             "thickness_mm": T, "material": part.get("normalized_material"),
+            "description": part.get("description"), "blank_from": _blank_from,
             "density_kg_m3": _density_for(part.get("normalized_material")),
             "per_assembly": per, "kg_each": round(_line_kg, 3),
             "kg_in_order": round(_line_kg * per * qty, 3),
@@ -655,7 +659,8 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                 _r, cartons=qty, order_qty=qty, use_sheet=_use_sheet,
                 sized_as=(f"one carton per unit, sized around {_p.get('part_number')} "
                           f"({L:g} x {B:g} x {H:g} mm, its measured size)"),
-                per_carton=_unit, order_gbp=_unit * qty, at_breaks=_at),
+                per_carton=_unit, order_gbp=_unit * qty, at_breaks=_at,
+                applied=_box_applied_one_part(_p, L, B, H, qty)),
             "working": (f"a PROVISIONAL allowance: one {_r.get('stock_board')} carton "
                         f"per unit at {_fname}, £{_unit:.4f} each x {qty} = "
                         f"£{_unit * qty:,.2f} the order. {_r.get('basis')}")}
@@ -663,7 +668,8 @@ def _box_method_price(order: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
                            use_sheet: bool, sized_as: str, per_carton: float,
-                           order_gbp: float, at_breaks: Dict[int, float]) -> Dict[str, Any]:
+                           order_gbp: float, at_breaks: Dict[int, float],
+                           applied: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """THE BOX CALCULATOR'S INPUTS AND EVERY STEP, as one record for the covering e-mail's
     'AI Estimator Calculator Inputs' section (James Gray, 15 Oct 2026: "show the full
     details of the calculation for the job so estimating can check it"). Nothing here is
@@ -674,6 +680,7 @@ def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
         "source": f"{(r.get('inputs') or {}).get('stated_by')}, "
                   f"{(r.get('inputs') or {}).get('stated_on')}",
         "sized_as": sized_as,
+        "applied": dict(applied or {}),
         "box_mm": list(r.get("box_mm") or []),
         "cartons": int(cartons),
         "order_qty": int(order_qty),
@@ -693,6 +700,90 @@ def _box_calculator_inputs(r: Dict[str, Any], *, cartons: int, order_qty: int,
         "order_gbp": round(float(order_gbp), 2),
         "order_gbp_at_breaks": {int(k): v for k, v in (at_breaks or {}).items()},
     }
+
+
+# HOW THE SHEET IS APPLIED TO THE DRAWING (D-540). The AI BOX CALCULATOR sheet takes a box's
+# outside size and a quantity; the drawing gives neither directly. These say, in words an
+# estimator reads on the e-mail, what was packed, why it was packed that way, which of the
+# drawing's dimensions became the box's length, breadth and height, and how the number of
+# cartons was arrived at. Each describes only what the engine did — nothing is re-decided.
+def _n_of(n: Any, word: str) -> str:
+    return f"{n} {word}" + ("" if str(n) == "1" else "s")
+
+
+def _box_applied_one_part(p: Dict[str, Any], L: float, B: float, H: float,
+                          qty: int) -> Dict[str, Any]:
+    name = str(p.get("part_number") or "the part")
+    desc = str(p.get("description") or "").strip()
+    src = str(p.get("blank_from") or "the part's measured blank")
+    return {
+        "route": "one_part",
+        "packed": f"The part {name}" + (f" ({desc})" if desc else ""),
+        "why": "the product is a single made part, so it is boxed as itself, one carton each",
+        "dims": [
+            {"box": "Length (L)", "mm": L, "from": f"the part's length — {src}"},
+            {"box": "Breadth (B)", "mm": B, "from": f"the part's width — {src}"},
+            {"box": "Height (H)", "mm": H,
+             "from": "the part's thickness (its gauge) — a flat part lies flat in the box"},
+        ],
+        "fit": ("the box is the part's own size; the only room inside is the sheet's panel "
+                "oversize"),
+        "count": f"one carton per unit ordered: {_n_of(qty, 'unit')} = {_n_of(qty, 'carton')}",
+    }
+
+
+def _box_applied_assembled(order: Dict[str, Any], plan: Dict[str, Any], L: float, B: float,
+                           H: float, n: int, qty: int) -> Dict[str, Any]:
+    au = order.get("assembled_unit") or {}
+    name = str(au.get("part_number") or "the product")
+    src = str(au.get("envelope_source") or "the product's overall size")
+    # Said as the drawing, so "sheet" on the e-mail only ever means the calculator's sheet.
+    src = {"the read's overall size": "the overall size read off the drawing (it prints no "
+                                      "body dimensions)",
+           "the sheet's body dimensions": "the drawing's body dimensions"}.get(src, src)
+    return {
+        "route": "assembled",
+        "packed": f"The assembled product {name}",
+        "why": (f"{au.get('basis') or 'a welded unit, which cannot be flat-packed'}, so it "
+                f"ships assembled, one carton around each unit, rather than as loose parts"),
+        "dims": [
+            {"box": "Length (L)", "mm": L,
+             "from": f"the longer side of the product's footprint (width or depth) — {src}"},
+            {"box": "Breadth (B)", "mm": B,
+             "from": f"the shorter side of the product's footprint — {src}"},
+            {"box": "Height (H)", "mm": H, "from": f"the product's overall height — {src}"},
+        ],
+        "fit": ("the box is the product's overall size; the only room inside is the sheet's "
+                "panel oversize"),
+        "count": f"one carton per unit ordered: {_n_of(qty, 'unit')} = {_n_of(n, 'carton')}",
+    }
+
+
+def _box_applied_standard(order: Dict[str, Any], plan: Dict[str, Any], L: float, B: float,
+                          H: float, n: int, qty: int, unmeasured: int) -> Dict[str, Any]:
+    pf = plan.get("packing_factor")
+    out = {
+        "route": "standard_carton",
+        "packed": f"The order's parts, packed loose ({plan.get('parts_measured') or 'the'} "
+                  f"measured part(s))",
+        "why": ("the product ships as separate parts, so they share standard cartons rather "
+                "than one box being made around each unit"),
+        "dims": [
+            {"box": "Length (L)", "mm": L, "from": "the standard carton's internal length "
+                                                    "(palletising configuration)"},
+            {"box": "Breadth (B)", "mm": B, "from": "the standard carton's internal breadth"},
+            {"box": "Height (H)", "mm": H, "from": "the standard carton's internal height"},
+        ],
+        "fit": ("the drawing does not set the box size here — the standard carton does; the "
+                "drawing sets how many are needed"),
+        "count": (f"{_n_of(n, 'carton')} for {_n_of(qty, 'unit')}: each part's flat blank x gauge gives its "
+                  f"volume and weight, totalled for the order, and filled into standard "
+                  f"cartons at packing factor {pf} (about {1 - float(pf or 0.8):.0%} of a "
+                  f"carton is packing and air) and within a carton's weight limit"),
+    }
+    if unmeasured:
+        out["count"] += (f"; {unmeasured} part(s) had no blank, so this is a lower bound")
+    return out
 
 
 def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any,
@@ -752,7 +843,10 @@ def _box_cartons_from_shipment(order: Dict[str, Any], qty: int, box_costing: Any
                   f"blanks' volume and weight at packing factor {plan.get('packing_factor')}"
                   + (f"; {int(_unm)} part(s) had no blank, so the count is a lower bound"
                      if _unm else "")),
-        per_carton=per, order_gbp=order_gbp, at_breaks=at)
+        per_carton=per, order_gbp=order_gbp, at_breaks=at,
+        applied=(_box_applied_assembled(order, plan, L, B, H, n, qty)
+                 if plan.get("ships_assembled")
+                 else _box_applied_standard(order, plan, L, B, H, n, qty, int(_unm))))
     if plan.get("ships_assembled"):
         working = (f"a PROVISIONAL allowance: {n} x {cfg.get('stock_board')} carton(s), one "
                    f"per unit, each sized around the assembled product {L:g} x {B:g} x {H:g} mm "

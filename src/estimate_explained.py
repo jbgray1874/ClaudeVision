@@ -2594,16 +2594,19 @@ def _table(headers: List[str], rows: List[List[Any]], numeric: Optional[set] = N
 
 
 def calculator_inputs_html(commercial_lines: Any) -> str:
-    """THE 'AI ESTIMATOR CALCULATOR INPUTS' SECTION (James Gray, 15 Oct 2026).
+    """THE 'AI ESTIMATOR CALCULATOR INPUTS' SECTION (D-538, D-539).
 
-    "A new section at the bottom called AI Estimator Calculator Inputs. This will be a new
-    series of improvements. The first is the boxing work we did — show the full details of
-    the calculation for the job so estimating can check it."
+    James Gray, 15 Oct 2026: "a new section at the bottom called AI Estimator Calculator
+    Inputs ... the first is the boxing work we did. so we show the full details of the
+    calculation for the job so estimating can check it" — and then: "are we able to
+    thoroughly explain for estimating also. So that anyone reading it will understand the
+    working. Otherwise, I'll have questions galore."
 
-    Each calculator the engine ran on the estimators' own figures (config, named and dated)
-    shows every input and every step, in the order the source sheet works it, so a person
-    can re-do it by hand. Nothing is priced here: every number is the calculator's own result
-    carried on the commercial line (calculator_inputs). No calculator ran, no section."""
+    So each calculator is EXPLAINED, not just tabulated: what it is and where its figures
+    come from, why each input exists, then every step in plain words with this job's own
+    numbers, what it assumes, and how to challenge it. Nothing is priced here — every number
+    is the calculator's own result carried on the commercial line (calculator_inputs). No
+    calculator ran, no section."""
     calcs: List[Dict[str, Any]] = []
     for line in commercial_lines or []:
         if not isinstance(line, dict):
@@ -2626,85 +2629,190 @@ def calculator_inputs_html(commercial_lines: Any) -> str:
             return f"£{float(v):,.{dp}f}"
         except (TypeError, ValueError):
             return "—"
-    out: List[str] = ["<h3>AI Estimator Calculator Inputs</h3>",
-                      "<p>The calculators the engine ran on this job using the estimators&rsquo; "
-                      "own figures, with every input and every step, in the order the source "
-                      "sheet works them, so each can be checked by hand. Change an input in "
-                      "config and the next run follows it.</p>"]
+
+    def num(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    _P = '<p style="margin:8px 0">'
+    _STEP = '<p style="margin:14px 0 4px"><b>'
+    _WORK = ('<p style="margin:4px 0 8px;padding:6px 10px;background:#f4f6f8;'
+             'border-left:3px solid #9aa8b6;font-family:Consolas,monospace;font-size:13px">')
+    out: List[str] = [
+        "<h3>AI Estimator Calculator Inputs</h3>",
+        _P + "Some lines on this estimate are worked out by a <b>calculator</b>: a fixed method "
+        "the estimating team has given us, with their own figures, which the engine runs on "
+        "this job&rsquo;s sizes and quantities. This section shows each one in full &mdash; what "
+        "it is, where every figure comes from, and each step of the sum with this job&rsquo;s "
+        "numbers in it &mdash; so you can follow it, check it by hand, and challenge any figure. "
+        "Nothing here is a supplier&rsquo;s quotation.</p>"]
     for c in calcs:
         if c.get("calculator") != "box":
             continue
         i = c.get("inputs") or {}
-        box = c.get("box_mm") or []
-        dims = " x ".join(g(v) for v in box) + " mm" if len(box) == 3 else "—"
-        out.append(f"<h4>{_e(c.get('title') or 'Box calculator')} &middot; the "
-                   f"{_e(c.get('_line') or 'PACKAGING')} line</h4>")
-        out.append(f"<p>Source: {_e(c.get('source'))}. Priced as {_e(c.get('sized_as'))}. "
-                   f"Order quantity {int(c.get('order_qty') or 1)}; cartons "
-                   f"{int(c.get('cartons') or 1)}.</p>")
-        out.append(_table(["Input", "Value", "Used for"], [
-            ["Box outside size (L x B x H)", dims, "every panel's cut size"],
-            ["Stock board", str(i.get("stock_board") or "—"), "the sheet the panels nest on"],
-            ["Sheet size", f"{g(i.get('sheet_length_mm'))} x {g(i.get('sheet_width_mm'))} mm",
-             "the nest"],
-            ["Sheet price", money(i.get("sheet_cost_gbp")), "each panel's share of a sheet"],
-            ["Scrap allowance", f"{float(i.get('scrap_fraction') or 0):.0%}",
-             "added to each panel's sheet share"],
-            ["Panel oversize", g(i.get("panel_oversize_mm"), " mm"),
-             "added to each finished dimension"],
-            ["Nest gap", g(i.get("nest_gap_mm"), " mm each side"), "between panels on the sheet"],
-            ["Sheet edge trim", g(i.get("sheet_edge_trim_mm"), " mm"),
-             "taken off the sheet width"],
-            ["Running rate", f"£{g(i.get('running_rate_gbp_per_mm'))}/mm", "x (L + B + H)"],
-            ["Set-up", money(i.get("setup_cost_gbp")), "spread over the cartons"],
-        ]))
-        try:
-            sw, sl = float(i.get("sheet_width_mm")), float(i.get("sheet_length_mm"))
-            trim, gap2 = float(i.get("sheet_edge_trim_mm")), 2.0 * float(i.get("nest_gap_mm"))
-            sheet, scrap = float(i.get("sheet_cost_gbp")), float(i.get("scrap_fraction"))
-        except (TypeError, ValueError):
-            sw = sl = trim = gap2 = sheet = scrap = 0.0
+        box = [num(v) for v in (c.get("box_mm") or [])]
+        L, B, H = (box + [0, 0, 0])[:3]
+        cartons = int(c.get("cartons") or 1)
+        qty = int(c.get("order_qty") or 1)
+        ov, gap, trim = num(i.get("panel_oversize_mm")), num(i.get("nest_gap_mm")), \
+            num(i.get("sheet_edge_trim_mm"))
+        sl, sw = num(i.get("sheet_length_mm")), num(i.get("sheet_width_mm"))
+        sheet, scrap = num(i.get("sheet_cost_gbp")), num(i.get("scrap_fraction"))
+        rate, setup = num(i.get("running_rate_gbp_per_mm")), num(i.get("setup_cost_gbp"))
+        board = str(i.get("stock_board") or "the stock board")
+        panels = [p for p in (c.get("panels") or []) if isinstance(p, dict)]
         n_charged = int(c.get("pairs_charged") or 3)
+        use_sheet = str(c.get("formula") or "sheet") == "sheet"
+
+        out.append(f"<h4>Box calculator &mdash; the {_e(c.get('_line') or 'PACKAGING')} line "
+                   f"({money(c.get('order_gbp'))} for the order)</h4>")
+        # ── what it is ────────────────────────────────────────────────────────────────
+        out.append(
+            _P + "<b>What it is.</b> The cost of a plain corrugated cardboard box (a regular "
+            "slotted carton, style 0201), worked out from the box&rsquo;s outside size the way "
+            f"the <b>AI BOX CALCULATOR</b> sheet does it ({_e(c.get('source'))}). The sheet "
+            "treats a box as <b>six flat panels in three pairs</b> &mdash; top and bottom, two "
+            "sides, two ends &mdash; cut from large sheets of board. It works out how many of "
+            "each panel fit on one sheet, shares the sheet&rsquo;s price between them, adds a "
+            "scrap allowance, then adds a running cost for making the box and a share of the "
+            "set-up cost for the order. The sheet&rsquo;s figures are copied into the "
+            "engine&rsquo;s configuration (<code>src/config.py</code>, <code>BOX_COSTING</code>) "
+            "and its sum is rebuilt in the engine, so the engine and the sheet give the same "
+            "answer for the same box.</p>")
+        # ── the sheet applied to this drawing (D-540) ─────────────────────────────────
+        ap = c.get("applied") if isinstance(c.get("applied"), dict) else {}
+        if ap:
+            out.append(_P + "<b>How the sheet is applied to this drawing.</b> The sheet needs "
+                       "two things: the box&rsquo;s outside size and how many boxes. The "
+                       "drawing gives neither directly, so this is how they were taken from "
+                       "it:</p>")
+            out.append(_P + f"<b>What is packed.</b> {_e(ap.get('packed'))} &mdash; "
+                       f"{_e(ap.get('why'))}.</p>")
+            out.append(_table(["Box size", "mm", "Taken from"], [
+                [_e(d.get("box")), g(d.get("mm")), _e(d.get("from"))]
+                for d in (ap.get("dims") or []) if isinstance(d, dict)]))
+            out.append(_P + f"<b>The fit.</b> {_e(ap.get('fit'))} (+{g(ov)} mm on each "
+                       "panel, step 1) &mdash; no foam, corners or other protection is "
+                       "added.</p>")
+            out.append(_P + f"<b>How many cartons.</b> {_e(ap.get('count'))}. Order quantity "
+                       f"{qty}.</p>")
+        else:
+            out.append(_P + f"<b>What was boxed on this job.</b> {_e(c.get('sized_as'))}. "
+                       f"Order quantity {qty}; {cartons} carton{'s' if cartons != 1 else ''} "
+                       "in all.</p>")
+        # ── the inputs ────────────────────────────────────────────────────────────────
+        out.append(_P + "<b>The figures it uses.</b> The box size is this job&rsquo;s (above); "
+                   "the rest are the sheet&rsquo;s own, held in <code>src/config.py</code> "
+                   "under <code>BOX_COSTING</code> with their source. Change one there and "
+                   "every later estimate follows it.</p>")
+        out.append(_table(["Figure", "Value", "What it is for"], [
+            ["Box outside size L x B x H", f"{g(L)} x {g(B)} x {g(H)} mm",
+             "length, breadth and height of the box this job needs"],
+            ["Board", board, "the corrugated board the panels are cut from"],
+            ["Sheet size", f"{g(sl)} x {g(sw)} mm", "the size of one sheet of that board"],
+            ["Sheet price", money(sheet), "what one sheet of board costs"],
+            ["Panel oversize", f"+{g(ov)} mm", "added to every panel's length and breadth for "
+                                               "folds, flaps and joints"],
+            ["Gap between panels", f"{g(gap)} mm each side", "space left round each panel when "
+                                                             "they are laid out on the sheet"],
+            ["Sheet edge trim", f"{g(trim)} mm", "taken off the sheet's width before laying out"],
+            ["Scrap allowance", f"{scrap:.0%}", "added to the board cost for offcuts and spoils"],
+            ["Running rate", f"£{g(rate)} per mm", "making cost, charged on L + B + H"],
+            ["Set-up", money(setup), "a one-off cost for the order, shared across its cartons"],
+        ]))
+        # ── the steps ─────────────────────────────────────────────────────────────────
+        out.append(_STEP + "Step 1 &mdash; the size of each panel.</b> Each pair of panels is "
+                   f"two of the box&rsquo;s sides; each is cut {g(ov)} mm bigger each way than the "
+                   "finished box:</p>")
+        _faces = {"Length/Breadth": "top and bottom", "Height/Breadth": "the two sides",
+                  "Height/Length": "the two ends"}
         rows = []
-        for k, p in enumerate(c.get("panels") or []):
-            pl, pb = p.get("cut_length_mm"), p.get("cut_breadth_mm")
-            nest = (f"across INT(({g(sw)} - {g(trim)}) / ({g(pb)} + {g(gap2)})) = "
-                    f"{p.get('across', '—')}; along INT({g(sl)} / ({g(pl)} + {g(gap2)})) = "
-                    f"{p.get('along', '—')}; {p.get('per_sheet')} a sheet")
-            cost = (f"{money(sheet)} / {p.get('per_sheet')} x {1 + scrap:g} x 2 = "
-                    f"{money(p.get('pair_cost_gbp'), 4)}")
-            rows.append([p.get("pair"), f"{g(pl)} x {g(pb)}", nest, cost,
-                         "yes" if k < n_charged else "no — not in the sheet's total"])
-        out.append(_table(["Panel pair (2 each)", "Cut size mm", "Nest on the sheet",
-                           "Pair cost", "In the charge"], rows))
-        try:
-            run_txt = (f"({' + '.join(g(v) for v in box)}) x £{g(i.get('running_rate_gbp_per_mm'))}"
-                       f" = {money(c.get('running_gbp'), 4)}")
-        except Exception:                                            # noqa: BLE001
-            run_txt = money(c.get("running_gbp"), 4)
-        steps = [
-            ["Running", run_txt],
-            ["Set-up share", f"{money(i.get('setup_cost_gbp'))} / {int(c.get('cartons') or 1)} "
-                             f"carton(s) = {money(c.get('setup_share_gbp'), 4)}"],
-            ["Sheet's own total (running + set-up + first two pairs)",
-             money(c.get("sheet_total_gbp"), 4)],
-            ["Three-pair sum (running + set-up + all six panels)",
-             money(c.get("three_pair_gbp"), 4)],
-            ["Charged a carton", f"{money(c.get('per_carton_gbp'), 4)} — {c.get('formula_name')} "
-                                 f"(config BOX_COSTING['formula'] = '{c.get('formula')}')"],
-            ["The order", f"{money(c.get('per_carton_gbp'), 4)} x {int(c.get('cartons') or 1)} = "
-                          f"{money(c.get('order_gbp'))}"],
-        ]
-        out.append(_table(["Step", "Working"], steps))
+        for p in panels:
+            rows.append([f"{p.get('pair')} ({_faces.get(str(p.get('pair')), '')})",
+                         f"{g(p.get('cut_length_mm'))} x {g(p.get('cut_breadth_mm'))} mm"])
+        out.append(_table(["Pair", "Cut size of each panel (finished size + "
+                                   f"{g(ov)} mm)"], rows))
+        out.append(_STEP + "Step 2 &mdash; how many panels fit on one sheet.</b> The panels are "
+                   f"laid out in a grid on a {g(sl)} x {g(sw)} mm sheet, each panel taking its "
+                   f"own size plus {g(gap)} mm each side ({g(2 * gap)} mm in all), with "
+                   f"{g(trim)} mm trimmed off the sheet&rsquo;s width first. Panels are not "
+                   "turned round to squeeze more in &mdash; the sheet does not, so neither do we. "
+                   "Whole panels only (INT means round down):</p>")
+        for p in panels:
+            pl, pb = num(p.get("cut_length_mm")), num(p.get("cut_breadth_mm"))
+            out.append(_WORK + _e(
+                f"{p.get('pair')}: across the width INT(({g(sw)} - {g(trim)}) / ({g(pb)} + "
+                f"{g(2 * gap)})) = {p.get('across')}  x  along the length INT({g(sl)} / "
+                f"({g(pl)} + {g(2 * gap)})) = {p.get('along')}  =  {p.get('per_sheet')} "
+                f"panels a sheet") + "</p>")
+        out.append(_STEP + "Step 3 &mdash; the board cost of each pair.</b> One panel&rsquo;s "
+                   f"share of a sheet is the sheet price divided by how many fit; the {scrap:.0%} "
+                   f"scrap allowance is added; and a pair is two panels:</p>")
+        for k, p in enumerate(panels):
+            out.append(_WORK + _e(
+                f"{p.get('pair')}: {money(sheet)} / {p.get('per_sheet')} x {1 + scrap:g} x 2 "
+                f"= {money(p.get('pair_cost_gbp'), 4)}"
+                + ("" if k < n_charged else "   (not in the total charged — see step 6)"))
+                + "</p>")
+        out.append(_STEP + "Step 4 &mdash; the running cost.</b> A making cost that grows with "
+                   "the size of the box, charged per millimetre of length + breadth + height:</p>")
+        out.append(_WORK + _e(f"({g(L)} + {g(B)} + {g(H)}) mm x £{g(rate)} = "
+                              f"{money(c.get('running_gbp'), 4)} a carton") + "</p>")
+        out.append(_STEP + "Step 5 &mdash; the set-up share.</b> The set-up is paid once for "
+                   "the order, so it is divided across all the cartons in it. This is the only "
+                   "part of the price that changes with quantity:</p>")
+        out.append(_WORK + _e(f"{money(setup)} / {cartons} carton{'s' if cartons != 1 else ''} "
+                              f"= {money(c.get('setup_share_gbp'), 4)} a carton") + "</p>")
+        _pairs_sum = sum(num(p.get("pair_cost_gbp")) for p in panels[:n_charged])
+        out.append(_STEP + "Step 6 &mdash; the price of one carton.</b> Running + set-up share "
+                   + ("+ the <b>first two</b> pairs. This is exactly how the sheet totals it "
+                      "(its total cell adds the top/bottom and side pairs, not the ends)"
+                      if use_sheet else "+ <b>all three</b> pairs")
+                   + ":</p>")
+        out.append(_WORK + _e(
+            f"{money(c.get('running_gbp'), 4)} + {money(c.get('setup_share_gbp'), 4)} + "
+            f"{' + '.join(money(p.get('pair_cost_gbp'), 4) for p in panels[:n_charged])} = "
+            f"{money(c.get('per_carton_gbp'), 4)} a carton") + "</p>")
+        _alt = (c.get("three_pair_gbp") if use_sheet else c.get("sheet_total_gbp"))
+        out.append(_P + ("<b>Why the ends are left out.</b> " if use_sheet else
+                         "<b>Why all three pairs.</b> ")
+                   + ("Adding the ends as well would make the carton "
+                      if use_sheet else "The sheet&rsquo;s own total, without the ends, would be ")
+                   + f"{money(_alt, 4)}. The engine is set to "
+                   + ("follow the sheet&rsquo;s own total" if use_sheet else "add all six panels")
+                   + (f" because it was {_e(i.get('formula_evidence'))}."
+                      if i.get("formula_evidence") else ".")
+                   + " A real 0201 carton is one folded piece of board rather than six "
+                   "separate panels, which may be why. The choice is one setting "
+                   "(BOX_COSTING &lsquo;formula&rsquo;) and can be changed.</p>")
+        out.append(_STEP + "Step 7 &mdash; the order, and the price per unit.</b></p>")
+        out.append(_WORK + _e(
+            f"{money(c.get('per_carton_gbp'), 4)} x {cartons} carton{'s' if cartons != 1 else ''} "
+            f"= {money(c.get('order_gbp'))} for the order; / {qty} unit{'s' if qty != 1 else ''} "
+            f"= {money(num(c.get('order_gbp')) / max(qty, 1), 4)} a unit") + "</p>")
         _at = c.get("order_gbp_at_breaks") or {}
         if _at:
             _brk = sorted((int(q), float(v)) for q, v in _at.items())
-            out.append(_table(["Order quantity", "Packaging for the order", "Per unit"],
-                              [[q, money(v), money(v / q, 4)] for q, v in _brk], numeric={0, 1, 2}))
-        out.append("<p style=\"color:#5b6b7d;font-size:12px\">A provisional allowance at held "
-                   "sheet rates, not a quoted box price: one unit per carton, 0201 style, the "
-                   "oversize the only clearance, no protection or orientation modelled. Check the "
-                   "carton size and count against the job before quoting.</p>")
+            out.append(_P + "<b>At other quantities.</b> The same sum at each quantity break. "
+                       "The board and running cost of each carton stay the same; the set-up is "
+                       "shared over more cartons, which is why the price per unit falls:</p>")
+            out.append(_table(["Units ordered", "Packaging for the order", "Per unit"],
+                              [[q, money(v), money(v / q, 4)] for q, v in _brk],
+                              numeric={0, 1, 2}))
+        # ── what it assumes, and how to challenge it ──────────────────────────────────
+        out.append(_P + "<b>What it assumes.</b> One unit per carton; a plain 0201 carton in "
+                   f"{_e(board)}; the {g(ov)} mm oversize is the only room left inside &mdash; no "
+                   "foam, corners, bags or other protection, and no particular way up. The board "
+                   "price is a held figure, not today&rsquo;s price from the supplier.</p>")
+        out.append(_P + "<b>How to check or change it.</b> If the carton should be a different "
+                   "size, a different board, hold more than one unit, or needs protection, say so "
+                   "on the job and the line is re-priced. If a figure in the table above is out "
+                   "of date (sheet price, running rate, set-up), it is changed once in the "
+                   "engine&rsquo;s configuration and every estimate after follows it. To check "
+                   "the arithmetic, put the box size into the AI BOX CALCULATOR sheet: it gives "
+                   "the same panel counts and pair costs.</p>")
     return "\n".join(out)
 
 

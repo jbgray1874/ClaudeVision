@@ -103,4 +103,4 @@ def test_the_unit_record_carries_the_products_overall_size():
     assert (env["length"], env["width"], env["height"]) == (630.0, 480.0, 1035.0)
     ans["sheet_facts"] = {"body_mm": {"height": 1030, "width": 470, "depth": 620}}
     env = cs.unit_assembly_part(recs, ans, "J")["product_envelope_mm"]
-    assert env["height"] == 1030.0 and "sheet" in env["source"], "the drawn body comes first"
+    assert env["height"] == 1030.0 and "drawing" in env["source"], "the drawn body comes first"
