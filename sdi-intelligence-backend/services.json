@@ -761,31 +761,31 @@
     {
       "id": "brighthr",
       "name": "SDI People Data Intelligence · BrightHR",
-      "status": "Built · awaiting API access",
+      "status": "Live · Partner API",
       "cls": "c-prog",
       "category": "Internal tools",
       "surface": "intranet",
-      "requires": "Needs the SDI network — its controls write to the InVentry watched folder.",
-      "desc": "On-demand pull of staff roster from BrightHR into InVentry tablets.",
-      "detail": "COO-driven on-demand sync. Pulls the active staff roster from BrightHR (Personal Access Token or client_credentials OAuth), writes the InVentry-format CSV (First Name, Surname, Email Address) to the watched folder where InVentry’s service picks it up. Every pull is snapshotted to disk for audit. Guards: refuses to write if zero records are returned or if the dropout exceeds the configured threshold (default 30%). Live attendance (Blip clock-ins) is a separate, later feature once BrightHR API access exposes it.<div style=\"margin-top:18px;padding:14px;background:var(--bg);border:1px solid var(--line)\"><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px\">COO controls</div><div style=\"display:flex;gap:10px;flex-wrap:wrap;align-items:center\"><button class=\"run\" id=\"hr-blip-btn\" onclick=\"hrBlip()\">Who's clocked in?</button><button class=\"run\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\" onclick=\"var n=document.querySelector('.nav a[data-view=files]');if(n)n.click();\">View HR output folder →</button><button class=\"run\" id=\"hr-load-btn\" onclick=\"hrBlipLoad()\" title=\"Push the current on-site list into InVentry via the Partner API\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\">Load to InVentry</button></div><div id=\"hr-blip-result\" class=\"muted\" style=\"margin-top:12px;font-size:12px;font-family:var(--mono);white-space:pre-wrap\"></div><div class=\"muted\" style=\"margin-top:10px;font-size:12px\">Buttons activate as soon as BrightHR credentials and the employee endpoint are populated in <code>.env</code>. They call <code>POST /api/hr/sync</code>, <code>/api/hr/pull</code> and <code>/api/hr/load</code> respectively.</div></div>",
+      "requires": "Needs the SDI network — it talks to the InVentry server on 10.0.0.241.",
+      "desc": "Signs staff in and out of InVentry to match who is clocked in on BrightHR Blip.",
+      "detail": "Keeps InVentry’s on-site register, and so the fire evacuation list, in line with who is clocked in on BrightHR Blip. Reads the Blip clockings, matches each person to their InVentry record (by PersonID, then email, then name), and signs people in or out through the InVentry Partner API, marking every action with the location <code>BRIGHTHR SYNC</code>. Every run is snapshotted to disk for audit. Guards: refuses data more than 15 minutes old, a Blip run with more than 2% failed lookups, or zero on site with failures; caps sign-outs at 25 per run; ignores clock-ins open longer than 20 hours (forgotten clock-outs); never signs out anyone whose lookup failed; only signs out records it manages. Runs every 5 minutes as a scheduled task.<div style=\"margin-top:18px;padding:14px;background:var(--bg);border:1px solid var(--line)\"><div style=\"font-family:var(--mono);font-size:10px;color:var(--ink-dim);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px\">COO controls</div><div style=\"display:flex;gap:10px;flex-wrap:wrap;align-items:center\"><button class=\"run\" id=\"hr-blip-btn\" onclick=\"hrBlip()\">Who's clocked in?</button><button class=\"run\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\" onclick=\"var n=document.querySelector('.nav a[data-view=files]');if(n)n.click();\">View HR output folder →</button><button class=\"run\" id=\"hr-load-btn\" onclick=\"hrBlipLoad()\" title=\"Push the current on-site list into InVentry via the Partner API\" style=\"background:transparent;color:var(--ink);border:1px solid var(--line)\">Load to InVentry</button></div><div id=\"hr-blip-result\" class=\"muted\" style=\"margin-top:12px;font-size:12px;font-family:var(--mono);white-space:pre-wrap\"></div><div class=\"muted\" style=\"margin-top:10px;font-size:12px\">Press <b>Who's clocked in?</b> first, then <b>Load to InVentry</b> within 15 minutes. Load to InVentry is a dry run until <code>HR_PUSH_APPLY</code> is switched on: it shows who it would sign in and out and changes nothing. They call <code>POST /api/hr/blip</code> and <code>POST /api/hr/blip/push</code>.</div></div>",
       "inputs": [
-        "BrightHR credentials (PAT or OAuth client_credentials)",
-        "employee endpoint URL",
-        "pagination params"
+        "BrightHR Blip clockings (API key in .env)",
+        "InVentry Partner API key and partner secret",
+        "InVentry certificate pinned in INVENTRY_API_CA_BUNDLE"
       ],
       "outputs": [
+        "Sign-ins and sign-outs on InVentry (location BRIGHTHR SYNC)",
         "Timestamped JSON snapshots (audit)",
-        "InVentry CSV at the watched folder",
-        "pull/load report"
+        "Push plan and status in the run log"
       ],
       "tech": [
         "Python + requests",
         "FastAPI router",
-        "BrightHR REST API",
-        "InVentry watched-folder CSV"
+        "BrightHR Blip API",
+        "InVentry Partner API"
       ],
-      "phase": "Built — gated on BrightHR API credentials",
-      "invoke": "Once API access is granted: the COO or any director with permission clicks <b>Run Sync</b> above. Also schedulable from Windows Task Scheduler. Endpoints: <code>POST /api/hr/sync</code> (pull+load), <code>/api/hr/pull</code>, <code>/api/hr/load</code>."
+      "phase": "Live — scheduled every 5 minutes; portal button in dry run",
+      "invoke": "The COO or a director clicks <b>Who’s clocked in?</b> then <b>Load to InVentry</b> above. The scheduled task <i>BrightHR-InVentry Presence Sync</i> runs the same thing every 5 minutes. Command line: <code>python hr_blip.py</code> then <code>python hr_onsite_push.py</code> (add <code>--apply</code> to write). Endpoints: <code>POST /api/hr/blip</code>, <code>POST /api/hr/blip/push?apply=false</code>, <code>/api/hr/inventry/check</code>."
     },
     {
       "id": "wearesdi",
