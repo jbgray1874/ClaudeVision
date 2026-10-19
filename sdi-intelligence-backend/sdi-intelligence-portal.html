@@ -4436,10 +4436,20 @@
     routeHash(window.location.hash.replace('#',''));
   })();
   function _sz(b){ if(b==null)return""; const u=["B","KB","MB","GB"];let i=0,n=b;while(n>=1024&&i<3){n/=1024;i++;} return n.toFixed(n<10&&i>0?1:0)+u[i]; }
+  // Set by a button elsewhere (View HR output folder) to open one root, newest first,
+  // instead of the list of roots. Read once by the next filesInit.
+  let _filesOpenNext=null;
+  function filesOpenRoot(match){
+    _filesOpenNext=String(match).toLowerCase();
+    const n=document.querySelector('.nav a[data-view="files"]'); if(n) n.click();
+  }
   async function filesInit(){
     const list=document.getElementById('files-list'), crumb=document.getElementById('files-crumb');
     try{ const d=await _get('/api/roots'); const roots=d.roots||[];
       if(!roots.length){ crumb.textContent='No file roots configured in .env'; list.innerHTML=''; return; }
+      const want=_filesOpenNext; _filesOpenNext=null;
+      const hit=want && roots.find(r=>(r.path||'').toLowerCase().includes(want));
+      if(hit){ _fsort['files-list']={key:'modified',dir:'desc'}; filesBrowse(hit.path); return; }
       crumb.textContent='Roots'; _renderFiles(roots.map(r=>({name:r.name||r.path,path:r.path,is_dir:true})), null);
     }catch(e){ crumb.textContent='Backend not reachable';
       list.innerHTML='<div class="muted">Couldn\'t reach the API ('+e.message+').<br>Run <code>python app.py</code> and open this page from <b>http://localhost:8071</b> — not the file on disk.</div>'; }
@@ -4593,11 +4603,13 @@
       return dir==='desc' ? -c : c;
     });
   }
-  function _sortHead(listId, key, label){
-    const st=_fsort[listId]||{};
+  function _sortHead(listId, key, label, dflt){
+    // dflt: the list's own default sort, so its arrow shows before anyone clicks -
+    // a heading with no arrow did not look like something that could be clicked.
+    const st=_fsort[listId]||dflt||{};
     const on = st.key===key;
-    const arrow = on ? (st.dir==='desc'?' \u25be':' \u25b4') : '';
-    return '<th data-sort="'+key+'" style="cursor:pointer;user-select:none"'
+    const arrow = on ? (st.dir==='desc'?' \u25be':' \u25b4') : ' <span style="opacity:.35">\u21c5</span>';
+    return '<th data-sort="'+key+'" title="Click to sort by '+label.toLowerCase()+'" style="cursor:pointer;user-select:none"'
          + (on?' class="sorted"':'') + '>'+label+arrow+'</th>';
   }
   function _sortableClick(listId, redraw){
@@ -4618,15 +4630,18 @@
     if(items) _filesLast = {items, curPath};
     const {items:its, curPath:cp} = _filesLast;
     const list=document.getElementById('files-list');
-    const st=_fsort['files-list']||{key:'name',dir:'asc'};
+    const dflt={key:'name',dir:'asc'};
+    const st=_fsort['files-list']||dflt;
     const rows=_fileSort(its, st.key, st.dir);
-    let h='<table><tr>'+_sortHead('files-list','name','Name')
-        + _sortHead('files-list','type','Type')
-        + _sortHead('files-list','size','Size')+'</tr>';
-    if(cp!==null) h+='<tr class="up"><td colspan="3" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
+    let h='<table><tr>'+_sortHead('files-list','name','Name',dflt)
+        + _sortHead('files-list','type','Type',dflt)
+        + _sortHead('files-list','size','Size',dflt)
+        + _sortHead('files-list','modified','Modified',dflt)+'</tr>';
+    if(cp!==null) h+='<tr class="up"><td colspan="4" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
     rows.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
       h+='<tr data-p="'+(it.path||'').replace(/"/g,'&quot;')+'" data-d="'+it.is_dir+'" data-e="'+ext+'" style="cursor:pointer">'
-        +'<td><b>'+it.name+'</b></td><td>'+(it.is_dir?'folder':(ext||'file'))+'</td><td>'+_sz(it.size_bytes)+'</td></tr>'; });
+        +'<td><b>'+it.name+'</b></td><td>'+(it.is_dir?'folder':(ext||'file'))+'</td><td>'+_sz(it.size_bytes)
+        +'</td><td class="muted">'+_when(it.modified||it.mtime)+'</td></tr>'; });
     list.innerHTML=h+'</table>';
   }
   _sortableClick('files-list', () => _renderFiles(null, null));
@@ -4696,12 +4711,12 @@
     if(items) _reportsLast = {items, curPath};
     const {items:its} = _reportsLast;
     const list=document.getElementById('reports-list');
-    const st=_fsort['reports-list']||{key:'modified',dir:'desc'};   // newest first by default
+    const dflt={key:'modified',dir:'desc'}, st=_fsort['reports-list']||dflt;   // newest first by default
     const rows=_fileSort(its, st.key, st.dir);
-    let h='<table><tr>'+_sortHead('reports-list','name','Name')
-        + _sortHead('reports-list','type','Type')
-        + _sortHead('reports-list','size','Size')
-        + _sortHead('reports-list','modified','Modified')+'</tr>';
+    let h='<table><tr>'+_sortHead('reports-list','name','Name',dflt)
+        + _sortHead('reports-list','type','Type',dflt)
+        + _sortHead('reports-list','size','Size',dflt)
+        + _sortHead('reports-list','modified','Modified',dflt)+'</tr>';
     h+='<tr class="up"><td colspan="4" style="cursor:pointer;color:var(--accent)">&#8629; back to roots</td></tr>';
     rows.forEach(it=>{ const ext=(it.ext||'').replace(/"/g,'');
       h+='<tr data-p="'+(it.path||'').replace(/"/g,'&quot;')+'" data-d="'+it.is_dir+'" data-e="'+ext+'" style="cursor:pointer">'
@@ -4809,12 +4824,12 @@
     ({items, folder, curPath} = _testingLast);
     const list=document.getElementById('testing-list');
     const isRoot = !curPath;
-    const st=_fsort['testing-list']||{key:'modified',dir:'desc'};   // newest first: this is a test view
+    const dflt={key:'modified',dir:'desc'}, st=_fsort['testing-list']||dflt;   // newest first: this is a test view
     items=_fileSort(items, st.key, st.dir);
-    let h='<table><tr>'+_sortHead('testing-list','name','Name')
-        + _sortHead('testing-list','type','Type')
-        + _sortHead('testing-list','size','Size')
-        + _sortHead('testing-list','modified','Modified')+'</tr>';
+    let h='<table><tr>'+_sortHead('testing-list','name','Name',dflt)
+        + _sortHead('testing-list','type','Type',dflt)
+        + _sortHead('testing-list','size','Size',dflt)
+        + _sortHead('testing-list','modified','Modified',dflt)+'</tr>';
     if(!isRoot) h+='<tr class="testing-up" data-folder="'+folder+'"><td colspan="4" style="cursor:pointer;color:var(--accent)">&#8629; back</td></tr>';
     if(!items.length) h+='<tr><td colspan="4" class="muted" style="padding:12px">No files yet</td></tr>';
     items.forEach(it=>{
