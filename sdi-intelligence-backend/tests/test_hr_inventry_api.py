@@ -371,8 +371,13 @@ def test_ambiguous_name_is_not_matched(snapshot):
     assert result["unmatched"][0]["reason"] == "ambiguous name"
 
 
-def test_sign_out_is_disabled_by_default(snapshot):
-    """Sign-ins go live first; sign-out is an explicit decision."""
+def test_sign_out_is_disabled_by_default(snapshot, monkeypatch):
+    """Sign-ins go live first; sign-out is an explicit decision.
+
+    The shipped default is pinned here: without it this test read the real
+    .env, and on the live desktop - where sign-out has been switched on - it
+    failed, testing the machine's settings instead of the code's default."""
+    monkeypatch.setattr(cfg, "INVENTRY_ENABLE_SIGN_OUT", False)
     snapshot([clocked_in()])
     fake = FakeAPI([person(person_id="BH-1", activity="IN"),
                     person(inventry_id="INV-2", person_id="BH-2", activity="IN")])
