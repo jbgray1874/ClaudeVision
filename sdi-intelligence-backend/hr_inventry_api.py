@@ -52,6 +52,8 @@ Sign-in and sign-out are one call, AddPersonnelAction, taking PersonnelID,
 ActionType ("IN"/"OUT"), and optionally ActionDateTime and ActionLocation.
 """
 import datetime
+import os
+import ssl
 import threading
 import time
 
@@ -90,15 +92,37 @@ def rejected_the_request(exc):
 
 
 class PinnedCertAdapter(requests.adapters.HTTPAdapter):
-    """Verify the certificate, but not the hostname on it.
+    """Trust exactly the pinned certificate - and, if asked, not its name.
 
-    For a single pinned self-signed certificate this is not a downgrade: the
-    pin already names one exact certificate, and hostname checking exists to
-    stop a CA vouching for the wrong name. Here the certificate is its own CA.
+    Pinned means the certificate in INVENTRY_API_CA_BUNDLE is itself the
+    trust anchor. InVentry's certificate turns out to be issued by a separate
+    signer we do not hold, so plain verification wants that signer and fails
+    with "unable to get local issuer certificate". Python 3.13+ quietly accepts
+    a pinned leaf as an anchor (VERIFY_X509_PARTIAL_CHAIN is on by default),
+    which is why the desktop (3.14) worked and SDI-App01's older Python did
+    not (19 Oct 2026). The flag is set here, so every Python behaves the same.
+
+    Skipping the hostname check is not a downgrade when the certificate is
+    pinned: the pin already names one exact certificate, and hostname checking
+    exists to stop a CA vouching for the wrong name.
     """
 
+    def __init__(self, cafile=None, check_hostname=False, **kwargs):
+        self.cafile = cafile
+        self.check_hostname = check_hostname
+        super().__init__(**kwargs)
+
     def init_poolmanager(self, *args, **kwargs):
-        kwargs["assert_hostname"] = False
+        # A missing file is left for the request to report, through _send,
+        # as a sentence naming INVENTRY_API_CA_BUNDLE - not a FileNotFoundError
+        # thrown out of the constructor.
+        if self.cafile and os.path.isfile(self.cafile):
+            ctx = ssl.create_default_context(cafile=self.cafile)
+            ctx.verify_flags |= getattr(ssl, "VERIFY_X509_PARTIAL_CHAIN", 0)
+            ctx.check_hostname = self.check_hostname
+            kwargs["ssl_context"] = ctx
+        if not self.check_hostname:
+            kwargs["assert_hostname"] = False
         return super().init_poolmanager(*args, **kwargs)
 
 
@@ -204,6 +228,11 @@ class InVentryAPI:
         # connection verified; skipping it without a pin does not.
         self.check_hostname = (cfg.INVENTRY_API_CHECK_HOSTNAME
                                if check_hostname is None else check_hostname)
+        pinned = isinstance(self.verify, str) and bool(self.verify)
+        if pinned and hasattr(self.session, "mount"):
+            # A pinned certificate is the anchor on every Python, name check or not.
+            self.session.mount("https://", PinnedCertAdapter(
+                cafile=self.verify, check_hostname=self.check_hostname))
         if not self.check_hostname:
             if self.verify is False:
                 self.warnings.append(
@@ -221,7 +250,7 @@ class InVentryAPI:
                         "certificate for any name would be accepted. Set "
                         "INVENTRY_API_CA_BUNDLE to InVentry's exported certificate."
                     )
-                if hasattr(self.session, "mount"):
+                if not pinned and hasattr(self.session, "mount"):
                     self.session.mount("https://", PinnedCertAdapter())
 
     # ── plumbing ─────────────────────────────────────────────────────────
@@ -297,6 +326,13 @@ class InVentryAPI:
                     time.sleep(2 ** (attempt - 1))
                     continue
                 raise InVentryAPIError(f"InVentry API unreachable at {url}: {exc}") from exc
+            except OSError as exc:
+                # requests reports an unreadable CA bundle as a bare OSError.
+                raise InVentryAPIError(
+                    f"The pinned certificate {self.verify!r} could not be read ({exc}). "
+                    f"Check INVENTRY_API_CA_BUNDLE points at InVentry's exported "
+                    f"certificate and that the file exists on this machine."
+                ) from exc
 
             if response.status_code == 429:
                 # Documented for GET. Should not happen for POST, but honour it.
