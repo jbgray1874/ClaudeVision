@@ -151,17 +151,13 @@ _CONTENT_TYPES = {
 }
 
 
-def attach_what_we_can(message: EmailMessage,
-                       paths: List[str]) -> Tuple[List[str], List[Dict[str, str]]]:
-    """Attach every file this service can actually read; report the rest by path.
+def readable_attachments(paths: List[str]) -> Tuple[List[Dict[str, Any]],
+                                                    List[Dict[str, str]]]:
+    """Every file this service can read, as {name, maintype, subtype, data}; the rest named.
 
-    THE SHARE IS NOT ALWAYS VISIBLE FROM HERE. The runner exists precisely because this
-    service may not see the estimating share — so a send that requires the attachments to be
-    readable is a send that fails on the deployment it matters most on. Anything unreadable
-    or oversized is named in the note with its full path, which an estimator on the domain
-    can paste straight into Explorer.
-    """
-    attached: List[str] = []
+    The one place the size caps and the 'not reachable from this service' rule live, so the
+    SMTP and the Graph transports attach exactly the same files and skip exactly the same."""
+    files: List[Dict[str, Any]] = []
     skipped: List[Dict[str, str]] = []
     total = 0
     for raw in paths:
@@ -188,11 +184,39 @@ def attach_what_we_can(message: EmailMessage,
             continue
         maintype, subtype = _CONTENT_TYPES.get(path.suffix.lower(),
                                                ("application", "octet-stream"))
-        message.add_attachment(data, maintype=maintype, subtype=subtype,
-                               filename=path.name)
-        attached.append(path.name)
+        files.append({"name": path.name, "maintype": maintype, "subtype": subtype,
+                      "data": data})
         total += size
-    return attached, skipped
+    return files, skipped
+
+
+def attach_what_we_can(message: EmailMessage,
+                       paths: List[str]) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Attach every file this service can actually read; report the rest by path.
+
+    THE SHARE IS NOT ALWAYS VISIBLE FROM HERE. The runner exists precisely because this
+    service may not see the estimating share — so a send that requires the attachments to be
+    readable is a send that fails on the deployment it matters most on. Anything unreadable
+    or oversized is named in the note with its full path, which an estimator on the domain
+    can paste straight into Explorer.
+    """
+    files, skipped = readable_attachments(paths)
+    for f in files:
+        message.add_attachment(f["data"], maintype=f["maintype"], subtype=f["subtype"],
+                               filename=f["name"])
+    return [f["name"] for f in files], skipped
+
+
+def graph_sender() -> str:
+    """The mailbox estimate e-mails are sent FROM through Microsoft Graph, or ''.
+
+    James Gray, 16 Oct 2026: "For our email responses from our site can we make them be sent
+    from SDIIntelligence" — as Nick's morning review already is, from
+    sdi-intelligence@wearesdi.com. SDI_ESTIMATE_FROM names that mailbox. It uses the same app
+    registration (SDI_CLIENT_ID / SDI_CLIENT_SECRET) and the same Exchange application access
+    policy that restricts Mail.Send to that one mailbox (MORNING_REVIEW.md), so it needs no new
+    permission. Unset, the estimate goes over SMTP exactly as before."""
+    return os.getenv("SDI_ESTIMATE_FROM", "").strip()
 
 
 def send(recipients: List[str], subject: str, body_html: str, body_text: str,
@@ -200,6 +224,15 @@ def send(recipients: List[str], subject: str, body_html: str, body_text: str,
     """Send one estimate. Returns what happened; never raises at the caller."""
     if not recipients:
         return {"sent": False, "reason": "no recipients — nothing was sent"}
+    graph_failed = ""
+    if graph_sender():
+        result = send_via_graph(recipients, subject, body_html, list(paths or []))
+        if result.get("sent") or not smtp_configured():
+            return result
+        # A GRAPH FAILURE DOES NOT LOSE THE ESTIMATE. With SMTP configured as well, the note
+        # still goes — from the SMTP sender — and the result says Graph failed and why, so a
+        # change of sender is never silent.
+        graph_failed = str(result.get("reason") or "Graph send failed")
     if not smtp_configured():
         return {"sent": False, "reason": "SMTP is not configured (SMTP_HOST / SMTP_FROM)"}
 
@@ -228,8 +261,143 @@ def send(recipients: List[str], subject: str, body_html: str, body_text: str,
     except Exception as exc:                                     # noqa: BLE001
         return {"sent": False, "reason": f"{type(exc).__name__}: {exc}",
                 "recipients": recipients, "attached": attached, "skipped": skipped}
-    return {"sent": True, "recipients": recipients, "attached": attached,
-            "skipped": skipped}
+    out = {"sent": True, "recipients": recipients, "attached": attached,
+           "skipped": skipped, "via": f"SMTP as {settings['sender']}"}
+    if graph_failed:
+        out["graph_failed"] = graph_failed
+    return out
+
+
+# ── Microsoft Graph, as the SDI Intelligence mailbox ─────────────────────────
+#
+# One sendMail request carries at most 4 MB of JSON, and an attachment travels base64 (a third
+# bigger). So a small message goes in one request; a larger one is built as a draft, each file
+# added on its own (an upload session for any file over 3 MB), and then sent. Either way the
+# message is saved to the mailbox's Sent Items, so the SDI Intelligence mailbox holds a record
+# of every estimate it sent.
+_GRAPH = "https://graph.microsoft.com/v1.0"
+_GRAPH_ONE_REQUEST_BYTES = 2_800_000        # raw attachment bytes that fit one sendMail
+_GRAPH_INLINE_FILE_BYTES = 3_000_000        # one attachment added in a single POST
+_GRAPH_CHUNK = 320 * 1024 * 9               # upload-session chunk (a multiple of 320 KiB)
+
+
+def _graph_token() -> Tuple[Optional[str], str]:
+    try:
+        import auth
+    except Exception as exc:                                     # noqa: BLE001
+        return None, f"auth module unavailable ({type(exc).__name__})"
+    if not (auth.CLIENT_ID and auth.CLIENT_SECRET):
+        return None, "SDI_CLIENT_ID / SDI_CLIENT_SECRET are not set"
+    result = auth._msal_app().acquire_token_for_client(
+        scopes=["https://graph.microsoft.com/.default"])
+    if "access_token" not in result:
+        return None, f"{result.get('error')}: {str(result.get('error_description', ''))[:300]}"
+    return result["access_token"], ""
+
+
+def _graph_error(res: Any) -> str:
+    try:
+        err = res.json().get("error", {})
+        return f"{res.status_code} {err.get('code')}: {err.get('message')}"
+    except Exception:                                            # noqa: BLE001
+        return f"{res.status_code} {str(getattr(res, 'text', ''))[:300]}"
+
+
+def _graph_message(recipients: List[str], subject: str, body_html: str) -> Dict[str, Any]:
+    msg: Dict[str, Any] = {
+        "subject": subject,
+        "body": {"contentType": "HTML", "content": body_html},
+        "toRecipients": [{"emailAddress": {"address": a}} for a in recipients],
+    }
+    reply_to = [a.strip() for a in os.getenv("SDI_ESTIMATE_REPLY_TO", "").split(",")
+                if a.strip()]
+    if reply_to:
+        msg["replyTo"] = [{"emailAddress": {"address": a}} for a in reply_to]
+    return msg
+
+
+def _file_attachment(f: Dict[str, Any]) -> Dict[str, Any]:
+    import base64
+    return {"@odata.type": "#microsoft.graph.fileAttachment", "name": f["name"],
+            "contentType": f"{f['maintype']}/{f['subtype']}",
+            "contentBytes": base64.b64encode(f["data"]).decode("ascii")}
+
+
+def send_via_graph(recipients: List[str], subject: str, body_html: str,
+                   paths: List[str], client: Any = None) -> Dict[str, Any]:
+    """Send one estimate from the SDI_ESTIMATE_FROM mailbox through Microsoft Graph.
+    Returns what happened; never raises at the caller."""
+    sender = graph_sender()
+    files, skipped = readable_attachments(paths)
+    names = [f["name"] for f in files]
+    base = {"recipients": recipients, "attached": names, "skipped": skipped,
+            "via": f"Microsoft Graph as {sender}"}
+    token, why = _graph_token()
+    if not token:
+        return dict(base, sent=False, attached=[],
+                    reason=f"no Graph token for {sender}: {why}")
+    try:
+        import httpx
+        http = client or httpx.Client(timeout=120)
+    except Exception as exc:                                     # noqa: BLE001
+        return dict(base, sent=False, attached=[], reason=f"httpx unavailable: {exc}")
+    head = {"Authorization": f"Bearer {token}"}
+    user = f"{_GRAPH}/users/{sender}"
+    msg = _graph_message(recipients, subject, body_html)
+    try:
+        if sum(len(f["data"]) for f in files) <= _GRAPH_ONE_REQUEST_BYTES:
+            msg["attachments"] = [_file_attachment(f) for f in files]
+            res = http.post(f"{user}/sendMail", headers=head,
+                            json={"message": msg, "saveToSentItems": True})
+            if res.status_code != 202:
+                return dict(base, sent=False, attached=[],
+                            reason=f"Graph sendMail {_graph_error(res)}")
+            return dict(base, sent=True)
+        # Too big for one request: a draft, its files one by one, then send.
+        res = http.post(f"{user}/messages", headers=head, json=msg)
+        if res.status_code not in (200, 201):
+            return dict(base, sent=False, attached=[],
+                        reason=f"Graph draft {_graph_error(res)}")
+        mid = res.json()["id"]
+        for f in files:
+            if len(f["data"]) <= _GRAPH_INLINE_FILE_BYTES:
+                r = http.post(f"{user}/messages/{mid}/attachments", headers=head,
+                              json=_file_attachment(f))
+                if r.status_code not in (200, 201):
+                    return dict(base, sent=False, attached=[],
+                                reason=f"Graph attachment {f['name']}: {_graph_error(r)}")
+                continue
+            r = http.post(f"{user}/messages/{mid}/attachments/createUploadSession",
+                          headers=head,
+                          json={"AttachmentItem": {"attachmentType": "file",
+                                                   "name": f["name"],
+                                                   "size": len(f["data"])}})
+            if r.status_code not in (200, 201):
+                return dict(base, sent=False, attached=[],
+                            reason=f"Graph upload session {f['name']}: {_graph_error(r)}")
+            url, data = r.json()["uploadUrl"], f["data"]
+            for start in range(0, len(data), _GRAPH_CHUNK):
+                chunk = data[start:start + _GRAPH_CHUNK]
+                end = start + len(chunk) - 1
+                up = http.put(url, content=chunk, headers={
+                    "Content-Length": str(len(chunk)),
+                    "Content-Range": f"bytes {start}-{end}/{len(data)}"})
+                if up.status_code not in (200, 201, 202):
+                    return dict(base, sent=False, attached=[],
+                                reason=f"Graph upload {f['name']}: {_graph_error(up)}")
+        r = http.post(f"{user}/messages/{mid}/send", headers=head)
+        if r.status_code != 202:
+            return dict(base, sent=False, attached=[], reason=f"Graph send {_graph_error(r)}")
+        return dict(base, sent=True)
+    except Exception as exc:                                     # noqa: BLE001
+        return dict(base, sent=False, attached=[],
+                    reason=f"could not reach Microsoft Graph ({type(exc).__name__}: {exc})")
+    finally:
+        if client is None:
+            try:
+                http.close()
+            except Exception:                                    # noqa: BLE001
+                pass
 
 
 # ── the note ─────────────────────────────────────────────────────────────────
