@@ -2289,6 +2289,12 @@
       var r=await fetch(API_BASE+'/api/hr/blip',{method:'POST',headers:_hdr()});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,200));
       var d=await r.json();
+      if(d.status==='busy'){
+        // Another query is running; this press did not query, so there is no count to show.
+        out.style.color='var(--warn)';
+        out.textContent=(d.warnings||[]).join('\n');
+        return;
+      }
       var when=(d.timestamp||'').replace('T',' ').slice(0,19);
       var file=d.output_file ? d.output_file.split('\\').pop() : '';
       var warn=(d.warnings||[]).join('\n');

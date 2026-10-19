@@ -111,7 +111,7 @@ def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
         {"id": "BH-2", "first_name": "Pat", "surname": "Example", "email": "p@wearesdi.com"},
     ])
 
-    def query(token, employee_id, from_dt):
+    def query(token, employee_id, from_dt, throttle=None):
         if employee_id == "BH-1":
             return [{"start": "2026-10-14T07:00:00Z"}], True
         return [], False                                   # BH-2's lookup fails
