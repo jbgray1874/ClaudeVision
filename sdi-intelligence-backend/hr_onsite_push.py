@@ -80,40 +80,167 @@ def _write_status(summary):
     _atomic_write_json(p, cur)
 
 
+def _pick(records):
+    """Of several InVentry records that are evidently one person, the one to use.
+
+    Currently on site first: reception has already signed them in on that copy,
+    and choosing another would sign them in a second time. Then the most
+    recently used. Then the lowest ID, so the answer never depends on the order
+    the API happens to list them in - otherwise a different copy could be
+    signed in on different days.
+    """
+    ordered = sorted(records, key=api.inventry_id)
+    return max(ordered, key=lambda r: (api.is_on_site(r),
+                                       str(api._field(r, "LastActivityDate"))))
+
+
+def _first_last(record):
+    return (str(api._field(record, "FirstName")).strip().lower(),
+            str(api._field(record, "Surname")).strip().lower())
+
+
+def _record_name(record):
+    return source_loader._name_key(*_first_last(record))
+
+
+def _display(record):
+    return f"{api._field(record, 'FirstName')} {api._field(record, 'Surname')}".strip() or "?"
+
+
+def _could_be(person, record):
+    """Could this InVentry record plausibly belong to this BrightHR person?
+
+    First name OR surname must agree. That admits a nickname (Rob / Robert
+    Lane) and a changed surname, and refuses an identifier that has ended up on
+    somebody else's record. Real data, 14 Oct: one person's BrightHR record
+    resolved, by a shared identifier, to a record filed under someone else's name.
+    """
+    first = str(person.get("first_name") or "").strip().lower()
+    last = str(person.get("surname") or "").strip().lower()
+    r_first, r_last = _first_last(record)
+    return bool((first and first == r_first) or (last and last == r_last))
+
+
+def _resolve(person, candidates, how):
+    """Choose among the InVentry records holding the identifier a person matched.
+
+    One person can have several records (duplicates). Several people can also
+    share one identifier (a data error) - so the records must agree with the
+    person's name, and must all be the same name, before one is used.
+    """
+    plausible = [r for r in candidates if _could_be(person, r)]
+    if not plausible:
+        names = ", ".join(sorted({_display(r) for r in candidates}))
+        return None, f"{how} is on the InVentry record of a different person ({names})"
+    if len({_record_name(r) for r in plausible}) > 1:
+        names = ", ".join(sorted({_display(r) for r in plausible}))
+        return None, f"{how} is shared by several people in InVentry ({names})"
+    return _pick(plausible), how
+
+
+def _identifier_keys(record):
+    keys = set()
+    pid = api.person_key(record)
+    if pid:
+        keys.add("pid:" + pid)
+    email = str(api._field(record, "EmailAddress")).strip().lower()
+    if email:
+        keys.add("email:" + email)
+    return keys
+
+
+def _linked(records):
+    """True when shared emails or PersonIDs join all these records into one.
+
+    Two records with the same name AND a shared identifier are one person on
+    two records. Two with the same name and nothing shared may be namesakes,
+    and stay ambiguous.
+    """
+    keys = [_identifier_keys(r) for r in records]
+    component, members, grew = set(keys[0]), {0}, True
+    while grew:
+        grew = False
+        for i, ks in enumerate(keys):
+            if i not in members and ks & component:
+                members.add(i)
+                component |= ks
+                grew = True
+    return len(members) == len(records)
+
+
 def _index_personnel(people):
-    """Build lookups from InVentry's personnel list."""
+    """Group InVentry's personnel by PersonID, email and name.
+
+    Lists, not single records: every group of more than one is a decision that
+    _match makes with the person in hand, rather than one taken blind here.
+    """
     by_person_id, by_email, by_name = {}, {}, {}
     for record in people:
         key = api.person_key(record)
         if key:
-            by_person_id[key] = record
+            by_person_id.setdefault(key, []).append(record)
         email = str(api._field(record, "EmailAddress")).strip().lower()
         if email:
-            by_email[email] = record
-        name = source_loader._name_key(
-            api._field(record, "FirstName"), api._field(record, "Surname"))
+            by_email.setdefault(email, []).append(record)
+        name = _record_name(record)
         if name:
-            # A duplicated name is ambiguous, so mark it rather than pick one.
-            by_name[name] = None if name in by_name else record
+            by_name.setdefault(name, []).append(record)
     return by_person_id, by_email, by_name
 
 
+def _shared_identifiers(by_person_id, by_email):
+    """Records sharing an identifier: duplicates (one name) and conflicts (several).
+
+    Returns two lists of (what, records). A duplicate is one person on several
+    records. A conflict is several people on one identifier, which is a data
+    error in InVentry that no amount of matching logic can safely resolve.
+    """
+    duplicates, conflicts, seen = [], [], set()
+    for what, groups in (("PersonID", by_person_id), ("email", by_email)):
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            ids = frozenset(api.inventry_id(r) for r in group)
+            if ids in seen:
+                continue
+            seen.add(ids)
+            one_name = len({_record_name(r) for r in group}) == 1
+            (duplicates if one_name else conflicts).append((what, group))
+    return duplicates, conflicts
+
+
 def _match(person, by_person_id, by_email, by_name):
-    """Find a person's InVentry record. Returns (record, how)."""
+    """Find a person's InVentry record. Returns (record, how).
+
+    A problem with a stronger identifier does not stop a weaker one being
+    tried: if one person's email has landed on someone else's record, their own
+    record can still be found by name. The problem is kept for the report if nothing
+    else works.
+    """
+    problems = []
+
     brighthr_id = (person.get("brighthr_id") or "").strip()
     if brighthr_id and brighthr_id in by_person_id:
-        return by_person_id[brighthr_id], "PersonID"
+        record, how = _resolve(person, by_person_id[brighthr_id], "PersonID")
+        if record is not None:
+            return record, how
+        problems.append(how)
 
     email = (person.get("email") or "").strip().lower()
     if email and email in by_email:
-        return by_email[email], "email"
+        record, how = _resolve(person, by_email[email], "email")
+        if record is not None:
+            return record, how
+        problems.append(how)
 
     name = source_loader._name_key(person.get("first_name"), person.get("surname"))
-    if name and by_name.get(name):
-        return by_name[name], "name"
-    if name in by_name:                      # present but ambiguous
-        return None, "ambiguous name"
-    return None, "no match"
+    records = by_name.get(name) if name else None
+    if records:
+        if len(records) == 1 or _linked(records):
+            return _pick(records), "name"
+        problems.append("ambiguous name")
+
+    return None, "; ".join(problems) if problems else "no match"
 
 
 def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
@@ -196,6 +323,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
 
     client = client or api.InVentryAPI()
     summary["warnings"].extend(client.warnings)
+    warnings_taken = len(client.warnings)
 
     try:
         people = client.get_personnel()
@@ -203,6 +331,39 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         return abort(f"Could not read InVentry personnel: {exc}")
 
     by_person_id, by_email, by_name = _index_personnel(people)
+    duplicates, conflicts = _shared_identifiers(by_person_id, by_email)
+
+    # People whose BrightHR query failed this run. Their presence is unknown,
+    # not absent, so their InVentry records are left exactly as they are.
+    unknown_idents = set()
+    for e in (payload.get("query_failed") or []):
+        unknown = {"brighthr_id": e.get("id") or "", "first_name": e.get("first_name", ""),
+                   "surname": e.get("surname", ""), "email": e.get("email", "")}
+        record, _ = _match(unknown, by_person_id, by_email, by_name)
+        if record is not None:
+            unknown_idents.add(api.inventry_id(record))
+    if duplicates:
+        names = sorted({_display(g[0]) for _, g in duplicates})
+        summary["warnings"].append(
+            f"{len(duplicates)} person(s) have more than one InVentry record sharing an "
+            f"email or PersonID ({', '.join(names[:5])}{', ...' if len(names) > 5 else ''}). "
+            f"The copy already on site, else the most recently used, is the one matched. "
+            f"Worth merging in InVentry: reception may sign people in on the other copy."
+        )
+        for what, g in duplicates:
+            _log(f"  DUPLICATE {_display(g[0])}: {len(g)} records share a {what} - "
+                 f"{', '.join(sorted(api.inventry_id(r) for r in g))}")
+    if conflicts:
+        pairs = sorted(" / ".join(sorted({_display(r) for r in g})) for _, g in conflicts)
+        summary["warnings"].append(
+            f"{len(conflicts)} InVentry identifier(s) are shared by different people "
+            f"({'; '.join(pairs[:5])}{'; ...' if len(pairs) > 5 else ''}). Those records are "
+            f"matched by name only, never by the shared identifier. Fix them in InVentry."
+        )
+        for what, g in conflicts:
+            _log(f"  CONFLICT {what} shared by different people: "
+                 + ", ".join(f"{_display(r)} ({api.inventry_id(r)})" for r in g))
+
     inventry_on_site = {api.inventry_id(r): r for r in people if api.is_on_site(r)}
     summary["inventry_on_site_before"] = len(inventry_on_site)
     summary["inventry_personnel"] = len(people)
@@ -218,6 +379,13 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
                                          "brighthr_id": person.get("brighthr_id", "")})
             continue
         summary["matched_by"][how] = summary["matched_by"].get(how, 0) + 1
+        if how != "name" and _record_name(record) != source_loader._name_key(
+                person.get("first_name"), person.get("surname")):
+            # Accepted - a nickname or a changed surname - but a human should
+            # glance at it before it is trusted on a fire roll.
+            summary.setdefault("name_checks", []).append(
+                {"brighthr": label, "inventry": _display(record), "by": how})
+            _log(f"  CHECK BrightHR '{label}' -> InVentry '{_display(record)}' ({how})")
         ident = api.inventry_id(record)
         should_be_on_site.add(ident)
         if ident in inventry_on_site:
@@ -232,17 +400,36 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         for ident, record in inventry_on_site.items():
             if ident in should_be_on_site:
                 continue
-            if not api.person_key(record):
-                # Not a person we manage: a visitor, contractor or someone
-                # InVentry knows and we do not. Never ours to sign out.
+            if ident in unknown_idents:
+                # Their BrightHR lookup failed this run. Not knowing is not the
+                # same as clocked out; the next run will know.
+                summary["skipped_unknown"] = summary.get("skipped_unknown", 0) + 1
                 continue
-            if only_our_own and not api.signed_in_by_us(record):
-                # Their last event came from reception, the Anywhere app or a
-                # rule - a human decision, or InVentry's own. Not ours to undo.
-                summary["skipped_not_ours"] = summary.get("skipped_not_ours", 0) + 1
+            if only_our_own:
+                if not api.signed_in_by_us(record):
+                    # Their last event came from reception, the Anywhere app or
+                    # a rule - a human decision, or InVentry's own. Not ours.
+                    summary["skipped_not_ours"] = summary.get("skipped_not_ours", 0) + 1
+                    continue
+                # The marker alone settles it: only this sync writes it, so the
+                # record is on site because we put it there. PersonID is NOT
+                # required - it was once meant to hold our BrightHR id, but on
+                # the live site it is Active Directory's, and 104 of 255 records
+                # have none. Requiring it left those people signed in for ever.
+            elif not api.person_key(record):
+                # Marker check off: a PersonID is the only remaining sign that
+                # the record is someone managed rather than a stray. Weak, which
+                # is why the marker check is the default.
                 continue
             label = f"{api._field(record,'FirstName')} {api._field(record,'Surname')}".strip()
             to_sign_out.append((ident, label))
+
+        if summary.get("skipped_unknown"):
+            summary["warnings"].append(
+                f"{summary['skipped_unknown']} person(s) left as they are: their BrightHR "
+                f"lookup failed this run, and an unknown is not a clock-out."
+            )
+            _log(f"  left as is (BrightHR lookup failed): {summary['skipped_unknown']}")
 
         if summary.get("skipped_not_ours"):
             summary["warnings"].append(
@@ -263,6 +450,15 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
          f"{len(inventry_on_site)}, sign in {len(to_sign_in)}, sign out "
          f"{len(to_sign_out)}, already on site {summary['already_on_site']}, "
          f"unmatched {len(summary['unmatched'])}")
+    # How people matched is the single most informative number on a first run:
+    # it says whether matching is exact (PersonID), good (email) or fragile
+    # (name). And the unmatched are the people a fire roll would miss, so they
+    # are named here rather than left in a status file nobody opens.
+    mb = summary["matched_by"]
+    _log(f"  matched by PersonID {mb.get('PersonID', 0)}, email {mb.get('email', 0)}, "
+         f"name {mb.get('name', 0)}")
+    for u in summary["unmatched"]:
+        _log(f"  UNMATCHED {u['name']}: {u['reason']}")
 
     # ── apply ──
     for ident, label, when in to_sign_in:
@@ -290,6 +486,10 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         except api.InVentryAPIError as exc:
             summary["failures"].append(f"sign_out {ident}: {exc}")
             _log(f"  FAILED to sign out {label}: {exc}")
+
+    # Anything the client raised while writing - notably the ActionLocation
+    # fallback, which only shows up once a real POST has been refused.
+    summary["warnings"].extend(client.warnings[warnings_taken:])
 
     if summary["unmatched"]:
         summary["warnings"].append(

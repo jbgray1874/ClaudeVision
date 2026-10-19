@@ -99,3 +99,26 @@ def test_unset_output_dir_is_reported_too(dirs, monkeypatch):
 ])
 def test_mapped_drive_detection(path, expected):
     assert hr_blip._looks_like_mapped_drive(path) is expected
+
+
+
+def test_the_snapshot_names_whose_lookup_failed(dirs, monkeypatch):
+    """The push needs WHO, not just how many, to tell unknown from absent."""
+    monkeypatch.setattr(cfg, "HR_OUTPUT_DIR", "")
+    monkeypatch.setattr(hr_blip, "_get_token", lambda: "t")
+    monkeypatch.setattr(hr_blip, "_load_active_employees", lambda: [
+        {"id": "BH-1", "first_name": "John", "surname": "Smith", "email": "j@wearesdi.com"},
+        {"id": "BH-2", "first_name": "Pat", "surname": "Example", "email": "p@wearesdi.com"},
+    ])
+
+    def query(token, employee_id, from_dt):
+        if employee_id == "BH-1":
+            return [{"start": "2026-10-14T07:00:00Z"}], True
+        return [], False                                   # BH-2's lookup fails
+
+    monkeypatch.setattr(hr_blip, "_query_one", query)
+    hr_blip.run_blip()
+
+    snap = json.loads((dirs / "blip_latest.json").read_text(encoding="utf-8"))
+    assert [p["id"] for p in snap["on_site"]] == ["BH-1"]
+    assert [p["id"] for p in snap["query_failed"]] == ["BH-2"]

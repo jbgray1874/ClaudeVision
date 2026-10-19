@@ -65,7 +65,41 @@ GET_WINDOW_SECONDS = 60.0
 
 
 class InVentryAPIError(RuntimeError):
-    """InVentry's API could not be reached, or refused a call."""
+    """InVentry's API could not be reached, or refused a call.
+
+    ``status`` is the HTTP status where there was one, and None when the call
+    never got a response. Callers use it to tell a rejected *request* from
+    rejected *credentials*, which need opposite responses.
+    """
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+def rejected_the_request(exc):
+    """True when InVentry refused this particular request's contents.
+
+    Deliberately narrow. 401/403 mean the credentials are wrong, 404 the path
+    is wrong, 429 that we are calling too fast, 5xx that InVentry is unwell -
+    none of which a different request body would fix. What is left is the 4xx
+    range that means "I will not accept what you sent".
+    """
+    status = getattr(exc, "status", None)
+    return status is not None and 400 <= status < 500 and status not in (401, 403, 404, 429)
+
+
+class PinnedCertAdapter(requests.adapters.HTTPAdapter):
+    """Verify the certificate, but not the hostname on it.
+
+    For a single pinned self-signed certificate this is not a downgrade: the
+    pin already names one exact certificate, and hostname checking exists to
+    stop a CA vouching for the wrong name. Here the certificate is its own CA.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        kwargs["assert_hostname"] = False
+        return super().init_poolmanager(*args, **kwargs)
 
 
 class RateLimiter:
@@ -96,12 +130,26 @@ def _utc_now():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _to_local(value):
+    """An aware datetime in this machine's local time.
+
+    astimezone() with no argument applies the OS's rules for that particular
+    instant, so a time from before the clocks changed converts correctly. No
+    tz database needed, which matters on Windows.
+    """
+    return value.astimezone()
+
+
 def format_datetime(value) -> str:
     """Format a timestamp for InVentry's datetime fields.
 
     Their own examples use 1983-07-08T00:00:00 and their responses
-    2020-12-22T18:08:46.307: a "T" separator and no timezone. Anything with a
-    trailing Z or an offset is converted to naive UTC first.
+    2020-12-22T18:08:46.307: a "T" separator and no timezone. The missing
+    timezone means LOCAL time - InVentry records actions in local time, though
+    its GetSystemTime reports UTC (see INVENTRY_TIME_MODE). So anything carrying
+    a Z or an offset is converted to local, or to UTC if configured, and the
+    offset dropped. A string with no offset is assumed already right and passed
+    through.
     """
     if value is None:
         value = _utc_now()
@@ -112,7 +160,11 @@ def format_datetime(value) -> str:
         except ValueError:
             return value if isinstance(value, str) else str(value)
     if value.tzinfo is not None:
-        value = value.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+        if cfg.INVENTRY_TIME_MODE == "utc":
+            value = value.astimezone(datetime.timezone.utc)
+        else:
+            value = _to_local(value)
+        value = value.replace(tzinfo=None)
     return value.strftime("%Y-%m-%dT%H:%M:%S")
 
 
@@ -120,7 +172,8 @@ class InVentryAPI:
     """Thin wrapper over the InVentry Partner API."""
 
     def __init__(self, base_url=None, api_key=None, partner_secret=None,
-                 verify=None, timeout=None, session=None, limiter=None):
+                 verify=None, timeout=None, session=None, limiter=None,
+                 check_hostname=None):
         self.base_url = (base_url if base_url is not None else cfg.INVENTRY_API_BASE_URL).rstrip("/")
         self.api_key = api_key if api_key is not None else cfg.INVENTRY_API_KEY
         self.partner_secret = partner_secret if partner_secret is not None else cfg.INVENTRY_PARTNER_SECRET
@@ -128,6 +181,8 @@ class InVentryAPI:
         self.session = session or requests.Session()
         self.limiter = limiter if limiter is not None else RateLimiter()
         self.warnings = []
+        # Set once InVentry has refused an ActionLocation - see add_action.
+        self.action_location_dropped = False
 
         # Their certificate is self-signed. A pinned CA bundle keeps
         # verification on and is preferred; otherwise verification is off,
@@ -144,6 +199,31 @@ class InVentryAPI:
                 "Set INVENTRY_API_CA_BUNDLE to the exported certificate to turn it back on."
             )
 
+        # Their certificate has no subjectAltName, so the hostname can never
+        # match. Pinning the certificate and skipping the name check keeps the
+        # connection verified; skipping it without a pin does not.
+        self.check_hostname = (cfg.INVENTRY_API_CHECK_HOSTNAME
+                               if check_hostname is None else check_hostname)
+        if not self.check_hostname:
+            if self.verify is False:
+                self.warnings.append(
+                    "INVENTRY_API_CHECK_HOSTNAME is off and no certificate is pinned, so "
+                    "nothing about the server is being verified. Set INVENTRY_API_CA_BUNDLE."
+                )
+            else:
+                if self.verify is True:
+                    # Verifying against the public CA store without checking the
+                    # name accepts ANY publicly-issued certificate for ANY domain.
+                    # Turning the name check off is only sound with a pin.
+                    self.warnings.append(
+                        "INVENTRY_API_CHECK_HOSTNAME is off but no certificate is pinned: "
+                        "the system CA store is being used, so any publicly-issued "
+                        "certificate for any name would be accepted. Set "
+                        "INVENTRY_API_CA_BUNDLE to InVentry's exported certificate."
+                    )
+                if hasattr(self.session, "mount"):
+                    self.session.mount("https://", PinnedCertAdapter())
+
     # ── plumbing ─────────────────────────────────────────────────────────
 
     def _require_config(self):
@@ -157,6 +237,24 @@ class InVentryAPI:
                 "InVentry API is not configured: " + ", ".join(missing) + ". The API key comes "
                 "from the InVentry console (Setup & Options -> Partner API); the partner secret "
                 "is issued by InVentry Ltd."
+            )
+
+        # A placeholder pasted verbatim from instructions is otherwise
+        # indistinguishable from a wrong credential: both come back as a 401,
+        # and the real cause is a line in a file nobody is looking at. Note
+        # .env takes the LAST of any duplicated key, so a pasted placeholder
+        # silently wins over the correct value above it.
+        placeholders = [name for name, value in (
+            ("INVENTRY_API_BASE_URL", self.base_url),
+            ("INVENTRY_API_KEY", self.api_key),
+            ("INVENTRY_PARTNER_SECRET", self.partner_secret),
+        ) if value.strip().startswith("<") and value.strip().endswith(">")]
+        if placeholders:
+            raise InVentryAPIError(
+                f"{', '.join(placeholders)} still holds a placeholder, not a real value - "
+                f"something like <paste it here> was copied into {cfg.ENV_FILE} literally. "
+                f"Remove that line. If the setting appears twice, the LAST one is the one "
+                f"being used."
             )
 
     def _headers(self):
@@ -179,6 +277,20 @@ class InVentryAPI:
                     method, url, headers=self._headers(), params=params, data=data,
                     timeout=self.timeout, verify=self.verify,
                 )
+            except requests.exceptions.SSLError as exc:
+                if "not valid for" in str(exc) or "Hostname mismatch" in str(exc):
+                    raise InVentryAPIError(
+                        f"InVentry's certificate does not carry the name {self.base_url!r}. "
+                        f"It is self-signed with CN=InVentry-PC and no subjectAltName, which "
+                        f"modern TLS ignores, so no hostname will ever match. Keep "
+                        f"INVENTRY_API_CA_BUNDLE pointed at the exported certificate and set "
+                        f"INVENTRY_API_CHECK_HOSTNAME=false - the certificate is still verified, "
+                        f"only its name is not. ({exc})"
+                    ) from exc
+                raise InVentryAPIError(
+                    f"TLS failed talking to {url}: {exc}. If the certificate was re-exported, "
+                    f"update INVENTRY_API_CA_BUNDLE."
+                ) from exc
             except requests.RequestException as exc:
                 last = exc
                 if attempt < retries:
@@ -189,7 +301,7 @@ class InVentryAPI:
             if response.status_code == 429:
                 # Documented for GET. Should not happen for POST, but honour it.
                 wait = _retry_after(response, attempt)
-                last = InVentryAPIError(f"Rate limited by InVentry ({url})")
+                last = InVentryAPIError(f"Rate limited by InVentry ({url})", status=429)
                 if attempt < retries:
                     time.sleep(wait)
                     continue
@@ -199,17 +311,18 @@ class InVentryAPI:
                 raise InVentryAPIError(
                     f"InVentry rejected the credentials ({response.status_code}). Check the API key "
                     f"is still listed in the console's Partner API section and that the partner "
-                    f"secret matches."
+                    f"secret matches.", status=response.status_code
                 )
 
             if response.status_code == 404:
                 raise InVentryAPIError(
                     f"InVentry returned 404 for {url}. The endpoint paths are still unconfirmed - "
-                    f"set INVENTRY_PATH_* from InVentry's Postman collection."
+                    f"set INVENTRY_PATH_* from InVentry's Postman collection.", status=404
                 )
 
             if response.status_code >= 500:
-                last = InVentryAPIError(f"InVentry returned {response.status_code} for {url}")
+                last = InVentryAPIError(f"InVentry returned {response.status_code} for {url}",
+                                        status=response.status_code)
                 if attempt < retries:
                     time.sleep(2 ** (attempt - 1))
                     continue
@@ -218,12 +331,14 @@ class InVentryAPI:
             if not response.ok:
                 # Non-200 bodies carry a useful string, per the documentation.
                 raise InVentryAPIError(
-                    f"InVentry returned {response.status_code} for {url}: {response.text[:300]}"
+                    f"InVentry returned {response.status_code} for {url}: {response.text[:300]}",
+                    status=response.status_code
                 )
 
             return _decode(response, url)
 
-        raise InVentryAPIError(f"InVentry API failed after {retries} attempts: {last}")
+        raise InVentryAPIError(f"InVentry API failed after {retries} attempts: {last}",
+                               status=getattr(last, "status", None))
 
     def get(self, path, params=None):
         return self._send("GET", path, params=params)
@@ -275,14 +390,58 @@ class InVentryAPI:
     # ── presence: one call, AddPersonnelAction ───────────────────────────
 
     def add_action(self, personnel_id, action_type, when=None, location=None):
-        """Record a sign-in or sign-out against an InVentry person."""
-        return self.post(cfg.INVENTRY_PATH_PERSONNEL_ACTION, {
+        """Record a sign-in or sign-out against an InVentry person.
+
+        ``ActionLocation`` is the one field here we are not certain InVentry
+        will accept. We send a distinctive value so we can recognise our own
+        sign-ins later, but InVentry may require it to name a real location -
+        and there is no Locations list in the console to add one to, so we
+        cannot make it real. If they reject the request over it, dropping the
+        field costs us safe sign-out; letting the call fail costs us the
+        sign-in, and a missing sign-in is a person missing from a fire roll.
+        So we drop the field and carry on.
+
+        Dropped for the rest of the client's life, not just this call: once
+        InVentry has refused it, retrying it 89 more times only doubles the
+        writes.
+        """
+        wanted = cfg.INVENTRY_ACTION_LOCATION if location is None else location
+        body = {
             "PersonnelID": personnel_id,
             "ActionType": action_type,
             "ActionDateTime": format_datetime(when) if when else "",
-            "ActionLocation": (cfg.INVENTRY_ACTION_LOCATION
-                               if location is None else location),
-        })
+        }
+
+        path = cfg.INVENTRY_PATH_PERSONNEL_ACTION
+        if wanted and not self.action_location_dropped:
+            try:
+                return self.post(path, dict(body, ActionLocation=wanted))
+            except InVentryAPIError as exc:
+                # Only when InVentry refused the request itself. A 401 or a
+                # timeout would come back exactly the same way without the
+                # field, and retrying would just write nothing twice as slowly.
+                if not rejected_the_request(exc):
+                    raise
+                refusal = exc
+
+            # Without the field. Only if THIS succeeds was the field the
+            # problem. If it fails too, the request was bad for another reason
+            # - one malformed PersonnelID, say - and that error propagates with
+            # the marker left on for everyone else. Concluding otherwise would
+            # let a single bad record strip the marker from every remaining
+            # sign-in in the run, and blame the wrong thing for it.
+            result = self.post(path, body)
+            self.action_location_dropped = True
+            self.warnings.append(
+                f"InVentry rejected AddPersonnelAction carrying "
+                f"ActionLocation={wanted!r} ({refusal}), and accepted the same request "
+                f"without it. It is omitted for the rest of this run. Sign-ins still work. "
+                f"Automatic sign-out cannot be enabled, because it depends on recognising "
+                f"our own marker in LastEventLocation."
+            )
+            return result
+
+        return self.post(path, body)
 
     def sign_in(self, inventry_id, when=None, location=None, reason=""):
         return self.add_action(inventry_id, cfg.INVENTRY_EVENT_TYPE_IN,
@@ -302,13 +461,17 @@ class InVentryAPI:
         ours = [p for p in on_site if signed_in_by_us(p)]
         return {
             "status": "ok",
+            "env_file": str(cfg.ENV_FILE) if cfg.ENV_FILE_FOUND else f"{cfg.ENV_FILE} (MISSING)",
             "base_url": self.base_url,
             "auth": auth if auth else "CheckAuth OK",
             "tls_verification": self.verify if self.verify is not False else "OFF (self-signed)",
             "personnel": len(people),
             "on_site": len(on_site),
             "on_site_signed_in_by_us": len(ours),
-            "with_our_person_id": len([p for p in people if _field(p, "PersonID")]),
+            # ANY PersonID, not ours - we have written none. On a directory-
+            # synced site InVentry fills this from Active Directory, so a high
+            # count here usually means AD identifiers, not BrightHR ones.
+            "with_person_id": len([p for p in people if _field(p, "PersonID")]),
             "warnings": list(self.warnings),
         }
 

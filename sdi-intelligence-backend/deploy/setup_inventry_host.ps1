@@ -89,6 +89,13 @@ if (-not $resolvedEnv) {
     if (-not ($envText | Where-Object { $_ -match "^INVENTRY_API_CA_BUNDLE=\S" })) {
         Note "INVENTRY_API_CA_BUNDLE not set - TLS verification stays off unless it points at $CertFile"
     }
+    # Their certificate is CN=InVentry-PC with no subjectAltName, which modern
+    # TLS ignores, so no hostname ever matches. Pinning the certificate and
+    # skipping the name check keeps the connection verified.
+    if (-not ($envText | Where-Object { $_ -match "^INVENTRY_API_CHECK_HOSTNAME=(false|0|no|off)" })) {
+        Bad "INVENTRY_API_CHECK_HOSTNAME is not set to false. InVentry's certificate has no subjectAltName, so verification fails with 'certificate is not valid for inventry-pc'."
+        Note "Add: INVENTRY_API_CHECK_HOSTNAME=false   (keep INVENTRY_API_CA_BUNDLE set - the certificate is still checked)"
+    }
 }
 
 Step "Result"

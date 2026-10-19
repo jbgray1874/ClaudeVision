@@ -183,6 +183,10 @@ def run_blip() -> dict:
     _log(f"  Querying at point-in-time {from_dt} with {MAX_WORKERS} workers")
 
     on_site = []
+    # Whose query failed, not just how many. A failed lookup is "unknown", and
+    # the push must not read it as "clocked out" - with sign-out live, that
+    # would take someone in the building off the fire roll for a cycle.
+    query_failed = []
     checked = 0
     failures = 0
     emp_list = [e for e in employees if e.get("id")]
@@ -202,6 +206,12 @@ def run_blip() -> dict:
                 clockings, ok = [], False
             if not ok:
                 failures += 1
+                query_failed.append({
+                    "id": emp.get("id"),
+                    "first_name": emp.get("first_name", ""),
+                    "surname": emp.get("surname", ""),
+                    "email": emp.get("email", ""),
+                })
             if clockings:
                 on_site.append({
                     "id": emp.get("id"),
@@ -241,9 +251,9 @@ def run_blip() -> dict:
 
     # ── audit snapshot ──
     snap_path = Path(cfg.HR_SNAPSHOT_DIR) / f"blip_{_stamp()}.json"
-    _atomic_write_json(snap_path, {"summary": summary, "on_site": on_site})
-    _atomic_write_json(Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json",
-                       {"summary": summary, "on_site": on_site})
+    snapshot = {"summary": summary, "on_site": on_site, "query_failed": query_failed}
+    _atomic_write_json(snap_path, snapshot)
+    _atomic_write_json(Path(cfg.HR_SNAPSHOT_DIR) / "blip_latest.json", snapshot)
 
     # ── browsable output for the COO ──
     out_file, out_error = _write_output_file(on_site, summary)
