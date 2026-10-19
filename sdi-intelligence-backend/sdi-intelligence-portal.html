@@ -2328,13 +2328,26 @@
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,200));
       var d=await r.json();
       var warn=(d.warnings||[]).join('\n');
+      // Names, not just counts: whoever pressed the button sees who changed, and
+      // the list InVentry is left with, to check against InVentry itself.
+      function names(title, list){
+        list=list||[];
+        return '\n\n'+title+' ('+list.length+')'+(list.length ? ':\n  '+list.join('\n  ') : '');
+      }
+      var dry=d.dry_run;
+      var after=d.on_site_after||[];
       out.style.color = d.status==='ok' ? 'var(--ok)' : 'var(--warn)';
-      out.textContent=(d.dry_run?'[DRY RUN] ':'')
-        +'Signed in '+((d.signed_in||[]).length)+', signed out '+((d.signed_out||[]).length)
-        +'\nBrightHR on site: '+d.brighthr_on_site+'  |  InVentry on site: '+d.inventry_on_site_before
-        +'\nAlready on site: '+d.already_on_site+'  |  Unmatched: '+((d.unmatched||[]).length)
+      out.textContent=(dry?'[DRY RUN] nothing has been changed in InVentry':'InVentry updated')
         +'\nStatus: '+(d.status||'').toUpperCase()
-        +(warn ? '\n'+warn : '');
+        +'\nBrightHR on site: '+d.brighthr_on_site+'  |  InVentry on site before: '+d.inventry_on_site_before
+        +'  |  Already right: '+d.already_on_site
+        +names(dry?'Would sign in':'Signed in', d.signed_in_names)
+        +names(dry?'Would sign out':'Signed out', d.signed_out_names)
+        +((d.sign_outs_held_back||[]).length ? names('Sign-outs held back: more than the safety limit, so none were made (IT clears these from the command line)', d.sign_outs_held_back) : '')
+        +names('Not matched to an InVentry record (not updated)', (d.unmatched||[]).map(function(u){return u.name;}))
+        +(d.on_site_after ? names(dry ? 'InVentry would then show on site'
+                                      : (d.on_site_after_read_back ? 'InVentry now shows on site (read back from InVentry)' : 'InVentry now shows on site'), after) : '')
+        +(warn ? '\n\nNotes:\n'+warn : '');
     }catch(e){
       out.style.color='var(--fail)';
       out.textContent='Push failed: '+e.message;
