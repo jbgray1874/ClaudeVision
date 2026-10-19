@@ -300,10 +300,14 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
             f"({meta.get('query_failures', '?')} query failure(s)); refusing to push a "
             f"possibly incomplete on-site list. Re-run the Blip query, or use --force."
         )
-    if age is not None and age > cfg.BLIP_MAX_STALE_MINUTES and not force:
+    # Not lifted by --force: --force is for a backlog over the sign-out cap, and
+    # a plan built on an old snapshot would sign out whoever has arrived since.
+    # The cure for stale data is always a fresh Blip query, never an override.
+    if age is not None and age > cfg.BLIP_MAX_STALE_MINUTES:
         return abort(
             f"On-site data is {age:.0f} minutes old (> BLIP_MAX_STALE_MINUTES "
-            f"{cfg.BLIP_MAX_STALE_MINUTES}); a stale roll call is worse than no update."
+            f"{cfg.BLIP_MAX_STALE_MINUTES}); a stale roll call is worse than no update. "
+            f"Run the Blip query first (python hr_blip.py, or Who's clocked in? on the portal)."
         )
     if not records and meta.get("query_failures") and not force:
         return abort(
@@ -449,7 +453,8 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
     _log(f"PUSH plan: BrightHR on site {len(records)}, InVentry on site "
          f"{len(inventry_on_site)}, sign in {len(to_sign_in)}, sign out "
          f"{len(to_sign_out)}, already on site {summary['already_on_site']}, "
-         f"unmatched {len(summary['unmatched'])}")
+         f"unmatched {len(summary['unmatched'])}, snapshot "
+         f"{'?' if age is None else f'{age:.0f} min'} old")
     # How people matched is the single most informative number on a first run:
     # it says whether matching is exact (PersonID), good (email) or fragile
     # (name). And the unmatched are the people a fire roll would miss, so they
