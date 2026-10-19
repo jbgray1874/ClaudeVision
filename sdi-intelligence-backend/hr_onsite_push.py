@@ -274,6 +274,11 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         "inventry_on_site_before": None,
         "signed_in": [],
         "signed_out": [],
+        # Names beside the ids, for the portal: whoever presses the button sees
+        # who was (or would be) changed, not just how many.
+        "signed_in_names": [],
+        "signed_out_names": [],
+        "sign_outs_held_back": [],
         "already_on_site": 0,
         "unmatched": [],
         "matched_by": {"PersonID": 0, "email": 0, "name": 0},
@@ -448,6 +453,7 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
                 f"({cfg.INVENTRY_MAX_SIGN_OUTS_PER_RUN}); suppressed as a likely data problem."
             )
             _log(f"  sign-outs suppressed: {summary['warnings'][-1]}")
+            summary["sign_outs_held_back"] = [label for _, label in to_sign_out]
             to_sign_out = []
 
     _log(f"PUSH plan: BrightHR on site {len(records)}, InVentry on site "
@@ -470,10 +476,12 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         if not apply:
             _log(f"  [DRY RUN] would SIGN IN  {label} ({ident}) at {when or 'now'}")
             summary["signed_in"].append(ident)
+            summary["signed_in_names"].append(label)
             continue
         try:
             client.sign_in(ident, when=when)
             summary["signed_in"].append(ident)
+            summary["signed_in_names"].append(label)
             _log(f"  signed in {label} ({ident})")
         except api.InVentryAPIError as exc:
             summary["failures"].append(f"sign_in {ident}: {exc}")
@@ -483,14 +491,36 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
         if not apply:
             _log(f"  [DRY RUN] would SIGN OUT {label} ({ident})")
             summary["signed_out"].append(ident)
+            summary["signed_out_names"].append(label)
             continue
         try:
             client.sign_out(ident)
             summary["signed_out"].append(ident)
+            summary["signed_out_names"].append(label)
             _log(f"  signed out {label} ({ident})")
         except api.InVentryAPIError as exc:
             summary["failures"].append(f"sign_out {ident}: {exc}")
             _log(f"  FAILED to sign out {label}: {exc}")
+
+    # ── who InVentry shows on site now ──
+    # After a live run that changed anything, read InVentry back, so the list
+    # is InVentry's own word rather than what we sent. Otherwise (a dry run, or
+    # nothing to do) it is the list the run leaves: before, less sign-outs,
+    # plus sign-ins.
+    after = None
+    if apply and (summary["signed_in"] or summary["signed_out"]):
+        try:
+            after = [r for r in client.get_personnel() if api.is_on_site(r)]
+            summary["on_site_after_read_back"] = True
+        except api.InVentryAPIError as exc:
+            summary["warnings"].append(f"Could not read InVentry back after the run: {exc}")
+    if after is None:
+        by_id = {api.inventry_id(r): r for r in people}
+        gone = set(summary["signed_out"])
+        after = [r for i, r in inventry_on_site.items() if i not in gone]
+        after += [by_id[i] for i in summary["signed_in"] if i in by_id]
+        summary["on_site_after_read_back"] = False
+    summary["on_site_after"] = sorted({_display(r) for r in after}, key=str.lower)
 
     # Anything the client raised while writing - notably the ActionLocation
     # fallback, which only shows up once a real POST has been refused.
@@ -499,8 +529,8 @@ def run_push(apply=False, force=False, source=source_loader.SOURCE_LATEST,
     if summary["unmatched"]:
         summary["warnings"].append(
             f"{len(summary['unmatched'])} on-site staff could not be matched to an InVentry "
-            f"record. Populate InVentry's PersonID with the BrightHR employee id (see "
-            f"docs/INVENTRY_API_NOTES.md) so matching is exact rather than by name."
+            f"record, so InVentry is not updated for them. Check that their name and email "
+            f"in InVentry match BrightHR."
         )
     if summary["failures"]:
         summary["status"] = "partial"

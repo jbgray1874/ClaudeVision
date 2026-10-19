@@ -248,7 +248,7 @@ class FakeAPI:
     """Stands in for InVentryAPI, recording writes."""
 
     def __init__(self, people, fail_on=None, read_error=None, warn_on_write=None):
-        self.people = people
+        self.people = [dict(p) for p in people]   # its own copies: writes change them
         self.warn_on_write = warn_on_write
         self.signed_in = []
         self.signed_out = []
@@ -269,11 +269,19 @@ class FakeAPI:
             self.warnings.append(self.warn_on_write)
             self.warn_on_write = None
         self.signed_in.append(ident)
+        self._set(ident, "IN")
 
     def sign_out(self, ident, when=None, **kw):
         if ident in self.fail_on:
             raise api.InVentryAPIError("simulated failure")
         self.signed_out.append(ident)
+        self._set(ident, "OUT")
+
+    def _set(self, ident, activity):
+        # So a read-back after the run sees the writes, as InVentry would.
+        for p in self.people:
+            if p["ID"] == ident:
+                p["LastActivity"] = activity
 
 
 def _iso(minutes_ago=1):
@@ -356,7 +364,7 @@ def test_unmatched_staff_are_reported_not_invented(snapshot):
 
     assert fake.signed_in == []
     assert result["unmatched"][0]["name"] == "New Starter"
-    assert any("PersonID" in w for w in result["warnings"])
+    assert any("could not be matched" in w for w in result["warnings"])
 
 
 def test_ambiguous_name_is_not_matched(snapshot):
@@ -437,6 +445,72 @@ def test_mass_sign_out_is_capped(snapshot, monkeypatch):
 
     assert fake.signed_out == []
     assert any("INVENTRY_MAX_SIGN_OUTS_PER_RUN" in w for w in result["warnings"])
+
+
+def test_the_result_names_who_is_changed(snapshot):
+    # The portal shows these, so whoever presses the button sees who, not how many.
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+    ])
+
+    result = push.run_push(apply=False, client=fake, enable_sign_out=True)
+
+    assert result["signed_in_names"] == ["John Smith"]
+    assert result["signed_out_names"] == ["Aisha Khan"]
+    assert result["sign_outs_held_back"] == []
+
+
+def test_sign_outs_held_back_by_the_cap_are_named(snapshot, monkeypatch):
+    monkeypatch.setattr(cfg, "INVENTRY_MAX_SIGN_OUTS_PER_RUN", 1)
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location=ours)] + [
+        person(inventry_id=f"INV-{i}", first=f"Test{i}", surname="Person",
+               email=f"test{i}@wearesdi.com", person_id=f"BH-{i}", activity="IN", location=ours)
+        for i in (2, 3)
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == [] and result["signed_out_names"] == []
+    assert sorted(result["sign_outs_held_back"]) == ["Test2 Person", "Test3 Person"]
+
+
+def test_a_live_run_reports_who_inventry_now_shows_on_site(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+        person(inventry_id="INV-3", first="Reception", surname="Visitor", email="rv@wearesdi.com",
+               person_id="", activity="IN", location="Main Entrance"),
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert result["on_site_after_read_back"] is True
+    assert result["on_site_after"] == ["John Smith", "Reception Visitor"]
+
+
+def test_a_dry_run_reports_the_list_it_would_leave(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+    ])
+
+    result = push.run_push(apply=False, client=fake, enable_sign_out=True)
+
+    assert fake.signed_in == [] and fake.signed_out == []
+    assert result["on_site_after_read_back"] is False
+    assert result["on_site_after"] == ["John Smith"]
 
 
 def test_dry_run_sends_nothing(snapshot):
