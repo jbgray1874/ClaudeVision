@@ -467,6 +467,17 @@ def test_stale_snapshot_is_refused(snapshot):
     assert push.run_push(apply=True, client=fake)["status"] == "aborted"
 
 
+def test_force_does_not_push_a_stale_snapshot(snapshot):
+    # --force clears a sign-out backlog; it must not act on an old roll call.
+    snapshot([clocked_in()], age_minutes=90)
+    fake = FakeAPI([person(person_id="BH-1")])
+
+    result = push.run_push(apply=True, force=True, client=fake)
+
+    assert result["status"] == "aborted"
+    assert fake.signed_in == [] and fake.signed_out == []
+
+
 def test_inventry_read_failure_aborts_without_writing(snapshot):
     snapshot([clocked_in()])
     fake = FakeAPI([], read_error="connection refused")
