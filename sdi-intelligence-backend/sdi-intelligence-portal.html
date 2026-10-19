@@ -4650,12 +4650,39 @@
     const tr=e.target.closest('tr[data-p]'); if(!tr) return;
     if(tr.dataset.d==='true') filesBrowse(tr.dataset.p); else _openFile(tr.dataset.p, tr.dataset.e);
   });
+  /* A BrightHR on-site file (blip_onsite_*.json) read as a list of people rather than
+     as JSON. Clock-ins open longer than 20 hours are marked: they are forgotten
+     clock-outs, and the InVentry push leaves them out for the same reason. */
+  function _onsiteText(d){
+    const rows=(d.staff_on_site||[]).slice().sort((a,b)=>
+      ((a.first_name||'')+' '+(a.surname||'')).localeCompare((b.first_name||'')+' '+(b.surname||'')));
+    const now=Date.now();
+    let forgotten=0;
+    const lines=rows.map(e=>{
+      const name=((e.first_name||'')+' '+(e.surname||'')).trim()||'?';
+      const t=Date.parse(e.clocked_in||'');
+      const hrs=isNaN(t)?null:(now-t)/3600000;
+      const late=hrs!==null && hrs>20; if(late) forgotten++;
+      return name.padEnd(32)+(isNaN(t)?'':_when(t))
+        +(late?'   <- open '+(hrs>48?Math.round(hrs/24)+' days':Math.round(hrs)+' h')+', probably forgot to clock out':'');
+    });
+    return 'BrightHR on site at '+_when(Date.parse(d.generated||''))
+      +'  |  '+rows.length+' on site of '+(d.employees_checked||'?')+' checked  |  status '+String(d.status||'').toUpperCase()
+      +(forgotten?'\n'+(forgotten===1?'1 person marked below forgot to clock out and is':forgotten+' people marked below forgot to clock out and are')
+                  +' not signed in to InVentry.':'')
+      +'\n\n'+'Name'.padEnd(32)+'Clocked in\n'+lines.join('\n');
+  }
   async function _openFile(path, ext){
     const v=document.getElementById('file-view'); v.classList.add('show'); v.textContent='Opening '+path+' …';
+    // The viewer sits below the list, and an output folder can hold hundreds of
+    // files: without this a file "did not open" because it opened off screen.
+    v.scrollIntoView({behavior:'smooth', block:'start'});
     try{ const r=await fetch(API_BASE+'/api/file?path='+encodeURIComponent(path),{headers:_hdr()});
       if(!r.ok) throw new Error(r.status+' '+(await r.text()).slice(0,160));
       const blob=await r.blob();
-      if(ext==='.json'){ v.textContent=JSON.stringify(JSON.parse(await blob.text()),null,2); }
+      if(ext==='.json'){ const d=JSON.parse(await blob.text());
+        v.textContent = Array.isArray(d.staff_on_site) ? _onsiteText(d) : JSON.stringify(d,null,2);
+        v.scrollIntoView({behavior:'smooth', block:'start'}); }
       else if(ext==='.txt'||ext==='.log'){ v.textContent=(await blob.text()).slice(0,20000); }
       else { const inline=_INLINE_EXT.has(ext);
              const nm=_deliver(blob, path, ext, inline);
