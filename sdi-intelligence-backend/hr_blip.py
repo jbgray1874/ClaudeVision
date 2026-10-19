@@ -13,6 +13,7 @@ import os
 import sys
 import datetime
 import time
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -21,6 +22,9 @@ import hr_config as cfg
 
 BLIP_URL = "https://api.bright.hr/blip/v1/clockings/query"
 MAX_WORKERS = 5   # concurrent requests — stays well under BrightHR rate limit
+MAX_ATTEMPTS = 6  # per employee, counting rate-limited tries
+MAX_PAUSE = 60    # seconds, the longest single rate-limit pause
+LOCK_STALE_MINUTES = 30   # a lock older than this was left by a run that died
 
 
 def _now():
@@ -60,7 +64,74 @@ def _load_active_employees() -> list:
     return json.loads(p.read_text(encoding="utf-8")).get("records") or []
 
 
-def _query_one(token: str, employee_id: str, from_dt: str) -> tuple:
+class _Throttle:
+    """One rate-limit pause shared by every worker.
+
+    When BrightHR answers 429, every worker waits, not just the one that was
+    refused. Workers backing off one at a time kept the other four hammering,
+    so on a busy afternoon nearly every query was refused three times and the
+    run came back degraded.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._resume_at = 0.0
+
+    def wait(self):
+        while True:
+            with self._lock:
+                delay = self._resume_at - time.monotonic()
+            if delay <= 0:
+                return
+            time.sleep(delay)
+
+    def pause(self, seconds: float) -> bool:
+        """Hold every worker for seconds. True if this extended the pause."""
+        with self._lock:
+            until = time.monotonic() + seconds
+            if until <= self._resume_at:
+                return False
+            self._resume_at = until
+            return True
+
+
+def _retry_after(response, attempt: int) -> float:
+    """BrightHR's Retry-After if it gives one, else 10s, 20s, 30s... capped."""
+    try:
+        wait = float(response.headers.get("Retry-After", ""))
+    except (TypeError, ValueError):
+        wait = 10 * (attempt + 1)
+    return max(1.0, min(wait, MAX_PAUSE))
+
+
+def _acquire_lock():
+    """One Blip run at a time. Two at once double the request rate and both
+    get rate-limited: the portal button pressed during a scheduled run, or
+    twice. Returns the lock path, or None if another run holds it."""
+    path = Path(cfg.HR_SNAPSHOT_DIR) / "blip.lock"
+    for _ in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                age = time.time() - path.stat().st_mtime
+            except OSError:
+                continue                     # released as we looked: try again
+            if age < LOCK_STALE_MINUTES * 60:
+                return None
+            _log(f"  removing a Blip lock left {age / 60:.0f} min ago by a run that did not finish")
+            try:
+                path.unlink()
+            except OSError:
+                return None
+            continue
+        os.write(fd, f"{os.getpid()} {_now().isoformat()}".encode())
+        os.close(fd)
+        return path
+    return None
+
+
+def _query_one(token: str, employee_id: str, from_dt: str, throttle=None) -> tuple:
     """
     Query clockings for one employee at a point in time.
     Returns (clockings, ok) where clockings are active at that moment (i.e.
@@ -76,16 +147,18 @@ def _query_one(token: str, employee_id: str, from_dt: str) -> tuple:
         "Content-Type": "application/json",
     }
     body = {"filters": {"employeeId": employee_id, "from": from_dt}}
-    for attempt in range(3):
+    throttle = throttle or _Throttle()
+    for attempt in range(MAX_ATTEMPTS):
+        throttle.wait()
         try:
             r = requests.post(BLIP_URL, json=body, headers=headers,
                               timeout=cfg.BH_TIMEOUT)
             if r.status_code == 404:
                 return [], True          # no clockings for this employee
             if r.status_code == 429:
-                wait = 10 * (attempt + 1)
-                _log(f"  [429] employee {employee_id} — backing off {wait}s")
-                time.sleep(wait)
+                wait = _retry_after(r, attempt)
+                if throttle.pause(wait):
+                    _log(f"  [429] BrightHR rate limit - all workers pausing {wait:.0f}s")
                 continue
             if r.status_code != 200:
                 _log(f"  [{r.status_code}] employee {employee_id} — query failed")
@@ -170,6 +243,23 @@ def _write_fallback_copy(payload: dict):
 
 def run_blip() -> dict:
     Path(cfg.HR_SNAPSHOT_DIR).mkdir(parents=True, exist_ok=True)
+    lock = _acquire_lock()
+    if lock is None:
+        reason = ("A BrightHR Blip query is already running (the scheduled task or "
+                  "another press). Wait for it to finish, then try again.")
+        _log(f"BLIP busy: {reason}")
+        return {"timestamp": _now().isoformat(), "status": "busy", "on_site": 0,
+                "employees_checked": 0, "query_failures": 0, "warnings": [reason]}
+    try:
+        return _run_blip()
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+
+
+def _run_blip() -> dict:
     _log("BLIP start — querying current clockings (concurrent)")
 
     token = _get_token()
@@ -192,9 +282,10 @@ def run_blip() -> dict:
     emp_list = [e for e in employees if e.get("id")]
 
     # ── concurrent queries ──
+    throttle = _Throttle()
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         futures = {
-            pool.submit(_query_one, token, emp["id"], from_dt): emp
+            pool.submit(_query_one, token, emp["id"], from_dt, throttle): emp
             for emp in emp_list
         }
         for future in as_completed(futures):
@@ -273,7 +364,7 @@ def run_blip() -> dict:
 if __name__ == "__main__":
     try:
         s = run_blip()
-        sys.exit(0 if s["status"] == "ok" else 2)
+        sys.exit(0 if s["status"] in ("ok", "busy") else 2)
     except Exception as exc:
         _log(f"BLIP CRITICAL: {exc}")
         sys.exit(1)
