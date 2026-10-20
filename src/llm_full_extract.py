@@ -410,6 +410,11 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     # halved. An estimate that moves by half between identical runs is not an estimate.
     _key = _cache_key("full", ctx, model, _PROMPT, SYSTEM_TRANSCRIBE)
     _hit = _cache_read(_key)
+    try:
+        import run_timing as _rt_llm
+        _rt_llm.reuse("llm_extract", _hit is not None)
+    except Exception:                                        # noqa: BLE001
+        pass
     if _hit is not None:
         print(f"   [llm-full-extract] reusing the cached read for this pack "
               f"(unchanged drawings, model and prompt) — the route does not get "
@@ -690,6 +695,11 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
         # effect.
         _ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)
         _ihit = _cache_read(_ikey)
+        try:
+            import run_timing as _rt_llm2
+            _rt_llm2.reuse("llm_extract_infer", _ihit is not None)
+        except Exception:                                    # noqa: BLE001
+            pass
         if _ihit is not None:
             return _ihit
         raw = _call_llm(payload, model, system=SYSTEM_INFER)

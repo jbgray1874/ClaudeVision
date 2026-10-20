@@ -1013,6 +1013,7 @@ def scan_folder_job(
     # and this loop is the first piece of it: the runner's only evidence was three "no output
     # for 130s" notices. run_timing's own advice when the unmeasured row is the biggest one is
     # to bracket more rather than optimise anything, so that is what these are.
+    run_timing.identify(stem=job_folder.name)
     run_timing.mark("start extract_pdf_summary")
     for pdf_path in sorted(pdfs, key=lambda p: p.name.lower()):
         print(f"      • Extracting {pdf_path.name}")

@@ -723,7 +723,15 @@ def native_extract_for_job(
             if native_files_state(_src)["count"]:
                 _analyse_from = _src
                 break
-    if jp is not None and run and _analyse_from is not None and _should_run(jp, _analyse_from):
+    _must_run = bool(jp is not None and run and _analyse_from is not None
+                     and _should_run(jp, _analyse_from))
+    try:
+        import run_timing as _rt_sw
+        if jp is not None and (jp.exists() or _must_run):
+            _rt_sw.reuse("solidworks_extract", not _must_run)
+    except Exception:                                        # noqa: BLE001
+        pass
+    if _must_run:
         _produced: List[str] = []
         _run_error = _run_analyser(_analyse_from, analyser=analyser, python_exe=python_exe,
                                    out_path=jp, produced=_produced)

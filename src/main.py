@@ -427,6 +427,16 @@ def main() -> None:
     # quantity; everything downstream reads what it decided.
     if getattr(args, "order_qty", None):
         os.environ["SDI_ORDER_QTY"] = str(int(args.order_qty))
+    # WHO THIS TIMING BELONGS TO (D-553), said before anything is timed.
+    try:
+        import run_timing as _rt_id
+        _rt_id.identify(product=str(getattr(args, "product", None) or "").strip() or None,
+                        customer=str(getattr(args, "customer", None) or "").strip() or None,
+                        units=getattr(args, "order_qty", None),
+                        breaks=",".join(str(q) for q in (getattr(args, "quantity_breaks", None) or []))
+                        or None)
+    except Exception:                                        # noqa: BLE001
+        pass
     # THE BREAKS TOO (D-550). A per-order line (packaging, delivery) is priced at a fixed list
     # of breaks and the run's own break was not among them: 401918's 150-off column divided the
     # 1-off pallet by 150. The lines price every break the run asks for.
@@ -2499,6 +2509,17 @@ if __name__ == "__main__":
             if _rt.detail_on():
                 import json as _json_api
                 print("[api-timing] " + _json_api.dumps(_rt.report_json()), flush=True)
+            # KEPT, NOT ONLY PRINTED (D-553): the record beside the run's log, and a row per
+            # phase on the machine's history, so the next speed step is decided across jobs.
+            try:
+                import config as _cfg_rt
+                import engine_build as _eb_rt
+                _rt.identify(build=(_eb_rt.describe() or {}).get("commit"))
+                _written = _rt.write(_cfg_rt.LOG_DIR, _cfg_rt.OUTPUT_DIR / "timing_history.csv")
+                if _written.get("json"):
+                    print(f"   [timing] record: {_written['json']}", flush=True)
+            except Exception:                                    # noqa: BLE001
+                pass
         except Exception:                                        # noqa: BLE001
             # Never let instrumentation take down a run that otherwise finished.
             pass
