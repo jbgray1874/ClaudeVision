@@ -39,6 +39,16 @@ import os
 from typing import Any, Dict, Optional
 
 import config
+try:
+    from service_config import the_service_config
+except ImportError:                    # loaded by path, without this folder on sys.path
+    import importlib.util as _ilu
+    import pathlib as _pl
+    _scs = _ilu.spec_from_file_location("service_config", _pl.Path(__file__).with_name("service_config.py"))
+    _scm = _ilu.module_from_spec(_scs)
+    _scs.loader.exec_module(_scm)
+    the_service_config = _scm.the_service_config
+config = the_service_config(config)   # this service's, even where the engine's holds the name
 
 # DM's own guide names these; accepting them means an estimator who has followed that guide
 # does not have to learn a second set of names for the same two facts.

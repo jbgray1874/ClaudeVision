@@ -518,7 +518,10 @@ def test_a_folder_that_cannot_be_listed_is_not_reported_as_empty(tmp_path, monke
 
     def _boom(self):
         raise OSError(59, "An unexpected network error occurred")
-    monkeypatch.setattr(Path, "iterdir", _boom)
+    # THE CLASS THE FOLDER IS, NOT ITS BASE. A test that patches PosixPath.iterdir leaves, on
+    # undo, a copy of the inherited method on PosixPath itself, after which patching Path no
+    # longer reaches a real folder and this test passed or failed by the order it ran in.
+    monkeypatch.setattr(type(tmp_path), "iterdir", _boom)
     reason = cad_inputs._skipped_ga_reason(tmp_path / "12645-01GA V2.DWG", tmp_path)
     assert "could not be searched" in reason
     assert "No PDF of this sheet" not in reason and "ask for the PDF" not in reason
