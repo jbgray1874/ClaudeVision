@@ -263,6 +263,37 @@ CA bundle. Three options:
    same reason:
    ```
    10.0.0.241   InVentry-PC
+
+**This was not enough, and the earlier conclusion here was wrong.** A hosts
+entry makes the name resolve, but their certificate is `CN=InVentry-PC` with
+**no subjectAltName**, and modern TLS stacks ignore `CN` entirely. So no
+hostname ever matches, however the host is addressed. Proven against the live
+system on 6 Oct 2026:
+
+```
+SSLError: certificate verify failed: Hostname mismatch,
+          certificate is not valid for 'inventry-pc'
+```
+
+`curl` still falls back to `CN` and appears to work, which is what misled us -
+a successful `curl` does not predict a successful `requests` call.
+
+The fix, in `.env`:
+
+```
+INVENTRY_API_CA_BUNDLE=C:\SDIIntelligence\inventry.pem
+INVENTRY_API_CHECK_HOSTNAME=false
+```
+
+This is **not** the same as turning verification off. With the certificate
+pinned, a server presenting any other certificate is still refused - checked
+against a CN-only certificate before the change was committed. Hostname
+checking exists to stop a CA vouching for the wrong name, which means nothing
+when the certificate is its own CA. Setting it false *without* a pinned bundle
+is the genuinely weak configuration, and the client warns about it.
+
+The proper fix is InVentry reissuing the certificate with a subjectAltName.
+Worth asking for, not worth waiting for.
    ```
    then `INVENTRY_API_BASE_URL=https://InVentry-PC:4816` and
    `INVENTRY_API_CA_BUNDLE=C:\SDIIntelligence\inventry.pem`.
