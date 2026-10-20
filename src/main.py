@@ -791,10 +791,11 @@ def main() -> None:
     if getattr(args, "fresh_read", False):
         os.environ["SDI_VISION_REFRESH"] = "1"
         os.environ["SDI_LLM_EXTRACT_REFRESH"] = "1"
-        print("   [fresh-read] both LLM caches bypassed — every page goes to the model and "
-              "the whole-pack read is re-driven. The answer may differ from the last run: "
-              "that is what is being measured, and it is why a normal estimate does not do "
-              "this.", flush=True)
+        os.environ["SDI_READ_REFRESH"] = "1"      # the read store too (D-554): nothing kept is consulted
+        print("   [fresh-read] both LLM caches and the read store bypassed — every page goes "
+              "to the model, every document is read again and the whole-pack read is "
+              "re-driven. The answer may differ from the last run: that is what is being "
+              "measured, and it is why a normal estimate does not do this.", flush=True)
     dxf_only_primary = bool(dxf_from_cli and not drawing_arg)
     job_cfg = getattr(config, "DRAWING_JOB_DISCOVERY", {}) or {}
     folder_as_job = bool(job_cfg.get("folder_as_job", False))

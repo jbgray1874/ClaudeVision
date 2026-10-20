@@ -6837,14 +6837,16 @@ def test_the_same_pack_produces_the_same_route():
        "the transcription key covers the pack text, the model AND the prompt — drop the text "
        "and a redrawn drawing silently keeps the old route; drop the prompt and a rule change "
        "is never re-asked")
-    ok("_cache_write(_key, obj)" in _src, "and the result is stored")
+    ok('_cache_write(_key, {**obj, "_raw_full": raw or ""})' in _src,
+       "and the result is stored, with the model's whole response (D-554)")
     ok('_ikey = _cache_key("infer", payload, model, SYSTEM_INFER, _INFER_PROMPT)' in _src,
        "the inference key covers its whole payload AND its prompt — the payload is where "
        "the weld came from, and the prompt is the question that produced it. The line two "
        "assertions above says drop the prompt and a rule change is never re-asked; this "
        "path was keyed on the system message alone, so it was the case that sentence "
        "describes")
-    ok("_cache_write(_ikey, _res)" in _src, "and it is stored too")
+    ok('_cache_write(_ikey, {**_res, "_raw_full": raw or ""})' in _src,
+       "and it is stored too, with the model's whole response (D-554)")
 
 
 def test_the_raw_model_response_is_kept():

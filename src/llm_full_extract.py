@@ -419,6 +419,16 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
         print(f"   [llm-full-extract] reusing the cached read for this pack "
               f"(unchanged drawings, model and prompt) — the route does not get "
               f"reconsidered between runs", flush=True)
+        # THE WORDS ARE KEPT, THE READING OF THEM IS MADE AGAIN (D-554): a stored entry
+        # carries the model's whole response, and the current parser, bridge and normaliser
+        # run over it, so a fix to any of them reaches every stored read without a new call.
+        # An entry kept before this carried its interpretation only, and is used as it is.
+        _kept = _hit.get("_raw_full")
+        if _kept:
+            _again = _interpret_transcription(_kept)
+            if _again:
+                _again["_from_cache"] = True
+                return _again
         return _hit
     try:
         raw = _call_llm(_PROMPT + "\n\n--- DRAWING PACK ---\n" + ctx, model,
@@ -426,11 +436,22 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     except Exception as exc:
         result["error"] = f"{type(exc).__name__}: {exc}"
         return result
-    obj = _parse(raw or "")
+    obj = _interpret_transcription(raw or "")
     if not obj:
         result["error"] = "LLM response was not parseable JSON"
         result["raw"] = (raw or "")[:2000]
         return result
+    _cache_write(_key, {**obj, "_raw_full": raw or ""})
+    return obj
+
+
+def _interpret_transcription(raw: str) -> Dict[str, Any]:
+    """What the engine reads from the model's words — parsed, projected onto the field names
+    the engine reads, normalised. {} when the words are not JSON. Run on the words whether
+    they were just spoken or kept (D-554)."""
+    obj = _parse(raw or "")
+    if not obj:
+        return {}
     obj["source"] = SOURCE_NAME
     obj["found"] = True
     normalize_job(obj)
@@ -438,10 +459,10 @@ def extract_full_job(pdf_path: str | Path, model: str = DEFAULT_MODEL) -> Dict[s
     # it" are indistinguishable from every saved artefact, because _llm_extract.json holds
     # the PARSED job. 2085's vanishing weld was settled by reading a commit diff and
     # noticing the parse path had not changed between two runs — which works once and is
-    # not a method. Truncated, because this is for answering a question, not an archive.
+    # not a method. Truncated, because this is for answering a question, not an archive;
+    # the store's entry holds the whole of it.
     obj["_raw_response"] = (raw or "")[:20000]
     obj["_prompt_fingerprint"] = _cache_key(_PROMPT, SYSTEM_TRANSCRIBE)
-    _cache_write(_key, obj)
     return obj
 
 
@@ -700,9 +721,14 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             _rt_llm2.reuse("llm_extract_infer", _ihit is not None)
         except Exception:                                    # noqa: BLE001
             pass
+        _from_store = False
         if _ihit is not None:
-            return _ihit
-        raw = _call_llm(payload, model, system=SYSTEM_INFER)
+            _kept = _ihit.get("_raw_full")
+            if not _kept:
+                return _ihit            # kept before D-554: its interpretation only, as it is
+            raw, _from_store = _kept, True      # the words, read again by the current code
+        else:
+            raw = _call_llm(payload, model, system=SYSTEM_INFER)
         parsed = _parse(raw) if raw else None
     except Exception:
         return {}
@@ -748,8 +774,12 @@ def infer_missing_details(context: str, bom: List[Dict[str, Any]],
             "_raw_response": (raw or "")[:20000],
             "found": bool(out or routes)}
     # The INFERRED route is the unstable half — welding on 2085 was a conclusion, not a
-    # reading, and it is the one that vanished. Cached on the same terms as the rest.
-    _cache_write(_ikey, _res)
+    # reading, and it is the one that vanished. Cached on the same terms as the rest, with
+    # the model's whole response so the next use re-reads the words (D-554).
+    if _from_store:
+        _res["_from_cache"] = True
+    else:
+        _cache_write(_ikey, {**_res, "_raw_full": raw or ""})
     return _res
 
 
