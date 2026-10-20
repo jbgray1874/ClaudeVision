@@ -409,11 +409,17 @@ Sent the Postman collection (the endpoint paths) and answered everything else:
 
 Everything is now built against this. See `docs/INVENTRY_API_NOTES.md`.
 
-## Round 4 — to send
+## Round 4 — sent 28 Sep 2026
 
-Only physical facts remain: console access, an admin login, the API host, and
-the certificate. Charlotte offered a support connection — this accepts it and
-asks for all four at once.
+Only physical facts remained: console access, an admin login, the API host, and
+the certificate. Charlotte offered a support connection — this accepted it and
+asked for all four at once.
+
+> **Inaccurate as drafted.** "Built and running in dry run" was never true: the
+> integration had been tested offline against fixtures, but had never
+> authenticated against the live system. The phrase reached a real email before
+> it was caught. Round 5 corrects it. Never describe a pipeline as running until
+> a live call has returned something.
 
 > Hi Charlotte,
 >
@@ -457,3 +463,341 @@ asks for all four at once.
 > James Gray
 > AI & Systems Controller, SDI Displays Ltd
 > james.gray@wearesdi.com · 07585 816501
+
+## Round 5 — to send
+
+Round 4 asked which partner secret to use as though we had not tried one. We
+have: the console key is created, the headers are going out correctly, and
+InVentry is rejecting them. That is a far more answerable question, and it is
+the only thing now blocking a first live cycle.
+
+Two additions to round 4's asks:
+
+* **Service restart.** A newly created key may only become active once the
+  InVentry service restarts. If so that explains the failure by itself.
+* **The contradiction in their own advice.** Charlotte said End User Development
+  "wouldn't require the Partner API", yet every endpoint in the collection is
+  under `/PartnerAPI/` and is rejected without a `partnersecret` header. This is
+  the likeliest root cause, and naming it is the fastest route to a real answer.
+
+The support connection is declined: the host question is settled (10.0.0.241)
+and console access was solved from Adam Stiff's instructions.
+
+> Hi Charlotte,
+>
+> Thank you — that was very helpful, and the Postman collection was the missing
+> piece. The integration is built and configured to run in dry run, logging what
+> it would change without writing anything. The one thing standing between us
+> and a first real cycle is authentication, and that's where I'm stuck.
+>
+> What I've done:
+>
+> - Confirmed our InVentry system at 10.0.0.241 is reachable on port 4816 from
+>   our network, and exported the certificate from the V4 folder.
+> - Created an API key in the console under Setup & Options → Partner API → Add
+>   API Key, with the partner set to **End User Development** as you suggested.
+>   Partner API is enabled.
+> - Called `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+>   request headers, using the `partnersecret` pre-filled in your Postman
+>   collection — your overview notes that value is the same across on-premises
+>   installations.
+>
+> The response is `Authentication failed`.
+>
+> So, two questions:
+>
+> 1. **The partner secret.** Is the value in the collection the one we should be
+>    using, or is one issued per site? I wonder whether I'm caught by your note
+>    that End User Development doesn't require the Partner API: every endpoint in
+>    the collection is under `/PartnerAPI/` and the call is rejected without a
+>    `partnersecret` header, so I'm not sure what an End User Development key is
+>    meant to be paired with. If there's a different secret, or a different
+>    endpoint set for end-user keys, that would explain this.
+>
+> 2. **Does the InVentry service need restarting before a newly created API key
+>    becomes active?** I've regenerated the key once. If it only takes effect
+>    after a restart that would explain the failure on its own, and I'd rather
+>    know before arranging any downtime.
+>
+> And one smaller thing for when we go live: does `ActionLocation` on
+> `AddPersonnelAction` accept free text, or must it match an existing location on
+> our system? We send a distinctive value so we can recognise our own sign-ins
+> and never sign out someone who signed in at reception. If it has to be a real
+> location, we'll create one.
+>
+> On the support connection — thank you, but I don't think we need it now. We've
+> established the software runs on 10.0.0.241, and a colleague passed on
+> instructions from Adam Stiff for reaching the console, so I can get to it
+> myself.
+>
+> Thanks for getting us this far so quickly.
+>
+> James
+
+## Round 6 — follow-up, 29 Sep 2026
+
+Round 5 went out on 28 Sep at 11:05 still carrying round 4's "built and running
+in dry run", and without the one fact that makes the partner secret urgent: the
+call is being rejected. This follow-up supplies it. It does not re-ask the two
+questions, it re-frames them as a failure with a specific cause.
+
+Console state verified the same day, from the live system:
+
+* **Settings → System → Partner API** (bottom of the left menu) — path confirmed.
+* **Enable partner API: On.**
+* One key, partner **"End User Developer"** — the option Charlotte named and the
+  one the documentation's example uses. So the key is correctly scoped.
+* **There is no Locations list anywhere in Settings.** The menu was walked end
+  to end: General options, Licencing, Integrations, Alerts and notifications,
+  Health assist, Door access control, Checkpoint, System. Locations cannot be
+  created customer-side, which kills the idea of sidestepping the
+  `ActionLocation` question by creating a real location. Charlotte's own
+  examples - "Main Touchscreen", "Quickscan", "Backdoor Quickscan" - look like
+  *device* names, so `LastEventLocation` probably reports the physical sign-in
+  point. `Checkpoint → Checkpoint devices` would confirm it.
+
+> Hi Charlotte,
+>
+> One update since yesterday, which makes question 1 more pressing than I put it.
+>
+> I've now created the API key — Setup & Options → System → Partner API → Add
+> API key, partner set to **End User Developer**, and "Enable partner API" is On.
+> Calling `GET /PartnerAPI/CheckAuth` with `apikey` and `partnersecret` as
+> request headers returns **`Authentication failed`**. The `partnersecret` I'm
+> using is the one pre-filled in your Postman collection.
+>
+> So the key exists and is the right type, and the call is being rejected. Two
+> things would resolve it:
+>
+> 1. Is the `partnersecret` in the collection the one we should use, or is one
+>    issued per site?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active?
+>
+> Also, on my earlier `ActionLocation` question — I've been through Settings end
+> to end and there's no Locations list to add to, so I can't create one my side.
+> That makes the free-text answer the deciding factor for us.
+>
+> Thanks,
+> James
+
+## Round 7 — escalation, 6 Oct 2026
+
+Rounds 5 and 6 asked about the partner secret as one question among several.
+This one states the consequence plainly: the 401 is at the authentication
+layer, so **no endpoint is reachable at all**. GetPersonnel is as blocked as
+AddPersonnelAction. There is no partial path into InVentry — we cannot even
+read the personnel list.
+
+It also reverses the earlier decline of their support connection. That was
+right when the open question was which host serves the API; it is wrong now
+that the open question is authentication on their side.
+
+Everything claimed in it was verified first, and the list is included so the
+question cannot come back as "are you sure it isn't your end?".
+
+> Hi Charlotte,
+>
+> I need to escalate this, and I'd rather set out exactly where we are than
+> keep asking the same question.
+>
+> The integration is finished. It is built, tested, configured, and installed
+> against our system at 10.0.0.241:4816. It is blocked on one credential, and
+> it is not one we can create or obtain ourselves.
+>
+> **`GET /PartnerAPI/CheckAuth` returns HTTP 401.**
+>
+> The important part is where that 401 sits. It is at the authentication layer,
+> before any endpoint, and both headers go on every call — so this is not a
+> problem with one request or one feature. `GetPersonnel` is as blocked as
+> `AddPersonnelAction`. We cannot write to InVentry, and we cannot read from it
+> either. At the moment we have no working path into the system at all, so
+> there is nothing further we can test or build around it.
+>
+> Everything on our side has been checked rather than assumed:
+>
+> * The API is reachable — 10.0.0.241 on port 4816, confirmed from our network.
+> * TLS completes, with your certificate exported from the V4 folder and
+>   verified against the connection.
+> * "Enable partner API" is On in the console.
+> * There is one API key, with the partner set to **End User Developer** — the
+>   option you identified for a customer's own integration.
+> * That key matches the console character for character; it is not a stale one.
+> * `apikey` and `partnersecret` are sent as lowercase request headers, exactly
+>   as your documentation and Postman collection specify.
+> * The 401 is a response from your software, not a network or TLS failure.
+>
+> The only value in that chain we have not been able to verify independently is
+> the **partner secret**. We are sending the one pre-filled in your Postman
+> collection, on the basis that your overview describes it as common across
+> on-premises installations.
+>
+> So, three questions:
+>
+> 1. Is the partner secret in the collection the one we should be using, or is
+>    one issued per site? If per site, could you issue ours?
+> 2. Does the InVentry service need restarting before a newly created API key
+>    becomes active? If so, that alone would explain this, and we will arrange
+>    the downtime.
+> 3. Is "End User Developer" definitely the right partner for a key that will
+>    be used against `/PartnerAPI/` endpoints? Your earlier note said this use
+>    wouldn't require the Partner API, but every endpoint in the collection
+>    sits under that path and is rejected without a `partnersecret` header, so
+>    I may have misunderstood which pairing is intended.
+>
+> **I'd now welcome the support connection you offered.** I declined it last
+> month because the open question then was which machine serves the API, and we
+> had answered that ourselves. The open question now is authentication inside
+> your software, which we cannot see from outside. Any day this week suits, and
+> I'm happy to be on the call.
+>
+> Two smaller things, neither urgent:
+>
+> * **`ActionLocation` on `AddPersonnelAction`** — does it accept free text, or
+>   must it name an existing location? I have been through Settings end to end
+>   and there is no Locations list I can add to, so I cannot make our value a
+>   real location. We send a distinctive value so the integration can recognise
+>   its own sign-ins and never sign out someone who signed in at reception —
+>   without that, we have to leave automatic sign-out switched off.
+> * **The certificate** is `CN=InVentry-PC` with no `subjectAltName`. Modern
+>   TLS stacks ignore the common name entirely, so verification fails for any
+>   hostname. `curl` still falls back to it, which disguises the problem. We've
+>   worked around it by pinning your certificate, so this isn't holding us up —
+>   but it will catch every customer who integrates this way, and it would be
+>   worth your development team reissuing with a SAN.
+>
+> For context on why I'm pushing: this feeds our fire evacuation list. The
+> point of it is that the roll call reflects who is actually in the building
+> rather than who remembered to sign in at reception. That's the reason it
+> matters to us rather than being a nice-to-have.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+
+## Round 7 reply — Charlotte Fastenbauer, 8 Oct 2026
+
+Three answers, all useful:
+
+1. **The partner secret is per site, and lives in our own database.** Support
+   will log on to our system, read it, and give it to us. So the value in the
+   Postman collection is *not* ours — which is exactly the 401, and closes the
+   question the last three emails have been asking. Their overview describing
+   it as "the same across on-premises installations" is, at best, misleading.
+2. **No service restart is needed** for a new API key. That hypothesis is dead.
+3. **`ActionLocation` accepts free text** — "within the Value section, you're
+   able to freetype whatever you like".
+
+Answer 3 unblocks automatic sign-out, which has been off since it was built.
+
+One caution before acting on it. "Within the Value section" reads like she is
+describing the key/value table in the Postman request, not making a statement
+about server-side validation. Accepting a value on the way in is also not the
+same as storing it and returning it as `LastEventLocation`, and the whole
+safety argument depends on the round trip, not on the POST succeeding. Treat it
+as good evidence, not proof: one `probe_inventry.py --sign-in` settles it, and
+that is a single record.
+
+This is the third time an inference about InVentry's behaviour has looked
+settled and not been - CN fallback, the Locations list, the shared secret. Run
+the probe.
+
+## Round 8 — full technical position, 10 Oct 2026
+
+Charlotte's 8 Oct reply answered the questions but the support connection has
+not happened. This sets out the complete technical position so the support
+engineer can act without a discovery call first, and so the one remaining ask
+is unambiguous.
+
+Everything in it was verified on the live system. Credentials are referenced,
+never quoted - the API key goes to the engineer on the call, not into an inbox.
+
+> Hi Charlotte,
+>
+> Thank you for the answers on the 8th — those cleared up the restart question
+> and `ActionLocation`. The support connection hasn't come through yet, so I
+> wanted to set out exactly where this stands, in enough detail that whoever
+> picks it up can go straight to the one thing we need.
+>
+> **Where it stands: `GET https://10.0.0.241:4816/PartnerAPI/CheckAuth` returns
+> HTTP 401.** That is the only thing between us and a working integration.
+>
+> **What we have configured and verified**
+>
+> * **Network** — 10.0.0.241 reachable on port 4816 from our network.
+> * **TLS** — your certificate exported from the V4 folder on the main unit and
+>   pinned, so the connection is verified rather than trusted blindly. One
+>   wrinkle covered below.
+> * **Console** — Setup & Options → System → Partner API. "Enable partner API"
+>   is On.
+> * **API key** — one key, created there with the Partner set to **End User
+>   Developer**, per your guidance. We have confirmed character by character
+>   that the key our software sends is the one currently shown in the console,
+>   so it is not a stale copy. I can read it out to the engineer on the call.
+> * **Headers** — `apikey` and `partnersecret`, both lowercase, as request
+>   headers, exactly as the documentation and your Postman collection specify.
+> * **Partner secret** — the 16-character value pre-filled in your Postman
+>   collection, which is what your overview document describes as common across
+>   on-premises installations.
+>
+> **What we have tried**
+>
+> * Both `https://InVentry-PC:4816` and `https://10.0.0.241:4816` — identical
+>   result, as expected, since the 401 is authentication rather than addressing.
+> * Regenerating the API key in the console and retrying (before you confirmed
+>   a restart isn't required).
+> * Verifying the response is genuinely from the InVentry application rather
+>   than a network or TLS failure — it is an HTTP 401, not a dropped connection.
+>
+> **What your answers have already resolved**
+>
+> * The InVentry service does not need restarting for a new key. Ruled out.
+> * `ActionLocation` accepts free text. That lets us enable automatic sign-out
+>   once we have confirmed the value is returned on the record.
+> * The partner secret is **per site and held in our own database** — which, as
+>   you say, means the value in the Postman collection is not ours. That
+>   explains the 401 precisely, and it is why nothing we can do here will fix it.
+>
+> **What is outstanding — one item**
+>
+> A member of your support team to connect, read our partner secret out of our
+> database, and give it to us. You escalated this on the 8th. Could you confirm
+> it is booked, and give me a ticket reference? I'm available at any notice and
+> will have everything staged so we can test authentication while the engineer
+> is still connected — if it still fails, they are right there to look at it.
+>
+> **One product note, not blocking us**
+>
+> Your certificate is issued as `CN=InVentry-PC` with no `subjectAltName`.
+> Modern TLS libraries ignore the common name entirely, so certificate
+> verification fails for every hostname, including the one on the certificate.
+> `curl` still falls back to the common name, which disguises the problem —
+> testing with curl succeeds while an application fails. We have worked around
+> it by pinning your certificate and disabling hostname checking, so this isn't
+> holding us up, but it will catch every customer who integrates this way. It
+> would be worth your development team reissuing with a SAN.
+>
+> For context on the urgency: this feeds our fire evacuation list. The whole
+> point is that the roll call reflects who is physically in the building rather
+> than who remembered to sign in at reception, so it matters to us rather more
+> than a typical integration would.
+>
+> Thanks,
+> James Gray
+> AI & Systems Controller, SDI Displays Ltd
+
+## Round 8 reply — Charlotte Fastenbauer, 12 Oct 2026
+
+The site's partner secret arrived: a 16-character value she calls the "End
+User Developer Key", first sent on 7 Oct on a support ticket from Farhan that
+was missed on our side. **Not recorded here** - it lives in `.env` only.
+
+Despite the name, it goes in `INVENTRY_PARTNER_SECRET`, not `INVENTRY_API_KEY`.
+"End User Developer" is the partner's name; this is that partner's secret for
+our site. Its format confirms it - 16 alphanumerics, like the collection's
+generic secret - whereas the API key is the GUID created in our own console.
+Swapping the GUID out for it would produce a fresh 401 for a different reason.
+
+If it still 401s, she will escalate to a developer. Rule out transcription
+first: the value mixes characters that email fonts render ambiguously (0/O,
+I/l).

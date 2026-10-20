@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -103,7 +104,10 @@ def test_post_sends_form_encoded_not_json():
     assert call["data"]["ActionType"] == cfg.INVENTRY_EVENT_TYPE_IN
 
 
-def test_sign_in_uses_the_documented_datetime_format():
+def test_sign_in_uses_the_documented_datetime_format(monkeypatch):
+    # The format is what is under test here, so the timezone is pinned: in
+    # local mode the answer would depend on the machine running the tests.
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "utc")
     client, session = make_client([StubResponse({"response": "OK"})])
     client.sign_in("INV-1", when="2026-09-21T07:45:00Z")
     # Their own examples: "T" separator, no timezone.
@@ -243,8 +247,9 @@ def test_fields_are_read_case_insensitively():
 class FakeAPI:
     """Stands in for InVentryAPI, recording writes."""
 
-    def __init__(self, people, fail_on=None, read_error=None):
-        self.people = people
+    def __init__(self, people, fail_on=None, read_error=None, warn_on_write=None):
+        self.people = [dict(p) for p in people]   # its own copies: writes change them
+        self.warn_on_write = warn_on_write
         self.signed_in = []
         self.signed_out = []
         self.warnings = []
@@ -259,12 +264,24 @@ class FakeAPI:
     def sign_in(self, ident, when=None, **kw):
         if ident in self.fail_on:
             raise api.InVentryAPIError("simulated failure")
+        # The real client appends here, mid-run, when it drops ActionLocation.
+        if self.warn_on_write:
+            self.warnings.append(self.warn_on_write)
+            self.warn_on_write = None
         self.signed_in.append(ident)
+        self._set(ident, "IN")
 
     def sign_out(self, ident, when=None, **kw):
         if ident in self.fail_on:
             raise api.InVentryAPIError("simulated failure")
         self.signed_out.append(ident)
+        self._set(ident, "OUT")
+
+    def _set(self, ident, activity):
+        # So a read-back after the run sees the writes, as InVentry would.
+        for p in self.people:
+            if p["ID"] == ident:
+                p["LastActivity"] = activity
 
 
 def _iso(minutes_ago=1):
@@ -280,12 +297,14 @@ def snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BLIP_MAX_STALE_MINUTES", 15)
     monkeypatch.setattr(cfg, "INVENTRY_MAX_SIGN_OUTS_PER_RUN", 25)
 
-    def write(on_site, status="ok", age_minutes=1, query_failures=0):
+    def write(on_site, status="ok", age_minutes=1, query_failures=0, query_failed=None):
         (snapshots / "blip_latest.json").write_text(json.dumps({
             "summary": {"timestamp": _iso(age_minutes), "employees_checked": 192,
-                        "on_site": len(on_site), "query_failures": query_failures,
+                        "on_site": len(on_site),
+                        "query_failures": query_failures or len(query_failed or []),
                         "status": status},
             "on_site": on_site,
+            "query_failed": query_failed or [],
         }), encoding="utf-8")
 
     return write
@@ -345,7 +364,7 @@ def test_unmatched_staff_are_reported_not_invented(snapshot):
 
     assert fake.signed_in == []
     assert result["unmatched"][0]["name"] == "New Starter"
-    assert any("PersonID" in w for w in result["warnings"])
+    assert any("could not be matched" in w for w in result["warnings"])
 
 
 def test_ambiguous_name_is_not_matched(snapshot):
@@ -360,8 +379,13 @@ def test_ambiguous_name_is_not_matched(snapshot):
     assert result["unmatched"][0]["reason"] == "ambiguous name"
 
 
-def test_sign_out_is_disabled_by_default(snapshot):
-    """Sign-ins go live first; sign-out is an explicit decision."""
+def test_sign_out_is_disabled_by_default(snapshot, monkeypatch):
+    """Sign-ins go live first; sign-out is an explicit decision.
+
+    The shipped default is pinned here: without it this test read the real
+    .env, and on the live desktop - where sign-out has been switched on - it
+    failed, testing the machine's settings instead of the code's default."""
+    monkeypatch.setattr(cfg, "INVENTRY_ENABLE_SIGN_OUT", False)
     snapshot([clocked_in()])
     fake = FakeAPI([person(person_id="BH-1", activity="IN"),
                     person(inventry_id="INV-2", person_id="BH-2", activity="IN")])
@@ -373,17 +397,23 @@ def test_sign_out_is_disabled_by_default(snapshot):
 
 
 def test_sign_out_when_enabled_only_touches_people_we_manage(snapshot):
+    """Changed 14 Oct. INV-3 used to be treated as an untouchable "visitor"
+    because it had no PersonID. But it carries our marker, which only this sync
+    writes - so it is on site because we put it there. On the live site
+    PersonID is Active Directory's field and 104 of 255 records lack one;
+    the old rule left every one of those signed in for ever."""
     ours = cfg.INVENTRY_ACTION_LOCATION
     snapshot([clocked_in()])
     fake = FakeAPI([
         person(person_id="BH-1", activity="IN", location=ours),                    # still here
         person(inventry_id="INV-2", person_id="BH-2", activity="IN", location=ours),  # left
-        person(inventry_id="INV-3", person_id="", activity="IN", location=ours),   # visitor
+        person(inventry_id="INV-3", person_id="", activity="IN", location=ours),   # left, no PersonID
+        person(inventry_id="INV-4", person_id="", activity="IN", location="CONSOLE"),  # reception
     ])
 
     push.run_push(apply=True, client=fake, enable_sign_out=True)
 
-    assert fake.signed_out == ["INV-2"]
+    assert sorted(fake.signed_out) == ["INV-2", "INV-3"]
 
 
 def test_a_reception_sign_in_is_never_undone(snapshot):
@@ -417,6 +447,72 @@ def test_mass_sign_out_is_capped(snapshot, monkeypatch):
     assert any("INVENTRY_MAX_SIGN_OUTS_PER_RUN" in w for w in result["warnings"])
 
 
+def test_the_result_names_who_is_changed(snapshot):
+    # The portal shows these, so whoever presses the button sees who, not how many.
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+    ])
+
+    result = push.run_push(apply=False, client=fake, enable_sign_out=True)
+
+    assert result["signed_in_names"] == ["John Smith"]
+    assert result["signed_out_names"] == ["Aisha Khan"]
+    assert result["sign_outs_held_back"] == []
+
+
+def test_sign_outs_held_back_by_the_cap_are_named(snapshot, monkeypatch):
+    monkeypatch.setattr(cfg, "INVENTRY_MAX_SIGN_OUTS_PER_RUN", 1)
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location=ours)] + [
+        person(inventry_id=f"INV-{i}", first=f"Test{i}", surname="Person",
+               email=f"test{i}@wearesdi.com", person_id=f"BH-{i}", activity="IN", location=ours)
+        for i in (2, 3)
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == [] and result["signed_out_names"] == []
+    assert sorted(result["sign_outs_held_back"]) == ["Test2 Person", "Test3 Person"]
+
+
+def test_a_live_run_reports_who_inventry_now_shows_on_site(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+        person(inventry_id="INV-3", first="Reception", surname="Visitor", email="rv@wearesdi.com",
+               person_id="", activity="IN", location="Main Entrance"),
+    ])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert result["on_site_after_read_back"] is True
+    assert result["on_site_after"] == ["John Smith", "Reception Visitor"]
+
+
+def test_a_dry_run_reports_the_list_it_would_leave(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="OUT"),
+        person(inventry_id="INV-2", first="Aisha", surname="Khan", email="aisha.khan@wearesdi.com",
+               person_id="BH-2", activity="IN", location=ours),
+    ])
+
+    result = push.run_push(apply=False, client=fake, enable_sign_out=True)
+
+    assert fake.signed_in == [] and fake.signed_out == []
+    assert result["on_site_after_read_back"] is False
+    assert result["on_site_after"] == ["John Smith"]
+
+
 def test_dry_run_sends_nothing(snapshot):
     snapshot([clocked_in()])
     fake = FakeAPI([person(person_id="BH-1", activity="OUT")])
@@ -445,6 +541,17 @@ def test_stale_snapshot_is_refused(snapshot):
     assert push.run_push(apply=True, client=fake)["status"] == "aborted"
 
 
+def test_force_does_not_push_a_stale_snapshot(snapshot):
+    # --force clears a sign-out backlog; it must not act on an old roll call.
+    snapshot([clocked_in()], age_minutes=90)
+    fake = FakeAPI([person(person_id="BH-1")])
+
+    result = push.run_push(apply=True, force=True, client=fake)
+
+    assert result["status"] == "aborted"
+    assert fake.signed_in == [] and fake.signed_out == []
+
+
 def test_inventry_read_failure_aborts_without_writing(snapshot):
     snapshot([clocked_in()])
     fake = FakeAPI([], read_error="connection refused")
@@ -458,7 +565,12 @@ def test_inventry_read_failure_aborts_without_writing(snapshot):
 def test_individual_failure_is_partial_not_fatal(snapshot):
     snapshot([clocked_in(), clocked_in(bh_id="BH-2", first="Aisha", surname="Khan",
                                        email="aisha@wearesdi.com")])
-    fake = FakeAPI([person(person_id="BH-1"), person(inventry_id="INV-2", person_id="BH-2")],
+    # INV-2 is Aisha's record. It used to carry the default name John Smith and
+    # match Aisha by ID alone - the very wrong-person match the name check now
+    # refuses. This test is about failure handling, so the record is hers.
+    fake = FakeAPI([person(person_id="BH-1"),
+                    person(inventry_id="INV-2", first="Aisha", surname="Khan",
+                           email="aisha@wearesdi.com", person_id="BH-2")],
                    fail_on={"INV-2"})
 
     result = push.run_push(apply=True, client=fake)
@@ -529,3 +641,377 @@ def test_the_check_can_be_disabled():
                 "signed_in": "2026-07-28T09:23:49Z", "email": ""}]
     present, forgotten = source_loader.split_stale_clockins(records, max_age_hours=0)
     assert len(present) == 1 and forgotten == []
+
+
+# ── the ActionLocation fallback ──────────────────────────────────────────
+# InVentry may require ActionLocation to name a real location, and there is no
+# Locations list in the console to create one in. If they refuse the field, a
+# sign-in must still go through: a missing sign-in is a person missing from a
+# fire roll, which is the failure this whole pipeline exists to prevent.
+
+def test_rejected_action_location_is_dropped_and_the_sign_in_still_happens():
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1", when="2026-09-21T09:00:00Z")
+
+    assert len(session.calls) == 2
+    assert "ActionLocation" in session.calls[0]["data"]
+    assert "ActionLocation" not in session.calls[1]["data"]
+    # The sign-in itself survived intact.
+    assert session.calls[1]["data"]["ActionType"] == cfg.INVENTRY_EVENT_TYPE_IN
+    assert session.calls[1]["data"]["PersonnelID"] == "INV-1"
+
+
+def test_the_fallback_warns_that_safe_sign_out_is_now_impossible():
+    client, _ = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1")
+    assert any("sign-out" in w for w in client.warnings)
+
+
+def test_the_location_is_not_retried_for_every_subsequent_person():
+    """89 people must not mean 178 POSTs."""
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid location", payload=None),
+        StubResponse({"response": "OK"}),
+        StubResponse({"response": "OK"}),
+        StubResponse({"response": "OK"}),
+    ])
+    client.sign_in("INV-1")
+    client.sign_in("INV-2")
+    client.sign_in("INV-3")
+
+    assert len(session.calls) == 4          # 2 for the first, 1 each after
+    assert all("ActionLocation" not in c["data"] for c in session.calls[1:])
+    # Warned once, not once per person. (The harness runs with verify=False,
+    # so the TLS warning is in there too - count only ours.)
+    assert sum("ActionLocation" in w for w in client.warnings) == 1
+
+
+def test_bad_credentials_are_not_mistaken_for_a_bad_location():
+    """A 401 would fail identically without the field - retrying writes nothing
+    twice and hides the real cause."""
+    client, session = make_client([StubResponse(status_code=401, payload=None)])
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("INV-1")
+    assert len(session.calls) == 1
+    assert client.action_location_dropped is False
+
+
+def test_a_server_error_is_not_mistaken_for_a_bad_location():
+    client, session = make_client([StubResponse(status_code=500, payload=None)] * 3)
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("INV-1")
+    assert client.action_location_dropped is False
+
+
+def test_an_empty_marker_sends_no_location_and_needs_no_fallback():
+    client, session = make_client([StubResponse({"response": "OK"})],
+                                  )
+    client.sign_in("INV-1", location="")
+    assert len(session.calls) == 1
+    assert "ActionLocation" not in session.calls[0]["data"]
+
+
+def test_a_warning_raised_during_the_writes_reaches_the_summary(snapshot):
+    """The ActionLocation fallback only fires once a POST has been refused,
+    which is long after the client's warnings are first collected. A warning
+    nobody sees is the same as no fallback at all."""
+    snapshot([clocked_in()])
+    client = FakeAPI([person(person_id="BH-1")],
+                     warn_on_write="InVentry rejected ActionLocation")
+    summary = push.run_push(apply=True, client=client)
+    assert any("ActionLocation" in w for w in summary["warnings"])
+
+
+# ── TLS: a certificate with no subjectAltName ────────────────────────────
+# InVentry's is CN=InVentry-PC with no SAN. Modern TLS ignores CN, so no
+# hostname ever matches. Verified against the live system, 6 Oct 2026.
+
+class ExplodingSession(StubSession):
+    """Raises the SSLError a CN-only certificate actually produces."""
+
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+
+    def request(self, *a, **kw):
+        self.calls.append(kw)
+        raise requests.exceptions.SSLError(self.message)
+
+
+def test_hostname_mismatch_names_the_setting_that_fixes_it():
+    client = api.InVentryAPI(
+        base_url="https://InVentry-PC:4816", api_key="k", partner_secret="s",
+        session=ExplodingSession(
+            "certificate verify failed: Hostname mismatch, certificate is not valid "
+            "for 'inventry-pc'."),
+        limiter=NoWaitLimiter(), verify="/path/to/inventry.pem")
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_API_CHECK_HOSTNAME=false" in str(exc.value)
+    assert "subjectAltName" in str(exc.value)
+
+
+def test_a_tls_failure_is_not_retried_three_times():
+    """A bad certificate will be just as bad two seconds later."""
+    session = ExplodingSession("certificate verify failed: unable to get local issuer")
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             session=session, limiter=NoWaitLimiter(), verify=True)
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_API_CA_BUNDLE" in str(exc.value)
+    assert len(session.calls) == 1
+
+
+def test_skipping_the_hostname_check_without_a_pin_is_called_out():
+    """Pinned + no hostname check is fine. Neither one is not."""
+    client, _ = make_client(verify=False, check_hostname=False)
+    assert any("nothing about the server is being verified" in w for w in client.warnings)
+
+
+def test_skipping_the_hostname_check_with_a_pin_does_not_warn_about_it():
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             verify="/path/to/inventry.pem", check_hostname=False,
+                             limiter=NoWaitLimiter())
+    assert not any("nothing about the server" in w for w in client.warnings)
+    # The adapter is what actually turns the name check off.
+    assert isinstance(client.session.get_adapter("https://x"), api.PinnedCertAdapter)
+
+
+def test_a_placeholder_pasted_into_env_is_named_not_left_as_a_401():
+    """A placeholder copied verbatim and a wrong credential both 401. Only one
+    of them is fixable by reading the error."""
+    client = api.InVentryAPI(base_url="https://x", api_key="k",
+                             partner_secret="<what they give you>",
+                             limiter=NoWaitLimiter(), verify=False)
+    with pytest.raises(api.InVentryAPIError) as exc:
+        client.check_auth()
+    assert "INVENTRY_PARTNER_SECRET" in str(exc.value)
+    assert "placeholder" in str(exc.value)
+    assert "LAST one" in str(exc.value)
+
+
+def test_a_real_secret_that_merely_contains_brackets_is_not_rejected():
+    client, session = make_client([StubResponse({"response": "OK"})],
+                                  partner_secret="ab<cd>ef")
+    client.check_auth()
+    assert session.calls[0]["headers"]["partnersecret"] == "ab<cd>ef"
+
+
+def test_one_bad_record_does_not_strip_the_marker_from_everyone_else():
+    """A 400 that is NOT about ActionLocation - a malformed PersonnelID, say -
+    fails the same way without the field. Concluding the field was at fault
+    would drop the marker for every remaining sign-in in the run, and blame the
+    wrong thing for it."""
+    client, session = make_client([
+        StubResponse(status_code=400, text="Invalid PersonnelID", payload=None),
+        StubResponse(status_code=400, text="Invalid PersonnelID", payload=None),
+        StubResponse({"response": "OK"}),
+    ])
+    with pytest.raises(api.InVentryAPIError):
+        client.sign_in("BAD-ID")
+
+    client.sign_in("INV-2")
+    assert client.action_location_dropped is False
+    assert "ActionLocation" in session.calls[2]["data"]
+    assert not any("ActionLocation" in w for w in client.warnings)
+
+
+def test_skipping_the_hostname_check_against_the_public_ca_store_is_called_out():
+    """Name check off is only sound with a pinned certificate. Against the
+    system store it accepts any publicly-issued certificate for any domain."""
+    client = api.InVentryAPI(base_url="https://x", api_key="k", partner_secret="s",
+                             verify=True, check_hostname=False, limiter=NoWaitLimiter())
+    assert any("any publicly-issued certificate" in w for w in client.warnings)
+
+
+# ── duplicate InVentry records for one person ────────────────────────────
+# Real data, 14 Oct: 255 InVentry staff records against ~192 BrightHR staff,
+# and two records for "James Gray" with different PersonIDs. Names were already
+# treated as ambiguous; a shared email or PersonID silently took whichever
+# record the API happened to list last.
+
+def test_duplicate_email_prefers_the_record_reception_already_signed_in(snapshot):
+    """Picking the other copy would sign the person in a second time."""
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-A", person_id="AD-1", activity="IN"),   # at reception
+        person(inventry_id="INV-B", person_id="AD-2", activity="OUT"),  # listed last
+    ])
+    result = push.run_push(apply=True, client=client)
+    assert client.signed_in == []
+    assert result["already_on_site"] == 1
+
+
+def test_duplicate_email_is_resolved_the_same_way_whatever_the_api_order(snapshot):
+    """Order-dependent matching would sign in a different copy on different days."""
+    a = person(inventry_id="INV-A", person_id="AD-1", activity="")
+    b = person(inventry_id="INV-B", person_id="AD-2", activity="")
+    b["LastActivityDate"] = "2026-10-01T08:00:00.000"   # more recently used
+    a["LastActivityDate"] = "0001-01-01T00:00:00"       # never used
+
+    picks = []
+    for order in ([a, b], [b, a]):
+        snapshot([clocked_in(bh_id="BH-9")])
+        client = FakeAPI(order)
+        push.run_push(apply=True, client=client)
+        picks.append(client.signed_in)
+    assert picks[0] == picks[1] == ["INV-B"]
+
+
+def test_duplicate_records_are_reported_for_cleanup(snapshot):
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-A", person_id="AD-1"),
+        person(inventry_id="INV-B", person_id="AD-2"),
+    ])
+    result = push.run_push(apply=False, client=client)
+    assert any("more than one InVentry record" in w for w in result["warnings"])
+
+
+# ── different people sharing an identifier ───────────────────────────────
+# Real dry run, 14 Oct: the record chosen for one BrightHR person was one of
+# two InVentry records filed under a different person's name. A shared email or
+# PersonID does NOT always mean one person. Signing in the wrong one puts the
+# wrong name on a fire roll and leaves the right one off.
+
+def test_shared_email_between_two_people_is_settled_by_name(snapshot):
+    snapshot([clocked_in(bh_id="BH-9", first="Sam", surname="Holt",
+                         email="shared@wearesdi.com")])
+    alex = person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+                  email="shared@wearesdi.com", person_id="AD-1")
+    sam = person(inventry_id="INV-SAM", first="Sam", surname="Holt",
+                   email="shared@wearesdi.com", person_id="AD-2")
+    alex["LastActivityDate"] = "2026-10-13T08:00:00.000"    # Alex used it more recently
+    sam["LastActivityDate"] = "0001-01-01T00:00:00"
+    client = FakeAPI([alex, sam])
+    push.run_push(apply=True, client=client)
+    assert client.signed_in == ["INV-SAM"]
+
+
+def test_an_email_held_by_a_differently_named_record_is_refused(snapshot):
+    """Sam's address on Alex's record is a data error. Guessing either way is
+    worse than reporting it."""
+    snapshot([clocked_in(bh_id="BH-9", first="Sam", surname="Holt",
+                         email="sam.holt@wearesdi.com")])
+    client = FakeAPI([person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+                             email="sam.holt@wearesdi.com", person_id="AD-1")])
+    result = push.run_push(apply=True, client=client)
+    assert client.signed_in == []
+    assert "different person" in result["unmatched"][0]["reason"]
+    assert "Alex Fenn" in result["unmatched"][0]["reason"]
+
+
+def test_a_nickname_still_matches_on_email(snapshot):
+    """Surname agrees, so Rob is Robert - refusing this would drop a real
+    person off the roll."""
+    snapshot([clocked_in(bh_id="BH-9", first="Robert", surname="Lane",
+                         email="robert.lane@wearesdi.com")])
+    client = FakeAPI([person(inventry_id="INV-ROB", first="Rob", surname="Lane",
+                             email="robert.lane@wearesdi.com", person_id="AD-1")])
+    push.run_push(apply=True, client=client)
+    assert client.signed_in == ["INV-ROB"]
+
+
+def test_same_name_duplicates_linked_by_an_identifier_are_one_person(snapshot):
+    """Two "Kit Marlow" records sharing an email are one person on two
+    records, not two namesakes - so a name match can safely use one of them
+    rather than leaving him off the roll as "ambiguous"."""
+    snapshot([clocked_in(bh_id="BH-9", first="Kit", surname="Marlow",
+                         email="kit@personal.example")])
+    a = person(inventry_id="INV-N1", first="Kit", surname="Marlow",
+               email="k.marlow@wearesdi.com", person_id="AD-1")
+    b = person(inventry_id="INV-N2", first="Kit", surname="Marlow",
+               email="k.marlow@wearesdi.com", person_id="AD-2")
+    client = FakeAPI([a, b])
+    result = push.run_push(apply=True, client=client)
+    assert len(client.signed_in) == 1
+    assert result["matched_by"]["name"] == 1
+
+
+def test_different_people_sharing_an_identifier_are_reported_as_a_conflict(snapshot):
+    snapshot([clocked_in(bh_id="BH-9")])
+    client = FakeAPI([
+        person(inventry_id="INV-ALEX", first="Alex", surname="Fenn",
+               email="shared@wearesdi.com", person_id="AD-1"),
+        person(inventry_id="INV-SAM", first="Sam", surname="Holt",
+               email="shared@wearesdi.com", person_id="AD-2"),
+    ])
+    result = push.run_push(apply=False, client=client)
+    conflict = [w for w in result["warnings"] if "different people" in w]
+    assert conflict and "Alex Fenn" in conflict[0] and "Sam Holt" in conflict[0]
+
+
+
+# ── times are sent in local time ─────────────────────────────────────────
+# InVentry keeps personnel actions in local time; its GetSystemTime is UTC.
+# Live, 14 Oct (BST): a self-stamped sign-in read back 19:34 at 18:34 UTC.
+
+BST = datetime.timezone(datetime.timedelta(hours=1))
+
+
+def test_a_utc_clock_in_is_sent_as_local_time(monkeypatch):
+    """05:54 BST arrives from BrightHR as 04:54Z. Sending 04:54 would record
+    the person an hour before they got here."""
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "local")
+    monkeypatch.setattr(api, "_to_local", lambda v: v.astimezone(BST))
+    assert api.format_datetime("2026-10-14T04:54:06Z") == "2026-10-14T05:54:06"
+
+
+def test_utc_mode_still_sends_utc(monkeypatch):
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "utc")
+    assert api.format_datetime("2026-10-14T04:54:06Z") == "2026-10-14T04:54:06"
+
+
+def test_a_time_with_no_offset_is_trusted_as_given(monkeypatch):
+    """No offset means someone already chose the zone - converting again
+    would shift it twice."""
+    monkeypatch.setattr(cfg, "INVENTRY_TIME_MODE", "local")
+    monkeypatch.setattr(api, "_to_local", lambda v: v.astimezone(BST))
+    assert api.format_datetime("2026-10-14T05:54:06") == "2026-10-14T05:54:06"
+
+
+
+# ── a failed BrightHR lookup is unknown, not absent ──────────────────────
+# Live, 14 Oct: "36 on site of 190 (1 query failure(s))". Within tolerance, so
+# the run proceeds - but the failed person used to be indistinguishable from
+# someone who had clocked out, and with sign-out live that takes a person who
+# is in the building off the fire roll until the next cycle.
+
+def test_a_failed_lookup_is_not_taken_as_a_clock_out(snapshot):
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()], query_failed=[{"id": "BH-7", "first_name": "Pat",
+                                             "surname": "Example", "email": "pat@wearesdi.com"}])
+    fake = FakeAPI([person(person_id="BH-1", activity="IN", location=ours),   # genuinely here
+                    person(inventry_id="INV-7", first="Pat", surname="Example",
+                           email="pat@wearesdi.com", person_id="AD-7",
+                           activity="IN", location=ours)])
+
+    result = push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == []
+    assert result["skipped_unknown"] == 1
+    assert any("lookup failed" in w for w in result["warnings"])
+
+
+def test_someone_else_failing_does_not_shield_a_real_clock_out(snapshot):
+    """Only the person whose lookup failed is left alone."""
+    ours = cfg.INVENTRY_ACTION_LOCATION
+    snapshot([clocked_in()], query_failed=[{"id": "BH-7", "first_name": "Pat",
+                                             "surname": "Example", "email": "pat@wearesdi.com"}])
+    fake = FakeAPI([
+        person(person_id="BH-1", activity="IN", location=ours),                # genuinely here
+        person(inventry_id="INV-7", first="Pat", surname="Example",
+               email="pat@wearesdi.com", person_id="AD-7", activity="IN", location=ours),
+        person(inventry_id="INV-8", first="Sam", surname="Gone",
+               email="sam@wearesdi.com", person_id="AD-8", activity="IN", location=ours),
+    ])
+
+    push.run_push(apply=True, client=fake, enable_sign_out=True)
+
+    assert fake.signed_out == ["INV-8"]

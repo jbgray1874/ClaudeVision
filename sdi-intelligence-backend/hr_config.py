@@ -6,7 +6,13 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).with_name(".env"))
+# Which .env this is matters more than it looks. A git worktree gets its own
+# copy, .env is deliberately untracked, and the two drift - a setting added to
+# the wrong one looks exactly like a setting that did not work. Both are
+# reported, so the answer is one line of output rather than an afternoon.
+ENV_FILE = Path(__file__).with_name(".env")
+ENV_FILE_FOUND = ENV_FILE.is_file()
+load_dotenv(ENV_FILE)
 
 
 def _opt(name: str, default: str = "") -> str:
@@ -96,6 +102,26 @@ INVENTRY_API_TIMEOUT = int(_opt("INVENTRY_API_TIMEOUT", "30"))
 INVENTRY_API_CA_BUNDLE = _opt("INVENTRY_API_CA_BUNDLE")
 INVENTRY_API_VERIFY = _opt("INVENTRY_API_VERIFY", "false").lower() not in ("false", "0", "no", "off")
 
+# Check the hostname against the certificate as well as the certificate itself?
+#
+# InVentry's certificate carries CN=InVentry-PC and NO subjectAltName. Modern
+# TLS stacks ignore CN entirely, so the name can never match, however the host
+# is addressed - by IP, or by a hosts entry for InVentry-PC. Proven on the live
+# system 6 Oct 2026: "certificate is not valid for 'inventry-pc'". curl still
+# falls back to CN and so appears to work, which is what misled us.
+#
+# Turning this off is NOT the same as turning verification off. With
+# INVENTRY_API_CA_BUNDLE pinned to their exported certificate, the connection
+# is still refused unless the server presents that exact certificate - verified
+# against a CN-only certificate before this was committed. Hostname checking
+# guards against a CA issuing a certificate for the wrong name, which means
+# nothing when the "CA" is the one self-signed certificate we pinned.
+#
+# The proper fix is InVentry reissuing with a subjectAltName. Until then, set
+# this false AND keep INVENTRY_API_CA_BUNDLE set. Setting it false WITHOUT a
+# pinned bundle is the genuinely weak configuration, and is warned about.
+INVENTRY_API_CHECK_HOSTNAME = _opt("INVENTRY_API_CHECK_HOSTNAME", "true").lower() not in ("false", "0", "no", "off")
+
 # Endpoint paths, from the Postman collection.
 INVENTRY_PATH_CHECK_AUTH = _opt("INVENTRY_PATH_CHECK_AUTH", "/PartnerAPI/CheckAuth")
 INVENTRY_PATH_PERSONNEL = _opt("INVENTRY_PATH_PERSONNEL", "/PartnerAPI/GetPersonnel/")
@@ -111,6 +137,16 @@ INVENTRY_INCLUDE_NON_STAFF = _opt("INVENTRY_INCLUDE_NON_STAFF", "false").lower()
 # holding exactly "IN" or "OUT".
 INVENTRY_EVENT_TYPE_IN = _opt("INVENTRY_EVENT_TYPE_IN", "IN")
 INVENTRY_EVENT_TYPE_OUT = _opt("INVENTRY_EVENT_TYPE_OUT", "OUT")
+
+# Times sent in ActionDateTime. InVentry keeps personnel actions in LOCAL time,
+# even though its GetSystemTime endpoint reports UTC. Proven 14 Oct 2026 (BST):
+# a sign-in InVentry stamped itself read back as 19:34 while GetSystemTime and
+# UTC both said 18:34-ish. Sending UTC would record every sign-in an hour early
+# while the clocks are forward.
+#   "local" - convert to the local time of the machine running the sync, which
+#             must therefore be on UK time. DST-correct for each timestamp.
+#   "utc"   - send UTC unchanged.
+INVENTRY_TIME_MODE = _opt("INVENTRY_TIME_MODE", "local").lower()
 
 # LastActivity values meaning "currently on site".
 INVENTRY_ACTIVITY_IN_VALUES = [
