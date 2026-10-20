@@ -1,4 +1,4 @@
-"""The HR InVentry app: named people only, a job the app polls, and nothing else
+"""HRInventry Anywhere, the app portal's HR app: named people only, a job the app polls, and nothing else
 of /api/hr reachable from outside the office.
 
 The app is reached through the App Proxy, which cuts a request off after about
